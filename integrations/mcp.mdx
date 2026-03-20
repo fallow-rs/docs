@@ -1,17 +1,91 @@
 ---
-title: "MCP server"
-description: "AI agent integration via the Model Context Protocol."
-keywords: ["MCP", "Model Context Protocol", "AI agent", "Claude Code", "Cursor", "tool integration"]
+title: "Agent integration"
+description: "How AI agents use fallow via CLI and MCP to find dead code, detect duplication, and auto-fix — capabilities LLMs fundamentally cannot do themselves."
+keywords: ["MCP", "Model Context Protocol", "AI agent", "Claude Code", "Cursor", "Windsurf", "Copilot", "tool integration", "CLI", "static analysis", "LLM limitations"]
 icon: "robot"
 ---
 
-`fallow-mcp` is an MCP server that exposes fallow's analysis capabilities to AI agents. [MCP (Model Context Protocol)](https://modelcontextprotocol.io) is an open standard for connecting AI models to external tools — it lets agents like Claude Code, Cursor, and GitHub Copilot run fallow commands and reason about the results.
+AI coding agents generate code at scale, but they don't perform static analysis. Building a module graph, tracing re-export chains through barrel files, determining which exports are unused across thousands of files — these require a dedicated tool. Fallow gives agents exactly that: deterministic, exhaustive static analysis they can call via CLI or MCP.
 
 <Info>
-Tools return JSON for direct use in AI model outputs. Agents can analyze dead code, find duplicates, and apply fixes — all through structured tool calls.
+  Every agent that can run shell commands can use fallow. The CLI is the primary interface — MCP is an optional structured layer on top.
 </Info>
 
-## Setup
+## Why agents need fallow
+
+Static analysis requires building and traversing a graph — not reading files in a context window. Here's what that means in practice:
+
+| What agents can't do | What fallow does |
+|:---------------------|:-----------------|
+| Build a complete module graph across 5,000+ files | Builds the full graph in under 200ms |
+| Track re-export chains through barrel files | Resolves `export *` chains through unlimited levels |
+| Know if an export is used somewhere outside their context window | Exhaustively checks every import in the entire codebase |
+| Detect code duplication across files they haven't seen | Suffix array algorithm catches clones across all files |
+| Determine which `package.json` dependencies are actually unused | Traces imports and script binaries to actual usage |
+| Guarantee completeness — no missed files, no false negatives | Deterministic: same input always produces same output |
+
+<Info>
+  Even with an infinite context window, an LLM reading files sequentially cannot replicate what a graph traversal algorithm does. The issue isn't context size — it's that static analysis is an algorithmic problem, not a comprehension problem.
+</Info>
+
+## CLI: the primary agent interface
+
+Every AI coding agent can run shell commands. This is the simplest and most universal integration — no MCP required:
+
+```bash
+# Full dead code analysis with JSON output
+fallow check --format json
+
+# Only check changed files (great for agent PR workflows)
+fallow check --changed-since main --format json
+
+# Find code duplication
+fallow dupes --format json
+
+# Preview what auto-fix would remove
+fallow fix --dry-run --format json
+
+# Apply fixes (agents should use --yes to skip confirmation)
+fallow fix --yes --format json
+
+# List project info (plugins, entry points, file count)
+fallow list --format json
+```
+
+<Tip>
+  Always use `--format json` when agents run fallow. The JSON output is structured, machine-readable, and easy for LLMs to parse and reason about. The human-readable format works too, but JSON eliminates parsing ambiguity.
+</Tip>
+
+### Agent workflow examples
+
+**After generating code:**
+```bash
+# Agent generates a new feature, commits, then checks its own work
+fallow check --changed-since main --format json
+# → finds that the old utility file is now unused
+# → agent removes it
+```
+
+**Codebase cleanup:**
+```bash
+# Agent is asked to clean up dead code
+fallow check --format json
+# → returns 401 issues: unused files, exports, dependencies
+fallow fix --yes --format json
+# → auto-removes unused exports and dependencies
+# Agent then deletes unused files from the JSON output
+```
+
+**Before a PR:**
+```bash
+# Agent verifies its changes don't introduce dead code
+fallow check --changed-since main --format json
+# → clean: no new issues introduced
+```
+
+## MCP: structured tool calling
+
+For agents that support [MCP (Model Context Protocol)](https://modelcontextprotocol.io), `fallow-mcp` exposes analysis capabilities as structured tools. This gives agents typed inputs and outputs instead of parsing CLI text.
 
 The MCP server uses stdio transport and wraps the `fallow` CLI binary. Set the `FALLOW_BIN` environment variable to point to the fallow binary (defaults to `fallow` in `PATH`).
 
@@ -42,7 +116,7 @@ The MCP server uses stdio transport and wraps the `fallow` CLI binary. Set the `
     }
     ```
   </Tab>
-  <Tab title="Other">
+  <Tab title="Other MCP clients">
     Any MCP-compatible client can connect to `fallow-mcp`. The server uses stdio transport:
 
     ```bash
@@ -57,7 +131,7 @@ The MCP server uses stdio transport and wraps the `fallow` CLI binary. Set the `
   </Tab>
 </Tabs>
 
-## Available tools
+### Available MCP tools
 
 | Tool | Description |
 |:-----|:------------|
@@ -99,20 +173,40 @@ The MCP server uses stdio transport and wraps the `fallow` CLI binary. Set the `
 </CodeGroup>
 
 <Tip>
-The MCP server wraps the CLI, so all fallow features are available to AI agents — including production mode, baselines, and incremental analysis.
+The MCP server wraps the CLI, so all fallow features are available — including production mode, baselines, and incremental analysis.
 </Tip>
+
+## CLI vs MCP: when to use which
+
+| | CLI | MCP |
+|:--|:---|:----|
+| **Availability** | Any agent that can run shell commands | Agents with MCP support |
+| **Setup** | Zero — fallow just needs to be installed | Requires MCP server configuration |
+| **Output** | Any format (JSON, SARIF, human, compact) | JSON only (structured) |
+| **Best for** | Universal compatibility, CI-like workflows | Typed tool calling, agent frameworks |
+
+<Info>
+  Most agents should start with CLI. If your agent framework supports MCP and you want typed tool calling, add the MCP server. Both use the same underlying analysis engine.
+</Info>
 
 ## Architecture
 
-The MCP server is a thin subprocess wrapper — all analysis logic stays in the CLI. The MCP crate only handles protocol framing and argument mapping, built with `rmcp` (official Rust MCP SDK).
+The MCP server is a thin subprocess wrapper — all analysis logic stays in the CLI binary. The MCP crate only handles protocol framing and argument mapping, built with `rmcp` (official Rust MCP SDK). This means:
+
+- CLI and MCP always produce identical results
+- Any fallow CLI update automatically improves MCP
+- No separate installation — `fallow-mcp` ships alongside `fallow`
 
 ## See also
 
-<CardGroup cols={2}>
-  <Card title="fallow check" icon="magnifying-glass" href="/cli/check">
-    Full CLI reference for the check command.
+<CardGroup cols={3}>
+  <Card title="CI integration" icon="shield-check" href="/integrations/ci">
+    The third track: catch what agents and humans miss.
+  </Card>
+  <Card title="VS Code extension" icon="window" href="/integrations/vscode">
+    Real-time feedback for human developers.
   </Card>
   <Card title="Dead code analysis" icon="skull-crossbones" href="/analysis/dead-code">
-    Learn about the 10 issue types fallow detects.
+    Learn about the 11 issue types fallow detects.
   </Card>
 </CardGroup>
