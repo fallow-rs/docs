@@ -1,39 +1,109 @@
 ---
 title: "CI Integration"
 description: "Add fallow to your GitHub Actions workflow."
+icon: "circle-check"
 ---
 
-## GitHub Action
+Fallow integrates with CI pipelines to catch dead code and duplication before it lands. The official GitHub Action posts job summaries, uploads SARIF to Code Scanning, and can comment on PRs.
 
-The official GitHub Action posts a job summary, uploads SARIF to Code Scanning, and can comment on PRs.
+<Tabs>
+  <Tab title="GitHub Action">
+    <Steps>
+      <Step title="Add the action">
+        Add fallow to your workflow file:
 
-```yaml
-name: Dead code analysis
-on: [push, pull_request]
+        ```yaml
+        name: Dead code analysis
+        on: [push, pull_request]
 
-jobs:
-  fallow:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: fallow-rs/fallow@v0
-        with:
-          format: sarif
-```
+        jobs:
+          fallow:
+            runs-on: ubuntu-latest
+            steps:
+              - uses: actions/checkout@v4
+              - uses: fallow-rs/fallow@v0
+                with:
+                  format: sarif
+        ```
+      </Step>
+      <Step title="Configure inputs">
+        Customize the action with these inputs:
 
-### Action inputs
+        | Input | Default | Description |
+        |:------|:--------|:------------|
+        | `command` | `check` | Command to run (`check`, `dupes`, `fix`) |
+        | `format` | `sarif` | Output format |
+        | `production` | `false` | Enable production mode |
+        | `changed-since` | — | Only check files changed since this ref |
+        | `baseline` | `false` | Compare against saved baseline |
+      </Step>
+      <Step title="Upload SARIF (optional)">
+        Upload results to GitHub Code Scanning for inline annotations on the PR diff:
 
-| Input | Default | Description |
-|:------|:--------|:------------|
-| `command` | `check` | Command to run (`check`, `dupes`, `fix`) |
-| `format` | `sarif` | Output format |
-| `production` | `false` | Enable production mode |
-| `changed-since` | — | Only check files changed since this ref |
-| `baseline` | `false` | Compare against saved baseline |
+        ```yaml
+        - uses: fallow-rs/fallow@v0
+          with:
+            format: sarif
+
+        - uses: github/codeql-action/upload-sarif@v3
+          with:
+            sarif_file: results.sarif
+        ```
+      </Step>
+    </Steps>
+
+    <Info>
+    SARIF upload to GitHub Code Scanning shows inline annotations directly on the PR diff — reviewers see dead code issues right where they matter.
+    </Info>
+  </Tab>
+  <Tab title="Manual Setup">
+    If you prefer not to use the action, run fallow directly:
+
+    ```yaml
+    - run: npx fallow check --format sarif > results.sarif
+    ```
+
+    Or with specific checks:
+
+    ```yaml
+    - run: npx fallow check --fail-on-issues --format compact
+    ```
+
+    ### Duplication checks
+
+    ```yaml
+    - run: npx fallow dupes --threshold 5 --format compact
+    ```
+
+    This fails if the overall duplication percentage exceeds 5%.
+  </Tab>
+  <Tab title="Other CI">
+    Fallow works in any CI environment that can run Node.js or download a binary. The basic pattern is the same:
+
+    ```bash
+    # Install
+    npx fallow check --format compact
+
+    # Or download the binary directly
+    curl -fsSL https://get.fallow.dev | sh
+    fallow check --format compact
+    ```
+
+    ### Exit codes
+
+    | Code | Meaning |
+    |:-----|:--------|
+    | `0` | No error-severity issues found |
+    | `1` | Error-severity issues found |
+    | `2` | Fatal error (invalid config, parse failure) |
+  </Tab>
+</Tabs>
+
+<Tip>
+For pull requests, use `--changed-since` to only check files modified in the PR. This keeps CI fast and focuses feedback on new code.
+</Tip>
 
 ### PR-only analysis
-
-Only check files changed in a pull request:
 
 ```yaml
 - uses: fallow-rs/fallow@v0
@@ -41,59 +111,39 @@ Only check files changed in a pull request:
     changed-since: ${{ github.event.pull_request.base.sha }}
 ```
 
-### SARIF upload
+<Accordion title="Incremental adoption with baselines">
+  Adopting fallow on a large codebase? Use baselines to avoid blocking on pre-existing issues while catching new ones.
 
-Upload results to GitHub Code Scanning for inline annotations:
+  **1. Save a baseline on your main branch:**
 
-```yaml
-- uses: fallow-rs/fallow@v0
-  with:
-    format: sarif
+  ```bash
+  npx fallow check --save-baseline
+  git add .fallow-baseline.json && git commit -m "chore: add fallow baseline"
+  ```
 
-- uses: github/codeql-action/upload-sarif@v3
-  with:
-    sarif_file: results.sarif
-```
+  **2. In your PR workflow, compare against the baseline:**
 
-## Manual setup
+  ```yaml
+  - run: npx fallow check --baseline
+  ```
 
-If you prefer not to use the action:
+  Only issues **not** present in the baseline will be reported. As your team cleans up existing dead code, periodically regenerate the baseline on `main`.
 
-```yaml
-- run: npx fallow check --format sarif > results.sarif
-```
+  <Warning>
+  Baselines must be committed to your repo. Don't regenerate on every CI run — that defeats the purpose of incremental adoption.
+  </Warning>
+</Accordion>
 
-Or with specific checks:
+## See also
 
-```yaml
-- run: npx fallow check --fail-on-issues --format compact
-```
-
-## Incremental adoption with baselines
-
-Save a baseline of existing issues, then only fail on new ones:
-
-```yaml
-# In your main branch workflow:
-- run: npx fallow check --save-baseline
-- run: git add .fallow-baseline.json && git commit -m "chore: update fallow baseline"
-
-# In your PR workflow:
-- run: npx fallow check --baseline
-```
-
-## Duplication checks
-
-```yaml
-- run: npx fallow dupes --threshold 5 --format compact
-```
-
-This fails if the overall duplication percentage exceeds 5%.
-
-## Exit codes
-
-| Code | Meaning |
-|:-----|:--------|
-| `0` | No error-severity issues found |
-| `1` | Error-severity issues found |
-| `2` | Fatal error (invalid config, parse failure) |
+<CardGroup cols={3}>
+  <Card title="Rule configuration" icon="sliders" href="/configuration/rules">
+    Configure severity levels and issue types.
+  </Card>
+  <Card title="fallow check" icon="magnifying-glass" href="/cli/check">
+    Full CLI reference for the check command.
+  </Card>
+  <Card title="Production mode" icon="rocket" href="/analysis/production-mode">
+    Exclude test and dev files from analysis.
+  </Card>
+</CardGroup>

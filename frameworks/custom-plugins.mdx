@@ -1,29 +1,66 @@
 ---
 title: "Custom Plugins"
 description: "Add support for internal frameworks with external plugin files."
+icon: "screwdriver-wrench"
 ---
 
-Need support for an internal framework? Create an external plugin file — no Rust code required.
+Need support for an internal framework or a tool fallow doesn't cover yet? Create an external plugin file — no Rust code required. Plugins are declarative JSON/TOML files that teach fallow about your framework's conventions.
+
+<Tip>
+Start with JSONC format for `$schema` support and IDE autocomplete.
+</Tip>
 
 ## Quick start
 
-Create a `fallow-plugin-<name>.jsonc` file in your project root:
+<Steps>
+  <Step title="Create the plugin file">
+    Create a `fallow-plugin-<name>.jsonc` file in your project root:
 
-```jsonc
-{
-  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/plugin-schema.json",
-  "name": "my-framework",
-  "enablers": ["my-framework"],
-  "entryPoints": ["src/routes/**/*.{ts,tsx}"],
-  "alwaysUsed": ["src/setup.ts"],
-  "toolingDependencies": ["my-framework-cli"],
-  "usedExports": [
-    { "pattern": "src/routes/**/*.{ts,tsx}", "exports": ["default", "loader", "action"] }
-  ]
-}
-```
+    ```jsonc
+    {
+      "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/plugin-schema.json",
+      "name": "my-framework",
+      "enablers": ["my-framework"],
+      "entryPoints": ["src/routes/**/*.{ts,tsx}"],
+      "alwaysUsed": ["src/setup.ts"],
+      "toolingDependencies": ["my-framework-cli"],
+      "usedExports": [
+        { "pattern": "src/routes/**/*.{ts,tsx}", "exports": ["default", "loader", "action"] }
+      ]
+    }
+    ```
 
-Fallow auto-discovers `fallow-plugin-*` files in your project root.
+    Fallow auto-discovers `fallow-plugin-*` files in your project root.
+  </Step>
+  <Step title="Configure the fields">
+    Customize the plugin fields for your framework. Only `name` is required — add the fields relevant to your use case.
+
+    ### Required
+
+    | Field | Type | Description |
+    |:------|:-----|:------------|
+    | `name` | string | Unique plugin name (shown in `fallow list --plugins`) |
+
+    ### Optional
+
+    | Field | Type | Description |
+    |:------|:-----|:------------|
+    | `enablers` | string[] | Package names that activate this plugin |
+    | `entryPoints` | string[] | Glob patterns for entry point files |
+    | `configPatterns` | string[] | Glob patterns for config files (always-used) |
+    | `alwaysUsed` | string[] | Files always considered used |
+    | `toolingDependencies` | string[] | Packages used via CLI, not imports |
+    | `detection` | object | Rich activation logic (see below) |
+    | `usedExports` | object[] | Exports always considered used |
+  </Step>
+  <Step title="Verify the plugin">
+    Confirm fallow picks up your plugin:
+
+    ```bash
+    fallow list --plugins
+    ```
+  </Step>
+</Steps>
 
 ## Supported formats
 
@@ -33,69 +70,53 @@ Fallow auto-discovers `fallow-plugin-*` files in your project root.
 | JSON | `.json` | No |
 | TOML | `.toml` | `#` |
 
-We recommend JSONC for comment support and `$schema` autocomplete.
+## Detection strategies
 
-## Plugin fields
+Plugins can use simple enablers or rich detection logic with boolean combinators.
 
-### Required
+<Accordion title="Simple detection (enablers)">
+  The simplest way to activate a plugin. Package names are checked against `package.json` — the plugin activates if any enabler matches:
 
-| Field | Type | Description |
-|:------|:-----|:------------|
-| `name` | string | Unique plugin name (shown in `fallow list --plugins`) |
-
-### Optional
-
-| Field | Type | Description |
-|:------|:-----|:------------|
-| `enablers` | string[] | Package names that activate this plugin |
-| `entryPoints` | string[] | Glob patterns for entry point files |
-| `configPatterns` | string[] | Glob patterns for config files (always-used) |
-| `alwaysUsed` | string[] | Files always considered used |
-| `toolingDependencies` | string[] | Packages used via CLI, not imports |
-| `detection` | object | Rich activation logic |
-| `usedExports` | object[] | Exports always considered used |
-
-### `enablers`
-
-Package names checked against `package.json`. The plugin activates if any enabler matches:
-
-```jsonc
-{
-  "enablers": ["my-framework", "@myorg/"]  // prefix matching with trailing /
-}
-```
-
-### `detection`
-
-Rich activation logic with boolean combinators:
-
-```jsonc
-{
-  "detection": { "type": "dependency", "package": "next" }
-}
-```
-
-```jsonc
-{
-  "detection": { "type": "fileExists", "pattern": "nuxt.config.*" }
-}
-```
-
-```jsonc
-{
-  "detection": {
-    "type": "all",
-    "conditions": [
-      { "type": "dependency", "package": "@my-org/core" },
-      { "type": "fileExists", "pattern": "my-org.config.*" }
-    ]
+  ```jsonc
+  {
+    "enablers": ["my-framework", "@myorg/"]  // prefix matching with trailing /
   }
-}
-```
+  ```
 
-### `usedExports`
+  A trailing `/` enables prefix matching, so `@myorg/` matches any package in the `@myorg` scope.
+</Accordion>
 
-Mark specific exports as always-used for convention-based frameworks:
+<Accordion title="File-based detection">
+  Activate a plugin when specific config files exist in the project:
+
+  ```jsonc
+  {
+    "detection": { "type": "fileExists", "pattern": "nuxt.config.*" }
+  }
+  ```
+</Accordion>
+
+<Accordion title="Combined detection (boolean logic)">
+  Combine multiple conditions with `all` (AND), `any` (OR), or `not`:
+
+  ```jsonc
+  {
+    "detection": {
+      "type": "all",
+      "conditions": [
+        { "type": "dependency", "package": "@my-org/core" },
+        { "type": "fileExists", "pattern": "my-org.config.*" }
+      ]
+    }
+  }
+  ```
+
+  This plugin only activates when both `@my-org/core` is installed **and** a `my-org.config.*` file exists.
+</Accordion>
+
+## Used exports
+
+Mark specific exports as always-used for convention-based frameworks where exports are consumed by name at runtime:
 
 ```jsonc
 {
@@ -106,6 +127,8 @@ Mark specific exports as always-used for convention-based frameworks:
 ```
 
 ## Discovery order
+
+Fallow searches for plugin files in this order:
 
 1. **Explicit paths** from the `plugins` config field
 2. **`.fallow/plugins/`** directory
@@ -154,15 +177,13 @@ Mark specific exports as always-used for convention-based frameworks:
 }
 ```
 
-## Verify your plugin
-
-```bash
-fallow list --plugins
-```
+<Info>
+External plugins cover the vast majority of use cases. AST-based config parsing (like the built-in ESLint or Vite plugins do) requires a built-in Rust plugin.
+</Info>
 
 ## JSON Schema
 
-Generate the schema for IDE autocomplete:
+Generate the schema locally for IDE autocomplete:
 
 ```bash
 fallow plugin-schema > plugin-schema.json
@@ -175,3 +196,14 @@ Reference it in your plugin file:
   "$schema": "./plugin-schema.json"
 }
 ```
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="Built-in plugins" icon="puzzle-piece" href="/frameworks/built-in">
+    Browse the 47 built-in framework plugins.
+  </Card>
+  <Card title="fallow list" icon="list" href="/cli/list">
+    Verify active plugins and inspect project metadata.
+  </Card>
+</CardGroup>
