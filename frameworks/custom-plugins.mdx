@@ -1,0 +1,177 @@
+---
+title: "Custom Plugins"
+description: "Add support for internal frameworks with external plugin files."
+---
+
+Need support for an internal framework? Create an external plugin file — no Rust code required.
+
+## Quick start
+
+Create a `fallow-plugin-<name>.jsonc` file in your project root:
+
+```jsonc
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/plugin-schema.json",
+  "name": "my-framework",
+  "enablers": ["my-framework"],
+  "entryPoints": ["src/routes/**/*.{ts,tsx}"],
+  "alwaysUsed": ["src/setup.ts"],
+  "toolingDependencies": ["my-framework-cli"],
+  "usedExports": [
+    { "pattern": "src/routes/**/*.{ts,tsx}", "exports": ["default", "loader", "action"] }
+  ]
+}
+```
+
+Fallow auto-discovers `fallow-plugin-*` files in your project root.
+
+## Supported formats
+
+| Format | Extension | Comments |
+|:-------|:----------|:---------|
+| JSONC | `.jsonc` | `//` and `/* */` |
+| JSON | `.json` | No |
+| TOML | `.toml` | `#` |
+
+We recommend JSONC for comment support and `$schema` autocomplete.
+
+## Plugin fields
+
+### Required
+
+| Field | Type | Description |
+|:------|:-----|:------------|
+| `name` | string | Unique plugin name (shown in `fallow list --plugins`) |
+
+### Optional
+
+| Field | Type | Description |
+|:------|:-----|:------------|
+| `enablers` | string[] | Package names that activate this plugin |
+| `entryPoints` | string[] | Glob patterns for entry point files |
+| `configPatterns` | string[] | Glob patterns for config files (always-used) |
+| `alwaysUsed` | string[] | Files always considered used |
+| `toolingDependencies` | string[] | Packages used via CLI, not imports |
+| `detection` | object | Rich activation logic |
+| `usedExports` | object[] | Exports always considered used |
+
+### `enablers`
+
+Package names checked against `package.json`. The plugin activates if any enabler matches:
+
+```jsonc
+{
+  "enablers": ["my-framework", "@myorg/"]  // prefix matching with trailing /
+}
+```
+
+### `detection`
+
+Rich activation logic with boolean combinators:
+
+```jsonc
+{
+  "detection": { "type": "dependency", "package": "next" }
+}
+```
+
+```jsonc
+{
+  "detection": { "type": "fileExists", "pattern": "nuxt.config.*" }
+}
+```
+
+```jsonc
+{
+  "detection": {
+    "type": "all",
+    "conditions": [
+      { "type": "dependency", "package": "@my-org/core" },
+      { "type": "fileExists", "pattern": "my-org.config.*" }
+    ]
+  }
+}
+```
+
+### `usedExports`
+
+Mark specific exports as always-used for convention-based frameworks:
+
+```jsonc
+{
+  "usedExports": [
+    { "pattern": "src/routes/**/*.{ts,tsx}", "exports": ["default", "loader", "action", "meta"] }
+  ]
+}
+```
+
+## Discovery order
+
+1. **Explicit paths** from the `plugins` config field
+2. **`.fallow/plugins/`** directory
+3. **Project root** — `fallow-plugin-*.{jsonc,json,toml}` files
+
+### Using the `plugins` config field
+
+```jsonc
+// .fallowrc.json
+{
+  "plugins": [
+    "tools/fallow-plugins/",
+    "vendor/my-plugin.jsonc"
+  ]
+}
+```
+
+## Examples
+
+### React Router
+
+```jsonc
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/plugin-schema.json",
+  "name": "react-router",
+  "enablers": ["react-router", "@tanstack/react-router"],
+  "entryPoints": ["src/routes/**/*.{ts,tsx}", "app/routes/**/*.{ts,tsx}"],
+  "configPatterns": ["react-router.config.{ts,js}"],
+  "toolingDependencies": ["@react-router/dev"],
+  "usedExports": [
+    { "pattern": "{src,app}/routes/**/*.{ts,tsx}", "exports": ["default", "loader", "action", "meta", "handle", "shouldRevalidate"] }
+  ]
+}
+```
+
+### Internal tooling
+
+```jsonc
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/plugin-schema.json",
+  "name": "our-build-system",
+  "enablers": ["@internal/build"],
+  "configPatterns": ["build.config.{ts,js}", ".buildrc"],
+  "alwaysUsed": ["scripts/build/**/*.ts", "config/**/*.ts"],
+  "toolingDependencies": ["@internal/build", "@internal/lint-rules"]
+}
+```
+
+## Verify your plugin
+
+```bash
+fallow list --plugins
+```
+
+## JSON Schema
+
+Generate the schema for IDE autocomplete:
+
+```bash
+fallow plugin-schema > plugin-schema.json
+```
+
+Reference it in your plugin file:
+
+```jsonc
+{
+  "$schema": "./plugin-schema.json"
+}
+```

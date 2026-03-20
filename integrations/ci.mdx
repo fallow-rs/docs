@@ -1,0 +1,99 @@
+---
+title: "CI Integration"
+description: "Add fallow to your GitHub Actions workflow."
+---
+
+## GitHub Action
+
+The official GitHub Action posts a job summary, uploads SARIF to Code Scanning, and can comment on PRs.
+
+```yaml
+name: Dead code analysis
+on: [push, pull_request]
+
+jobs:
+  fallow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: fallow-rs/fallow@v0
+        with:
+          format: sarif
+```
+
+### Action inputs
+
+| Input | Default | Description |
+|:------|:--------|:------------|
+| `command` | `check` | Command to run (`check`, `dupes`, `fix`) |
+| `format` | `sarif` | Output format |
+| `production` | `false` | Enable production mode |
+| `changed-since` | — | Only check files changed since this ref |
+| `baseline` | `false` | Compare against saved baseline |
+
+### PR-only analysis
+
+Only check files changed in a pull request:
+
+```yaml
+- uses: fallow-rs/fallow@v0
+  with:
+    changed-since: ${{ github.event.pull_request.base.sha }}
+```
+
+### SARIF upload
+
+Upload results to GitHub Code Scanning for inline annotations:
+
+```yaml
+- uses: fallow-rs/fallow@v0
+  with:
+    format: sarif
+
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: results.sarif
+```
+
+## Manual setup
+
+If you prefer not to use the action:
+
+```yaml
+- run: npx fallow check --format sarif > results.sarif
+```
+
+Or with specific checks:
+
+```yaml
+- run: npx fallow check --fail-on-issues --format compact
+```
+
+## Incremental adoption with baselines
+
+Save a baseline of existing issues, then only fail on new ones:
+
+```yaml
+# In your main branch workflow:
+- run: npx fallow check --save-baseline
+- run: git add .fallow-baseline.json && git commit -m "chore: update fallow baseline"
+
+# In your PR workflow:
+- run: npx fallow check --baseline
+```
+
+## Duplication checks
+
+```yaml
+- run: npx fallow dupes --threshold 5 --format compact
+```
+
+This fails if the overall duplication percentage exceeds 5%.
+
+## Exit codes
+
+| Code | Meaning |
+|:-----|:--------|
+| `0` | No error-severity issues found |
+| `1` | Error-severity issues found |
+| `2` | Fatal error (invalid config, parse failure) |
