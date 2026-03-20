@@ -65,3 +65,5 @@ Tabs, Steps, Cards, CardGroup, Accordion, Info, Tip, Warning, Note, CodeGroup.
 1. Run `npx mintlify dev` and check the page renders.
 2. Check all links resolve (no broken hrefs).
 3. Confirm frontmatter has all four required fields.
+4. If you added a page, add it to the correct group in `docs.json`.
+5. Verify counts still match: 84 plugins, 11 issue types, 141 knip plugins.
