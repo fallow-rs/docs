@@ -4,7 +4,7 @@
     <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/fallow-rs/fallow/main/assets/logo.svg">
     <img src="https://raw.githubusercontent.com/fallow-rs/fallow/main/assets/logo.svg" alt="fallow" width="290">
   </picture><br>
-  <strong>Documentation for the dead code and duplication analyzer for JavaScript and TypeScript.</strong><br><br>
+  <strong>Documentation for the codebase analyzer for JavaScript and TypeScript.</strong><br><br>
   <a href="https://docs.fallow.tools"><img src="https://img.shields.io/badge/docs-docs.fallow.tools-blue.svg" alt="Documentation"></a>
   <a href="https://github.com/fallow-rs/fallow"><img src="https://img.shields.io/badge/fallow-GitHub-orange" alt="fallow"></a>
 </p>
