@@ -1,0 +1,175 @@
+---
+title: "Debugging & Troubleshooting"
+description: "Trace findings, diagnose false positives, and understand fallow's analysis pipeline."
+icon: "bug"
+---
+
+When fallow reports something unexpected, its built-in tracing and performance tools help you understand *why*. This page covers the debugging workflow for each type of finding.
+
+## Tracing export usage
+
+Use `--trace FILE:EXPORT` to see the full usage chain for a specific export. This answers: "Who uses this export, and through which re-export paths?"
+
+```bash
+fallow check --trace src/utils/format.ts:formatDate
+```
+
+This prints every file that imports `formatDate`, including indirect usage through barrel re-exports. Use this when:
+
+- An export you expected to be used is reported as unused.
+- You want to understand which consumers depend on a symbol before removing it.
+- A re-export chain is not being resolved as expected.
+
+## Tracing file edges
+
+Use `--trace-file PATH` to see all incoming and outgoing edges for a file in the module graph. This answers: "What does this file import, and what imports this file?"
+
+```bash
+fallow check --trace-file src/components/Button.tsx
+```
+
+This shows every import the file makes and every file that imports from it. Use this when:
+
+- A file is reported as unused but you believe something should reference it.
+- You want to verify that a file is reachable from entry points.
+- You're investigating why a file's exports are all marked unused (maybe the file itself is unreachable).
+
+## Tracing dependency usage
+
+Use `--trace-dependency PACKAGE` to find everywhere a package is used -- through imports, script binaries, and plugin detection. This answers: "Where is this dependency actually consumed?"
+
+```bash
+fallow check --trace-dependency lodash
+```
+
+This reports all import sites, `package.json` script binary usage, and plugin-based detection for the given package. Use this when:
+
+- A dependency is reported as unused but you believe it's used in scripts or config files.
+- You want to audit which parts of your codebase depend on a specific package.
+- You're evaluating whether a dependency can be removed.
+
+## Tracing duplication clones
+
+Use `dupes --trace FILE:LINE` to see all clone instances at a specific source location. This answers: "Where else does this duplicated code appear?"
+
+```bash
+fallow dupes --trace src/utils/validate.ts:42
+```
+
+This shows every other location that shares the same clone group as the code at the given line. Use this when:
+
+- You want to find all copies of a duplicated block before refactoring.
+- You're deciding whether to extract a shared function or module.
+- A duplication finding seems incorrect and you want to inspect the matched instances.
+
+## Performance profiling
+
+Use `--performance` to get a timing breakdown of each pipeline stage. This answers: "Where is fallow spending time?"
+
+```bash
+fallow check --performance
+fallow dupes --performance
+```
+
+The output shows timing for each stage: config loading, file discovery, parsing (with cache hit/miss statistics), resolution, graph construction, and analysis. Use this when:
+
+- Analysis is slower than expected and you want to find the bottleneck.
+- You want to verify the cache is working (high hit rate means incremental runs are fast).
+- You're comparing performance across different configuration options.
+
+## Cache behavior
+
+Fallow caches parsed AST information using bincode serialization with xxh3 hashing. On subsequent runs, unchanged files are loaded from cache instead of being re-parsed.
+
+```bash
+# Run with caching (default)
+fallow check
+
+# Skip the cache entirely
+fallow check --no-cache
+```
+
+Use `--no-cache` when:
+
+- You suspect stale cache entries are causing incorrect results.
+- You've changed fallow versions and want a clean analysis.
+- You're benchmarking full parse performance.
+
+The `--performance` flag shows cache statistics: how many files were cache hits vs. cache misses. A high cache hit rate on incremental runs is expected -- only modified files need re-parsing.
+
+## Common false positives
+
+### Dynamic imports with runtime values
+
+Fallow resolves template literals and `import.meta.glob`, but fully dynamic imports like `import(variable)` cannot be resolved statically.
+
+**Fix**: Add the target directory to `entry` in your config:
+
+```jsonc
+{
+  "entry": ["src/plugins/*.ts"]
+}
+```
+
+### Convention-based exports
+
+Some frameworks consume exports by naming convention rather than explicit imports. For example, Next.js `generateStaticParams` or Remix `loader` functions.
+
+**Fix**: Fallow's built-in plugins already handle most frameworks. If you're using a niche framework, create a [custom plugin](/frameworks/custom-plugins) or use `ignoreExports`:
+
+```jsonc
+{
+  "ignoreExports": [
+    { "pattern": "src/routes/**/*.ts", "exports": ["loader", "action"] }
+  ]
+}
+```
+
+### Dependency injection frameworks
+
+DI containers (NestJS, Angular, InversifyJS) resolve dependencies at runtime via decorators and metadata. Fallow skips decorated class members, but injected services may appear unused if they're only referenced via DI tokens.
+
+**Fix**: Add the DI-registered files as entry points, or suppress specific findings:
+
+```typescript
+// fallow-ignore-next-line unused-export
+export class UserService { /* ... */ }
+```
+
+### Peer dependencies and optional dependencies
+
+Packages listed in `peerDependencies` or `optionalDependencies` are not analyzed by default since they may be provided by the consuming project.
+
+**Fix**: If fallow incorrectly flags these, add them to `ignoreDependencies`:
+
+```jsonc
+{
+  "ignoreDependencies": ["react", "react-dom"]
+}
+```
+
+### Config files not recognized as entry points
+
+If a config file (e.g., `tailwind.config.ts`) is reported as unused, its framework plugin may not be active.
+
+**Fix**: Run `fallow list` to check which plugins are active. If the relevant plugin isn't detected, add the config file to `entry`:
+
+```jsonc
+{
+  "entry": ["tailwind.config.ts"]
+}
+```
+
+## See also
+
+<CardGroup cols={3}>
+  <Card title="Dead Code Analysis" icon="skull-crossbones" href="/analysis/dead-code">
+    Overview of how fallow detects unused code.
+  </Card>
+  <Card title="CLI: check" icon="terminal" href="/cli/check">
+    Full reference for the `fallow check` command and all its flags.
+  </Card>
+  <Card title="Inline Suppression" icon="comment-slash" href="/configuration/suppression">
+    Suppress individual findings with inline comments.
+  </Card>
+</CardGroup>

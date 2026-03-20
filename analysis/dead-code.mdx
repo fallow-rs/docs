@@ -174,6 +174,93 @@ Fallow uses syntactic analysis only -- no TypeScript compiler, no type informati
 Because fallow uses syntactic analysis only, it works best with projects using `isolatedModules: true` (required for esbuild, swc, and Vite). Legacy tsc-only projects may see some false positives on type-only imports.
 </Note>
 
+## Script binary analysis
+
+Fallow parses `package.json` scripts to detect CLI tool usage, reducing false positives in unused dependency detection. When you have a script like `"lint": "eslint src/"`, fallow recognizes that `eslint` is a binary provided by the `eslint` package and marks it as used.
+
+This works in several ways:
+
+- **Binary name to package name mapping** -- Script commands like `tsc`, `vitest`, or `next` are mapped back to their parent packages (`typescript`, `vitest`, `next`). This prevents these packages from being reported as unused even when they're never `import`-ed in source code.
+- **`--config` arguments as entry points** -- When a script references a config file (e.g., `jest --config jest.e2e.config.ts`), fallow treats that config file as an entry point. This ensures config files are not flagged as unused.
+- **File path arguments** -- Direct file references in scripts (e.g., `node scripts/seed.js`) are also recognized as entry points.
+- **Env wrappers and package manager runners** -- Commands prefixed with `cross-env`, `npx`, `pnpx`, `yarn dlx`, or `node -r` are unwrapped to find the actual tool binary underneath.
+
+```json
+{
+  "scripts": {
+    "build": "tsc && vite build",
+    "test": "vitest --config vitest.config.ts",
+    "lint": "cross-env NODE_ENV=production eslint src/"
+  }
+}
+```
+
+In this example, fallow detects `typescript`, `vite`, `vitest`, and `eslint` as used dependencies, and `vitest.config.ts` as an entry point.
+
+## Dynamic import resolution
+
+Fallow resolves dynamic imports that use patterns rather than static strings. When you write `import(\`./locales/${lang}.json\`)`, the import target is not known at static analysis time. Fallow converts these patterns into glob expressions and matches them against discovered files.
+
+Supported patterns:
+
+| Pattern | Example | Resolved as |
+|:--------|:--------|:------------|
+| Template literals | `` import(`./icons/${name}.svg`) `` | `./icons/*.svg` |
+| String concatenation | `import("./routes/" + path)` | `./routes/*` |
+| `import.meta.glob` | `import.meta.glob("./modules/*.ts")` | `./modules/*.ts` |
+| `require.context` | `require.context("./themes", true, /\.css$/)` | `./themes/**/*.css` |
+
+Files matched by these glob patterns are marked as reachable in the module graph, preventing them from being reported as unused. This is especially important for locale files, icon sets, route modules, and other convention-based directory structures.
+
+<Note>
+Dynamic imports with fully runtime-computed paths (e.g., `import(userInput)`) cannot be resolved statically. Use `entry` in your config to mark those directories as entry points.
+</Note>
+
+## Re-export chain resolution
+
+Barrel files (`index.ts` files that re-export from other modules) are common in JavaScript projects. Fallow fully resolves `export *` chains through multiple levels of barrel files with cycle detection.
+
+```typescript
+// utils/math.ts
+export const add = (a: number, b: number) => a + b;
+
+// utils/index.ts (barrel)
+export * from './math';
+
+// src/index.ts (barrel)
+export * from './utils';
+
+// app.ts
+import { add } from './src';
+```
+
+In this example, fallow traces the import of `add` in `app.ts` through `src/index.ts` and `utils/index.ts` back to `utils/math.ts`. The `add` export is correctly marked as used across the entire chain.
+
+This resolution handles:
+
+- **Multi-level chains** -- Any depth of `export *` re-exports is followed until the original declaration is found.
+- **Cycle detection** -- Circular re-export chains (e.g., `a` re-exports from `b`, `b` re-exports from `a`) are detected and handled without infinite loops.
+- **Mixed re-exports** -- Named re-exports (`export { foo } from './bar'`) and namespace re-exports (`export * from './bar'`) are both tracked.
+
+## Cross-reference with duplication
+
+When you run `fallow check --include-dupes`, fallow cross-references dead code findings with code duplication analysis. Clone instances that appear in unused files or overlap with unused exports are flagged as **combined high-priority findings**.
+
+```bash
+fallow check --include-dupes
+```
+
+This is useful for prioritizing cleanup: if a block of code is both duplicated *and* unused, removing it has double impact -- you eliminate dead code and reduce duplication at the same time.
+
+The cross-reference identifies:
+
+- **Clone instances in unused files** -- If a file is unreachable from entry points and contains duplicated code, the duplication finding is elevated.
+- **Clone instances overlapping unused exports** -- If an unused export contains code that is duplicated elsewhere, both findings are reported together.
+
+<Tip>
+Use `--include-dupes` in CI to catch the highest-impact cleanup opportunities first.
+</Tip>
+
 ## See also
 
 <CardGroup cols={3}>
