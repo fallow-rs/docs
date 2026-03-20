@@ -1,0 +1,167 @@
+---
+title: "Workspaces"
+description: "Monorepo workspace detection, cross-package imports, and per-package config."
+icon: "folder-tree"
+---
+
+Fallow automatically detects and analyzes monorepo workspaces. It understands npm, yarn, and pnpm workspace protocols, resolves cross-package imports through `node_modules` symlinks, and lets you scope output to a single package.
+
+<Info>
+Workspace detection is automatic. If your repo has a `workspaces` field in `package.json` or a `pnpm-workspace.yaml` file, fallow will find and analyze all packages.
+</Info>
+
+## Workspace auto-detection
+
+Fallow detects workspaces from these sources:
+
+| Source | Example |
+|:-------|:--------|
+| `package.json` `workspaces` field | `"workspaces": ["packages/*"]` |
+| `pnpm-workspace.yaml` | `packages: ["packages/*", "apps/*"]` |
+
+<CodeGroup>
+```json package.json (npm / yarn)
+{
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ]
+}
+```
+
+```yaml pnpm-workspace.yaml
+packages:
+  - "packages/*"
+  - "apps/*"
+```
+</CodeGroup>
+
+## Cross-workspace imports
+
+When package `apps/web` imports from `@myorg/ui`, fallow resolves the import through the `node_modules` symlink back to the workspace source files. Symlinked paths are canonicalized so that usage is tracked against the real source location, not the `node_modules` copy.
+
+```ts apps/web/src/App.tsx
+// Resolves to packages/ui/src/Button.tsx via node_modules symlink
+import { Button } from '@myorg/ui'
+```
+
+### Pnpm content-addressable store
+
+Pnpm uses a content-addressable store with a `.pnpm` virtual store inside `node_modules`. Fallow detects these `.pnpm` virtual store paths and maps them back to the original workspace source files, so cross-package usage is tracked correctly even with pnpm's strict isolation mode.
+
+## Package exports resolution
+
+Fallow resolves the `exports` field in each package's `package.json`, including subpath patterns:
+
+```json packages/ui/package.json
+{
+  "name": "@myorg/ui",
+  "exports": {
+    ".": "./src/index.ts",
+    "./icons": "./src/icons/index.ts",
+    "./theme/*": "./src/theme/*.ts"
+  }
+}
+```
+
+An import of `@myorg/ui/icons` resolves to `packages/ui/src/icons/index.ts`.
+
+## Output directory mapping
+
+When a package's `exports` or `main` field points to a build output directory (`dist`, `build`, `out`, `esm`, `cjs`), fallow maps it back to the corresponding source file. It tries the same relative path under `src/` with source extensions (`.ts`, `.tsx`, `.js`, `.jsx`).
+
+```json packages/utils/package.json
+{
+  "main": "dist/index.js"
+}
+```
+
+Fallow maps `dist/index.js` back to `src/index.ts` (or `.js`, `.tsx`, etc.) if the source file exists.
+
+## Per-package tsconfig.json
+
+Fallow discovers `tsconfig.json` files in each workspace package automatically (`TsconfigDiscovery::Auto`). Path aliases defined in each package's `tsconfig.json` are used when resolving imports within that package.
+
+```json packages/ui/tsconfig.json
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  }
+}
+```
+
+## Scoping output to a single package
+
+Use `-w` / `--workspace` to focus output on a single package. Fallow still analyzes the full monorepo graph but only reports issues within the specified package.
+
+```bash
+# Only show issues in the @myorg/ui package
+fallow check -w @myorg/ui
+
+# Works with any command
+fallow dupes -w @myorg/web
+```
+
+<Tip>
+Use `--workspace` in CI to run per-package checks in parallel, each with its own exit code.
+</Tip>
+
+## Per-package config overrides
+
+Override any configuration field for specific workspace packages in your root config file:
+
+<CodeGroup>
+```jsonc .fallowrc.json
+{
+  "rules": {
+    "unused-exports": "error"
+  },
+  "workspaces": {
+    "packages/ui": {
+      "entry": ["src/index.ts"],
+      "ignoreExports": [
+        { "pattern": "src/**/*.tsx", "exports": ["*"] }
+      ]
+    },
+    "packages/config": {
+      "rules": {
+        "unused-exports": "off"
+      }
+    }
+  }
+}
+```
+
+```toml fallow.toml
+[rules]
+unused-exports = "error"
+
+[workspaces."packages/ui"]
+entry = ["src/index.ts"]
+
+[[workspaces."packages/ui".ignoreExports]]
+pattern = "src/**/*.tsx"
+exports = ["*"]
+
+[workspaces."packages/config".rules]
+unused-exports = "off"
+```
+</CodeGroup>
+
+<Warning>
+Workspace overrides are merged with the root config, not replaced. If you set a rule at the root level, it applies to all packages unless explicitly overridden.
+</Warning>
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="gear" href="/configuration/overview">
+    Full config file reference including all available fields.
+  </Card>
+  <Card title="fallow check" icon="terminal" href="/cli/check">
+    CLI reference for running analysis across workspaces.
+  </Card>
+</CardGroup>

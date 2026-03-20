@@ -1,0 +1,157 @@
+---
+title: "Known Limitations"
+description: "Current analysis boundaries and workarounds."
+icon: "triangle-exclamation"
+---
+
+Fallow is a syntactic analyzer -- it trades some precision for speed. This page documents the known limitations and how to work around them.
+
+<Info>
+Most limitations only matter in specific project setups. For the majority of JavaScript and TypeScript codebases, fallow produces accurate results out of the box.
+</Info>
+
+<Accordion title="Syntactic analysis only (no TypeScript type information)">
+  Fallow parses source code as syntax trees using Oxc. It does **not** invoke the TypeScript compiler or resolve type information. This is the core design trade-off that makes fallow fast.
+
+  **Impact:** Type-only imports that are elided by the TypeScript compiler (e.g., `import type { Foo }`) are handled correctly. However, legacy patterns where a value import is used only as a type may cause false positives in rare cases.
+
+  **Workaround:** Ensure your project uses `isolatedModules: true` in `tsconfig.json`. This is already required by esbuild, swc, and Vite, so most modern projects already have it. With `isolatedModules`, every import is either explicitly `import type` or a real value import -- eliminating ambiguity.
+
+  ```jsonc tsconfig.json
+  {
+    "compilerOptions": {
+      "isolatedModules": true
+    }
+  }
+  ```
+</Accordion>
+
+<Accordion title="Svelte export false negatives">
+  In Svelte components, `export let` declarations serve double duty: they define component props **and** regular exports. Fallow cannot distinguish between props (which are used by consumers via the template) and utility exports that may genuinely be unused.
+
+  **Impact:** Some unused exports in `.svelte` files may not be reported.
+
+  **Workaround:** There is no configuration workaround for this. Review Svelte component exports manually. Utility functions should be extracted into separate `.ts` files where fallow can track them accurately.
+</Accordion>
+
+<Accordion title="CSS/SCSS regex-based parsing">
+  CSS and SCSS files are parsed with lightweight regex extraction rather than a full CSS parser. This covers the most common patterns but not the full CSS specification.
+
+  **What's tracked:**
+  - `@import` and `@use` statements
+  - `@forward` rules
+  - `@apply` and `@tailwind` directives (as Tailwind dependency usage)
+
+  **What's not tracked:**
+  - `composes:` (CSS Modules composition)
+  - `:global()` and `:local()` pseudo-selectors
+  - Complex selector-based dependencies
+
+  **Workaround:** If fallow reports false positives for CSS files that use `composes:` or `:global()`, suppress them with `ignorePatterns` or inline comments.
+
+  ```jsonc .fallowrc.json
+  {
+    "ignorePatterns": ["**/legacy-styles/**/*.css"]
+  }
+  ```
+</Accordion>
+
+<Accordion title="NestJS and dependency injection class members">
+  Fallow tracks class member usage syntactically -- it looks for direct references in source code. In NestJS and other DI frameworks, abstract class methods may be invoked at runtime through the DI container without appearing as direct references.
+
+  **Impact:** Abstract class methods and properties consumed via dependency injection may be reported as unused.
+
+  **Workaround:** Disable `unused-class-members` for DI-heavy projects:
+
+  <CodeGroup>
+  ```jsonc .fallowrc.json
+  {
+    "rules": {
+      "unused-class-members": "off"
+    }
+  }
+  ```
+
+  ```toml fallow.toml
+  [rules]
+  unused-class-members = "off"
+  ```
+  </CodeGroup>
+</Accordion>
+
+<Accordion title="Library consumer types (noisy but correct)">
+  If your package exports types intended for external consumers (e.g., `ButtonProps`, `Config`), fallow will correctly report them as unused within your project -- because they are. No internal file imports them.
+
+  **Impact:** Correct findings that are noisy for library authors.
+
+  **Workaround:** Use `ignoreExports` to mark public API files:
+
+  ```jsonc .fallowrc.json
+  {
+    "ignoreExports": [
+      { "pattern": "src/index.ts", "exports": ["*"] },
+      { "pattern": "src/types.ts", "exports": ["*"] }
+    ]
+  }
+  ```
+</Accordion>
+
+<Accordion title="Config parsing ceiling">
+  Fallow's built-in plugins parse config files (e.g., `vite.config.ts`, `jest.config.js`) using Oxc's AST parser. This handles static objects, arrays, and `defineConfig()` wrappers. However, it cannot evaluate arbitrary JavaScript.
+
+  **What's handled:**
+  - Static object literals and arrays
+  - `defineConfig()` / `module.exports` wrappers
+  - String concatenation in simple cases
+
+  **What's not handled:**
+  - Computed property keys
+  - Conditional expressions (`process.env.NODE_ENV === 'production' ? ... : ...`)
+  - Nested factory functions
+  - Dynamic `require()` with variables
+
+  **Workaround:** Add undetected entry points manually in your fallow config:
+
+  ```jsonc .fallowrc.json
+  {
+    "entry": ["src/dynamic-entry.ts", "scripts/*.ts"]
+  }
+  ```
+</Accordion>
+
+<Accordion title="React Native native modules">
+  React Native auto-linked native packages (installed via `npx pod-install` or auto-linking) are not detected as used by fallow. These packages may not have any explicit `import` in JavaScript code.
+
+  **Impact:** Auto-linked packages like `react-native-screens` or `react-native-gesture-handler` may be reported as unused dependencies.
+
+  **Workaround:** Add auto-linked packages to `ignoreDependencies`:
+
+  ```jsonc .fallowrc.json
+  {
+    "ignoreDependencies": [
+      "react-native-screens",
+      "react-native-gesture-handler",
+      "react-native-safe-area-context"
+    ]
+  }
+  ```
+</Accordion>
+
+<Accordion title="LSP column offsets are byte-based">
+  The fallow LSP server reports column positions as byte offsets rather than character offsets. For ASCII-only source files this makes no difference. For files containing multi-byte characters (emoji, CJK, accented characters), the column number may be off by a few positions.
+
+  **Impact:** Diagnostic squiggles in VS Code may be slightly misaligned on lines containing non-ASCII characters.
+
+  **Workaround:** This is a cosmetic issue only. The line number and file path are always correct, so navigation still works. A fix is planned for a future release.
+</Accordion>
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="Inline suppression" icon="comment-slash" href="/configuration/suppression">
+    Suppress individual false positives directly in source code.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/overview">
+    Full config file reference for ignorePatterns, ignoreExports, and rules.
+  </Card>
+</CardGroup>

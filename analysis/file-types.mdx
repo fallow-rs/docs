@@ -1,0 +1,146 @@
+---
+title: "Non-JS File Types"
+description: "Vue, Svelte, Astro, MDX, CSS modules, and platform-specific extensions."
+icon: "file-code"
+---
+
+Fallow doesn't just analyze `.js` and `.ts` files. It extracts imports and exports from a range of non-JavaScript file types, so your module graph stays complete without manual configuration.
+
+<Info>
+All file type support is built in. Fallow detects these files automatically based on their extension -- no plugins or config needed.
+</Info>
+
+<Tabs>
+  <Tab title="Vue / Svelte">
+    Fallow extracts the `<script>` block from Vue and Svelte single-file components and analyzes it like a standalone JS/TS module.
+
+    **What's supported:**
+
+    - `<script>` and `<script setup>` blocks
+    - `lang="ts"` and `lang="tsx"` attributes
+    - `<script src="./external.ts">` external script references
+    - HTML comments (`<!-- ... -->`) are filtered out before parsing
+
+    ```vue Example.vue
+    <script setup lang="ts">
+    import { ref } from 'vue'
+    import { formatDate } from '@/utils/date'
+
+    const count = ref(0)
+    </script>
+
+    <template>
+      <div>{{ formatDate(new Date()) }}</div>
+    </template>
+    ```
+
+    Fallow sees this file as importing `ref` from `vue` and `formatDate` from `@/utils/date`.
+
+    <Warning>
+    Svelte components export props implicitly. Fallow cannot distinguish between props and utility exports, which may cause false negatives for unused exports in `.svelte` files. See [Limitations](/analysis/limitations) for details.
+    </Warning>
+  </Tab>
+  <Tab title="Astro">
+    Astro components use a frontmatter block delimited by `---` at the top of the file. Fallow extracts everything between the two `---` delimiters and analyzes it as TypeScript.
+
+    ```astro Layout.astro
+    ---
+    import Header from '../components/Header.astro'
+    import Footer from '../components/Footer.astro'
+    import type { Props } from './types'
+    ---
+
+    <html>
+      <body>
+        <Header />
+        <slot />
+        <Footer />
+      </body>
+    </html>
+    ```
+
+    Fallow sees this file as importing `Header`, `Footer`, and the `Props` type.
+  </Tab>
+  <Tab title="MDX">
+    MDX files can contain JavaScript `import` and `export` statements alongside Markdown content. Fallow extracts these statements and includes them in the module graph.
+
+    ```mdx guide.mdx
+    import { CodeBlock } from '../components/CodeBlock'
+    import { Callout } from '../components/Callout'
+
+    export const meta = { title: 'Getting Started' }
+
+    # Getting Started
+
+    <CodeBlock language="bash">
+      npm install fallow
+    </CodeBlock>
+    ```
+
+    Fallow tracks the imports of `CodeBlock` and `Callout`, and the named export `meta`.
+  </Tab>
+  <Tab title="CSS / SCSS Modules">
+    Fallow tracks CSS and SCSS module files (`.module.css` and `.module.scss`) by extracting class names as named exports. When a component imports `styles` from a CSS module, fallow knows which classes are defined.
+
+    ```css Button.module.css
+    .root {
+      display: flex;
+    }
+
+    .primary {
+      background: blue;
+    }
+
+    .disabled {
+      opacity: 0.5;
+    }
+    ```
+
+    This file exports `root`, `primary`, and `disabled` as named exports.
+
+    **CSS features fallow tracks:**
+
+    | Feature | Description |
+    |:--------|:------------|
+    | `@import` | CSS import statements create edges in the module graph |
+    | `@use` | Sass `@use` rules are resolved as module imports |
+    | `@forward` | Sass `@forward` rules are treated as re-exports |
+    | `@apply` / `@tailwind` | Detected as Tailwind CSS dependency usage |
+
+    <Tip>
+    When Tailwind is in your `package.json`, fallow recognizes `@apply` and `@tailwind` directives as evidence that the `tailwindcss` dependency is used -- preventing false "unused dependency" reports.
+    </Tip>
+  </Tab>
+  <Tab title="React Native">
+    React Native projects use platform-specific file extensions to provide different implementations per platform. Fallow understands these extensions and treats them as variants of the same module.
+
+    **Supported platform extensions:**
+
+    | Extension | Platform |
+    |:----------|:---------|
+    | `.web.ts` / `.web.tsx` | Web (react-native-web) |
+    | `.ios.ts` / `.ios.tsx` | iOS |
+    | `.android.ts` / `.android.tsx` | Android |
+    | `.native.ts` / `.native.tsx` | Native (iOS + Android) |
+
+    ```
+    src/
+      Button.tsx          # Default implementation
+      Button.web.tsx      # Web override
+      Button.native.tsx   # Native override
+    ```
+
+    When another file imports `./Button`, fallow resolves it to all platform variants and considers each one reachable.
+  </Tab>
+</Tabs>
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="Dead code analysis" icon="skull-crossbones" href="/analysis/dead-code">
+    How fallow builds the module graph and detects unused code.
+  </Card>
+  <Card title="Built-in plugins" icon="puzzle-piece" href="/frameworks/built-in">
+    47 framework plugins for automatic entry point detection.
+  </Card>
+</CardGroup>
