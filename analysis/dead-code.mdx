@@ -242,11 +242,11 @@ fallow check --trace-dependency lodash
 
 ## How it works
 
-Fallow uses syntactic analysis only: no TypeScript compiler, no type information. This is what makes it fast.
+Fallow uses syntactic analysis with scope-aware binding resolution via Oxc: no TypeScript compiler, no type information. This is what makes it fast.
 
 ```mermaid
 flowchart TB
-  A["Discovery<br/>Entry points from package.json + plugins"] --> B["Parsing<br/>Parallel with Oxc + rayon"]
+  A["Discovery<br/>Entry points from package.json + plugins"] --> B["Parsing<br/>Parallel with Oxc + oxc_semantic + rayon"]
   B --> C["Resolution<br/>Import specifiers to file paths"]
   C --> D["Graph<br/>Module graph with re-export chains"]
   D --> E["Analysis<br/>Walk from entry points, report unreachable code"]
@@ -255,7 +255,7 @@ flowchart TB
 This graph-based approach guarantees completeness regardless of project size.
 
 <Note>
-Because fallow uses syntactic analysis only, it works best with projects using `isolatedModules: true` (required for esbuild, swc, and Vite). Legacy tsc-only projects may see some false positives on type-only imports.
+Fallow works best with projects using `isolatedModules: true` (required for esbuild, swc, and Vite). `oxc_semantic` scope analysis detects unused import bindings (imports where the bound name is never read), but legacy tsc-only projects without `isolatedModules` may still see edge cases with type-only imports.
 </Note>
 
 ## Script binary analysis
@@ -333,6 +333,26 @@ This resolution handles:
 - **Cycle detection:** Circular re-export chains (e.g., `a` re-exports from `b`, `b` re-exports from `a`) are detected and handled without infinite loops.
 - **Mixed re-exports:** Named re-exports (`export { foo } from './bar'`) and namespace re-exports (`export * from './bar'`) are both tracked.
 
+## Namespace import narrowing
+
+When a file uses `import * as ns from './module'`, fallow narrows which exports are actually consumed by scanning for member accesses (`ns.foo`, `ns.bar`) and destructuring patterns (`const { foo, bar } = ns`) in the importing file.
+
+```ts
+import * as utils from './utils';
+
+// Only foo and bar are marked as used — baz remains unused
+const { foo } = utils;
+utils.bar();
+```
+
+This works with static imports, dynamic imports (`const mod = await import('./x')`), and require (`const mod = require('./x')`).
+
+Fallow also uses `oxc_semantic` scope analysis to detect imports where the binding is never read. An `import { foo } from './utils'` where `foo` is never referenced in the file does not count as a reference to the `foo` export — improving unused-export detection precision.
+
+<Note>
+Whole-object consumption patterns like `Object.values(ns)`, `{ ...ns }`, `for (const k in ns)`, and rest destructuring (`const { a, ...rest } = ns`) conservatively mark all exports as used, since the tool cannot determine which specific members are accessed.
+</Note>
+
 ## Cross-reference with duplication
 
 When you run `fallow check --include-dupes`, fallow cross-references dead code findings with code duplication analysis. Clone instances that appear in unused files or overlap with unused exports are flagged as **combined high-priority findings**.
@@ -358,14 +378,14 @@ Fallow detects dependency cycles during module graph construction with zero extr
 
 | Project | Files | fallow | madge | dpdm | vs madge | vs dpdm |
 |:--------|------:|-------:|------:|-----:|---------:|--------:|
-| [zod](https://github.com/colinhacks/zod) | 174 | **17ms** | 565ms | 201ms | **34.2x** | **12.2x** |
-| [preact](https://github.com/preactjs/preact) | 244 | **25ms** | 476ms | 176ms | **19.2x** | **7.1x** |
-| [fastify](https://github.com/fastify/fastify) | 286 | **29ms** | 251ms | 218ms | **8.6x** | **7.4x** |
-| synthetic (1,000 files) | 1,000 | **30ms** | 544ms | 217ms | **18.2x** | **7.3x** |
-| synthetic (5,000 files) | 5,000 | **123ms** | 1.80s | 417ms | **14.6x** | **3.4x** |
+| [zod](https://github.com/colinhacks/zod) | 174 | **17ms** | 540ms | 190ms | **32x** | **11x** |
+| [preact](https://github.com/preactjs/preact) | 244 | **19ms** | 298ms | 132ms | **16x** | **7x** |
+| [fastify](https://github.com/fastify/fastify) | 286 | **20ms** | 165ms | 132ms | **8x** | **7x** |
+| [vue/core](https://github.com/vuejs/core) | 522 | **59ms** | 175ms | 143ms | **3x** | **2x** |
+| [TanStack/query](https://github.com/TanStack/query) | 901 | **134ms** | 168ms | 137ms | **1.3x** | **1.0x** |
 
 <Info>
-  9-34x faster than madge, 3-12x faster than dpdm. Fallow uses 5-7x less memory because it reuses the module graph already built for dead code analysis.
+  3-32x faster than madge, 2-11x faster than dpdm on small-to-medium projects. Fallow uses 5-7x less memory because it reuses the module graph already built for dead code analysis.
 </Info>
 
 ## See also
