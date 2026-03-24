@@ -1,11 +1,11 @@
 ---
 title: "Metric definitions"
-description: "What each metric in fallow's health, duplication, and check output means, how it's computed, and how to interpret the values."
-keywords: ["metrics", "maintainability index", "cyclomatic complexity", "cognitive complexity", "hotspots", "fan-in", "fan-out"]
+description: "What each metric in fallow's health, duplication, and check output means, how it's computed, and how to interpret the values — with links to the research behind each metric."
+keywords: ["metrics", "maintainability index", "cyclomatic complexity", "cognitive complexity", "hotspots", "fan-in", "fan-out", "clone detection"]
 icon: "chart-line"
 ---
 
-Fallow's `health` and `dupes` commands produce numeric metrics. This page explains what each metric means, how it's computed, and what values to aim for.
+Fallow's `health` and `dupes` commands produce numeric metrics rooted in established software engineering research. This page explains what each metric means, how it's computed, how to interpret the values, and where the underlying research comes from.
 
 <Tip>
 Pass `--explain` to any command with `--format json` to include metric definitions directly in the JSON output as a `_meta` object. The MCP server always includes `_meta` automatically.
@@ -19,46 +19,56 @@ These metrics appear in `fallow health` output, both per-function (findings) and
 
 ### Cyclomatic complexity
 
-**What it measures:** The number of independent paths through a function. Computed as 1 + the number of decision points (if/else, switch cases, loops, ternary operators, logical `&&`/`||`).
+**What it measures:** The number of linearly independent paths through a function's control flow graph. Computed as 1 + the number of decision points (`if`/`else`, `switch` cases, `for`/`while`/`do` loops, ternary `?:`, logical `&&`/`||`, `catch` blocks).
 
 | Range | Interpretation |
 |:------|:---------------|
-| 1–10 | Simple, easy to test |
-| 11–20 | Moderate complexity |
-| 21–50 | High complexity, consider splitting |
-| 50+ | Very high, hard to test exhaustively |
+| 1–10 | Simple, easy to test exhaustively |
+| 11–20 | Moderate — most functions should stay here |
+| 21–50 | High, consider splitting into smaller functions |
+| 50+ | Very high — testing all paths is impractical |
 
 **Default threshold:** 20
 
+**Research:** Introduced by Thomas McCabe in his 1976 IEEE paper ["A Complexity Measure"](https://doi.org/10.1109/TSE.1976.233837). The threshold ranges above are widely used in industry tooling (SonarQube, ESLint, Visual Studio) and trace back to McCabe's original recommendation that functions above 10 require more rigorous testing, with the NIST recommendation of 20 as a practical upper bound.
+
 ### Cognitive complexity
 
-**What it measures:** How hard a function is to understand when reading top-to-bottom. Unlike cyclomatic complexity, cognitive complexity penalizes nesting depth and non-linear control flow (breaks, continues, early returns, recursion).
+**What it measures:** How hard a function is to understand when reading top-to-bottom. Unlike cyclomatic complexity (which counts paths), cognitive complexity penalizes structures that break linear reading flow: nesting depth, `break`/`continue` to labels, recursion, and sequences of logical operators.
 
 | Range | Interpretation |
 |:------|:---------------|
-| 0–7 | Easy to understand |
-| 8–15 | Moderate, may need comments |
-| 15+ | Hard to follow, consider refactoring |
+| 0–7 | Easy to understand at a glance |
+| 8–15 | Moderate — may benefit from extraction |
+| 15+ | Hard to follow, refactoring recommended |
 
 **Default threshold:** 15
 
+**Research:** Developed by G. Ann Campbell at SonarSource. The full specification is available as a [white paper from SonarSource](https://www.sonarsource.com/resources/cognitive-complexity/). The metric was designed to address a key limitation of cyclomatic complexity: a `switch` with 20 cases has cyclomatic 20 but is trivially readable, while 4 levels of nested `if`/`else` has cyclomatic 4 but is much harder to follow. Cognitive complexity captures this distinction by incrementing for nesting rather than just branching.
+
 ### Complexity density
 
-**What it measures:** Total cyclomatic complexity divided by lines of code. A file with 100 cyclomatic and 100 lines has density 1.0.
+**What it measures:** Total cyclomatic complexity divided by lines of code. A file with cyclomatic sum 100 across 100 lines has density 1.0.
 
 | Value | Interpretation |
 |:------|:---------------|
-| < 0.3 | Low density |
-| 0.3–1.0 | Moderate |
-| > 1.0 | Very dense, nearly every line is a decision point |
+| < 0.3 | Low — typical for data files, configs, simple modules |
+| 0.3–1.0 | Moderate — normal application code |
+| > 1.0 | Very dense — nearly every line is a decision point |
+
+This metric is not from a single paper but combines McCabe's cyclomatic complexity with the well-established practice of normalizing metrics by size to enable fair cross-file comparison.
 
 ---
 
 ## File health scores
 
-Per-file scores from `fallow health --file-scores`. Zero-function files (barrel files, re-export files) are excluded.
+Per-file scores from `fallow health --file-scores`. Zero-function files (barrel files, re-export files) are excluded to avoid degenerate scores.
 
 ### Maintainability Index (MI)
+
+Fallow uses a **simplified Maintainability Index** adapted for JavaScript/TypeScript module graphs. The classic MI formula from [Oman and Hagemeister (1992)](https://doi.org/10.1109/ICSM.1992.242525) combines Halstead Volume, cyclomatic complexity, lines of code, and comment percentage. [Microsoft's adaptation](https://learn.microsoft.com/en-us/visualstudio/code-quality/code-metrics-maintainability-index-range-and-meaning) normalized the scale to 0–100.
+
+Fallow's variant replaces Halstead Volume (which requires full type resolution) with **complexity density**, and adds **dead code ratio** and **fan-out coupling** — metrics that are meaningful at the module level in JS/TS codebases:
 
 **Formula:**
 
@@ -75,23 +85,27 @@ Clamped to \[0, 100\]. Higher is better.
 | 40–70 | Moderate, review periodically |
 | 0–40 | Poor, prioritize for refactoring |
 
-### Fan-in (importers)
+These thresholds align with [Microsoft's Visual Studio ranges](https://learn.microsoft.com/en-us/visualstudio/code-quality/code-metrics-maintainability-index-range-and-meaning) (green/yellow/red at 20 and 10 on their 0–100 scale; fallow uses more conservative thresholds since the formula differs).
 
-Number of files that import this file. High fan-in means high **blast radius** — changes to this file affect many dependents.
+### Fan-in and fan-out
 
-### Fan-out (imports)
+**Fan-in** (importers): Number of files that import this file. High fan-in means high **blast radius** — changes to this file affect many dependents.
 
-Number of files this file directly imports. High fan-out indicates high coupling. The MI formula penalizes fan-out logarithmically, capping at \~40 imports.
+**Fan-out** (imports): Number of files this file directly imports. High fan-out indicates high coupling and change propagation risk. The MI formula penalizes fan-out logarithmically, capping the penalty at ~40 imports.
+
+**Research:** Fan-in/fan-out coupling metrics originate from [Henry and Kafura (1981)](https://doi.org/10.1109/TSE.1981.231113), who defined information flow complexity as `length × (fan_in × fan_out)²`. The concept was later refined in the [Chidamber & Kemerer OO metrics suite (1994)](https://doi.org/10.1109/32.295895), where Coupling Between Objects (CBO) captures the same idea for class-level dependencies.
 
 ### Dead code ratio
 
-Fraction of value exports with zero references (0.0–1.0). Type-only exports (interfaces, type aliases) are excluded from both numerator and denominator to avoid inflating the ratio in well-typed codebases.
+Fraction of value exports with zero references (0.0–1.0). Type-only exports (interfaces, type aliases) are excluded from both numerator and denominator to avoid inflating the ratio in well-typed codebases that export props types alongside components.
 
 ---
 
 ## Hotspot metrics
 
-Hotspots combine **code complexity** with **git churn history** to find files that are both hard to maintain and frequently changing. Available via `fallow health --hotspots`.
+Hotspots identify files that are both **complex** and **frequently changing** — the intersection where bugs are most likely to occur and where refactoring yields the highest return on investment. Available via `fallow health --hotspots`.
+
+**Research:** The churn × complexity methodology was pioneered by [Michael Feathers](https://www.agileconnection.com/article/getting-empirical-about-refactoring) and systematized by Adam Tornhill in [*Your Code as a Crime Scene*](https://pragprog.com/titles/atcrime/your-code-as-a-crime-scene/) (2015) and [*Software Design X-Rays*](https://pragprog.com/titles/atevol/software-design-x-rays/) (2018). The core insight: complex code that never changes is stable (leave it alone); simple code that changes often is fine (easy to modify); but complex code that changes often is where defects concentrate.
 
 ### Hotspot score
 
@@ -103,40 +117,53 @@ normalized_complexity = complexity_density / max_density      (0..1)
 score = normalized_churn × normalized_complexity × 100       (0..100)
 ```
 
-Uses within-project max normalization. Higher score = higher risk. A file needs both high churn AND high complexity to score highly.
+Uses within-project max normalization — scores are relative to the most churned and most complex file in your project. A file needs both high churn AND high complexity to score highly; either dimension alone produces a low score due to the multiplicative relationship.
 
 ### Weighted commits
 
-Recency-weighted commit count using exponential decay with a 90-day half-life. A commit yesterday counts more than a commit 6 months ago.
+Recency-weighted commit count using exponential decay with a 90-day half-life. A commit yesterday contributes ~1.0 to the weighted count; a commit 90 days ago contributes ~0.5; a commit 180 days ago contributes ~0.25.
+
+**Research:** Recency-weighted change metrics for defect prediction were introduced by [Graves, Karr, Marron, and Siy (2000)](https://doi.org/10.1109/32.859533), who demonstrated that recent changes are significantly more predictive of faults than older changes. The empirical link between code churn and defect density was further established by [Nagappan and Ball (2005)](https://doi.org/10.1145/1062455.1062514) at Microsoft.
 
 ### Churn trend
 
-Compares the first half vs the second half of the analysis window:
+Compares commit frequency in the first half vs the second half of the analysis window:
 
 | Trend | Meaning |
 |:------|:--------|
 | `accelerating` | Recent commits > 1.5× older commits — activity is increasing |
-| `stable` | Balanced commit frequency |
+| `stable` | Balanced commit frequency across the window |
 | `cooling` | Recent commits < 0.67× older commits — activity is decreasing |
+
+Accelerating files with high complexity scores are the highest-priority refactoring candidates.
 
 ---
 
 ## Duplication metrics
 
-From `fallow dupes` output.
+From `fallow dupes` output. Fallow uses token-based clone detection with configurable normalization.
+
+**Research:** Clone detection taxonomy and techniques are surveyed in [Roy, Cordy, and Koschke (2009)](https://doi.org/10.1016/j.scico.2009.02.007). Token-based clone detection was pioneered by [Baker (1995)](https://doi.org/10.1109/WCRE.1995.514697) using parameterized string matching. Fallow's approach is token-based with four normalization levels:
+
+| Mode | Clone type | What is normalized |
+|:-----|:-----------|:-------------------|
+| `strict` | Type-1 | Nothing — exact token match |
+| `mild` | Type-2 | Identifiers abstracted |
+| `weak` | Type-2+ | Identifiers + literals abstracted |
+| `semantic` | Type-2+ | Identifiers + literals + types stripped |
 
 ### Duplication percentage
 
-Fraction of total source tokens that appear in at least one clone group. Computed over the full analyzed file set.
+Fraction of total source tokens that appear in at least one clone group. Computed over the full analyzed file set before any `--top` truncation.
 
 ### Token count / line count
 
-Per-clone-group size metrics. Tokens are language-aware (keywords, identifiers, operators). Larger clones have higher refactoring value.
+Per-clone-group size metrics. Tokens are language-aware (keywords, identifiers, operators, punctuation). Line count is the span in source lines. Larger clones have higher refactoring value — prioritize groups with the most tokens.
 
 ### Clone groups vs clone families
 
-- **Clone group**: A set of 2+ code fragments with identical normalized token sequences.
-- **Clone family**: Multiple clone groups that share the same set of files — indicating systematic duplication patterns (e.g., copy-pasted modules).
+- **Clone group**: A set of 2+ code fragments with identical normalized token sequences at different locations.
+- **Clone family**: Multiple clone groups that share the same set of files — indicating systematic duplication patterns (e.g., two modules that are copy-pasted variants of each other). Families suggest **extract-module** refactoring rather than per-function extraction.
 
 ---
 
@@ -152,7 +179,7 @@ When `--explain` is passed (or via MCP), each command's JSON output includes a `
     "metrics": {
       "maintainability_index": {
         "name": "Maintainability Index",
-        "description": "Composite score...",
+        "description": "Composite score: 100 - (complexity_density × 30) - ...",
         "range": "[0, 100]",
         "interpretation": "higher is better; <40 poor, 40–70 moderate, >70 good"
       }
@@ -162,3 +189,20 @@ When `--explain` is passed (or via MCP), each command's JSON output includes a `
 ```
 
 This allows AI agents and CI systems to programmatically understand what each metric means without consulting external documentation.
+
+---
+
+## References
+
+1. McCabe, T.J. (1976). "A Complexity Measure." *IEEE Transactions on Software Engineering*, SE-2(4), 308–320. [doi:10.1109/TSE.1976.233837](https://doi.org/10.1109/TSE.1976.233837)
+2. Campbell, G.A. (2018). "Cognitive Complexity: A new way of measuring understandability." SonarSource. [sonarsource.com/resources/cognitive-complexity](https://www.sonarsource.com/resources/cognitive-complexity/)
+3. Oman, P. and Hagemeister, J. (1992). "Metrics for Assessing a Software System's Maintainability." *Proc. ICSM*, 337–344. [doi:10.1109/ICSM.1992.242525](https://doi.org/10.1109/ICSM.1992.242525)
+4. Microsoft. "Maintainability Index range and meaning." [learn.microsoft.com](https://learn.microsoft.com/en-us/visualstudio/code-quality/code-metrics-maintainability-index-range-and-meaning)
+5. Henry, S. and Kafura, D. (1981). "Software Structure Metrics Based on Information Flow." *IEEE TSE*, SE-7(5), 510–518. [doi:10.1109/TSE.1981.231113](https://doi.org/10.1109/TSE.1981.231113)
+6. Chidamber, S.R. and Kemerer, C.F. (1994). "A Metrics Suite for Object Oriented Design." *IEEE TSE*, 20(6), 476–493. [doi:10.1109/32.295895](https://doi.org/10.1109/32.295895)
+7. Tornhill, A. (2015). *Your Code as a Crime Scene.* Pragmatic Programmers. [pragprog.com](https://pragprog.com/titles/atcrime/your-code-as-a-crime-scene/)
+8. Tornhill, A. (2018). *Software Design X-Rays.* Pragmatic Programmers. [pragprog.com](https://pragprog.com/titles/atevol/software-design-x-rays/)
+9. Graves, T.L. et al. (2000). "Predicting Fault Incidence Using Software Change History." *IEEE TSE*, 26(7), 653–661. [doi:10.1109/32.859533](https://doi.org/10.1109/32.859533)
+10. Nagappan, N. and Ball, T. (2005). "Use of Relative Code Churn Measures to Predict System Defect Density." *Proc. ICSE*, 284–292. [doi:10.1145/1062455.1062514](https://doi.org/10.1145/1062455.1062514)
+11. Roy, C.K., Cordy, J.R., and Koschke, R. (2009). "Comparison and Evaluation of Code Clone Detection Techniques and Tools." *Science of Computer Programming*, 74(7), 470–495. [doi:10.1016/j.scico.2009.02.007](https://doi.org/10.1016/j.scico.2009.02.007)
+12. Baker, B.S. (1995). "On Finding Duplication and Near-Duplication in Large Software Systems." *Proc. WCRE*, 86–95. [doi:10.1109/WCRE.1995.514697](https://doi.org/10.1109/WCRE.1995.514697)
