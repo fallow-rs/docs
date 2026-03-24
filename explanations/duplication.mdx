@@ -85,39 +85,81 @@ The number of locations where the same code appears. A clone group with 5 instan
 
 ### Clone groups
 
-A **clone group** is a set of 2+ code fragments with identical normalized token sequences. Each fragment is an **instance** of the group.
+A **clone group** is a single duplicated code block found at 2+ locations. Each location is an **instance**.
 
 ```text
-● Clone group (42 lines, 3 instances)
-  src/features/forecasting/server/procedures/analytics.ts:141-181
-  src/features/forecasting/server/procedures/cashflow.ts:153-194
-  src/features/forecasting/server/procedures/income.ts:590-631
+● Clone group 1 (8 lines, 2 instances)
+  src/validators/userValidator.ts:12-19
+  src/validators/orderValidator.ts:8-15
 ```
 
-This means lines 141–181 of `analytics.ts`, 153–194 of `cashflow.ts`, and 590–631 of `income.ts` have the same token structure.
+This means one block of 8 lines appears in both files. Here's what it looks like:
+
+<CodeGroup>
+
+```typescript userValidator.ts:12-19
+const errors: string[] = [];
+for (const [key, rule] of Object.entries(rules)) {
+  const value = data[key];
+  if (rule.required && (value === undefined || value === null)) {
+    errors.push(`${key} is required`);
+  }
+}
+return errors;
+```
+
+```typescript orderValidator.ts:8-15
+const errors: string[] = [];
+for (const [key, rule] of Object.entries(rules)) {
+  const value = data[key];
+  if (rule.required && (value === undefined || value === null)) {
+    errors.push(`${key} is required`);
+  }
+}
+return errors;
+```
+
+</CodeGroup>
+
+One clone group = one duplicated block. But the same two files may share more than one block:
+
+```text
+● Clone group 2 (6 lines, 2 instances)
+  src/validators/userValidator.ts:24-29
+  src/validators/orderValidator.ts:20-25
+
+● Clone group 3 (5 lines, 2 instances)
+  src/validators/userValidator.ts:35-39
+  src/validators/orderValidator.ts:31-35
+```
+
+Three separate clone groups, all between the same two files. That pattern is a **clone family**.
 
 ### Clone families
 
-When multiple clone groups share the same file pair (or set), fallow groups them into a **clone family**. Families indicate systematic duplication — the files were likely copy-pasted from each other.
+A **clone family** is when multiple clone groups involve the same files. It means those files weren't just sharing one snippet — they were likely copy-pasted from each other entirely.
 
 ```text
 Family: src/validators/userValidator.ts ↔ src/validators/orderValidator.ts
-  3 clone groups, 118 duplicated lines
+  3 clone groups, 19 duplicated lines
   → Extract shared validation module
 ```
 
-| Pattern | Refactoring strategy |
-|:--------|:--------------------|
-| Family within one file | Extract function — the clones share local context |
-| Family across 2 files | Extract module — create a shared utility both files import |
-| Family across a directory | Extract pattern — the directory likely uses a copy-paste template |
+This changes the refactoring approach. Individual clone groups suggest extracting a function. A clone family suggests the files themselves need to be merged or restructured.
+
+| Pattern | What it tells you | Refactoring strategy |
+|:--------|:------------------|:--------------------|
+| Single clone group | One block was copied | Extract that block into a shared function |
+| Family within one file | Multiple self-clones | Extract the repeated pattern into a helper |
+| Family across 2 files | Files were copy-pasted | Merge into a shared module with configuration |
+| Family across a directory | Template-based duplication | Replace the template with a parameterized generator |
 
 
 ## When duplication is acceptable
 
 Not all duplication should be eliminated. Context matters.
 
-- **Test files**: Test cases often repeat setup code intentionally. Abstracting test setup can make tests harder to understand and debug. Exclude test files with `dupes.ignore` patterns if the noise is distracting.
+- **Test files**: Test cases often repeat setup code intentionally. Abstracting test setup can make tests harder to understand and debug. Use [`--production`](/cli/global-flags) to exclude test/story/dev files entirely, or use `dupes.ignore` patterns for more granular control.
 - **Generated code**: Codegen output (GraphQL, Prisma, OpenAPI) is inherently duplicative. Exclude with `dupes.ignore`.
 - **Small clones (< 10 lines)**: Very small clones are often idiomatic patterns (error handling, guard clauses) rather than meaningful duplication.
 - **Cross-language ports**: If you maintain both `.ts` and `.js` versions intentionally, use `--skip-local` to focus on cross-directory duplicates instead.

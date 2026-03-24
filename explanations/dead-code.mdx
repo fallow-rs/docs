@@ -41,7 +41,7 @@ Exported symbols never imported by any other module. The export exists but nothi
 **When to act:** Most unused exports should be removed or unexported. They clutter the public API surface and increase cognitive load when reading the module.
 
 **When it's OK to keep:**
-- **Library public API**: If you're building a library, exports are consumed by external users fallow can't see. Use the `entry` config to mark library entry points.
+- **Library public API**: Exports consumed by external users fallow can't see. Mark them with [`/** @public */`](/configuration/suppression#jsdoc-public-tag) JSDoc tags, add the library entry point to [`entry`](/configuration/overview), or use [`ignoreExports`](/configuration/overview#ignoreexports) for broad patterns.
 - **Convention-based exports**: Exports consumed by frameworks via naming conventions (e.g., Next.js `getStaticProps`). Fallow's framework plugins handle most of these — if one is missed, configure the plugin or add an ignore pattern.
 
 ### Unused types
@@ -250,13 +250,17 @@ Adopt one issue type at a time. Fix the findings, then add the next type.
 
 ## Common false positive patterns
 
+Fallow auto-detects 84 frameworks via `package.json`, so most convention-based exports (Next.js pages, Storybook stories, Jest configs) are handled out of the box. Run `fallow list` to see which plugins are active and what entry points they add.
+
+False positives that do occur are typically in these categories:
+
 | Pattern | Why fallow flags it | Fix |
 |:--------|:-------------------|:----|
-| Next.js `page.tsx` exports | Framework-specific entry points | Enable the Next.js plugin (auto-detected in most cases) |
-| Storybook `*.stories.tsx` | Story files aren't imported by app code | Enable the Storybook plugin |
-| Jest `setupTests.ts` | Referenced in config, not imported | Add to `entry` in config |
-| Express route handlers | Mounted via `app.use()`, not direct imports | Plugin or `entry` config |
+| Scripts run directly (`node scripts/seed.ts`) | Not imported by any module | Add to `entry` in config, or add a `package.json` script |
+| Dependency injection / runtime wiring | Registered via DI container, not `import` | Add to `entry` or use `/** @public */` |
+| Dynamic `require()` with variables | Path not statically resolvable | Add the directory to `entry` |
 | Environment-specific files | Only imported behind `process.env` checks | Add to `entry` if always needed |
+| Unsupported framework conventions | Plugin doesn't exist for this framework | Add entry points manually or [write a custom plugin](/frameworks/custom-plugins) |
 
 <Warning>
 Before acting on a finding, verify with `--trace`. A finding is only as good as fallow's module graph. If an export is used via a dynamic pattern fallow can't resolve, use `--trace` to confirm.
@@ -276,11 +280,13 @@ fallow check --trace-dependency lodash
 
 ## Limitations
 
-- **Dynamic imports with runtime-computed paths** (`import(variable)`) cannot be resolved statically. Mark those directories in `entry`.
-- **Decorator-driven wiring** (NestJS, Angular, TypeORM) may hide usage that fallow can't trace syntactically. Use framework plugins where available.
-- **Monorepo cross-package references** require workspace-aware configuration. Fallow resolves workspace packages via `workspaces` in the root `package.json`.
+- **Fully runtime-computed paths** — `import(variable)` or `require(variable)` where the argument has no static structure cannot be resolved. Template literals with partial paths (`import(\`./locales/${lang}.json\`)`) and `import.meta.glob` *are* resolved. Only completely opaque variables are a limitation. Mark those directories in `entry`.
+- **Syntactic analysis only** — fallow doesn't invoke the TypeScript compiler. Conditional types or dead code behind generic constraints require type resolution to detect. See [known limitations](/analysis/limitations) for details.
 - **Side-effect imports** (`import './polyfill'`) are tracked as file-level edges. The imported file won't be flagged as unused, but individual exports within it are still analyzed.
-- **`require()` with variables** (`require(dynamicPath)`) cannot be resolved. Only static `require('...')` calls are traced.
+
+<Info>
+Monorepo workspaces, framework conventions (Next.js, NestJS, Angular, etc.), and decorator-driven wiring are handled automatically via [auto-detected plugins](/frameworks/built-in) and [workspace detection](/configuration/workspaces). See [known limitations](/analysis/limitations) for edge cases.
+</Info>
 
 
 ## JSON `_meta` object
