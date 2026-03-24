@@ -7,7 +7,7 @@ icon: "skull-crossbones"
 
 `fallow check` performs dead code analysis on your TypeScript project. It builds a module graph from your <Tooltip tip="Files that serve as roots of the module graph. Anything reachable from them is considered used.">entry points</Tooltip> and reports anything that isn't reachable.
 
-This analysis requires building and traversing a complete module graph. It can't be approximated by reading files individually. Fallow does this deterministically in milliseconds, giving agents, developers, and CI pipelines the same reliable results.
+Dead code analysis requires building and traversing a complete module graph. Reading files individually isn't enough. Fallow does this deterministically in milliseconds, giving agents, developers, and CI pipelines the same reliable results.
 
 ```bash
 fallow check
@@ -262,7 +262,7 @@ fallow check --trace-dependency lodash
 
 ## How it works
 
-Fallow uses syntactic analysis with scope-aware binding resolution via Oxc: no TypeScript compiler, no type information. This is what makes it fast.
+Fallow uses syntactic analysis with scope-aware binding resolution via Oxc. No TypeScript compiler, no type information. That's what makes it fast.
 
 ```mermaid
 flowchart TB
@@ -272,7 +272,7 @@ flowchart TB
   D --> E["Analysis<br/>Walk from entry points, report unreachable code"]
 ```
 
-This graph-based approach guarantees completeness regardless of project size.
+The graph-based approach guarantees completeness regardless of project size.
 
 <Note>
 Fallow works best with projects using `isolatedModules: true` (required for esbuild, swc, and Vite). `oxc_semantic` scope analysis detects unused import bindings (imports where the bound name is never read), but legacy tsc-only projects without `isolatedModules` may still see edge cases with type-only imports.
@@ -280,14 +280,14 @@ Fallow works best with projects using `isolatedModules: true` (required for esbu
 
 ## Script binary analysis
 
-Fallow parses `package.json` scripts to detect CLI tool usage, reducing false positives in unused dependency detection. When you have a script like `"lint": "eslint src/"`, fallow recognizes that `eslint` is a binary provided by the `eslint` package and marks it as used.
+Fallow parses `package.json` scripts to detect CLI tool usage. This reduces false positives in unused dependency detection. When you have a script like `"lint": "eslint src/"`, fallow recognizes that `eslint` is a binary provided by the `eslint` package and marks it as used.
 
-This works in several ways:
+How it works:
 
-- **Binary name to package name mapping:** Script commands like `tsc`, `vitest`, or `next` are mapped back to their parent packages (`typescript`, `vitest`, `next`). This prevents these packages from being reported as unused even when they're never `import`-ed in source code.
-- **`--config` arguments as entry points:** When a script references a config file (e.g., `jest --config jest.e2e.config.ts`), fallow treats that config file as an entry point. This ensures config files are not flagged as unused.
+- **Binary name to package name mapping:** Script commands like `tsc`, `vitest`, or `next` are mapped back to their parent packages (`typescript`, `vitest`, `next`). These packages won't be reported as unused even when they're never `import`-ed in source code.
+- **`--config` arguments as entry points:** When a script references a config file (e.g., `jest --config jest.e2e.config.ts`), fallow treats that config file as an entry point. Config files won't be flagged as unused.
 - **File path arguments:** Direct file references in scripts (e.g., `node scripts/seed.js`) are also recognized as entry points.
-- **Env wrappers and package manager runners:** Commands prefixed with `cross-env`, `npx`, `pnpx`, `yarn dlx`, or `node -r` are unwrapped to find the actual tool binary underneath.
+- **Env wrappers and package manager runners:** Commands prefixed with `cross-env`, `npx`, `pnpx`, `yarn dlx`, or `node -r` are unwrapped to find the actual tool binary.
 
 ```json
 {
@@ -303,7 +303,7 @@ In this example, fallow detects `typescript`, `vite`, `vitest`, and `eslint` as 
 
 ## Infrastructure entry points
 
-Fallow scans infrastructure config files for source file references and treats them as entry points. This prevents worker processes, migration scripts, and other infrastructure-defined processes from being reported as unused files.
+Fallow scans infrastructure config files for source file references and treats them as entry points. Worker processes, migration scripts, and other infrastructure-defined files won't be reported as unused.
 
 Supported files:
 
@@ -324,7 +324,7 @@ CMD ["node", "src/worker.ts"]
 
 ## Dynamic import resolution
 
-Fallow resolves dynamic imports that use patterns rather than static strings. When you write `import(\`./locales/${lang}.json\`)`, the import target is not known at static analysis time. Fallow converts these patterns into glob expressions and matches them against discovered files.
+Fallow resolves dynamic imports that use patterns rather than static strings. When you write `import(\`./locales/${lang}.json\`)`, the import target isn't known at analysis time. Fallow converts these patterns into glob expressions and matches them against discovered files.
 
 Supported patterns:
 
@@ -335,7 +335,7 @@ Supported patterns:
 | `import.meta.glob` | `import.meta.glob("./modules/*.ts")` | `./modules/*.ts` |
 | `require.context` | `require.context("./themes", true, /\.css$/)` | `./themes/**/*.css` |
 
-Files matched by these glob patterns are marked as reachable in the module graph, preventing them from being reported as unused. This is useful for locale files, icon sets, route modules, and other convention-based directory structures.
+Matched files are marked as reachable in the module graph, so they won't be reported as unused. Useful for locale files, icon sets, route modules, and other convention-based directory structures.
 
 <Note>
 Dynamic imports with fully runtime-computed paths (e.g., `import(userInput)`) cannot be resolved statically. Use `entry` in your config to mark those directories as entry points.
@@ -343,7 +343,7 @@ Dynamic imports with fully runtime-computed paths (e.g., `import(userInput)`) ca
 
 ## Re-export chain resolution
 
-Barrel files (`index.ts` files that re-export from other modules) are common in TypeScript projects. Fallow fully resolves `export *` chains through multiple levels of barrel files with cycle detection.
+Barrel files (`index.ts` files that re-export from other modules) are common in TypeScript projects. Fallow resolves `export *` chains through multiple levels of barrel files with cycle detection.
 
 ```typescript
 // utils/math.ts
@@ -368,10 +368,10 @@ flowchart TB
 
 In this example, fallow traces the import of `add` in `app.ts` through `src/index.ts` and `utils/index.ts` back to `utils/math.ts`. The `add` export is correctly marked as used across the entire chain.
 
-This resolution handles:
+Resolution handles:
 
 - **Multi-level chains:** Any depth of `export *` re-exports is followed until the original declaration is found.
-- **Cycle detection:** Circular re-export chains (e.g., `a` re-exports from `b`, `b` re-exports from `a`) are detected and handled without infinite loops.
+- **Cycle detection:** Circular re-export chains (e.g., `a` re-exports from `b`, `b` re-exports from `a`) are detected and handled gracefully.
 - **Mixed re-exports:** Named re-exports (`export { foo } from './bar'`) and namespace re-exports (`export * from './bar'`) are both tracked.
 
 ## Namespace import narrowing
@@ -386,17 +386,17 @@ const { foo } = utils;
 utils.bar();
 ```
 
-This works with static imports, dynamic imports (`const mod = await import('./x')`), and require (`const mod = require('./x')`).
+Works with static imports, dynamic imports (`const mod = await import('./x')`), and require (`const mod = require('./x')`).
 
-Fallow also uses `oxc_semantic` scope analysis to detect imports where the binding is never read. An `import { foo } from './utils'` where `foo` is never referenced in the file does not count as a reference to the `foo` export — improving unused-export detection precision.
+Fallow also uses `oxc_semantic` scope analysis to detect imports where the binding is never read. An `import { foo } from './utils'` where `foo` is never referenced in the file does not count as a reference to the `foo` export. This improves unused-export detection precision.
 
 <Note>
-Whole-object consumption patterns like `Object.values(ns)`, `{ ...ns }`, `for (const k in ns)`, and rest destructuring (`const { a, ...rest } = ns`) conservatively mark all exports as used, since the tool cannot determine which specific members are accessed.
+Whole-object consumption patterns like `Object.values(ns)`, `{ ...ns }`, `for (const k in ns)`, and rest destructuring (`const { a, ...rest } = ns`) conservatively mark all exports as used. Fallow can't determine which specific members are accessed in these cases.
 </Note>
 
 ## Cross-reference with duplication
 
-When you run `fallow check --include-dupes`, fallow cross-references dead code findings with code duplication analysis. Clone instances that appear in unused files or overlap with unused exports are flagged as **combined high-priority findings**.
+Running `fallow check --include-dupes` cross-references dead code findings with code duplication analysis. Clone instances in unused files, or overlapping with unused exports, are flagged as **combined high-priority findings**.
 
 ```bash
 fallow check --include-dupes
@@ -404,7 +404,7 @@ fallow check --include-dupes
 
 Use `--include-dupes` to prioritize cleanup: if a block of code is both duplicated *and* unused, removing it eliminates dead code and reduces duplication at the same time.
 
-The cross-reference identifies:
+What the cross-reference finds:
 
 - **Clone instances in unused files:** If a file is unreachable from entry points and contains duplicated code, the duplication finding is elevated.
 - **Clone instances overlapping unused exports:** If an unused export contains code that is duplicated elsewhere, both findings are reported together.
@@ -415,7 +415,7 @@ Use `--include-dupes` in CI to catch the highest-impact cleanup opportunities fi
 
 ## Circular dependency benchmarks
 
-Fallow detects dependency cycles during module graph construction with zero extra cost. Standalone tools like madge and dpdm build their own graph from scratch.
+Fallow detects dependency cycles during module graph construction at no extra cost. Standalone tools like madge and dpdm build their own graph from scratch.
 
 | Project | Files | fallow | madge | dpdm | vs madge | vs dpdm |
 |:--------|------:|-------:|------:|-----:|---------:|--------:|
@@ -426,7 +426,7 @@ Fallow detects dependency cycles during module graph construction with zero extr
 | [TanStack/query](https://github.com/TanStack/query) | 901 | **134ms** | 168ms | 137ms | **1.3x** | **1.0x** |
 
 <Info>
-  3-32x faster than madge, 2-11x faster than dpdm on small-to-medium projects. Fallow uses 5-7x less memory because it reuses the module graph already built for dead code analysis.
+  3-32x faster than madge, 2-11x faster than dpdm on small-to-medium projects. Fallow uses 5-7x less memory by reusing the module graph already built for dead code analysis.
 </Info>
 
 ## See also
