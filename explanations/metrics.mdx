@@ -1,0 +1,164 @@
+---
+title: "Metric definitions"
+description: "What each metric in fallow's health, duplication, and check output means, how it's computed, and how to interpret the values."
+keywords: ["metrics", "maintainability index", "cyclomatic complexity", "cognitive complexity", "hotspots", "fan-in", "fan-out"]
+icon: "chart-line"
+---
+
+Fallow's `health` and `dupes` commands produce numeric metrics. This page explains what each metric means, how it's computed, and what values to aim for.
+
+<Tip>
+Pass `--explain` to any command with `--format json` to include metric definitions directly in the JSON output as a `_meta` object. The MCP server always includes `_meta` automatically.
+</Tip>
+
+---
+
+## Complexity metrics
+
+These metrics appear in `fallow health` output, both per-function (findings) and per-file (file scores).
+
+### Cyclomatic complexity
+
+**What it measures:** The number of independent paths through a function. Computed as 1 + the number of decision points (if/else, switch cases, loops, ternary operators, logical `&&`/`||`).
+
+| Range | Interpretation |
+|:------|:---------------|
+| 1–10 | Simple, easy to test |
+| 11–20 | Moderate complexity |
+| 21–50 | High complexity, consider splitting |
+| 50+ | Very high, hard to test exhaustively |
+
+**Default threshold:** 20
+
+### Cognitive complexity
+
+**What it measures:** How hard a function is to understand when reading top-to-bottom. Unlike cyclomatic complexity, cognitive complexity penalizes nesting depth and non-linear control flow (breaks, continues, early returns, recursion).
+
+| Range | Interpretation |
+|:------|:---------------|
+| 0–7 | Easy to understand |
+| 8–15 | Moderate, may need comments |
+| 15+ | Hard to follow, consider refactoring |
+
+**Default threshold:** 15
+
+### Complexity density
+
+**What it measures:** Total cyclomatic complexity divided by lines of code. A file with 100 cyclomatic and 100 lines has density 1.0.
+
+| Value | Interpretation |
+|:------|:---------------|
+| < 0.3 | Low density |
+| 0.3–1.0 | Moderate |
+| > 1.0 | Very dense, nearly every line is a decision point |
+
+---
+
+## File health scores
+
+Per-file scores from `fallow health --file-scores`. Zero-function files (barrel files, re-export files) are excluded.
+
+### Maintainability Index (MI)
+
+**Formula:**
+
+```
+fan_out_penalty = min(ln(fan_out + 1) × 4, 15)
+MI = 100 - (complexity_density × 30) - (dead_code_ratio × 20) - fan_out_penalty
+```
+
+Clamped to \[0, 100\]. Higher is better.
+
+| Range | Interpretation |
+|:------|:---------------|
+| 70–100 | Good maintainability |
+| 40–70 | Moderate, review periodically |
+| 0–40 | Poor, prioritize for refactoring |
+
+### Fan-in (importers)
+
+Number of files that import this file. High fan-in means high **blast radius** — changes to this file affect many dependents.
+
+### Fan-out (imports)
+
+Number of files this file directly imports. High fan-out indicates high coupling. The MI formula penalizes fan-out logarithmically, capping at \~40 imports.
+
+### Dead code ratio
+
+Fraction of value exports with zero references (0.0–1.0). Type-only exports (interfaces, type aliases) are excluded from both numerator and denominator to avoid inflating the ratio in well-typed codebases.
+
+---
+
+## Hotspot metrics
+
+Hotspots combine **code complexity** with **git churn history** to find files that are both hard to maintain and frequently changing. Available via `fallow health --hotspots`.
+
+### Hotspot score
+
+**Formula:**
+
+```
+normalized_churn = weighted_commits / max_weighted_commits   (0..1)
+normalized_complexity = complexity_density / max_density      (0..1)
+score = normalized_churn × normalized_complexity × 100       (0..100)
+```
+
+Uses within-project max normalization. Higher score = higher risk. A file needs both high churn AND high complexity to score highly.
+
+### Weighted commits
+
+Recency-weighted commit count using exponential decay with a 90-day half-life. A commit yesterday counts more than a commit 6 months ago.
+
+### Churn trend
+
+Compares the first half vs the second half of the analysis window:
+
+| Trend | Meaning |
+|:------|:--------|
+| `accelerating` | Recent commits > 1.5× older commits — activity is increasing |
+| `stable` | Balanced commit frequency |
+| `cooling` | Recent commits < 0.67× older commits — activity is decreasing |
+
+---
+
+## Duplication metrics
+
+From `fallow dupes` output.
+
+### Duplication percentage
+
+Fraction of total source tokens that appear in at least one clone group. Computed over the full analyzed file set.
+
+### Token count / line count
+
+Per-clone-group size metrics. Tokens are language-aware (keywords, identifiers, operators). Larger clones have higher refactoring value.
+
+### Clone groups vs clone families
+
+- **Clone group**: A set of 2+ code fragments with identical normalized token sequences.
+- **Clone family**: Multiple clone groups that share the same set of files — indicating systematic duplication patterns (e.g., copy-pasted modules).
+
+---
+
+## JSON `_meta` object
+
+When `--explain` is passed (or via MCP), each command's JSON output includes a `_meta` object:
+
+```json
+{
+  "schema_version": 3,
+  "_meta": {
+    "docs": "https://docs.fallow.tools/cli/health",
+    "metrics": {
+      "maintainability_index": {
+        "name": "Maintainability Index",
+        "description": "Composite score...",
+        "range": "[0, 100]",
+        "interpretation": "higher is better; <40 poor, 40–70 moderate, >70 good"
+      }
+    }
+  }
+}
+```
+
+This allows AI agents and CI systems to programmatically understand what each metric means without consulting external documentation.
