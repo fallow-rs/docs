@@ -1,14 +1,14 @@
 ---
 title: "fallow health"
-description: "CLI reference for fallow health. Analyze function complexity and per-file maintainability to find hotspots that need refactoring."
-keywords: ["fallow health", "complexity", "cyclomatic", "cognitive", "CLI", "code health", "refactoring", "maintainability", "file scores"]
+description: "CLI reference for fallow health. Analyze function complexity, per-file maintainability, and git-churn hotspots to find code that needs refactoring."
+keywords: ["fallow health", "complexity", "cyclomatic", "cognitive", "CLI", "code health", "refactoring", "maintainability", "file scores", "hotspots", "churn", "git history"]
 icon: "terminal"
 ---
 
-Analyze function complexity and file-level health across your codebase. Fallow computes cyclomatic and cognitive complexity for every function, then reports those exceeding configurable thresholds. With `--file-scores`, it also computes a per-file maintainability index combining complexity density, dead code ratio, and coupling.
+Analyze function complexity and file-level health across your codebase. Fallow computes cyclomatic and cognitive complexity for every function, then reports those exceeding configurable thresholds. With `--file-scores`, it also computes a per-file maintainability index combining complexity density, dead code ratio, and coupling. With `--hotspots`, it identifies files that are both complex and frequently changing by combining git churn history with complexity data.
 
 <Tip>
-  Use `--top N` to quickly find the most complex functions without setting thresholds.
+  Use `--top N` to quickly find the most complex functions without setting thresholds. Add `--hotspots` to surface files that are both complex and frequently changed.
 </Tip>
 
 ```bash
@@ -38,12 +38,20 @@ fallow health
 |:-----|:------------|
 | `--file-scores` | Compute per-file maintainability index. Requires the full analysis pipeline (graph + dead code detection). File scores are sorted by maintainability index ascending (worst first). `--sort` and `--baseline` apply to complexity findings only, not file scores. |
 
+### Hotspot analysis
+
+| Flag | Description |
+|:-----|:------------|
+| `--hotspots` | Identify hotspots: files that are both complex and frequently changing. Combines git churn history with complexity data. Requires a git repository. |
+| `--since <DURATION>` | Git history window for hotspot analysis (default: `6m`). Accepts durations (`6m`, `90d`, `1y`, `2w`) or ISO dates (`2025-06-01`). |
+| `--min-commits <N>` | Minimum number of commits for a file to be included in hotspot ranking (default: 3). |
+
 ### Scoping
 
 | Flag | Description |
 |:-----|:------------|
-| `-w, --workspace <NAME>` | Scope output to a single workspace package while keeping the full cross-workspace graph |
-| `--changed-since <REF>` | Only analyze functions in files changed since the given git ref (e.g., `main`, `HEAD~5`) |
+| `-w, --workspace <NAME>` | Scope output to a single workspace package while keeping the full cross-workspace graph. Also scopes hotspots to the specified package. |
+| `--changed-since <REF>` | Only analyze functions in files changed since the given git ref (e.g., `main`, `HEAD~5`). Also applies to hotspot analysis. |
 
 ### Baseline
 
@@ -86,6 +94,55 @@ Additional metrics reported per file (informational, not in the formula):
 | `function_count` | Number of functions in the file |
 | `lines` | Total lines of code |
 
+## Hotspot score formula
+
+The hotspot score identifies files that are both complex and frequently changed — the intersection most likely to harbor bugs and slow down development. The score combines git churn with complexity density:
+
+```
+normalized_churn = weighted_commits / max_weighted_commits (0..1)
+normalized_complexity = complexity_density / max_density (0..1)
+score = normalized_churn × normalized_complexity × 100
+```
+
+Clamped to 0–100. Higher means higher risk. Scores are normalized within the project, so the highest-risk file always scores close to 100.
+
+| Component | Description |
+|:----------|:------------|
+| `weighted_commits` | Recency-weighted commit count using exponential decay with a 90-day half-life. Recent changes contribute more than old ones. |
+| `complexity_density` | Cyclomatic complexity / lines of code. Measures how densely complex the code is. |
+
+### Per-file hotspot metrics
+
+Each hotspot entry includes:
+
+| Metric | Description |
+|:-------|:------------|
+| `path` | Relative file path |
+| `score` | 0–100 hotspot score (higher = higher risk) |
+| `commits` | Raw commit count in the analysis window |
+| `weighted_commits` | Recency-weighted commit count (exponential decay, 90-day half-life) |
+| `lines_added` | Total lines added in the analysis window |
+| `lines_deleted` | Total lines deleted in the analysis window |
+| `complexity_density` | Cyclomatic complexity / lines of code |
+| `fan_in` | Blast radius: number of files importing this file |
+| `trend` | `Accelerating`, `Stable`, or `Cooling` — direction of recent change activity |
+
+### Hotspot summary
+
+The hotspot summary (included in JSON output) provides context about the analysis:
+
+| Field | Description |
+|:------|:------------|
+| `since` | Display string for the analysis window (e.g., "6 months") |
+| `min_commits` | Minimum commit threshold used |
+| `files_analyzed` | Files meeting the `min_commits` threshold |
+| `files_excluded` | Files below the `min_commits` threshold |
+| `shallow_clone` | Detection flag — warns if a shallow clone was detected |
+
+<Warning>
+  Hotspot analysis requires a git repository. Shallow clones may produce incomplete results — fallow detects this and warns you. For best results, ensure a full clone with `git fetch --unshallow`.
+</Warning>
+
 ## Examples
 
 <CodeGroup>
@@ -114,6 +171,26 @@ fallow health --file-scores --top 20
 
 # JSON output with file scores
 fallow health --file-scores --format json
+```
+
+```bash Hotspot analysis
+# Identify hotspots (complex + frequently changed)
+fallow health --hotspots
+
+# Custom history window and commit threshold
+fallow health --hotspots --since 90d --min-commits 5
+
+# Top 10 hotspots in JSON
+fallow health --hotspots --top 10 --format json
+
+# Hotspots for a specific workspace
+fallow health --hotspots --workspace my-app
+
+# Hotspots using an ISO date
+fallow health --hotspots --since 2025-06-01
+
+# Combine with file scores for full picture
+fallow health --hotspots --file-scores
 ```
 
 ```bash Custom thresholds
@@ -169,9 +246,30 @@ fallow health --file-scores --format markdown | gh pr comment --body-file -
     :15 parseExpression  cyclomatic: 25  cognitive: 31  98 lines
 
 ● File health scores (3 files)
-  src/legacy/handler.ts MI:52.3 fan-in:2  fan-out:18  dead:45%  density:0.38
-  src/diff/index.js MI:68.4 fan-in:3  fan-out:12  dead:0%  density:0.89
-  src/utils/parser.ts MI:75.1 fan-in:8  fan-out:4  dead:25%  density:0.22
+
+  52.3    src/legacy/handler.ts
+           2 fan-in   18 fan-out   45% dead  0.38 density
+
+  68.4    src/diff/index.js
+           3 fan-in   12 fan-out    0% dead  0.89 density
+
+  75.1    src/utils/parser.ts
+           8 fan-in    4 fan-out   25% dead  0.22 density
+```
+
+```bash title="$ fallow health --hotspots --top 3"
+● Hotspots (3 files, since 6 months)
+
+  92.0 ▲  src/diff/index.js
+          47 commits   2460 churn  0.89 density   3 fan-in  ▲ accelerating
+
+  71.0 ─  src/legacy/handler.ts
+          23 commits    720 churn  0.38 density   2 fan-in  ─ stable
+
+  38.0 ▼  src/utils/parser.ts
+          12 commits    300 churn  0.22 density   8 fan-in  ▼ cooling
+
+  18 files excluded (< 3 commits)
 ```
 
 ## JSON output
@@ -181,7 +279,7 @@ fallow health --file-scores --format markdown | gh pr comment --body-file -
 ```json title="$ fallow health --format json --top 2"
 {
   "schema_version": 3,
-  "version": "1.6.0",
+  "version": "1.7.0",
   "elapsed_ms": 140,
   "summary": {
     "files_analyzed": 252,
@@ -212,7 +310,7 @@ When `--file-scores` is used, the JSON output includes additional fields:
 ```json title="$ fallow health --file-scores --format json --top 2"
 {
   "schema_version": 3,
-  "version": "1.6.0",
+  "version": "1.7.0",
   "elapsed_ms": 320,
   "summary": {
     "files_analyzed": 252,
@@ -254,6 +352,72 @@ When `--file-scores` is used, the JSON output includes additional fields:
 
 <Note>
   Without `--file-scores`, the `file_scores` array and `summary.files_scored` / `summary.average_maintainability` fields are omitted entirely from the JSON output.
+</Note>
+
+### With hotspots
+
+When `--hotspots` is used, the JSON output includes a `hotspots` array and `hotspot_summary`:
+
+```json title="$ fallow health --hotspots --format json --top 2"
+{
+  "schema_version": 3,
+  "version": "1.7.0",
+  "elapsed_ms": 480,
+  "summary": {
+    "files_analyzed": 252,
+    "functions_analyzed": 5424,
+    "functions_above_threshold": 24,
+    "max_cyclomatic_threshold": 20,
+    "max_cognitive_threshold": 15
+  },
+  "findings": [
+    {
+      "path": "src/diff/index.js",
+      "name": "diff",
+      "line": 48,
+      "col": 0,
+      "cyclomatic": 67,
+      "cognitive": 138,
+      "line_count": 290,
+      "exceeded": "both"
+    }
+  ],
+  "hotspot_summary": {
+    "since": "6 months",
+    "min_commits": 3,
+    "files_analyzed": 21,
+    "files_excluded": 18,
+    "shallow_clone": false
+  },
+  "hotspots": [
+    {
+      "path": "src/diff/index.js",
+      "score": 92,
+      "commits": 47,
+      "weighted_commits": 38.4,
+      "lines_added": 1840,
+      "lines_deleted": 620,
+      "complexity_density": 0.89,
+      "fan_in": 3,
+      "trend": "Accelerating"
+    },
+    {
+      "path": "src/legacy/handler.ts",
+      "score": 71,
+      "commits": 23,
+      "weighted_commits": 14.2,
+      "lines_added": 540,
+      "lines_deleted": 180,
+      "complexity_density": 0.38,
+      "fan_in": 2,
+      "trend": "Stable"
+    }
+  ]
+}
+```
+
+<Note>
+  Without `--hotspots`, the `hotspots` array and `hotspot_summary` fields are omitted entirely from the JSON output. Hotspot analysis can be combined with `--file-scores` to include all three sections in a single output.
 </Note>
 
 ## Markdown output
