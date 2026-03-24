@@ -2,7 +2,7 @@
 
 ## What this is
 
-Mintlify documentation site for [fallow](https://github.com/fallow-rs/fallow), a dead code and duplication analyzer for JavaScript/TypeScript. Built in Rust. Three audiences: AI agents, human developers, CI pipelines.
+Mintlify documentation site for [fallow](https://github.com/fallow-rs/fallow), a dead code and duplication analyzer for TypeScript/JavaScript. Built in Rust. Three audiences: AI agents, human developers, CI pipelines.
 
 ## Dev server
 

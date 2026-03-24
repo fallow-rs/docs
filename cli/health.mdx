@@ -1,11 +1,11 @@
 ---
 title: "fallow health"
-description: "CLI reference for fallow health. Analyze function complexity using cyclomatic and cognitive metrics to find hotspots that need refactoring."
-keywords: ["fallow health", "complexity", "cyclomatic", "cognitive", "CLI", "code health", "refactoring"]
+description: "CLI reference for fallow health. Analyze function complexity and per-file maintainability to find hotspots that need refactoring."
+keywords: ["fallow health", "complexity", "cyclomatic", "cognitive", "CLI", "code health", "refactoring", "maintainability", "file scores"]
 icon: "terminal"
 ---
 
-Analyze function complexity across your codebase. Fallow computes cyclomatic and cognitive complexity for every function, then reports those exceeding configurable thresholds.
+Analyze function complexity and file-level health across your codebase. Fallow computes cyclomatic and cognitive complexity for every function, then reports those exceeding configurable thresholds. With `--file-scores`, it also computes a per-file maintainability index combining complexity density, dead code ratio, and coupling.
 
 <Tip>
   Use `--top N` to quickly find the most complex functions without setting thresholds.
@@ -28,9 +28,29 @@ fallow health
 
 | Flag | Description |
 |:-----|:------------|
-| `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `compact` |
-| `--top <N>` | Show only the top N most complex functions |
-| `--sort <METRIC>` | Sort by: `cyclomatic` (default), `cognitive`, `lines` |
+| `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `compact`, `markdown`, `sarif` |
+| `--top <N>` | Show only the top N most complex functions (and file scores) |
+| `--sort <METRIC>` | Sort complexity findings by: `cyclomatic` (default), `cognitive`, `lines` |
+
+### File health scores
+
+| Flag | Description |
+|:-----|:------------|
+| `--file-scores` | Compute per-file maintainability index. Requires the full analysis pipeline (graph + dead code detection). File scores are sorted by maintainability index ascending (worst first). `--sort` and `--baseline` apply to complexity findings only, not file scores. |
+
+### Scoping
+
+| Flag | Description |
+|:-----|:------------|
+| `-w, --workspace <NAME>` | Scope output to a single workspace package while keeping the full cross-workspace graph |
+| `--changed-since <REF>` | Only analyze functions in files changed since the given git ref (e.g., `main`, `HEAD~5`) |
+
+### Baseline
+
+| Flag | Description |
+|:-----|:------------|
+| `--save-baseline` | Save current complexity findings as a baseline for future comparison |
+| `--baseline` | Compare against a saved baseline and only report new findings. Applies to complexity findings only, not file scores. |
 
 ## Exit codes
 
@@ -38,6 +58,33 @@ fallow health
 |:-----|:--------|
 | `0` | No functions exceed the configured thresholds |
 | `1` | One or more functions exceed a threshold |
+
+## Maintainability index formula
+
+The per-file maintainability index is a weighted composite score:
+
+```
+fan_out_penalty = min(ln(fan_out + 1) × 4, 15)
+MI = 100 - (complexity_density × 30) - (dead_code_ratio × 20) - fan_out_penalty
+```
+
+Clamped to 0–100. Higher is better. Files with zero functions (barrel/re-export files) are excluded by default.
+
+| Component | Description | Weight |
+|:----------|:------------|:-------|
+| `complexity_density` | Total cyclomatic complexity / lines of code | ×30 |
+| `dead_code_ratio` | Fraction of **value** exports with zero references (0.0–1.0). Type-only exports (interfaces, type aliases) are excluded. | ×20 |
+| `fan_out_penalty` | Logarithmic scaling of import count, capped at 15 points. Reflects diminishing marginal risk of additional imports. | max 15 |
+
+Additional metrics reported per file (informational, not in the formula):
+
+| Metric | Description |
+|:-------|:------------|
+| `fan_in` | Number of files that import this file |
+| `total_cyclomatic` | Sum of cyclomatic complexity across all functions |
+| `total_cognitive` | Sum of cognitive complexity across all functions |
+| `function_count` | Number of functions in the file |
+| `lines` | Total lines of code |
 
 ## Examples
 
@@ -58,6 +105,17 @@ fallow health --top 10 --sort cognitive
 fallow health --top 10 --sort lines
 ```
 
+```bash File health scores
+# Per-file maintainability index
+fallow health --file-scores
+
+# Worst 20 files by maintainability
+fallow health --file-scores --top 20
+
+# JSON output with file scores
+fallow health --file-scores --format json
+```
+
 ```bash Custom thresholds
 # Stricter thresholds
 fallow health --max-cyclomatic 10 --max-cognitive 8
@@ -66,66 +124,203 @@ fallow health --max-cyclomatic 10 --max-cognitive 8
 fallow health --max-cyclomatic 999 --max-cognitive 10
 ```
 
+```bash Workspace scoping
+# Scope to a single workspace package
+fallow health --workspace my-app
+
+# Only check changed files in a PR
+fallow health --changed-since main
+```
+
+```bash Baseline comparison
+# Save current findings as baseline
+fallow health --save-baseline
+
+# Only report new findings compared to baseline
+fallow health --baseline
+
+# SARIF output for GitHub Code Scanning
+fallow health --format sarif
+```
+
 ```bash CI integration
 # JSON output for pipelines
 fallow health --format json
 
 # Compact output for summaries
 fallow health --format compact
+
+# Markdown for PR comments
+fallow health --file-scores --format markdown
+
+# Markdown piped to a PR comment
+fallow health --file-scores --format markdown | gh pr comment --body-file -
 ```
 </CodeGroup>
 
 ## Example output
 
-```bash title="$ fallow health --top 5"
-  1. src/server/resolvers/analytics.ts:42  processAnalytics
-     cyclomatic: 34  cognitive: 28  lines: 187
+```bash title="$ fallow health --file-scores --top 3"
+● High complexity functions (3 shown, 24 total)
+  src/diff/index.js
+    :48 diff  cyclomatic: 67  cognitive: 138  290 lines
+    :381 diffElementNodes  cyclomatic: 63  cognitive: 105  200 lines
+  src/utils/parser.ts
+    :15 parseExpression  cyclomatic: 25  cognitive: 31  98 lines
 
-  2. src/features/auth/handlers.ts:118  handleOAuthCallback
-     cyclomatic: 27  cognitive: 22  lines: 134
-
-  3. src/utils/parser.ts:15  parseExpression
-     cyclomatic: 25  cognitive: 31  lines: 98
-
-  4. src/server/middleware/validate.ts:8  validateRequest
-     cyclomatic: 22  cognitive: 18  lines: 76
-
-  5. src/components/Table/Table.tsx:44  renderColumns
-     cyclomatic: 21  cognitive: 16  lines: 112
-
-5 functions exceed thresholds (0.14s)
+● File health scores (3 files)
+  src/legacy/handler.ts MI:52.3 fan-in:2  fan-out:18  dead:45%  density:0.38
+  src/diff/index.js MI:68.4 fan-in:3  fan-out:12  dead:0%  density:0.89
+  src/utils/parser.ts MI:75.1 fan-in:8  fan-out:4  dead:25%  density:0.22
 ```
 
 ## JSON output
+
+### Complexity findings
 
 ```json title="$ fallow health --format json --top 2"
 {
   "schema_version": 3,
   "version": "1.6.0",
   "elapsed_ms": 140,
-  "functions": [
+  "summary": {
+    "files_analyzed": 252,
+    "functions_analyzed": 5424,
+    "functions_above_threshold": 24,
+    "max_cyclomatic_threshold": 20,
+    "max_cognitive_threshold": 15
+  },
+  "findings": [
     {
-      "file": "src/server/resolvers/analytics.ts",
-      "line": 42,
-      "name": "processAnalytics",
-      "cyclomatic": 34,
-      "cognitive": 28,
-      "lines": 187
-    },
+      "path": "src/diff/index.js",
+      "name": "diff",
+      "line": 48,
+      "col": 0,
+      "cyclomatic": 67,
+      "cognitive": 138,
+      "line_count": 290,
+      "exceeded": "both"
+    }
+  ]
+}
+```
+
+### With file scores
+
+When `--file-scores` is used, the JSON output includes additional fields:
+
+```json title="$ fallow health --file-scores --format json --top 2"
+{
+  "schema_version": 3,
+  "version": "1.6.0",
+  "elapsed_ms": 320,
+  "summary": {
+    "files_analyzed": 252,
+    "functions_analyzed": 5424,
+    "functions_above_threshold": 24,
+    "max_cyclomatic_threshold": 20,
+    "max_cognitive_threshold": 15,
+    "files_scored": 2,
+    "average_maintainability": 68.9
+  },
+  "findings": [
     {
-      "file": "src/features/auth/handlers.ts",
-      "line": 118,
-      "name": "handleOAuthCallback",
-      "cyclomatic": 27,
-      "cognitive": 22,
-      "lines": 134
+      "path": "src/diff/index.js",
+      "name": "diff",
+      "line": 48,
+      "col": 0,
+      "cyclomatic": 67,
+      "cognitive": 138,
+      "line_count": 290,
+      "exceeded": "both"
     }
   ],
-  "summary": {
-    "functions_analyzed": 1842,
-    "functions_exceeding": 2
-  }
+  "file_scores": [
+    {
+      "path": "demo/index.jsx",
+      "fan_in": 0,
+      "fan_out": 24,
+      "dead_code_ratio": 1.0,
+      "complexity_density": 0.04,
+      "maintainability_index": 66.8,
+      "total_cyclomatic": 2,
+      "total_cognitive": 1,
+      "function_count": 2,
+      "lines": 54
+    }
+  ]
 }
+```
+
+<Note>
+  Without `--file-scores`, the `file_scores` array and `summary.files_scored` / `summary.average_maintainability` fields are omitted entirely from the JSON output.
+</Note>
+
+## Markdown output
+
+Formatted for PR comments. Pipe directly to `gh pr comment`:
+
+```bash
+fallow health --file-scores --format markdown | gh pr comment --body-file -
+```
+
+```markdown title="$ fallow health --file-scores --format markdown --top 2"
+## Fallow Health: 24 functions above threshold
+
+### High complexity functions (2 shown)
+
+| File | Function | Line | Cyclomatic | Cognitive | Lines |
+|:-----|:---------|-----:|-----------:|----------:|------:|
+| src/diff/index.js | diff | 48 | 67 | 138 | 290 |
+| src/diff/index.js | diffElementNodes | 381 | 63 | 105 | 200 |
+
+### File health scores (2 files)
+
+| File | MI | Fan-in | Fan-out | Dead code | Density |
+|:-----|---:|-------:|--------:|----------:|--------:|
+| src/legacy/handler.ts | 52.3 | 2 | 18 | 45% | 0.38 |
+| src/diff/index.js | 68.4 | 3 | 12 | 0% | 0.89 |
+```
+
+## SARIF output
+
+SARIF format for GitHub Code Scanning and other static analysis tools:
+
+```bash
+fallow health --format sarif
+```
+
+```json title="$ fallow health --format sarif (excerpt)"
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [{
+    "tool": { "driver": { "name": "fallow" } },
+    "results": [
+      {
+        "ruleId": "fallow/high-cyclomatic-complexity",
+        "level": "warning",
+        "message": { "text": "Function 'diff' has cyclomatic complexity 67 (threshold: 20)" },
+        "locations": [{
+          "physicalLocation": {
+            "artifactLocation": { "uri": "src/diff/index.js" },
+            "region": { "startLine": 48, "startColumn": 1 }
+          }
+        }]
+      }
+    ]
+  }]
+}
+```
+
+Upload to GitHub Code Scanning in CI:
+
+```yaml
+- run: fallow health --format sarif > health.sarif
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: health.sarif
+    category: fallow-health
 ```
 
 ## Configuration
