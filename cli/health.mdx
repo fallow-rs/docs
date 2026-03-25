@@ -42,7 +42,7 @@ By default, all three sections are included. Use these flags to select individua
 | `--complexity` | Show only complexity findings (functions exceeding thresholds). |
 | `--file-scores` | Show only per-file maintainability scores. Requires the full analysis pipeline (graph + dead code detection). File scores are sorted by maintainability index ascending (worst first). `--sort` and `--baseline` apply to complexity findings only, not file scores. |
 | `--hotspots` | Show only hotspot analysis: files that are both complex and frequently changing. Combines git churn history with complexity data. Requires a git repository. |
-| `--targets` | Show only refactoring targets: ranked recommendations based on complexity, coupling, churn, and dead code signals. Each target has a priority score (0–100) and a one-line actionable recommendation. |
+| `--targets` | Show only refactoring targets: ranked recommendations with priority scores, effort estimates, contributing factors, and evidence for AI agents. |
 
 Multiple section flags can be combined (e.g., `--complexity --hotspots`). Without any section flags, all sections are included.
 
@@ -201,17 +201,21 @@ fallow health --hotspots --file-scores
 ```
 
 ```bash Refactoring targets
-# Ranked refactoring recommendations
+# Ranked refactoring recommendations with effort estimates
 fallow health --targets
 
 # Top 5 targets
 fallow health --targets --top 5
 
-# Targets in JSON (includes structured factors)
+# JSON with evidence for AI agents
 fallow health --targets --format json
 
 # Combine with file scores and hotspots
 fallow health --targets --file-scores --hotspots
+
+# Save baseline, then only show new targets
+fallow health --targets --save-baseline .fallow-baseline.json
+fallow health --targets --baseline .fallow-baseline.json
 ```
 
 ```bash Custom thresholds
@@ -471,30 +475,43 @@ When `--targets` is used, the JSON output includes a `targets` array:
   },
   "targets": [
     {
+      "path": "src/core/processor.ts",
+      "priority": 92.3,
+      "recommendation": "Actively-changing file with growing complexity — stabilize before adding features",
+      "category": "urgent_churn_complexity",
+      "effort": "high",
+      "factors": [
+        {
+          "metric": "complexity_density",
+          "value": 0.83,
+          "threshold": 0.3,
+          "detail": "density 0.83 exceeds 0.3"
+        }
+      ]
+    },
+    {
       "path": "src/helpers/util.ts",
       "priority": 38.8,
       "recommendation": "Remove 12 unused exports to reduce surface area (86% dead)",
       "category": "remove_dead_code",
+      "effort": "low",
       "factors": [
         {
           "metric": "dead_code_ratio",
           "value": 0.86,
           "threshold": 0.5,
           "detail": "12 unused of 14 value exports (86%)"
-        },
-        {
-          "metric": "fan_in",
-          "value": 35,
-          "threshold": 10,
-          "detail": "35 files depend on this"
         }
-      ]
+      ],
+      "evidence": {
+        "unused_exports": ["assertEqual", "assertIs", "assertNever"]
+      }
     }
   ]
 }
 ```
 
-Each factor includes raw `value` and `threshold` fields for programmatic consumption. Categories: `urgent_churn_complexity`, `break_circular_dependency`, `split_high_impact`, `remove_dead_code`, `extract_complex_functions`, `extract_dependencies`.
+Each target includes `effort` (`low`/`medium`/`high`) and `factors` with raw `value`/`threshold` for programmatic use. The `evidence` field provides actionable detail for supported categories (`remove_dead_code`, `extract_complex_functions`, `break_circular_dependency`) — omitted for other categories.
 
 <Note>
   Without `--targets`, the `targets` array is omitted entirely from the JSON output.

@@ -243,6 +243,10 @@ Pioneered by Michael Feathers and systematized by Adam Tornhill in [*Your Code a
 
 Refactoring targets are ranked, actionable recommendations produced by [`fallow health --targets`](/cli/health). They synthesize the metrics above into a prioritized list of files that would benefit most from refactoring.
 
+<Tip>
+**Quick start**: Run `fallow health --targets` to get a prioritized refactoring list. Filter by `effort: low` for quick wins. Save a baseline with `--save-baseline`, add `--baseline` to CI, and prevent new tech debt from landing. Update the baseline as you fix targets.
+</Tip>
+
 <Info>
 **Targets are synthesis, not data.** The other sections show measurements. Targets tell you what to do about them.
 </Info>
@@ -265,6 +269,53 @@ All inputs are normalized to \[0, 1\] so each weight is a true percentage share.
 | 40–70 | Moderate | Schedule for upcoming work |
 | 0–40 | Lower priority | Monitor, address opportunistically |
 
+### Effort estimation
+
+Every target includes an effort estimate (`low`, `medium`, or `high`) based on three file-level signals:
+
+| Effort | Criteria |
+|:-------|:---------|
+| **low** | < 100 lines AND \u{2264} 3 functions AND < 5 importers |
+| **high** | \u{2265} 500 lines, OR \u{2265} 20 importers, OR (\u{2265} 15 functions AND density > 0.5) |
+| **medium** | Everything else |
+
+Effort uses OR-semantics for "high" (any single criterion triggers it) and AND-semantics for "low" (all three must be true). A 50-line file with 25 importers is still "high" because changes ripple widely.
+
+In human output, effort appears after the category label separated by ` \u{00b7} `:
+```
+dead code \u{00b7} low    Remove 12 unused exports...
+complexity \u{00b7} high  Extract 3 functions with cognitive complexity > 30...
+```
+
+### Evidence
+
+For three recommendation categories, fallow provides structured evidence linking the target back to specific analysis data. This lets agents and scripts act on recommendations without a second tool call.
+
+| Category | Evidence fields | Example |
+|:---------|:---------------|:--------|
+| `remove_dead_code` | `unused_exports`: list of export names | `["assertEqual", "assertIs", "assertNever"]` |
+| `extract_complex_functions` | `complex_functions`: list of `{name, line, cognitive}` | `[{"name": "processData", "line": 45, "cognitive": 113}]` |
+| `break_circular_dependency` | `cycle_path`: list of file paths forming the cycle | `["src/a.ts", "src/b.ts", "src/c.ts"]` |
+| All other categories | `evidence` omitted from JSON | \u{2014} |
+
+Evidence is designed for machine consumption. In human output, the recommendation text already incorporates the key evidence (e.g., "Remove 12 unused exports" or "Extract processData (cognitive: 113)").
+
+### Baselines
+
+Use `--save-baseline` and `--baseline` with the health command to track refactoring progress over time. When a baseline is active, only *new* targets (not present in the baseline) are reported.
+
+```bash
+# Save current targets as the baseline
+fallow health --targets --save-baseline .fallow-baseline.json
+
+# On subsequent runs, only show new targets
+fallow health --targets --baseline .fallow-baseline.json
+```
+
+Baseline keys use the format `relative_path:category_label` (e.g., `src/utils.ts:dead code`). A target is considered "known" if the same file + category combination exists in the baseline, regardless of whether its priority score or effort level has changed.
+
+This is useful in CI to prevent new tech debt from landing while allowing existing targets to be addressed incrementally.
+
 ### Recommendation categories
 
 Each target is assigned a category based on which rule matches first (evaluated in priority order):
@@ -284,19 +335,19 @@ A file can trigger multiple rules, but only the highest-priority match determine
 ● Refactoring targets (5)
 
   92.3    src/core/processor.ts
-          churn+complexity  Actively-changing file with growing complexity — stabilize before adding features
+          churn+complexity · high  Actively-changing file with growing complexity — stabilize before adding features
 
   71.2    src/utils/helpers.ts
-          high impact  Split high-impact file — 15 dependents amplify every change
+          high impact · high  Split high-impact file — 15 dependents amplify every change
 
   55.8    src/legacy/old-api.ts
-          dead code  Remove 8 unused exports to reduce surface area (73% dead)
+          dead code · low  Remove 8 unused exports to reduce surface area (73% dead)
 
   52.0    src/graph/resolver.ts
-          circular dep  Break import cycle — 8 files depend on this, changes cascade through the cycle
+          circular dep · medium  Break import cycle — 8 files depend on this, changes cascade through the cycle
 
   41.8    src/components/Dashboard.tsx
-          complexity  Extract renderMetrics (cognitive: 45) and renderFilters (cognitive: 32) into smaller functions
+          complexity · high  Extract renderMetrics (cognitive: 45) and renderFilters (cognitive: 32) into smaller functions
 
   Prioritized refactoring recommendations based on complexity, churn, and coupling signals — https://docs.fallow.tools/explanations/health#refactoring-targets
 ```
@@ -313,6 +364,7 @@ With `--format json`, each target includes structured data for programmatic cons
       "priority": 92.3,
       "recommendation": "Actively-changing file with growing complexity — stabilize before adding features",
       "category": "urgent_churn_complexity",
+      "effort": "high",
       "factors": [
         {
           "metric": "complexity_density",
@@ -327,12 +379,30 @@ With `--format json`, each target includes structured data for programmatic cons
           "detail": "12 files depend on this"
         }
       ]
+    },
+    {
+      "path": "src/helpers/util.ts",
+      "priority": 38.8,
+      "recommendation": "Remove 12 unused exports to reduce surface area (86% dead)",
+      "category": "remove_dead_code",
+      "effort": "low",
+      "factors": [
+        {
+          "metric": "dead_code_ratio",
+          "value": 0.86,
+          "threshold": 0.5,
+          "detail": "12 unused of 14 value exports (86%)"
+        }
+      ],
+      "evidence": {
+        "unused_exports": ["assertEqual", "assertIs", "assertNever", "oldConfig", "legacyHelper"]
+      }
     }
   ]
 }
 ```
 
-Each factor includes raw `value` and `threshold` for programmatic use — AI agents and CI scripts can use these without parsing the `detail` string.
+Each factor includes raw `value` and `threshold` for programmatic use. The `evidence` field provides actionable detail for categories that support it — AI agents can use `evidence.unused_exports` to generate removal PRs without a second tool call. Categories without evidence omit the field entirely.
 
 
 ## Limitations
