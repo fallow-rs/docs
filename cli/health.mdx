@@ -60,6 +60,12 @@ Multiple section flags can be combined (e.g., `--complexity --hotspots`). Withou
 | `-w, --workspace <NAME>` | Scope output to a single workspace package while keeping the full cross-workspace graph. Also scopes hotspots to the specified package. |
 | `--changed-since <REF>` | Only analyze functions in files changed since the given git ref (e.g., `main`, `HEAD~5`). Also applies to hotspot analysis. |
 
+### Snapshots
+
+| Flag | Description |
+|:-----|:------------|
+| `--save-snapshot [PATH]` | Save a vital signs snapshot for trend tracking. Default path: `.fallow/snapshots/<timestamp>.json`. Forces file-scores and hotspot computation for complete metrics. |
+
 ### Baseline
 
 | Flag | Description |
@@ -149,6 +155,83 @@ The hotspot summary (included in JSON output) provides context about the analysi
 <Warning>
   Hotspot analysis requires a git repository. Shallow clones may produce incomplete results. Fallow detects this and warns you. For best results, ensure a full clone with `git fetch --unshallow`.
 </Warning>
+
+## Vital signs
+
+When file-scores are enabled (either explicitly via `--file-scores` or implicitly via `--save-snapshot`), the JSON output includes a `vital_signs` object with high-level codebase health metrics. These metrics provide a single-glance summary of code quality.
+
+| Metric | Description |
+|:-------|:------------|
+| `dead_file_pct` | Percentage of files with zero inbound references |
+| `dead_export_pct` | Percentage of value exports with zero references |
+| `avg_cyclomatic` | Average cyclomatic complexity across all functions |
+| `p90_cyclomatic` | 90th percentile cyclomatic complexity |
+| `duplication_pct` | Percentage of duplicated code (null if duplication analysis was not run) |
+| `hotspot_count` | Number of files with a hotspot score >= 50 |
+| `maintainability_avg` | Average maintainability index across all scored files |
+| `unused_dep_count` | Number of unused dependencies detected |
+| `circular_dep_count` | Number of circular dependency cycles detected |
+
+## Snapshots
+
+Use `--save-snapshot` to capture a point-in-time record of your codebase's vital signs. Snapshots enable trend tracking across builds, sprints, or releases.
+
+```bash
+# Save snapshot to the default path (.fallow/snapshots/<timestamp>.json)
+fallow health --save-snapshot
+
+# Save snapshot to a specific path
+fallow health --save-snapshot ./snapshot.json
+```
+
+The `--save-snapshot` flag forces file-scores and hotspot computation so that all vital signs metrics are available, regardless of which section flags are passed.
+
+### Snapshot format
+
+```json title="snapshot.json"
+{
+  "snapshot_schema_version": 1,
+  "version": "1.10.0",
+  "timestamp": "2026-03-25T14:30:00Z",
+  "git_sha": "a1b2c3d",
+  "git_branch": "main",
+  "shallow_clone": false,
+  "vital_signs": {
+    "dead_file_pct": 4.2,
+    "dead_export_pct": 12.8,
+    "avg_cyclomatic": 3.1,
+    "p90_cyclomatic": 11,
+    "duplication_pct": null,
+    "hotspot_count": 5,
+    "maintainability_avg": 72.4,
+    "unused_dep_count": 3,
+    "circular_dep_count": 1
+  },
+  "counts": {
+    "dead_files": 11,
+    "total_files": 262,
+    "dead_exports": 48,
+    "total_exports": 375,
+    "unused_deps": 3,
+    "circular_deps": 1
+  }
+}
+```
+
+| Field | Description |
+|:------|:------------|
+| `snapshot_schema_version` | Schema version for forward compatibility |
+| `version` | Fallow version that produced the snapshot |
+| `timestamp` | ISO 8601 timestamp of the snapshot |
+| `git_sha` | Current git commit SHA (if in a git repo) |
+| `git_branch` | Current git branch name |
+| `shallow_clone` | Whether a shallow clone was detected |
+| `vital_signs` | High-level health metrics (see [Vital signs](#vital-signs)) |
+| `counts` | Raw numerators and denominators behind the percentage metrics |
+
+<Tip>
+  Store snapshots in CI artifacts or commit them to your repo to build a history of codebase health over time.
+</Tip>
 
 ## Examples
 
@@ -257,6 +340,17 @@ fallow health --file-scores --format markdown
 
 # Markdown piped to a PR comment
 fallow health --file-scores --format markdown | gh pr comment --body-file -
+```
+
+```bash Snapshots
+# Save snapshot to default path (.fallow/snapshots/<timestamp>.json)
+fallow health --save-snapshot
+
+# Save snapshot to a specific file
+fallow health --save-snapshot ./snapshot.json
+
+# CI: save snapshot as a build artifact
+fallow health --save-snapshot ./snapshot.json --format json
 ```
 </CodeGroup>
 
@@ -515,6 +609,32 @@ Each target includes `effort` (`low`/`medium`/`high`) and `factors` with raw `va
 
 <Note>
   Without `--targets`, the `targets` array is omitted entirely from the JSON output.
+</Note>
+
+### With vital signs
+
+When file-scores are enabled (via `--file-scores` or implicitly via `--save-snapshot`), the JSON output includes a top-level `vital_signs` object:
+
+```json title="$ fallow health --file-scores --format json (vital_signs excerpt)"
+{
+  "schema_version": 3,
+  "version": "1.10.0",
+  "vital_signs": {
+    "dead_file_pct": 4.2,
+    "dead_export_pct": 12.8,
+    "avg_cyclomatic": 3.1,
+    "p90_cyclomatic": 11,
+    "duplication_pct": null,
+    "hotspot_count": 5,
+    "maintainability_avg": 72.4,
+    "unused_dep_count": 3,
+    "circular_dep_count": 1
+  }
+}
+```
+
+<Note>
+  Without file-scores enabled, the `vital_signs` object is omitted from the JSON output. The `duplication_pct` field is `null` when duplication analysis (`fallow dead-code` or `fallow dupes`) has not been run.
 </Note>
 
 ## Markdown output
