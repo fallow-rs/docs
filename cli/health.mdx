@@ -1,14 +1,14 @@
 ---
 title: "fallow health"
-description: "CLI reference for fallow health. Analyze function complexity, per-file maintainability, and git-churn hotspots to find code that needs refactoring."
-keywords: ["fallow health", "complexity", "cyclomatic", "cognitive", "CLI", "code health", "refactoring", "maintainability", "file scores", "hotspots", "churn", "git history"]
+description: "CLI reference for fallow health. Analyze function complexity, per-file maintainability, git-churn hotspots, and refactoring targets to find code that needs attention."
+keywords: ["fallow health", "complexity", "cyclomatic", "cognitive", "CLI", "code health", "refactoring", "maintainability", "file scores", "hotspots", "churn", "git history", "refactoring targets"]
 icon: "terminal"
 ---
 
-Analyze function complexity and file-level health across your codebase. By default, fallow reports all three sections: complexity findings, file health scores, and hotspot analysis. Use `--complexity`, `--file-scores`, or `--hotspots` to select individual sections.
+Analyze function complexity and file-level health across your codebase. By default, fallow reports all four sections: complexity findings, file health scores, hotspot analysis, and refactoring targets. Use `--complexity`, `--file-scores`, `--hotspots`, or `--targets` to select individual sections.
 
 <Tip>
-  All three sections (complexity, file scores, hotspots) are enabled by default. Use `--complexity`, `--file-scores`, or `--hotspots` to select individual sections. Add `--top N` to limit results.
+  All four sections are enabled by default. Use `--complexity`, `--file-scores`, `--hotspots`, or `--targets` to select individual sections. Add `--top N` to limit results.
 </Tip>
 
 ```bash
@@ -29,7 +29,7 @@ fallow health
 | Flag | Description |
 |:-----|:------------|
 | `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `compact`, `markdown`, `sarif` |
-| `--top <N>` | Show only the top N most complex functions (and file scores) |
+| `--top <N>` | Show only the top N results per section (findings, file scores, hotspots, targets) |
 | `--sort <METRIC>` | Sort complexity findings by: `cyclomatic` (default), `cognitive`, `lines` |
 | `--explain` | Add metric explanations. In human format, explanations are always shown. In JSON format, adds a `_meta` object with metric descriptions and docs links. |
 
@@ -42,6 +42,7 @@ By default, all three sections are included. Use these flags to select individua
 | `--complexity` | Show only complexity findings (functions exceeding thresholds). |
 | `--file-scores` | Show only per-file maintainability scores. Requires the full analysis pipeline (graph + dead code detection). File scores are sorted by maintainability index ascending (worst first). `--sort` and `--baseline` apply to complexity findings only, not file scores. |
 | `--hotspots` | Show only hotspot analysis: files that are both complex and frequently changing. Combines git churn history with complexity data. Requires a git repository. |
+| `--targets` | Show only refactoring targets: ranked recommendations based on complexity, coupling, churn, and dead code signals. Each target has a priority score (0–100) and a one-line actionable recommendation. |
 
 Multiple section flags can be combined (e.g., `--complexity --hotspots`). Without any section flags, all sections are included.
 
@@ -197,6 +198,20 @@ fallow health --hotspots --since 2025-06-01
 
 # Combine with file scores for full picture
 fallow health --hotspots --file-scores
+```
+
+```bash Refactoring targets
+# Ranked refactoring recommendations
+fallow health --targets
+
+# Top 5 targets
+fallow health --targets --top 5
+
+# Targets in JSON (includes structured factors)
+fallow health --targets --format json
+
+# Combine with file scores and hotspots
+fallow health --targets --file-scores --hotspots
 ```
 
 ```bash Custom thresholds
@@ -435,7 +450,54 @@ When `--hotspots` is used, the JSON output includes a `hotspots` array and `hots
 ```
 
 <Note>
-  Without `--hotspots`, the `hotspots` array and `hotspot_summary` fields are omitted entirely from the JSON output. Hotspot analysis can be combined with `--file-scores` to include all three sections in a single output.
+  Without `--hotspots`, the `hotspots` array and `hotspot_summary` fields are omitted entirely from the JSON output. Hotspot analysis can be combined with `--file-scores` to include all sections in a single output.
+</Note>
+
+### With refactoring targets
+
+When `--targets` is used, the JSON output includes a `targets` array:
+
+```json title="$ fallow health --targets --format json --top 2"
+{
+  "schema_version": 3,
+  "version": "1.8.1",
+  "elapsed_ms": 520,
+  "summary": {
+    "files_analyzed": 252,
+    "functions_analyzed": 5424,
+    "functions_above_threshold": 24,
+    "max_cyclomatic_threshold": 20,
+    "max_cognitive_threshold": 15
+  },
+  "targets": [
+    {
+      "path": "src/helpers/util.ts",
+      "priority": 38.8,
+      "recommendation": "Remove 12 unused exports to reduce surface area (86% dead)",
+      "category": "remove_dead_code",
+      "factors": [
+        {
+          "metric": "dead_code_ratio",
+          "value": 0.86,
+          "threshold": 0.5,
+          "detail": "12 unused of 14 value exports (86%)"
+        },
+        {
+          "metric": "fan_in",
+          "value": 35,
+          "threshold": 10,
+          "detail": "35 files depend on this"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Each factor includes raw `value` and `threshold` fields for programmatic consumption. Categories: `urgent_churn_complexity`, `break_circular_dependency`, `split_high_impact`, `remove_dead_code`, `extract_complex_functions`, `extract_dependencies`.
+
+<Note>
+  Without `--targets`, the `targets` array is omitted entirely from the JSON output.
 </Note>
 
 ## Markdown output

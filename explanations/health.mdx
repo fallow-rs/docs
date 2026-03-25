@@ -1,7 +1,7 @@
 ---
 title: "Health explained"
 description: "What each metric in fallow's health output means, how it's computed, and how to interpret the values."
-keywords: ["health", "maintainability index", "cyclomatic complexity", "cognitive complexity", "hotspots", "fan-in", "fan-out", "complexity density"]
+keywords: ["health", "maintainability index", "cyclomatic complexity", "cognitive complexity", "hotspots", "refactoring targets", "fan-in", "fan-out", "complexity density"]
 icon: "chart-line"
 ---
 
@@ -237,6 +237,102 @@ Compares commit frequency in the first half vs second half of the analysis windo
 <Accordion title="Research: churn × complexity methodology">
 Pioneered by Michael Feathers and systematized by Adam Tornhill in [*Your Code as a Crime Scene*](https://pragprog.com/titles/atcrime/your-code-as-a-crime-scene/) (2015) and [*Software Design X-Rays*](https://pragprog.com/titles/atevol/software-design-x-rays/) (2018).
 </Accordion>
+
+
+## Refactoring targets
+
+Refactoring targets are ranked, actionable recommendations produced by [`fallow health --targets`](/cli/health). They synthesize the metrics above into a prioritized list of files that would benefit most from refactoring.
+
+<Info>
+**Targets are synthesis, not data.** The other sections show measurements. Targets tell you what to do about them.
+</Info>
+
+### Priority score
+
+```
+priority = min(complexity_density, 1) × 30
+         + hotspot_boost × 25            (hotspot_score / 100 if in hotspots, else 0)
+         + dead_code_ratio × 20
+         + min(fan_in / 20, 1) × 15
+         + min(fan_out / 30, 1) × 10
+```
+
+All inputs are normalized to \[0, 1\] so each weight is a true percentage share. The formula intentionally avoids the Maintainability Index to prevent double-counting (MI already incorporates density and dead code).
+
+| Score | Interpretation | Action |
+|:------|:---------------|:-------|
+| 70–100 | High priority | Address in the current sprint |
+| 40–70 | Moderate | Schedule for upcoming work |
+| 0–40 | Lower priority | Monitor, address opportunistically |
+
+### Recommendation categories
+
+Each target is assigned a category based on which rule matches first (evaluated in priority order):
+
+| Category | Display label | Trigger | What it means |
+|:---------|:-------------|:--------|:-------------|
+| Urgent churn + complexity | `churn+complexity` | Hotspot score ≥ 50, accelerating trend, density > 0.5 | Actively-changing file with growing complexity — highest urgency |
+| Break circular dependency | `circular dep` | File in an import cycle with fan-in ≥ 5 | Changes cascade through the cycle to many dependents |
+| Split high-impact file | `high impact` | Fan-in ≥ 20 (or ≥ 10 with ≥ 5 functions) and density > 0.3 | High blast radius amplifies every bug introduced |
+| Remove dead code | `dead code` | Dead code ratio ≥ 0.5 with ≥ 3 value exports | Majority of exports are unused — reduce surface area |
+| Extract complex functions | `complexity` | Top cognitive complexity ≥ 30 | Contains functions that are very hard to understand |
+| Reduce coupling | `coupling` | Fan-out ≥ 15 and MI < 60 (excluding entry points) | Too many imports reduce testability |
+
+A file can trigger multiple rules, but only the highest-priority match determines the category. All contributing factors are still collected and shown in JSON output.
+
+```text fallow health --targets --top 5
+● Refactoring targets (5)
+
+  92.3    src/core/processor.ts
+          churn+complexity  Actively-changing file with growing complexity — stabilize before adding features
+
+  71.2    src/utils/helpers.ts
+          high impact  Split high-impact file — 15 dependents amplify every change
+
+  55.8    src/legacy/old-api.ts
+          dead code  Remove 8 unused exports to reduce surface area (73% dead)
+
+  52.0    src/graph/resolver.ts
+          circular dep  Break import cycle — 8 files depend on this, changes cascade through the cycle
+
+  41.8    src/components/Dashboard.tsx
+          complexity  Extract renderMetrics (cognitive: 45) and renderFilters (cognitive: 32) into smaller functions
+
+  Prioritized refactoring recommendations based on complexity, churn, and coupling signals — https://docs.fallow.tools/explanations/health#refactoring-targets
+```
+
+### JSON structure
+
+With `--format json`, each target includes structured data for programmatic consumption:
+
+```json
+{
+  "targets": [
+    {
+      "path": "src/core/processor.ts",
+      "priority": 92.3,
+      "recommendation": "Actively-changing file with growing complexity — stabilize before adding features",
+      "category": "urgent_churn_complexity",
+      "factors": [
+        {
+          "metric": "complexity_density",
+          "value": 0.67,
+          "threshold": 0.3,
+          "detail": "density 0.67 exceeds 0.3"
+        },
+        {
+          "metric": "fan_in",
+          "value": 12,
+          "threshold": 10,
+          "detail": "12 files depend on this"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Each factor includes raw `value` and `threshold` for programmatic use — AI agents and CI scripts can use these without parsing the `detail` string.
 
 
 ## Limitations
