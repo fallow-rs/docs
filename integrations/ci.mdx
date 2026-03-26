@@ -147,7 +147,7 @@ CI is the last line of defense. If dead code slips through agent workflows or ed
     </Info>
   </Tab>
   <Tab title="Manual Setup">
-    If you prefer not to use the action, run fallow directly:
+    If you prefer not to use the action or template, run fallow directly:
 
     ```yaml
     - run: npx fallow dead-code --format sarif > results.sarif
@@ -170,20 +170,42 @@ CI is the last line of defense. If dead code slips through agent workflows or ed
     The `--ci`, `--fail-on-issues`, and `--sarif-file` flags work on all commands: `dead-code`, `dupes`, `health`, and bare `fallow`.
     </Info>
 
-    ### PR comments
+    ### PR/MR comments
 
-    Post results as a PR comment using markdown output:
+    Post results as a comment using markdown output:
 
-    ```yaml
-    - run: npx fallow dead-code --format markdown | gh pr comment ${{ github.event.pull_request.number }} --body-file -
-    ```
+    <Tabs>
+      <Tab title="GitHub Actions">
+        ```yaml
+        - run: npx fallow dead-code --format markdown | gh pr comment ${{ github.event.pull_request.number }} --body-file -
+        - run: npx fallow dupes --format markdown | gh pr comment ${{ github.event.pull_request.number }} --body-file -
+        - run: npx fallow health --format markdown | gh pr comment ${{ github.event.pull_request.number }} --body-file -
+        ```
+      </Tab>
+      <Tab title="GitLab CI">
+        Use the built-in template with `FALLOW_COMMENT`:
 
-    Duplication and health results can also be posted as PR comments:
+        ```yaml
+        fallow:
+          extends: .fallow
+          variables:
+            FALLOW_COMMENT: "true"
+        ```
 
-    ```yaml
-    - run: npx fallow dupes --format markdown | gh pr comment ${{ github.event.pull_request.number }} --body-file -
-    - run: npx fallow health --format markdown | gh pr comment ${{ github.event.pull_request.number }} --body-file -
-    ```
+        Or manually with the GitLab API:
+
+        ```yaml
+        fallow:
+          script:
+            - npx fallow dead-code --format markdown > fallow-report.md
+            - |
+              curl --request POST \
+                --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+                "$CI_API_V4_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID/notes" \
+                --data-urlencode "body@fallow-report.md"
+        ```
+      </Tab>
+    </Tabs>
 
     ### Duplication checks
 
@@ -193,7 +215,7 @@ CI is the last line of defense. If dead code slips through agent workflows or ed
 
     This fails if the overall duplication percentage exceeds 5%.
 
-    Use `--changed-since` to only check duplication in files modified in the PR:
+    Use `--changed-since` to only check duplication in files modified in the PR/MR:
 
     ```yaml
     - run: npx fallow dupes --changed-since origin/main --format compact
@@ -225,13 +247,32 @@ CI is the last line of defense. If dead code slips through agent workflows or ed
 For pull requests, use `--changed-since` to only check files modified in the PR. This keeps CI fast and focuses feedback on new code.
 </Tip>
 
-### PR-only analysis
+### PR/MR-only analysis
 
-```yaml
-- uses: fallow-rs/fallow@v1
-  with:
-    changed-since: ${{ github.event.pull_request.base.sha }}
-```
+Only analyze files changed in the current pull request or merge request:
+
+<Tabs>
+  <Tab title="GitHub Action">
+    ```yaml
+    - uses: fallow-rs/fallow@v1
+      with:
+        changed-since: ${{ github.event.pull_request.base.sha }}
+    ```
+  </Tab>
+  <Tab title="GitLab CI">
+    ```yaml
+    fallow:
+      extends: .fallow
+      variables:
+        FALLOW_CHANGED_SINCE: "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    ```
+  </Tab>
+  <Tab title="Manual">
+    ```yaml
+    - run: npx fallow dead-code --changed-since origin/main
+    ```
+  </Tab>
+</Tabs>
 
 <Accordion title="Incremental adoption with baselines">
   Adopting fallow on a large codebase? Use baselines to skip pre-existing issues while still catching new ones.
@@ -243,11 +284,30 @@ For pull requests, use `--changed-since` to only check files modified in the PR.
   git add .fallow-baseline.json && git commit -m "chore: add fallow baseline"
   ```
 
-  **2. In your PR workflow, compare against the baseline:**
+  **2. In your CI workflow, compare against the baseline:**
 
-  ```yaml
-  - run: npx fallow dead-code --baseline .fallow-baseline.json
-  ```
+  <Tabs>
+    <Tab title="GitHub Action">
+      ```yaml
+      - uses: fallow-rs/fallow@v1
+        with:
+          baseline: .fallow-baseline.json
+      ```
+    </Tab>
+    <Tab title="GitLab CI">
+      ```yaml
+      fallow:
+        extends: .fallow
+        variables:
+          FALLOW_BASELINE: ".fallow-baseline.json"
+      ```
+    </Tab>
+    <Tab title="Manual">
+      ```yaml
+      - run: npx fallow dead-code --baseline .fallow-baseline.json
+      ```
+    </Tab>
+  </Tabs>
 
   Only new issues (not in the baseline) get reported. As your team cleans up existing dead code, periodically regenerate the baseline on `main`.
 
