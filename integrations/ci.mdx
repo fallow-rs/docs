@@ -1,6 +1,6 @@
 ---
 title: "CI integration"
-description: "Run fallow in CI with GitHub Actions or GitLab CI to catch dead code and duplication on every push and PR. Supports SARIF upload, Code Quality reports, and baseline diffing."
+description: "Run fallow in CI with GitHub Actions or GitLab CI to catch dead code, duplication, and complexity hotspots on every push and PR. Supports SARIF upload, Code Quality reports, and baseline diffing."
 keywords: ["CI", "GitHub Actions", "GitLab CI", "SARIF", "code scanning", "Code Quality", "baseline", "pull request", "merge request", "automation", "safety net", "agents", "static analysis"]
 icon: "shield-check"
 ---
@@ -14,7 +14,7 @@ CI is the last line of defense. If dead code slips through agent workflows or ed
         Add fallow to your workflow file:
 
         ```yaml
-        name: Dead code analysis
+        name: Fallow analysis
         on: [push, pull_request]
 
         jobs:
@@ -26,13 +26,15 @@ CI is the last line of defense. If dead code slips through agent workflows or ed
                 with:
                   format: sarif
         ```
+
+        This runs all analyses (dead code + duplication + complexity) by default. Use the `command` input to run a specific analysis.
       </Step>
       <Step title="Configure inputs">
         Customize the action with these inputs:
 
         | Input | Default | Description |
         |:------|:--------|:------------|
-        | `command` | `check` | Command to run (`dead-code`, `check`, `dupes`, `fix`) |
+        | `command` | `check` | Command to run (`check`, `dead-code`, `dupes`, `health`, `fix`, or empty for all) |
         | `root` | `.` | Project root directory |
         | `config` | — | Path to config file (`.fallowrc.json` or `fallow.toml`) |
         | `format` | `sarif` | Output format |
@@ -69,15 +71,26 @@ CI is the last line of defense. If dead code slips through agent workflows or ed
     </Steps>
 
     ```bash title="GitHub Actions job summary"
-    fallow dead-code — 3 issues found
+    fallow — 8 issues found
 
+    Dead Code (3 issues)
     | Type | File | Symbol | Line |
     |------|------|--------|------|
     | unused-export | src/utils/format.ts | formatCurrency | 12 |
     | unused-export | src/utils/format.ts | formatPercentage | 28 |
     | unused-file | src/legacy/oldApi.ts | — | — |
 
-    Completed in 22ms
+    Duplication (3 clone groups, 1.8%)
+    | Files | Lines | Tokens |
+    |-------|-------|--------|
+    | src/tax/utils.ts ↔ src/savings/utils.ts | 25 | 92 |
+
+    Complexity (2 hotspots)
+    | File | Function | Cyclomatic | Cognitive |
+    |------|----------|------------|-----------|
+    | src/server/router.ts:42 | handleRequest | 28 | 34 |
+
+    Completed in 48ms
     ```
 
     <Info>
@@ -104,13 +117,14 @@ CI is the last line of defense. If dead code slips through agent workflows or ed
 
         | Variable | Default | Description |
         |:---------|:--------|:------------|
-        | `FALLOW_COMMAND` | `""` | Command to run (`dead-code`, `dupes`, `health`, `fix`, or empty for all) |
+        | `FALLOW_COMMAND` | `""` | Command to run (`check`, `dead-code`, `dupes`, `health`, `fix`, or empty for all) |
         | `FALLOW_ROOT` | `.` | Project root directory |
         | `FALLOW_CONFIG` | — | Path to config file |
         | `FALLOW_PRODUCTION` | `false` | Enable production mode |
         | `FALLOW_FAIL_ON_ISSUES` | `true` | Fail pipeline if issues found |
         | `FALLOW_CHANGED_SINCE` | — | Only check files changed since this ref |
         | `FALLOW_BASELINE` | — | Path to baseline file for comparison |
+        | `FALLOW_SAVE_BASELINE` | — | Save current results as a baseline file |
         | `FALLOW_COMMENT` | `false` | Post results as MR comment |
         | `FALLOW_CODEQUALITY` | `true` | Generate Code Quality report (inline MR annotations) |
         | `FALLOW_VERSION` | `latest` | Fallow version to use |
@@ -150,20 +164,16 @@ CI is the last line of defense. If dead code slips through agent workflows or ed
     If you prefer not to use the action or template, run fallow directly:
 
     ```yaml
-    - run: npx fallow dead-code --format sarif > results.sarif
+    - run: npx fallow --ci              # All analyses (dead code + dupes + health)
+    - run: npx fallow dead-code --ci    # Dead code only
+    - run: npx fallow dupes --ci        # Duplication only
+    - run: npx fallow health --ci       # Complexity hotspots only
     ```
 
-    Or use `--ci` mode for SARIF + fail-on-issues + quiet in one flag:
+    The `--ci` flag enables SARIF output, fail-on-issues, and quiet mode in one flag. Or configure individually:
 
     ```yaml
-    - run: npx fallow dead-code --ci
-    - run: npx fallow --ci    # All analyses
-    ```
-
-    Or with specific checks:
-
-    ```yaml
-    - run: npx fallow dead-code --fail-on-issues --format compact
+    - run: npx fallow --fail-on-issues --format compact
     ```
 
     <Info>
@@ -197,12 +207,14 @@ CI is the last line of defense. If dead code slips through agent workflows or ed
         ```yaml
         fallow:
           script:
-            - npx fallow dead-code --format markdown > fallow-report.md
+            - npx fallow --format markdown > fallow-report.md
             - |
               curl --request POST \
                 --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
                 "$CI_API_V4_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID/notes" \
                 --data-urlencode "body@fallow-report.md"
+          rules:
+            - if: $CI_MERGE_REQUEST_IID
         ```
       </Tab>
     </Tabs>
@@ -220,17 +232,30 @@ CI is the last line of defense. If dead code slips through agent workflows or ed
     ```yaml
     - run: npx fallow dupes --changed-since origin/main --format compact
     ```
+
+    ### Health checks
+
+    ```yaml
+    - run: npx fallow health --format compact
+    ```
+
+    Reports complexity hotspots and circular dependencies. Use `--max-cyclomatic 15` to customize the threshold.
   </Tab>
   <Tab title="Other CI">
     Fallow works in any CI environment that can run Node.js or download a binary. The pattern is the same everywhere:
 
     ```bash
-    # Run with npx (no install needed)
+    # Run all analyses (no install needed)
+    npx fallow --format compact
+
+    # Or individual commands
     npx fallow dead-code --format compact
+    npx fallow dupes --format compact
+    npx fallow health --format compact
 
     # Or download the binary directly
     curl -fsSL https://get.fallow.dev | sh
-    fallow dead-code --format compact
+    fallow --format compact
     ```
 
     ### Exit codes
@@ -269,7 +294,7 @@ Only analyze files changed in the current pull request or merge request:
   </Tab>
   <Tab title="Manual">
     ```yaml
-    - run: npx fallow dead-code --changed-since origin/main
+    - run: npx fallow --changed-since origin/main
     ```
   </Tab>
 </Tabs>
@@ -280,7 +305,7 @@ Only analyze files changed in the current pull request or merge request:
   **1. Save a baseline on your main branch:**
 
   ```bash
-  npx fallow dead-code --save-baseline .fallow-baseline.json
+  npx fallow --save-baseline .fallow-baseline.json
   git add .fallow-baseline.json && git commit -m "chore: add fallow baseline"
   ```
 
@@ -304,7 +329,7 @@ Only analyze files changed in the current pull request or merge request:
     </Tab>
     <Tab title="Manual">
       ```yaml
-      - run: npx fallow dead-code --baseline .fallow-baseline.json
+      - run: npx fallow --baseline .fallow-baseline.json
       ```
     </Tab>
   </Tabs>
@@ -320,16 +345,16 @@ Only analyze files changed in the current pull request or merge request:
 
 CI works best when combined with agent and editor integration:
 
-1. **Agent** generates code and runs `fallow dead-code --changed-since HEAD~1` to self-check
+1. **Agent** generates code and runs `fallow --changed-since HEAD~1` to self-check
 2. **Human** reviews in VS Code, sees Code Lens annotations on new exports
 3. **CI** runs the full analysis and catches anything that slipped through
 
 ```mermaid
 flowchart TB
-  A["Agent<br/>fallow dead-code --changed-since HEAD~1"] -->|generates + self-checks| B["Code"]
+  A["Agent<br/>fallow --changed-since HEAD~1"] -->|generates + self-checks| B["Code"]
   B --> C["Human<br/>VS Code Code Lens"]
   C -->|reviews| D["Pull Request"]
-  D --> E["CI<br/>Full fallow dead-code + SARIF"]
+  D --> E["CI<br/>Full fallow analysis + SARIF"]
   E -->|passes| F["main"]
 ```
 
