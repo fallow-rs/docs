@@ -56,6 +56,15 @@ fallow check      # Hidden alias for fallow dead-code
 | `--save-baseline <PATH>` | Save current results as a baseline file |
 | `--production` | Production mode (exclude test/story/dev files) |
 
+### Regression detection
+
+| Flag | Description |
+|:-----|:------------|
+| `--fail-on-regression` | Fail if issue count increased beyond tolerance vs a regression baseline |
+| `--tolerance <N>` | Allowed increase: `"2%"` (percentage) or `"5"` (absolute). Default: `"0"` |
+| `--regression-baseline <PATH>` | Path to regression baseline file (default: `.fallow/regression-baseline.json`) |
+| `--save-regression-baseline <PATH>` | Save current issue counts as a regression baseline |
+
 <Accordion title="Debugging flags">
   These flags help you understand how fallow resolves your code and where time is spent.
 
@@ -111,11 +120,83 @@ fallow dead-code --save-baseline .fallow-baseline.json
 fallow dead-code --baseline .fallow-baseline.json
 ```
 
+```bash Regression detection
+# Save a regression baseline (e.g., on the main branch)
+fallow dead-code --save-regression-baseline
+
+# Fail if issue count regressed (zero tolerance)
+fallow dead-code --fail-on-regression
+
+# Allow up to 2% increase
+fallow dead-code --fail-on-regression --tolerance 2%
+
+# Allow up to 5 absolute new issues
+fallow dead-code --fail-on-regression --tolerance 5
+
+# Custom baseline path
+fallow dead-code --fail-on-regression --regression-baseline .fallow/my-baseline.json
+```
+
 ```bash Production mode
 # Exclude test and dev files
 fallow dead-code --production
 ```
 </CodeGroup>
+
+## Regression detection
+
+Save a regression baseline on your main branch, then compare on subsequent runs (e.g., in PR checks) to prevent issue count from growing.
+
+**Workflow:**
+
+1. Save a regression baseline on `main`:
+   ```bash
+   fallow dead-code --save-regression-baseline
+   ```
+   This writes issue counts to `.fallow/regression-baseline.json` (or a custom path).
+
+2. On each PR, compare against the baseline:
+   ```bash
+   fallow dead-code --fail-on-regression
+   ```
+   Exits with code 1 if the total issue count exceeds the baseline plus the configured tolerance.
+
+3. Optionally set a tolerance to allow small fluctuations:
+   ```bash
+   fallow dead-code --fail-on-regression --tolerance 2%   # percentage
+   fallow dead-code --fail-on-regression --tolerance 5     # absolute
+   ```
+
+When `--fail-on-regression` is used with `--format json`, the output includes an optional `regression` object:
+
+```json
+{
+  "regression": {
+    "status": "pass",
+    "baseline_total": 42,
+    "current_total": 45,
+    "delta": 3,
+    "tolerance": 2.0,
+    "tolerance_kind": "percentage",
+    "exceeded": false
+  }
+}
+```
+
+| Field | Description |
+|:------|:------------|
+| `status` | `pass`, `exceeded`, or `skipped` |
+| `baseline_total` | Issue count from the baseline file |
+| `current_total` | Issue count from the current run |
+| `delta` | `current_total - baseline_total` |
+| `tolerance` | Configured tolerance value |
+| `tolerance_kind` | `percentage` or `absolute` |
+| `exceeded` | Whether the delta exceeds the tolerance |
+| `reason` | Only present when `status` is `skipped` (e.g., baseline file not found) |
+
+<Tip>
+These flags also work with `fallow dupes` and bare `fallow` (all analyses). The regression check compares total issue counts across all enabled analyses.
+</Tip>
 
 ## Example output
 
