@@ -1,7 +1,7 @@
 ---
 title: "CI integration"
-description: "Run fallow in CI with GitHub Actions or GitLab CI to catch dead code, duplication, and complexity hotspots on every push and PR. Supports SARIF upload, Code Quality reports, and baseline diffing."
-keywords: ["CI", "GitHub Actions", "GitLab CI", "SARIF", "code scanning", "Code Quality", "baseline", "pull request", "merge request", "automation", "safety net", "agents", "static analysis"]
+description: "Run fallow in CI with GitHub Actions or GitLab CI to catch dead code, duplication, and complexity hotspots on every push and PR. Supports SARIF upload, Code Quality reports, rich MR comments, inline review with suggestions, and baseline diffing."
+keywords: ["CI", "GitHub Actions", "GitLab CI", "SARIF", "code scanning", "Code Quality", "baseline", "pull request", "merge request", "automation", "safety net", "agents", "static analysis", "MR comments", "inline review", "suggestions"]
 icon: "shield-check"
 ---
 
@@ -99,6 +99,10 @@ CI is the last line of defense. If dead code slips through agent workflows or ed
     <Info>
     SARIF upload to GitHub Code Scanning shows dead code issues as inline annotations directly on the PR diff.
     </Info>
+
+    <Info>
+    The action automatically detects your package manager (npm, pnpm, or yarn) from lock files. Review comments and annotations show the correct install/uninstall commands for your project.
+    </Info>
   </Tab>
   <Tab title="GitLab CI">
     <Steps>
@@ -125,15 +129,36 @@ CI is the last line of defense. If dead code slips through agent workflows or ed
         | `FALLOW_CONFIG` | — | Path to config file |
         | `FALLOW_PRODUCTION` | `false` | Enable production mode |
         | `FALLOW_FAIL_ON_ISSUES` | `true` | Fail pipeline if issues found |
-        | `FALLOW_CHANGED_SINCE` | — | Only check files changed since this ref |
+        | `FALLOW_CHANGED_SINCE` | — | Only check files changed since this ref (auto-detected in MR pipelines) |
         | `FALLOW_BASELINE` | — | Path to baseline file for comparison |
         | `FALLOW_SAVE_BASELINE` | — | Save current results as a baseline file |
-        | `FALLOW_COMMENT` | `false` | Post results as MR comment |
+        | `FALLOW_COMMENT` | `false` | Post a rich MR summary comment with collapsible sections for each analysis |
+        | `FALLOW_REVIEW` | `false` | Post inline MR discussions on changed lines with suggestion blocks for auto-fixable issues |
+        | `FALLOW_MAX_COMMENTS` | `50` | Maximum number of inline review comments to post (applies to `FALLOW_REVIEW`) |
         | `FALLOW_CODEQUALITY` | `true` | Generate Code Quality report (inline MR annotations) |
         | `FALLOW_VERSION` | `latest` | Fallow version to use |
+        | `FALLOW_SCRIPTS_REF` | `main` | Pin CI scripts to a specific git ref (tag, branch, or SHA) for reproducible builds |
         | `FALLOW_WORKSPACE` | — | Scope to a single workspace package |
         | `FALLOW_DUPES_MODE` | `mild` | Detection mode for dupes (`strict`, `mild`, `weak`, `semantic`) |
         | `FALLOW_ARGS` | — | Additional arguments (space-separated) |
+
+        <Info>
+        In MR pipelines, the template automatically passes `--changed-since` to scope analysis to files changed in the merge request. No manual configuration needed.
+        </Info>
+
+        <Info>
+        The template automatically detects your package manager (npm, pnpm, or yarn) from lock files. Review comments and suggestions show the correct install/uninstall commands for your project.
+        </Info>
+
+        Example — full MR feedback with summary comment and inline review:
+
+        ```yaml
+        fallow:
+          extends: .fallow
+          variables:
+            FALLOW_COMMENT: "true"
+            FALLOW_REVIEW: "true"
+        ```
 
         Example — dead code only with MR comments:
 
@@ -150,18 +175,61 @@ CI is the last line of defense. If dead code slips through agent workflows or ed
 
         No additional configuration needed. The report is uploaded as a CI artifact automatically.
       </Step>
-      <Step title="MR comments (optional)">
-        Set `FALLOW_COMMENT: "true"` to post a summary table as an MR comment. The comment is updated on each push (no spam).
+      <Step title="Rich MR comments">
+        **Summary comment** — Set `FALLOW_COMMENT: "true"` to post a rich MR comment with collapsible sections for dead code, duplication, and complexity findings. The comment is updated on each push (no spam).
 
-        For MR comments, the job needs API access. Either:
-        - Set a `GITLAB_TOKEN` CI/CD variable (project access token with `api` scope), or
-        - Use the built-in `CI_JOB_TOKEN` (requires the project to allow job token API access)
+        **Inline review** — Set `FALLOW_REVIEW: "true"` to post inline MR discussions directly on changed lines. Auto-fixable issues include GitLab suggestion blocks that can be applied with one click. Use `FALLOW_MAX_COMMENTS` to cap the number of inline comments (default: 50).
+
+        ```yaml
+        fallow:
+          extends: .fallow
+          variables:
+            FALLOW_COMMENT: "true"    # Rich summary comment
+            FALLOW_REVIEW: "true"     # Inline discussions with suggestions
+            FALLOW_MAX_COMMENTS: "30" # Limit inline comments
+        ```
+      </Step>
+      <Step title="Authentication">
+        MR comments and inline reviews require API access. Two options:
+
+        - **`GITLAB_TOKEN`** (recommended) — a project or personal access token with `api` scope. Set it as a CI/CD variable. Required for full features including comment cleanup on resolved issues.
+        - **`CI_JOB_TOKEN`** — works for posting comments but cannot clean up outdated comments when issues are resolved. Requires the project to allow job token API access.
+
+        <Warning>
+        `CI_JOB_TOKEN` cannot delete or update comments from previous runs. Use a `GITLAB_TOKEN` with `api` scope for the best experience — stale comments are automatically removed when issues are fixed.
+        </Warning>
       </Step>
     </Steps>
 
     <Info>
     The GitLab template caches parse results per branch via `.fallow/`, so incremental runs are fast.
     </Info>
+
+    <Accordion title="Complete example configuration">
+      A full `.gitlab-ci.yml` setup with summary comments, inline review, and Code Quality:
+
+      ```yaml
+      include:
+        - remote: 'https://raw.githubusercontent.com/fallow-rs/fallow/main/ci/gitlab-ci.yml'
+
+      fallow:
+        extends: .fallow
+        variables:
+          FALLOW_COMMENT: "true"        # Rich MR summary with collapsible sections
+          FALLOW_REVIEW: "true"         # Inline discussions with suggestion blocks
+          FALLOW_MAX_COMMENTS: "50"     # Cap inline review comments (default: 50)
+          FALLOW_CODEQUALITY: "true"    # Code Quality report for MR annotations
+          FALLOW_FAIL_ON_ISSUES: "true" # Fail pipeline on issues
+          FALLOW_PRODUCTION: "true"     # Exclude test/dev files
+          # FALLOW_SCRIPTS_REF: "v1.0.0" # Pin scripts to a specific version
+      ```
+
+      The template automatically:
+      - Detects your package manager (npm/pnpm/yarn) from lock files
+      - Scopes analysis to changed files in MR pipelines via `--changed-since`
+      - Caches parse results per branch for fast incremental runs
+      - Uploads Code Quality artifacts for inline MR annotations
+    </Accordion>
   </Tab>
   <Tab title="Manual Setup">
     If you prefer not to use the action or template, run fallow directly:
@@ -272,7 +340,7 @@ CI is the last line of defense. If dead code slips through agent workflows or ed
 </Tabs>
 
 <Tip>
-The GitHub Action automatically scopes analysis to changed files in PR context (`auto-changed-since: true` by default). No extra configuration needed.
+Both the GitHub Action and GitLab CI template automatically scope analysis to changed files in PR/MR context. No extra configuration needed.
 </Tip>
 
 ### PR/MR-only analysis
@@ -298,6 +366,8 @@ Only analyze files changed in the current pull request or merge request:
     ```
   </Tab>
   <Tab title="GitLab CI">
+    The template does this automatically in MR pipelines. To use a custom ref instead:
+
     ```yaml
     fallow:
       extends: .fallow
