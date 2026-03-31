@@ -1,0 +1,120 @@
+---
+title: "Health badges"
+description: "Add a shields.io-compatible health badge to your README showing your project's health score and letter grade."
+keywords: ["badge", "shields.io", "README", "health score", "SVG", "CI", "GitHub Actions"]
+icon: "award"
+---
+
+Add a health badge to your README to show your project's code health at a glance.
+
+```bash
+fallow health --format badge > badge.svg
+```
+
+The badge displays the letter grade and numeric score in shields.io flat style:
+
+| Project | Badge |
+|---------|-------|
+| zod | ![zod](https://github.com/fallow-rs/fallow/releases/download/v2.7.2/zod.svg) |
+| preact | ![preact](https://github.com/fallow-rs/fallow/releases/download/v2.7.2/preact.svg) |
+| svelte | ![svelte](https://github.com/fallow-rs/fallow/releases/download/v2.7.2/svelte.svg) |
+| vite | ![vite](https://github.com/fallow-rs/fallow/releases/download/v2.7.2/vite.svg) |
+
+Grades: **A** (≥85, green) · **B** (70–84, green) · **C** (55–69, yellow) · **D** (40–54, orange) · **F** (&lt;40, red).
+
+## Hosting the badge
+
+The SVG needs a stable URL for your README to reference. Three options, from simplest to most robust:
+
+### Option 1: Commit to your repo
+
+Generate the badge and commit it directly:
+
+```bash
+fallow health --format badge > .github/badges/health.svg
+git add .github/badges/health.svg
+git commit -m "chore: update health badge"
+```
+
+Then reference it in your README:
+
+```markdown
+![fallow health](./github/badges/health.svg)
+```
+
+This is the simplest approach but the badge only updates when you regenerate and commit.
+
+### Option 2: Publish from CI (recommended)
+
+Add a step to your CI workflow that generates the badge and publishes it to a `badges` branch:
+
+<Tabs>
+  <Tab title="GitHub Actions">
+    ```yaml
+    - name: Generate health badge
+      run: fallow health --format badge > badge.svg
+
+    - name: Publish badge
+      uses: peaceiris/actions-gh-pages@v4
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: .
+        publish_branch: badges
+        keep_files: true
+        include_files: badge.svg
+    ```
+
+    Then reference the badge from the `badges` branch:
+
+    ```markdown
+    ![fallow health](https://raw.githubusercontent.com/your-org/your-repo/badges/badge.svg)
+    ```
+  </Tab>
+  <Tab title="GitLab CI">
+    ```yaml
+    health-badge:
+      stage: deploy
+      script:
+        - fallow health --format badge > badge.svg
+      artifacts:
+        paths:
+          - badge.svg
+    ```
+
+    Use GitLab's [badge API](https://docs.gitlab.com/ee/user/project/badges.html) to link the artifact.
+  </Tab>
+</Tabs>
+
+### Option 3: Shields.io endpoint
+
+If you prefer dynamic badges via shields.io, generate a JSON endpoint file instead:
+
+```bash
+fallow health --format json --score --quiet 2>/dev/null \
+  | jq '{schemaVersion: 1, label: "fallow", message: "\(.health_score.grade) (\(.health_score.score | floor))", color: (if .health_score.score >= 85 then "brightgreen" elif .health_score.score >= 70 then "green" elif .health_score.score >= 55 then "yellow" elif .health_score.score >= 40 then "orange" else "red" end)}' \
+  > health-badge.json
+```
+
+Host the JSON file (e.g., in a Gist or on the `badges` branch) and use the shields.io endpoint badge:
+
+```markdown
+![fallow health](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/your-org/your-repo/badges/health-badge.json)
+```
+
+This keeps the badge rendering on shields.io's CDN and always shows the latest score.
+
+## Monorepo badges
+
+For workspace packages, scope the badge with `--workspace`:
+
+```bash
+fallow health --format badge --workspace my-package > badges/my-package.svg
+```
+
+## Technical details
+
+- Self-contained SVG with embedded Verdana font metrics — no external requests
+- Unique element IDs per badge — safe to inline multiple badges on one page
+- `--format badge` automatically enables `--score` (no need to pass both)
+- Exit code 2 with an error message if the score cannot be computed
+- Also available via the `FALLOW_FORMAT=badge` environment variable
