@@ -14,7 +14,7 @@ Pass `--explain` to any command with `--format json` to include issue type defin
 
 ## Issue types
 
-Fallow detects 14 types of dead code. Each type has a default severity that determines whether it causes a non-zero exit code with `--fail-on-issues`.
+Fallow detects 15 types of dead code. Each type has a default severity that determines whether it causes a non-zero exit code with `--fail-on-issues`.
 
 ### Unused files
 
@@ -163,6 +163,20 @@ Modules that import each other directly or transitively, forming a cycle.
 **When it's OK to keep:**
 - **Type-only cycles**: If the cycle only involves `import type`, there's no runtime initialization risk. These are reported separately as type-only dependencies.
 
+### Boundary violations
+
+Imports that cross user-defined architecture zone boundaries. Zones are defined in the `boundaries` config section and map file path patterns to named architecture zones. A boundary violation occurs when a file in one zone imports from a file in another zone that the boundary rules disallow.
+
+| Severity | Default |
+|:---------|:--------|
+| Error | Yes |
+
+**When to act:** Always. Boundary violations indicate that code is breaking the intended architecture. Fix by restructuring imports to respect zone boundaries, or by adjusting the boundary configuration if the import is intentional.
+
+**Common false positives:**
+- **Shared utilities**: Code in a shared/common zone may need to be accessible from multiple zones. Adjust boundary rules to allow these imports.
+- **Newly created zones**: When introducing boundaries to an existing codebase, expect violations. Use `warn` severity initially.
+
 ### Type-only dependencies
 
 Production dependencies (`dependencies`) that are only ever imported via `import type`. Since type imports are erased at compile time, these packages are never loaded at runtime and should be moved to `devDependencies`.
@@ -190,14 +204,15 @@ Not all findings are equally important. Use this priority order:
 
 1. **Unresolved imports** — potential runtime failures
 2. **Unlisted dependencies** — breaks in strict environments
-3. **Unused files** — entire modules to delete
-4. **Unused dependencies** — security and install time
-5. **Unused exports** — API surface cleanup
-6. **Circular dependencies** — initialization bugs
-7. **Type-only dependencies** — install size optimization
-8. **Test-only dependencies** — install size optimization
-9. **Duplicate exports** — developer experience
-10. **Unused types / enum members / class members** — code hygiene
+3. **Boundary violations** — architecture enforcement
+4. **Unused files** — entire modules to delete
+5. **Unused dependencies** — security and install time
+6. **Unused exports** — API surface cleanup
+7. **Circular dependencies** — initialization bugs
+8. **Type-only dependencies** — install size optimization
+9. **Test-only dependencies** — install size optimization
+10. **Duplicate exports** — developer experience
+11. **Unused types / enum members / class members** — code hygiene
 
 <Info>
 The first two categories indicate correctness issues that may cause runtime failures. Everything else is maintenance and hygiene.
@@ -327,6 +342,12 @@ When `--explain` is passed (or via MCP), the JSON output includes a `_meta` obje
         "description": "Modules that import each other directly or transitively",
         "severity": "warning",
         "action": "Extract shared code into a separate module"
+      },
+      "boundary_violation": {
+        "name": "Boundary violation",
+        "description": "Import crosses a user-defined architecture zone boundary",
+        "severity": "error",
+        "action": "Restructure the import to respect zone boundaries"
       }
     }
   }
