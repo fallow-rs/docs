@@ -1,0 +1,301 @@
+---
+title: "Architecture boundaries"
+description: "Enforce architecture rules with directory-based import boundaries. Define zones for UI, data, and shared code — fallow catches violations at Rust speed."
+keywords: ["architecture boundaries", "import rules", "module boundaries", "layered architecture", "hexagonal architecture", "feature-sliced design", "bulletproof react", "zone boundaries"]
+icon: "layer-group"
+---
+
+`fallow dead-code` enforces architecture boundaries by checking that imports between directories follow your rules. Define <Tooltip tip="Named groups of files matched by glob patterns — e.g., 'ui' matches src/components/**">zones</Tooltip> and declare which zones may import from which.
+
+```bash
+fallow dead-code --boundary-violations
+```
+
+<Info>
+  Boundary violations are included in `fallow dead-code` output by default. Use `--boundary-violations` to show only boundary issues.
+</Info>
+
+## Quick start with presets
+
+The fastest way to add boundaries is with a built-in preset. Fallow ships four presets for common architecture patterns:
+
+<CodeGroup>
+```jsonc .fallowrc.json
+{
+  "boundaries": {
+    "preset": "bulletproof"
+  }
+}
+```
+
+```toml fallow.toml
+[boundaries]
+preset = "bulletproof"
+```
+</CodeGroup>
+
+Run `fallow list --boundaries` to see the expanded zones and rules:
+
+```bash title="$ fallow list --boundaries"
+Boundaries: 4 zones, 4 rules
+
+Zones:
+  app                  3 files  src/app/**
+  features             12 files src/features/**
+  shared               8 files  src/components/**, src/hooks/**, src/lib/**, ...
+  server               4 files  src/server/**
+
+Rules:
+  app                  → features, shared, server
+  features             → shared, server
+  server               → shared
+  shared               (isolated — no imports allowed)
+```
+
+## Presets
+
+<Tabs>
+  <Tab title="Bulletproof">
+    The dominant React/Next.js pattern. Feature modules are isolated from each other; shared utilities and server infrastructure form the base layers.
+
+    **4 zones:** `app`, `features`, `shared`, `server`
+
+    ```
+    app       → features, shared, server
+    features  → shared, server
+    server    → shared
+    shared    (isolated)
+    ```
+
+    The `shared` zone covers: `components`, `hooks`, `lib`, `utils`, `utilities`, `providers`, `shared`, `types`, `styles`, `i18n`.
+
+    <Tip>
+      This preset matches the architecture from [Bulletproof React](https://github.com/alan2207/bulletproof-react) and is the most common pattern in modern React and Next.js projects.
+    </Tip>
+  </Tab>
+  <Tab title="Layered">
+    Classic N-tier architecture with four layers. Infrastructure may import from both domain and application (common for dependency injection).
+
+    **4 zones:** `presentation`, `application`, `domain`, `infrastructure`
+
+    ```
+    presentation    → application
+    application     → domain
+    domain          (isolated)
+    infrastructure  → domain, application
+    ```
+  </Tab>
+  <Tab title="Hexagonal">
+    Ports and adapters pattern. The domain has zero outward dependencies; adapters implement port interfaces.
+
+    **3 zones:** `adapters`, `ports`, `domain`
+
+    ```
+    adapters  → ports
+    ports     → domain
+    domain    (isolated)
+    ```
+  </Tab>
+  <Tab title="Feature-Sliced">
+    [Feature-Sliced Design](https://feature-sliced.design) with strict downward-only imports. Each layer may only import from layers below it.
+
+    **6 zones:** `app`, `pages`, `widgets`, `features`, `entities`, `shared`
+
+    ```
+    app       → pages, widgets, features, entities, shared
+    pages     → widgets, features, entities, shared
+    widgets   → features, entities, shared
+    features  → entities, shared
+    entities  → shared
+    shared    (isolated)
+    ```
+  </Tab>
+</Tabs>
+
+### Source root detection
+
+Preset zone patterns use `{rootDir}/{zone}/**`. Fallow auto-detects the source root from `tsconfig.json`:
+
+```jsonc title="tsconfig.json"
+{
+  "compilerOptions": {
+    "rootDir": "./lib"  // zones become lib/app/**, lib/features/**, etc.
+  }
+}
+```
+
+If no `rootDir` is found, fallow falls back to `src`.
+
+## Custom zones and rules
+
+For full control, define zones and rules directly:
+
+<CodeGroup>
+```jsonc .fallowrc.json
+{
+  "boundaries": {
+    "zones": [
+      { "name": "ui", "patterns": ["src/components/**", "src/pages/**"] },
+      { "name": "data", "patterns": ["src/db/**", "src/api/**"] },
+      { "name": "shared", "patterns": ["src/lib/**", "src/utils/**"] }
+    ],
+    "rules": [
+      { "from": "ui", "allow": ["shared"] },
+      { "from": "data", "allow": ["shared"] },
+      { "from": "shared", "allow": [] }
+    ]
+  }
+}
+```
+
+```toml fallow.toml
+[[boundaries.zones]]
+name = "ui"
+patterns = ["src/components/**", "src/pages/**"]
+
+[[boundaries.zones]]
+name = "data"
+patterns = ["src/db/**", "src/api/**"]
+
+[[boundaries.zones]]
+name = "shared"
+patterns = ["src/lib/**", "src/utils/**"]
+
+[[boundaries.rules]]
+from = "ui"
+allow = ["shared"]
+
+[[boundaries.rules]]
+from = "data"
+allow = ["shared"]
+
+[[boundaries.rules]]
+from = "shared"
+allow = []
+```
+</CodeGroup>
+
+### How zones work
+
+- A file belongs to the **first zone** whose pattern matches (first-match wins)
+- Files that don't match any zone are **unrestricted** — they can import from and be imported by any zone
+- **Self-imports** are always allowed (files in the same zone can freely import each other)
+- A zone with **no rule entry** is unrestricted — it can import from any zone
+- A zone with a rule and an **empty `allow` list** is isolated — it cannot import from other zones
+
+### Overriding preset zones
+
+Start from a preset and customize specific zones or rules. Zones with the same name replace the preset zone; rules with the same `from` replace the preset rule.
+
+```jsonc
+{
+  "boundaries": {
+    "preset": "hexagonal",
+    "zones": [
+      { "name": "domain", "patterns": ["src/core/**"] }
+    ]
+  }
+}
+```
+
+This keeps `adapters` and `ports` from the hexagonal preset but replaces the `domain` zone pattern with `src/core/**`.
+
+## Suppressing violations
+
+Suppress individual findings with inline comments:
+
+```typescript
+// fallow-ignore-next-line boundary-violation
+import { db } from '../data/client';
+```
+
+Or suppress all boundary violations in a file:
+
+```typescript
+// fallow-ignore-file boundary-violation
+```
+
+To suppress boundary checking entirely, set the rule severity to `off`:
+
+```jsonc
+{
+  "rules": {
+    "boundary-violation": "off"
+  }
+}
+```
+
+<Tip>
+  When introducing boundaries to an existing codebase, start with `"warn"` severity. Fix violations incrementally, then switch to `"error"` once the codebase is clean.
+</Tip>
+
+## Output formats
+
+Boundary violations appear in all output formats:
+
+<Tabs>
+  <Tab title="Human">
+    ```bash title="$ fallow dead-code --boundary-violations"
+    Boundary violations (2)
+
+      src/features/auth/login.ts:3 → src/features/billing/api.ts (features → features)
+      src/components/Button.tsx:1 → src/server/db/client.ts (shared → server)
+    ```
+  </Tab>
+  <Tab title="JSON">
+    ```json
+    {
+      "boundary_violations": [
+        {
+          "from_path": "src/features/auth/login.ts",
+          "to_path": "src/features/billing/api.ts",
+          "from_zone": "features",
+          "to_zone": "features",
+          "import_specifier": "../billing/api",
+          "line": 3,
+          "col": 0
+        }
+      ]
+    }
+    ```
+
+    <Note>
+      The full JSON output includes a `schema_version`, `version`, `elapsed_ms`, and all issue type arrays. Only `boundary_violations` is shown here.
+    </Note>
+  </Tab>
+  <Tab title="Compact">
+    ```
+    boundary-violation:src/features/auth/login.ts:3:src/features/auth/login.ts -> src/features/billing/api.ts (features -> features)
+    ```
+  </Tab>
+</Tabs>
+
+## Inspecting your boundaries
+
+Use `fallow list --boundaries` to verify your configuration before running analysis:
+
+```bash
+# Human-readable summary
+fallow list --boundaries
+
+# JSON for scripting or MCP tools
+fallow list --boundaries --format json --quiet
+```
+
+<Note>
+  Fallow warns when a zone matches zero files. This usually means the glob pattern doesn't match your directory structure. Run `fallow list --boundaries` to check file counts per zone.
+</Note>
+
+## See also
+
+<CardGroup cols={3}>
+  <Card title="fallow dead-code" icon="terminal" href="/cli/check">
+    CLI reference for the dead code command, including all issue type filters.
+  </Card>
+  <Card title="Rules & Severity" icon="scale-balanced" href="/configuration/rules">
+    Set boundary violations to error, warn, or off.
+  </Card>
+  <Card title="Inline Suppression" icon="comment-slash" href="/configuration/suppression">
+    Suppress individual findings in source code.
+  </Card>
+</CardGroup>
