@@ -1,0 +1,430 @@
+---
+title: "Boundaries"
+description: "Configure architecture boundary zones and rules. Use built-in presets or define custom zones to enforce import direction in your codebase."
+keywords: ["boundaries", "zones", "rules", "presets", "architecture", "import rules", "bulletproof", "layered", "hexagonal", "feature-sliced"]
+icon: "layer-group"
+---
+
+Boundaries enforce import direction between architectural zones. A zone groups files by glob pattern; a rule declares which zones may import from which. Violations appear as `boundary-violation` issues in `fallow dead-code` output.
+
+For preset descriptions, output formats, and suppression, see [Architecture boundaries](/analysis/boundaries).
+
+## Presets
+
+Fallow ships four built-in presets for common architecture patterns:
+
+| Preset | Zones | Description |
+|:-------|:------|:------------|
+| `layered` | 4 | Classic N-tier: presentation, application, domain, infrastructure |
+| `hexagonal` | 3 | Ports and adapters: adapters, ports, domain |
+| `feature-sliced` | 6 | [Feature-Sliced Design](https://feature-sliced.design): strict downward-only imports |
+| `bulletproof` | 4 | [Bulletproof React](https://github.com/alan2207/bulletproof-react): app, features, shared, server |
+
+<CodeGroup>
+```jsonc .fallowrc.json
+{
+  "boundaries": {
+    "preset": "bulletproof"
+  }
+}
+```
+
+```toml fallow.toml
+[boundaries]
+preset = "bulletproof"
+```
+</CodeGroup>
+
+<Info>
+See [Architecture boundaries - Presets](/analysis/boundaries#presets) for the full zone and rule definitions of each preset.
+</Info>
+
+## tsconfig rootDir detection
+
+When a preset is active, fallow reads `compilerOptions.rootDir` from `tsconfig.json` to determine the source root for zone patterns. Preset zones become `{rootDir}/{zone}/**`.
+
+The detection logic:
+
+1. Reads `tsconfig.json` from the project root (supports JSONC with comments and trailing commas)
+2. Extracts `compilerOptions.rootDir`
+3. Strips a leading `./` prefix and any trailing `/`
+4. Rejects `.`, `..`, and absolute paths for security
+5. Falls back to `src` if the field is missing, the file doesn't exist, or the value is rejected
+
+```jsonc title="tsconfig.json"
+{
+  "compilerOptions": {
+    "rootDir": "./lib"
+  }
+}
+```
+
+With the `hexagonal` preset, this produces zones:
+
+```
+lib/adapters/**
+lib/ports/**
+lib/domain/**
+```
+
+<Note>
+rootDir detection only applies to presets. Custom zones use patterns exactly as written.
+</Note>
+
+## Custom zones
+
+Define zones manually when presets don't match your architecture. Each zone has:
+
+| Field | Type | Description |
+|:------|:-----|:------------|
+| `name` | `string` | Zone identifier used in rules |
+| `patterns` | `string[]` | Glob patterns relative to the project root |
+| `root` | `string?` | Reserved for future use (currently ignored) |
+
+<CodeGroup>
+```jsonc .fallowrc.json
+{
+  "boundaries": {
+    "zones": [
+      { "name": "ui", "patterns": ["src/components/**", "src/pages/**"] },
+      { "name": "data", "patterns": ["src/db/**", "src/api/**"] },
+      { "name": "shared", "patterns": ["src/lib/**", "src/utils/**"] }
+    ]
+  }
+}
+```
+
+```toml fallow.toml
+[[boundaries.zones]]
+name = "ui"
+patterns = ["src/components/**", "src/pages/**"]
+
+[[boundaries.zones]]
+name = "data"
+patterns = ["src/db/**", "src/api/**"]
+
+[[boundaries.zones]]
+name = "shared"
+patterns = ["src/lib/**", "src/utils/**"]
+```
+</CodeGroup>
+
+**Zone classification rules:**
+
+- A file belongs to the **first zone** whose pattern matches (first-match wins)
+- Files that don't match any zone are **unrestricted** -- they can import from and be imported by any zone
+- Zone order matters: place more specific patterns before broader ones
+
+<Warning>
+Fallow warns when a zone matches zero files. This usually means the glob pattern doesn't match your directory structure. Run `fallow list --boundaries` to check file counts per zone.
+</Warning>
+
+## Custom rules
+
+Rules define which zones may import from which. Each rule has:
+
+| Field | Type | Description |
+|:------|:-----|:------------|
+| `from` | `string` | The importing zone |
+| `allow` | `string[]` | Zones that `from` may import from |
+
+<CodeGroup>
+```jsonc .fallowrc.json
+{
+  "boundaries": {
+    "zones": [
+      { "name": "ui", "patterns": ["src/components/**", "src/pages/**"] },
+      { "name": "data", "patterns": ["src/db/**", "src/api/**"] },
+      { "name": "shared", "patterns": ["src/lib/**", "src/utils/**"] }
+    ],
+    "rules": [
+      { "from": "ui", "allow": ["shared"] },
+      { "from": "data", "allow": ["shared"] },
+      { "from": "shared", "allow": [] }
+    ]
+  }
+}
+```
+
+```toml fallow.toml
+[[boundaries.zones]]
+name = "ui"
+patterns = ["src/components/**", "src/pages/**"]
+
+[[boundaries.zones]]
+name = "data"
+patterns = ["src/db/**", "src/api/**"]
+
+[[boundaries.zones]]
+name = "shared"
+patterns = ["src/lib/**", "src/utils/**"]
+
+[[boundaries.rules]]
+from = "ui"
+allow = ["shared"]
+
+[[boundaries.rules]]
+from = "data"
+allow = ["shared"]
+
+[[boundaries.rules]]
+from = "shared"
+allow = []
+```
+</CodeGroup>
+
+**Rule semantics:**
+
+- **Self-imports** are always allowed -- files within the same zone can freely import each other
+- **No rule entry** means the zone is unrestricted -- it can import from any zone
+- **Empty `allow` list** means the zone is isolated -- no cross-zone imports permitted
+- Only zones with an explicit rule entry are constrained
+
+<Tip>
+Start with rules for your lowest-level zones (the ones that should import from nothing) and work upward.
+</Tip>
+
+## Merging presets with custom config
+
+When both `preset` and `zones`/`rules` are specified, fallow merges them:
+
+- **Zones** with the same name as a preset zone **replace** the preset zone entirely
+- **Rules** with the same `from` as a preset rule **replace** the preset rule
+- New zones and rules are **added** on top of the preset
+
+### Example: override a preset zone
+
+Use the hexagonal preset but put your domain code in `src/core` instead of `src/domain`:
+
+<CodeGroup>
+```jsonc .fallowrc.json
+{
+  "boundaries": {
+    "preset": "hexagonal",
+    "zones": [
+      { "name": "domain", "patterns": ["src/core/**"] }
+    ]
+  }
+}
+```
+
+```toml fallow.toml
+[boundaries]
+preset = "hexagonal"
+
+[[boundaries.zones]]
+name = "domain"
+patterns = ["src/core/**"]
+```
+</CodeGroup>
+
+This keeps `adapters` and `ports` from the hexagonal preset but replaces the `domain` zone pattern with `src/core/**`. All three rules remain unchanged.
+
+### Example: add a zone to a preset
+
+Add a `test` zone to the bulletproof preset so test utilities are isolated:
+
+<CodeGroup>
+```jsonc .fallowrc.json
+{
+  "boundaries": {
+    "preset": "bulletproof",
+    "zones": [
+      { "name": "test", "patterns": ["src/__tests__/**", "src/**/*.test.ts"] }
+    ],
+    "rules": [
+      { "from": "test", "allow": ["features", "shared", "server"] }
+    ]
+  }
+}
+```
+
+```toml fallow.toml
+[boundaries]
+preset = "bulletproof"
+
+[[boundaries.zones]]
+name = "test"
+patterns = ["src/__tests__/**", "src/**/*.test.ts"]
+
+[[boundaries.rules]]
+from = "test"
+allow = ["features", "shared", "server"]
+```
+</CodeGroup>
+
+The four bulletproof zones and their rules are preserved. The `test` zone and its rule are added on top.
+
+## Inspecting boundaries
+
+Use `fallow list --boundaries` to see the expanded configuration after preset expansion and merging. This is the fastest way to verify your config is correct.
+
+```bash title="$ fallow list --boundaries"
+Boundaries: 4 zones, 4 rules
+
+Zones:
+  app                  3 files  src/app/**
+  features             12 files src/features/**
+  shared               8 files  src/components/**, src/hooks/**, src/lib/**, ...
+  server               4 files  src/server/**
+
+Rules:
+  app                  → features, shared, server
+  features             → shared, server
+  server               → shared
+  shared               (isolated — no imports allowed)
+```
+
+For scripting or MCP tools, use JSON output:
+
+```bash
+fallow list --boundaries --format json --quiet
+```
+
+<Tip>
+Run `fallow list --boundaries` first when debugging boundary violations. It shows the actual zone patterns, file counts, and resolved rules -- catching misconfigured globs before you analyze.
+</Tip>
+
+## Common patterns
+
+<Accordion title="Monorepo with per-package boundaries">
+Preset zone patterns are flat (`src/<zone>/**`), which doesn't work when packages have separate source directories. Define zones explicitly for each package:
+
+<CodeGroup>
+```jsonc .fallowrc.json
+{
+  "boundaries": {
+    "zones": [
+      { "name": "web-ui", "patterns": ["apps/web/src/components/**", "apps/web/src/pages/**"] },
+      { "name": "web-data", "patterns": ["apps/web/src/api/**", "apps/web/src/hooks/**"] },
+      { "name": "shared-ui", "patterns": ["packages/ui/src/**"] },
+      { "name": "shared-utils", "patterns": ["packages/utils/src/**"] }
+    ],
+    "rules": [
+      { "from": "web-ui", "allow": ["web-data", "shared-ui", "shared-utils"] },
+      { "from": "web-data", "allow": ["shared-utils"] },
+      { "from": "shared-ui", "allow": ["shared-utils"] },
+      { "from": "shared-utils", "allow": [] }
+    ]
+  }
+}
+```
+
+```toml fallow.toml
+[[boundaries.zones]]
+name = "web-ui"
+patterns = ["apps/web/src/components/**", "apps/web/src/pages/**"]
+
+[[boundaries.zones]]
+name = "web-data"
+patterns = ["apps/web/src/api/**", "apps/web/src/hooks/**"]
+
+[[boundaries.zones]]
+name = "shared-ui"
+patterns = ["packages/ui/src/**"]
+
+[[boundaries.zones]]
+name = "shared-utils"
+patterns = ["packages/utils/src/**"]
+
+[[boundaries.rules]]
+from = "web-ui"
+allow = ["web-data", "shared-ui", "shared-utils"]
+
+[[boundaries.rules]]
+from = "web-data"
+allow = ["shared-utils"]
+
+[[boundaries.rules]]
+from = "shared-ui"
+allow = ["shared-utils"]
+
+[[boundaries.rules]]
+from = "shared-utils"
+allow = []
+```
+</CodeGroup>
+</Accordion>
+
+<Accordion title="tRPC apps with server-to-features imports">
+In tRPC apps, the server router typically imports from feature modules to compose sub-routers. With the bulletproof preset, this causes `server -> features` violations.
+
+The cleanest approach is to suppress the router composition file:
+
+```typescript title="src/server/_app.ts"
+// fallow-ignore-file boundary-violation
+import { authRouter } from '../features/auth/router'
+import { billingRouter } from '../features/billing/router'
+
+export const appRouter = router({
+  auth: authRouter,
+  billing: billingRouter,
+})
+```
+
+Alternatively, add `features` to the server rule:
+
+```jsonc
+{
+  "boundaries": {
+    "preset": "bulletproof",
+    "rules": [
+      { "from": "server", "allow": ["shared", "features"] }
+    ]
+  }
+}
+```
+
+<Warning>
+Widening the server rule allows all server files to import from features, not just the router. Prefer inline suppression for surgical exceptions.
+</Warning>
+</Accordion>
+
+<Accordion title="Adding a test zone alongside a preset">
+Test files often need to import from any zone. Add a `test` zone that sits above the preset layers:
+
+<CodeGroup>
+```jsonc .fallowrc.json
+{
+  "boundaries": {
+    "preset": "bulletproof",
+    "zones": [
+      { "name": "test", "patterns": ["src/**/*.test.ts", "src/**/*.spec.ts", "src/__tests__/**"] }
+    ],
+    "rules": [
+      { "from": "test", "allow": ["app", "features", "shared", "server"] }
+    ]
+  }
+}
+```
+
+```toml fallow.toml
+[boundaries]
+preset = "bulletproof"
+
+[[boundaries.zones]]
+name = "test"
+patterns = ["src/**/*.test.ts", "src/**/*.spec.ts", "src/__tests__/**"]
+
+[[boundaries.rules]]
+from = "test"
+allow = ["app", "features", "shared", "server"]
+```
+</CodeGroup>
+
+Since zones use first-match classification, place more specific patterns (like test file globs) before broader zone patterns. When using a preset with custom zones, custom zones are appended after preset zones. If your test files live inside zone directories (e.g., `src/features/auth/auth.test.ts`), the preset's `features` zone pattern will match first. Move the test patterns into an explicit zone list that comes before the preset zones, or use `ignorePatterns` to exclude test files from boundary analysis entirely.
+</Accordion>
+
+## See also
+
+<CardGroup cols={3}>
+  <Card title="Architecture boundaries" icon="layer-group" href="/analysis/boundaries">
+    Presets, output formats, and inline suppression for boundary violations.
+  </Card>
+  <Card title="Rules & Severity" icon="scale-balanced" href="/configuration/rules">
+    Set `boundary-violation` to error, warn, or off.
+  </Card>
+  <Card title="Inline Suppression" icon="comment-slash" href="/configuration/suppression">
+    Suppress individual findings in source code.
+  </Card>
+</CardGroup>
