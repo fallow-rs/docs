@@ -142,7 +142,8 @@ The MCP server uses <Tooltip tip="Communication via standard input/output stream
 | `fix_apply` | Apply auto-fixes (`fallow fix --yes --format json`) |
 | `check_health` | Complexity metrics, file health scores, hotspots, and refactoring targets (`fallow health --format json`). Set `file_scores: true` for maintainability index, `hotspots: true` for churn analysis, `targets: true` for ranked recommendations sorted by efficiency, `trend: true` for per-metric deltas against the most recent snapshot. |
 | `audit` | Audit changed files for dead code, complexity, and duplication ([`fallow audit --format json`](/cli/audit)). Returns a verdict (pass/warn/fail). Set `base` to specify the comparison ref (auto-detects if omitted). |
-| `project_info` | Project metadata, including plugins, files, and entry points (`fallow list --format json`) |
+| `project_info` | Project metadata, including plugins, files, and entry points (`fallow list --format json`). Set `entry_points`, `files`, `plugins`, or `boundaries` to `true` to request specific sections. |
+| `list_boundaries` | Architecture boundary zones and access rules (`fallow list --boundaries --format json`). Returns zone definitions, access rules, and per-zone file counts. Returns `{"configured": false}` if no boundaries are configured. |
 
 <CodeGroup>
 ```json Example request
@@ -158,7 +159,7 @@ The MCP server uses <Tooltip tip="Communication via standard input/output stream
 ```json Example response
 {
   "schema_version": 3,
-  "version": "2.9.1",
+  "version": "2.9.2",
   "elapsed_ms": 42,
   "total_issues": 1,
   "unused_exports": [
@@ -180,9 +181,27 @@ The MCP server uses <Tooltip tip="Communication via standard input/output stream
 The MCP server wraps the CLI, so all fallow features are available: production mode, baselines, and incremental analysis.
 </Tip>
 
-### Fix suggestions in tool responses
+### Notable tool parameters
 
-Every issue returned by the `analyze` and `check_changed` tools now includes an `actions` array with machine-actionable fix and suppress hints. The MCP server passes JSON through transparently from the CLI, so agents get the same structured actions described in the [dead-code CLI reference](/cli/check#fix-suggestions-in-json-output). Agents can use the `auto_fixable` flag to decide whether to call `fix_apply` or handle the suggestion manually.
+Some tools accept additional parameters beyond the common `root`, `config`, `no_cache`, and `threads`:
+
+| Tool | Parameter | Type | Description |
+|:-----|:----------|:-----|:------------|
+| `analyze` | `boundary_violations` | bool | Convenience alias for `issue_types: ["boundary-violations"]` |
+| `find_dupes` | `changed_since` | string | Only report duplication in files changed since a git ref |
+| `project_info` | `entry_points` | bool | Request detected entry points |
+| `project_info` | `files` | bool | Request all discovered source files |
+| `project_info` | `plugins` | bool | Request active framework plugins |
+| `project_info` | `boundaries` | bool | Request architecture boundary zones and rules |
+
+### Structured actions in tool responses
+
+All tools now return structured `actions` arrays on every finding, enabling agents to programmatically apply fixes or suppressions:
+
+- **Dead code** (`analyze`, `check_changed`): fix action (e.g. `remove-export`) + suppress action. Agents can use the `auto_fixable` flag to decide whether to call `fix_apply` or handle the suggestion manually. See the [dead-code CLI reference](/cli/check#fix-suggestions-in-json-output) for action type details.
+- **Health** (`check_health`, `audit`): `refactor-function` + suppress actions on findings, `apply-refactoring` + suppress on targets (when evidence exists), `refactor-file` + `add-tests` on hotspots.
+- **Duplication** (`find_dupes`, `audit`): `extract-shared` + suppress actions on clone families and groups.
+- **Audit** (`audit`): inherits actions from all three sub-analyses (dead code, health, duplication).
 
 ## Combined output from bare `fallow`
 
@@ -202,6 +221,21 @@ This is the most efficient way for agents to get a full picture of the codebase 
 | **Setup** | None (just install fallow) | MCP server configuration needed |
 | **Output** | Any format (JSON, SARIF, human, compact, markdown) | JSON only (structured) |
 | **Best for** | Universal compatibility, CI-like workflows | Typed tool calling, agent frameworks |
+
+## Environment variables
+
+| Variable | Description |
+|:---------|:------------|
+| `FALLOW_BIN` | Path to the fallow CLI binary. The MCP server checks, in order: this env var, a sibling binary next to `fallow-mcp`, then `fallow` in `PATH`. |
+| `FALLOW_TIMEOUT_SECS` | Subprocess timeout in seconds (default: `120`). If the CLI does not exit within this window, the MCP server kills the process and returns a structured error. Increase for very large codebases. |
+
+## Error handling
+
+The MCP server returns structured JSON errors when the underlying CLI fails:
+
+- **Exit code 1**: treated as success (issues found, not an error). The full JSON output is returned.
+- **Exit code 2+**: the server passes through the CLI's structured JSON error from stdout when available. If no JSON is available, it constructs `{"error": true, "message": "...", "exit_code": N}` from stderr.
+- **Subprocess timeout**: if the CLI does not exit within `FALLOW_TIMEOUT_SECS` (default 120s), the server kills the process and returns a timeout error.
 
 ## Architecture
 
