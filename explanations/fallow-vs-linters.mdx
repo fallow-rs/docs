@@ -20,7 +20,7 @@ This page explains the conceptual difference, what each tool category finds, and
     Prettier, Biome, dprint. Enforces consistent formatting across all files — indentation, quotes, trailing commas. Works on a single file. No understanding of imports or project structure.
   </Card>
   <Card title="Linter" icon="list-check">
-    ESLint, Biome, oxlint. Enforces coding rules and detects local code smells — undefined variables, missing dependencies in `useEffect`, suspicious patterns. Works on a single file, with optional type context from `tsc`. Biome handles both formatting and linting in a single pass — fallow adds the graph-level layer that no single-file tool can provide.
+    ESLint, Biome, oxlint. Enforces coding rules and detects local code smells — undefined variables, missing dependencies in `useEffect`, suspicious patterns. Works on a single file, with optional type context from `tsc`.
   </Card>
   <Card title="Codebase analyzer" icon="diagram-project">
     Fallow. Finds issues that only exist at the project level — unused files, orphaned exports, circular dependencies, dependency graph violations. Requires building and traversing the full module graph.
@@ -56,13 +56,7 @@ The key distinction: **linters read files**. Fallow **builds the import graph** 
 
 **\[4\] Boundaries.** ESLint: `eslint-plugin-boundaries` enforces import rules between element types with capture groups and templates. `no-restricted-paths` enforces directory-level restrictions but requires enumerating every forbidden pair. Neither follows re-export chains, so a boundary can be bypassed via a barrel file. Biome: `noRestrictedImports` accepts plain string paths only, no globs or patterns. oxlint: no boundary rules. Fallow: [zone presets](/configuration/boundaries) (`bulletproof`, `layered`, `hexagonal`, `feature-sliced`) with re-export chain tracking.
 
-<Info>
-`eslint-plugin-import` builds a cross-file graph for `no-unused-modules` and `no-cycle`, but reconstructs it from scratch on every lint run with no caching. Fallow builds and caches the module graph once, resolves barrel file re-export chains, and runs all analyses in milliseconds rather than minutes. Where the tools overlap, the capability is the same; the performance difference is 100-1000x.
-</Info>
-
-## Where fallow goes further
-
-Several of these issues have ESLint plugin solutions. The table above marks the capability overlap honestly. Fallow's advantage in the overlapping areas is performance (100-1000x faster on large projects), correctness (barrel re-export resolution, alias handling), and zero per-run graph rebuild cost.
+## Detailed comparison
 
 ### Unused exports
 
@@ -105,6 +99,8 @@ Detecting unreachable files requires starting from entry points and walking the 
 src/auth.ts → src/user.ts → src/permissions.ts → src/auth.ts
 ```
 
+Not all cycles are bugs. Dependency injection frameworks (NestJS, InversifyJS) create intentional cycles. Use `// fallow-ignore-next-line circular-dep` to suppress them, the same way you'd use an ESLint disable comment. No tool automatically distinguishes intentional from accidental cycles.
+
 Both `eslint-plugin-import/no-cycle` and Biome v2's `noImportCycles` detect circular imports. The difference is performance and search depth, not detection.
 
 `no-cycle` rebuilds the module graph on every run. On larger projects it takes 45-305 seconds and has caused out-of-memory failures ([#2348](https://github.com/import-js/eslint-plugin-import/issues/2348)). Teams commonly set `maxDepth: 1` to keep lint times tolerable, which means cycles longer than two hops go undetected. The rule only covers ES `import` statements, not `require()`.
@@ -112,8 +108,6 @@ Both `eslint-plugin-import/no-cycle` and Biome v2's `noImportCycles` detect circ
 Biome v2's `noImportCycles` is Rust-based and faster, but Biome's own documentation flags it as computationally expensive. oxlint has `no-cycle` in Rust, faster than the JS version but with less coverage of edge cases.
 
 Fallow builds the module graph once (cached across runs), checks for cycles without a depth cap, and covers both `import` and `require()`. On projects where `no-cycle` takes minutes, fallow completes in under a second.
-
-One note that applies to all tools: dependency injection frameworks (NestJS, InversifyJS) intentionally create import cycles. Fallow's inline suppression (`// fallow-ignore-next-line circular-dep`) handles this the same way ESLint's disable comments do. No tool automatically distinguishes intentional from accidental cycles.
 
 ### Architecture boundary violations
 
@@ -123,7 +117,7 @@ Two ESLint plugins enforce import boundaries: `eslint-plugin-boundaries` and `es
 
 `no-restricted-paths` enforces directory-level restrictions. It requires enumerating every forbidden path pair, has no glob support, and does not scale to large modular architectures.
 
-Fallow ships [zone presets](/configuration/boundaries) for common patterns (`bulletproof`, `layered`, `hexagonal`, `feature-sliced`). Zones are defined by glob patterns, and rules can be expressed as allowlists ("this zone can only import from these zones") rather than enumerating forbidden paths. Fallow's boundary analysis understands re-export chains: if `shared/index.ts` re-exports a symbol from `core/`, that import is correctly attributed to `core/` when evaluating boundary rules.
+Fallow tracks re-export chains when evaluating boundaries. If `shared/index.ts` re-exports a symbol from `core/`, an import of that symbol is attributed to `core/`, not `shared/`, when checking boundary rules. [Zone presets](/configuration/boundaries) (`bulletproof`, `layered`, `hexagonal`, `feature-sliced`) cover common architecture patterns. Zones use glob patterns, and rules are expressed as allowlists ("this zone can only import from these zones") rather than enumerating forbidden paths.
 
 ```jsonc
 {
@@ -213,12 +207,16 @@ Fallow's GitHub Action automatically uploads SARIF results to GitHub Code Scanni
 | Library export consumed by external consumers | Fallow (configure [entry points](/configuration/overview#entry) or `/** @public */`) |
 
 <Tip>
-Already have dead code in the codebase? Use `--save-baseline` to snapshot current issues, then `--baseline` in CI to fail only on **new** issues. See the [CI integration guide](/integrations/ci) for incremental adoption.
+Existing codebase already has unused exports and files? Use `--save-baseline` to snapshot current issues, then run CI with `--baseline` to fail only on regressions. See the [CI integration guide](/integrations/ci) for incremental adoption.
 </Tip>
 
 ## Summary
 
 None of them replaces the others. A codebase that passes all three is formatted, linted, and free of dead weight.
+
+<Info>
+This page compares fallow to linters. For a comparison with knip (which operates at the same graph level as fallow), see [Fallow vs Knip](/migration/comparison).
+</Info>
 
 <CardGroup cols={2}>
   <Card title="Quick Start" icon="rocket" href="/quickstart">
