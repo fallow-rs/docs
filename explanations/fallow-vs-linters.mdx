@@ -1,0 +1,205 @@
+---
+title: "Fallow vs linters"
+description: "Why fallow and linters (ESLint, Biome, oxlint) are complementary, not competing. Linters work at the file level. Fallow works at the project graph level. They find fundamentally different things."
+keywords: ["fallow vs eslint", "fallow vs biome", "linter vs codebase analyzer", "static analysis", "dead code", "unused exports", "module graph", "CI pipeline"]
+icon: "scale-balanced"
+---
+
+Linters enforce style. Formatters enforce consistency. Fallow enforces relevance.
+
+- **Formatter**: "Does this file look consistent?"
+- **Linter**: "Does this file follow the rules?"
+- **Fallow**: "Is this codebase structurally sound?"
+
+This page explains the conceptual difference, what each tool category finds, and how to combine them in CI.
+
+## Three pillars of code quality
+
+<CardGroup cols={3}>
+  <Card title="Formatter" icon="paintbrush">
+    Prettier, Biome, dprint. Enforces consistent formatting across all files — indentation, quotes, trailing commas. Works on a single file. No understanding of imports or project structure.
+  </Card>
+  <Card title="Linter" icon="list-check">
+    ESLint, Biome, oxlint. Enforces coding rules and detects local code smells — undefined variables, missing dependencies in `useEffect`, suspicious patterns. Works on a single file, with optional type context from `tsc`. Biome handles both formatting and linting in a single pass — fallow adds the graph-level layer that no single-file tool can provide.
+  </Card>
+  <Card title="Codebase analyzer" icon="diagram-project">
+    Fallow. Finds issues that only exist at the project level — unused files, orphaned exports, circular dependencies, dependency graph violations. Requires building and traversing the full module graph.
+  </Card>
+</CardGroup>
+
+The key distinction: **linters read files**. Fallow **builds the import graph** across the entire project and reasons about relationships between modules.
+
+## What each tool finds
+
+| Issue | Linter | Fallow |
+|:------|:------:|:------:|
+| Unused variable within a file | Yes | No |
+| Missing `useEffect` dependency | Yes | No |
+| Suspicious `==` vs `===` | Yes | No |
+| Code style violations | Yes | No |
+| Exported symbol never imported anywhere | No | Yes |
+| File not reachable from any entry point | No | Yes |
+| Circular import chain across 5 files | No | Yes |
+| Package in `dependencies` but never imported | No | Yes |
+| Architecture boundary crossed across zones | No | Yes |
+| Duplicated logic blocks across modules | No | Yes |
+| Complexity hotspots with git churn correlation | No | Yes |
+
+<Info>
+ESLint's `no-unused-vars` catches variables unused within the same file but cannot detect cross-file dead code — exported functions nobody imports, unreachable files, unused `package.json` dependencies, or multi-hop circular imports. The `eslint-plugin-import` rule `no-unused-modules` does cross-file analysis but doesn't handle barrel file re-exports, monorepo workspaces, or TypeScript path aliases. Project-wide graph traversal is required for those.
+</Info>
+
+## Issues that require graph-level analysis
+
+These are things a linter structurally cannot detect, because they require knowing the relationships between files across the entire project.
+
+### Unused exports
+
+`no-unused-vars` flags `const x = 1` when `x` is never used in the same file. But if you write `export const x = 1`, the linter stops — it has no way to know whether another file imports `x`.
+
+Fallow builds the full import graph, traces re-export chains through <Tooltip tip="Index files (typically index.ts) that re-export symbols from other modules for cleaner imports">barrel files</Tooltip>, and tells you exactly which exports have zero references across the entire project.
+
+<Info>
+If you're building a library, your public API exports are intentionally consumed externally. Mark them with `/** @public */` JSDoc tags or configure your [entry points](/configuration/overview#entry) so fallow doesn't flag them.
+</Info>
+
+```bash
+fallow dead-code --unused-exports
+```
+
+```
+● Unused exports (3)
+  src/components/Card/index.ts
+    :1  CardFooter
+  src/utils/format.ts
+    :14 formatCurrency
+    :28 formatDate
+```
+
+### Unused files
+
+A file that nothing imports. It exists in your repository, gets included in IDE indexing and type-checking, but is never loaded at runtime. Linters have no concept of "entry points" — they process whatever file you give them.
+
+Fallow starts from your entry points (detected via 84 framework plugins) and marks every file not reachable in the graph.
+
+### Circular dependencies
+
+```
+src/auth.ts → src/user.ts → src/permissions.ts → src/auth.ts
+```
+
+Each individual file looks fine to a linter. The cycle only appears when you trace the full import chain. Circular dependencies cause subtle initialization bugs, bundler issues, and make refactoring risky. For decorator-driven frameworks like NestJS and Angular, fallow's [framework plugins](/frameworks/built-in) auto-detect registrations so fallow doesn't flag decorator-wired modules.
+
+### Architecture boundary violations
+
+If your team has defined architecture rules — for example, "the UI layer must not import from the database layer" — fallow can enforce these automatically. A linter rule might partially cover this, but only with complex custom rule authorship and manual maintenance. Fallow's [boundaries config](/configuration/boundaries) lets you declare zones and enforce them across the graph:
+
+```jsonc
+{
+  "boundaries": {
+    "zones": [
+      { "name": "ui", "include": ["src/components/**"] },
+      { "name": "api", "include": ["src/api/**"] }
+    ],
+    "rules": [
+      { "from": "ui", "disallow": ["api"] }
+    ]
+  }
+}
+```
+
+## Recommended CI pipeline
+
+Run all three in parallel. They have zero overlap and catch different things:
+
+<Tabs>
+  <Tab title="GitHub Actions">
+    ```yaml
+    jobs:
+      format:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - run: npx prettier --check .          # or: npx biome check --only=format
+
+      lint:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - run: npx eslint .                    # or: npx biome lint / npx oxlint
+
+      analyze:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - uses: fallow-rs/fallow@v2
+    ```
+  </Tab>
+  <Tab title="Single job">
+    ```yaml
+    jobs:
+      quality:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - run: npx prettier --check .
+          - run: npx eslint .
+          - run: npx fallow --ci
+    ```
+  </Tab>
+  <Tab title="GitLab CI">
+    ```yaml
+    include:
+      - remote: 'https://raw.githubusercontent.com/fallow-rs/fallow/main/ci/gitlab-ci.yml'
+
+    lint:
+      script:
+        - npx eslint .
+
+    fallow:
+      extends: .fallow
+    ```
+  </Tab>
+</Tabs>
+
+<Info>
+Fallow's GitHub Action automatically uploads SARIF results to GitHub Code Scanning, giving you inline annotations on PR diffs. Linter results typically appear via separate status checks or linter-review actions.
+</Info>
+
+## What to use when
+
+| Situation | Tool |
+|:----------|:-----|
+| Variable used in wrong scope | Linter |
+| Missing React hook dependency | Linter |
+| Inconsistent code style | Formatter |
+| Exported function nobody imports | Fallow |
+| File that was left behind after a refactor | Fallow |
+| `lodash` in `package.json` but never imported | Fallow |
+| 8-file circular dependency chain | Fallow |
+| Feature module importing directly from core internals | Fallow |
+| Growing codebase, want to prevent new dead code in PRs | Fallow (`--changed-since`) |
+| Library export consumed by external consumers | Fallow (configure [entry points](/configuration/overview#entry) or `/** @public */`) |
+
+<Tip>
+Already have dead code in the codebase? Use `--save-baseline` to snapshot current issues, then `--baseline` in CI to fail only on **new** issues. See the [CI integration guide](/integrations/ci) for incremental adoption.
+</Tip>
+
+## Summary
+
+None of them replaces the others. A codebase that passes all three is formatted, linted, and free of dead weight.
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Add fallow to your project in under a minute.
+  </Card>
+  <Card title="CI Integration" icon="shield-check" href="/integrations/ci">
+    Full guide for GitHub Actions, GitLab CI, and other pipelines.
+  </Card>
+  <Card title="Dead code explained" icon="skull-crossbones" href="/explanations/dead-code">
+    All 15 issue types fallow detects, with examples.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/overview">
+    Entry points, ignore patterns, severity rules.
+  </Card>
+</CardGroup>
