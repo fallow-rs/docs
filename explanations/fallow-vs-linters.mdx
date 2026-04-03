@@ -31,38 +31,34 @@ The key distinction: **linters read files**. Fallow **builds the import graph** 
 
 ## What each tool finds
 
-| Issue | ESLint / Biome / oxlint | Fallow |
-|:------|:------:|:------:|
-| Unused variable within a file | Yes | No |
-| Missing `useEffect` dependency | Yes | No |
-| Suspicious `==` vs `===` | Yes | No |
-| Code style violations | Yes | No |
-| Exported symbol never imported anywhere | Yes, slow \[1\] | Yes |
-| File not reachable from any entry point | No | Yes |
-| Circular import chain across N files | Yes, slow \[2\] | Yes |
-| Package in `dependencies` but never imported | No \[3\] | Yes |
-| Import of package not in `package.json` | Yes | Yes |
-| Architecture boundary enforcement | Yes \[4\] | Yes |
-| Duplicated logic blocks across modules | No | Yes |
-| Per-function cyclomatic complexity | Yes | Yes |
-| Per-function cognitive complexity | Biome only | Yes |
-| Complexity + git churn hotspot correlation | No | Yes |
+| Issue | ESLint | Biome | oxlint | Fallow |
+|:------|:------:|:-----:|:------:|:------:|
+| Unused variable within a file | Yes | Yes | Yes | No |
+| Missing `useEffect` dependency | Yes | Yes | Yes | No |
+| Suspicious `==` vs `===` | Yes | Yes | Yes | No |
+| Code style violations | Yes | Yes | Yes | No |
+| Exported symbol never imported | Slow \[1\] | No | No | Yes |
+| File not reachable from entry point | No | No | No | Yes |
+| Circular import chain across N files | Slow \[2\] | Yes \[2\] | Yes \[2\] | Yes |
+| Package in deps but never imported | No \[3\] | No \[3\] | No | Yes |
+| Import of package not in package.json | Yes | Yes | No | Yes |
+| Architecture boundary enforcement | Yes \[4\] | Limited \[4\] | No | Yes |
+| Duplicated logic blocks across modules | No | No | No | Yes |
+| Per-function cyclomatic complexity | Yes | No | Yes | Yes |
+| Per-function cognitive complexity | No | Yes | No | Yes |
+| Complexity + git churn hotspot correlation | No | No | No | Yes |
 
-**\[1\]** `eslint-plugin-import/no-unused-modules` rebuilds the full import graph on every lint run. On projects with 20-30K LOC this adds ~320 seconds to total lint time ([source](https://github.com/import-js/eslint-plugin-import/issues/1487)). It also produces incorrect results with `import { name as alias }` ([#1339](https://github.com/import-js/eslint-plugin-import/issues/1339)) and does not follow barrel file re-export chains. Neither Biome nor oxlint have an equivalent rule.
+**\[1\] Unused exports.** `eslint-plugin-import/no-unused-modules` rebuilds the full import graph on every lint run. On projects with 20-30K LOC this adds ~320 seconds to total lint time ([#1487](https://github.com/import-js/eslint-plugin-import/issues/1487)). Produces incorrect results with `import { name as alias }` ([#1339](https://github.com/import-js/eslint-plugin-import/issues/1339)). Does not follow barrel file re-export chains. Neither Biome nor oxlint have an equivalent rule.
 
-**\[2\]** `eslint-plugin-import/no-cycle` takes 45-305 seconds on large projects with known OOM failures ([#2348](https://github.com/import-js/eslint-plugin-import/issues/2348), [#2076](https://github.com/import-js/eslint-plugin-import/issues/2076)). Teams commonly set `maxDepth: 1` to keep lint times tolerable, which misses longer cycles. Only covers ES `import`, not `require()`. Biome v2 ships `noImportCycles` (Rust, graph-based) but documents it as computationally expensive. oxlint has `no-cycle` in Rust, faster than the JS version.
+**\[2\] Circular imports.** ESLint: `eslint-plugin-import/no-cycle` takes 45-305 seconds on large projects with known OOM failures ([#2348](https://github.com/import-js/eslint-plugin-import/issues/2348), [#2076](https://github.com/import-js/eslint-plugin-import/issues/2076)). Teams commonly set `maxDepth: 1` to stay fast, missing longer cycles. Only covers ES `import`, not `require()`. Biome v2: `noImportCycles` is Rust-based and graph-aware, but Biome documents it as computationally expensive. oxlint: `no-cycle` in Rust, faster than the JS version. Fallow: builds and caches the graph once, no depth cap, covers both `import` and `require()`, completes in under a second.
 
-**\[3\]** `no-extraneous-dependencies` catches the opposite problem: packages you import but forgot to list. "Listed but never imported" and "imported but not listed" are different bugs. Fallow finds both.
+**\[3\] Unused vs unlisted deps.** `no-extraneous-dependencies` (ESLint) and `noUndeclaredDependencies` (Biome) catch imports of packages missing from `package.json`. That is the opposite problem. No linter detects packages listed in `package.json` that are never imported. Fallow finds both.
 
-**\[4\]** `eslint-plugin-boundaries` enforces import rules between element types you define. It supports capture groups and templates. `no-restricted-paths` enforces directory-level restrictions but requires enumerating every forbidden path pair. Neither plugin follows re-export chains through barrel files, so a boundary rule can be bypassed via a re-exporting index file. Neither ships preset configurations for common architecture patterns. Fallow's [zone presets](/configuration/boundaries) (`bulletproof`, `layered`, `hexagonal`, `feature-sliced`) expand to full rule sets and track re-exports.
+**\[4\] Boundaries.** ESLint: `eslint-plugin-boundaries` enforces import rules between element types with capture groups and templates. `no-restricted-paths` enforces directory-level restrictions but requires enumerating every forbidden pair. Neither follows re-export chains, so a boundary can be bypassed via a barrel file. Biome: `noRestrictedImports` accepts plain string paths only, no globs or patterns. oxlint: no boundary rules. Fallow: [zone presets](/configuration/boundaries) (`bulletproof`, `layered`, `hexagonal`, `feature-sliced`) with re-export chain tracking.
 
 <Info>
-Linters process files individually. `eslint-plugin-import` builds a cross-file graph for rules like `no-unused-modules` and `no-cycle`, but reconstructs it from scratch on every lint run with no caching. Fallow builds and caches the module graph once, resolves barrel file re-export chains, and runs all analyses in milliseconds rather than minutes. The capability overlap is real; the performance difference is 100-1000x.
+`eslint-plugin-import` builds a cross-file graph for `no-unused-modules` and `no-cycle`, but reconstructs it from scratch on every lint run with no caching. Fallow builds and caches the module graph once, resolves barrel file re-export chains, and runs all analyses in milliseconds rather than minutes. Where the tools overlap, the capability is the same; the performance difference is 100-1000x.
 </Info>
-
-<Note>
-**What about Biome?** Biome v2 added `noImportCycles` for circular import detection (Rust-based, graph-aware). Biome does not detect unused exports, unused files, or unused dependencies. Its import restriction rule (`noRestrictedImports`) accepts plain string paths only. If your team is on Biome, you get cycle detection. For everything else in the table above, fallow and Biome are complementary.
-</Note>
 
 ## Where fallow goes further
 
