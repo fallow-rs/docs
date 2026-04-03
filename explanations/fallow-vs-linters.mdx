@@ -31,34 +31,54 @@ The key distinction: **linters read files**. Fallow **builds the import graph** 
 
 ## What each tool finds
 
-| Issue | Linter | Fallow |
+| Issue | ESLint / Biome / oxlint | Fallow |
 |:------|:------:|:------:|
 | Unused variable within a file | Yes | No |
 | Missing `useEffect` dependency | Yes | No |
 | Suspicious `==` vs `===` | Yes | No |
 | Code style violations | Yes | No |
-| Exported symbol never imported anywhere | Partial (`no-unused-modules`) | Yes |
+| Exported symbol never imported anywhere | Yes, slow \[1\] | Yes |
 | File not reachable from any entry point | No | Yes |
-| Circular import chain across 5 files | Partial (`no-cycle`) | Yes |
-| Package in `dependencies` but never imported | No | Yes |
-| Architecture boundary enforcement | Partial (manual rules) | Yes (zone presets) |
+| Circular import chain across N files | Yes, slow \[2\] | Yes |
+| Package in `dependencies` but never imported | No \[3\] | Yes |
+| Import of package not in `package.json` | Yes | Yes |
+| Architecture boundary enforcement | Yes \[4\] | Yes |
 | Duplicated logic blocks across modules | No | Yes |
-| Per-function complexity thresholds | Yes (`complexity` rule) | Yes |
+| Per-function cyclomatic complexity | Yes | Yes |
+| Per-function cognitive complexity | Biome only | Yes |
 | Complexity + git churn hotspot correlation | No | Yes |
 
+**\[1\]** `eslint-plugin-import/no-unused-modules` rebuilds the full import graph on every lint run. On projects with 20-30K LOC this adds ~320 seconds to total lint time ([source](https://github.com/import-js/eslint-plugin-import/issues/1487)). It also produces incorrect results with `import { name as alias }` ([#1339](https://github.com/import-js/eslint-plugin-import/issues/1339)) and does not follow barrel file re-export chains. Neither Biome nor oxlint have an equivalent rule.
+
+**\[2\]** `eslint-plugin-import/no-cycle` takes 45-305 seconds on large projects with known OOM failures ([#2348](https://github.com/import-js/eslint-plugin-import/issues/2348), [#2076](https://github.com/import-js/eslint-plugin-import/issues/2076)). Teams commonly set `maxDepth: 1` to keep lint times tolerable, which misses longer cycles. Only covers ES `import`, not `require()`. Biome v2 ships `noImportCycles` (Rust, graph-based) but documents it as computationally expensive. oxlint has `no-cycle` in Rust, faster than the JS version.
+
+**\[3\]** `no-extraneous-dependencies` catches the opposite problem: packages you import but forgot to list. "Listed but never imported" and "imported but not listed" are different bugs. Fallow finds both.
+
+**\[4\]** `eslint-plugin-boundaries` enforces import rules between element types you define. It supports capture groups and templates. `no-restricted-paths` enforces directory-level restrictions but requires enumerating every forbidden path pair. Neither plugin follows re-export chains through barrel files, so a boundary rule can be bypassed via a re-exporting index file. Neither ships preset configurations for common architecture patterns. Fallow's [zone presets](/configuration/boundaries) (`bulletproof`, `layered`, `hexagonal`, `feature-sliced`) expand to full rule sets and track re-exports.
+
 <Info>
-ESLint's `no-unused-vars` catches variables unused within the same file but cannot detect cross-file dead code — exported functions nobody imports, unreachable files, unused `package.json` dependencies, or multi-hop circular imports. The `eslint-plugin-import` rule `no-unused-modules` does cross-file analysis but doesn't handle barrel file re-exports, monorepo workspaces, or TypeScript path aliases. Project-wide graph traversal is required for those.
+Linters process files individually. `eslint-plugin-import` builds a cross-file graph for rules like `no-unused-modules` and `no-cycle`, but reconstructs it from scratch on every lint run with no caching. Fallow builds and caches the module graph once, resolves barrel file re-export chains, and runs all analyses in milliseconds rather than minutes. The capability overlap is real; the performance difference is 100-1000x.
 </Info>
+
+<Note>
+**What about Biome?** Biome v2 added `noImportCycles` for circular import detection (Rust-based, graph-aware). Biome does not detect unused exports, unused files, or unused dependencies. Its import restriction rule (`noRestrictedImports`) accepts plain string paths only. If your team is on Biome, you get cycle detection. For everything else in the table above, fallow and Biome are complementary.
+</Note>
 
 ## Where fallow goes further
 
-Some of these issues have partial linter solutions via `eslint-plugin-import`. Fallow handles them through full module graph traversal, which is faster, more complete, and doesn't require per-file ESLint execution.
+Several of these issues have ESLint plugin solutions. The table above marks the capability overlap honestly. Fallow's advantage in the overlapping areas is performance (100-1000x faster on large projects), correctness (barrel re-export resolution, alias handling), and zero per-run graph rebuild cost.
 
 ### Unused exports
 
-`no-unused-vars` flags `const x = 1` when `x` is never used in the same file. But if you write `export const x = 1`, `no-unused-vars` stops. The `eslint-plugin-import` rule `no-unused-modules` attempts this but doesn't handle barrel file re-exports, monorepo workspaces, or TypeScript path aliases.
+`eslint-plugin-import/no-unused-modules` finds exported symbols that no other file imports. It works, but with three practical problems:
 
-Fallow builds the full import graph, traces re-export chains through <Tooltip tip="Index files (typically index.ts) that re-export symbols from other modules for cleaner imports">barrel files</Tooltip>, and tells you exactly which exports have zero references across the entire project.
+**Performance.** The rule rebuilds the full module graph from scratch on each lint run. On a 20-30K LOC project, this adds ~320 seconds to total lint time ([#1487](https://github.com/import-js/eslint-plugin-import/issues/1487)). Most teams that enable it disable it within weeks.
+
+**Correctness.** The rule produces incorrect results with `import { name as alias }` ([#1339](https://github.com/import-js/eslint-plugin-import/issues/1339)). The aliased import is not recognized as a usage of the original export, so the export is reported as unused even when it has consumers.
+
+**Re-export chains.** `no-unused-modules` does not follow <Tooltip tip="Index files (typically index.ts) that re-export symbols from other modules for cleaner imports">barrel file</Tooltip> re-exports. If `components/index.ts` re-exports from `components/Button.ts`, and an outside file imports from `components/index.ts`, the export in `Button.ts` may still be flagged as unused.
+
+Fallow builds a persistent module graph, resolves re-export chains iteratively, and handles TypeScript path aliases. The full unused export analysis runs in under a second.
 
 <Info>
 If you're building a library, your public API exports are intentionally consumed externally. Mark them with `/** @public */` JSDoc tags or configure your [entry points](/configuration/overview#entry) so fallow doesn't flag them.
@@ -79,9 +99,9 @@ fallow dead-code --unused-exports
 
 ### Unused files
 
-A file that nothing imports. It exists in your repository, gets included in IDE indexing and type-checking, but is never loaded at runtime. Linters have no concept of "entry points" — they process whatever file you give them.
+`no-unused-modules` detects exports with no importers, but does not detect files that are never imported at all. A file with no exports and no importers (an orphaned utility, a deleted component's leftover test file) does not trigger any ESLint rule.
 
-Fallow starts from your entry points (detected via 84 framework plugins) and marks every file not reachable in the graph.
+Detecting unreachable files requires starting from entry points and walking the full import graph. ESLint has no concept of entry points. It lints files; it does not traverse graphs from roots. Fallow reads entry points from `package.json` fields and framework conventions (Next.js pages, Vite entry, etc.), then marks every file not reachable from those roots.
 
 ### Circular dependencies
 
@@ -89,11 +109,25 @@ Fallow starts from your entry points (detected via 84 framework plugins) and mar
 src/auth.ts → src/user.ts → src/permissions.ts → src/auth.ts
 ```
 
-ESLint's `no-cycle` rule from `eslint-plugin-import` detects circular imports, but runs inside the ESLint process on each file individually, which is slow on large projects and misses cycles involving files ESLint doesn't lint. Fallow detects cycles during module graph construction at zero extra cost. Circular dependencies cause subtle initialization bugs, bundler issues, and make refactoring risky. For decorator-driven frameworks like NestJS and Angular, fallow's [framework plugins](/frameworks/built-in) auto-detect registrations so fallow doesn't flag decorator-wired modules.
+Both `eslint-plugin-import/no-cycle` and Biome v2's `noImportCycles` detect circular imports. The difference is performance and search depth, not detection.
+
+`no-cycle` rebuilds the module graph on every run. On larger projects it takes 45-305 seconds and has caused out-of-memory failures ([#2348](https://github.com/import-js/eslint-plugin-import/issues/2348)). Teams commonly set `maxDepth: 1` to keep lint times tolerable, which means cycles longer than two hops go undetected. The rule only covers ES `import` statements, not `require()`.
+
+Biome v2's `noImportCycles` is Rust-based and faster, but Biome's own documentation flags it as computationally expensive. oxlint has `no-cycle` in Rust, faster than the JS version but with less coverage of edge cases.
+
+Fallow builds the module graph once (cached across runs), checks for cycles without a depth cap, and covers both `import` and `require()`. On projects where `no-cycle` takes minutes, fallow completes in under a second.
+
+One note that applies to all tools: dependency injection frameworks (NestJS, InversifyJS) intentionally create import cycles. Fallow's inline suppression (`// fallow-ignore-next-line circular-dep`) handles this the same way ESLint's disable comments do. No tool automatically distinguishes intentional from accidental cycles.
 
 ### Architecture boundary violations
 
-If your team has defined architecture rules ("the UI layer must not import from the database layer"), both linters and fallow can enforce them. ESLint has `eslint-plugin-boundaries` and `no-restricted-paths`. The difference: linters require per-rule configuration for each restricted path. Fallow's [boundaries config](/configuration/boundaries) uses glob-based zones with architecture presets (`bulletproof`, `layered`, `hexagonal`, `feature-sliced`) that expand to full rule sets automatically:
+Two ESLint plugins enforce import boundaries: `eslint-plugin-boundaries` and `eslint-plugin-import/no-restricted-paths`.
+
+`eslint-plugin-boundaries` defines element types for your codebase (`feature`, `shared`, `core`) and enforces rules between them. It supports capture groups and templates. The limitation: it enforces per file with no understanding of re-export chains. A boundary rule saying "features cannot import from other features" can be satisfied on paper while violated in practice through a barrel file re-exporting across the boundary.
+
+`no-restricted-paths` enforces directory-level restrictions. It requires enumerating every forbidden path pair, has no glob support, and does not scale to large modular architectures.
+
+Fallow ships [zone presets](/configuration/boundaries) for common patterns (`bulletproof`, `layered`, `hexagonal`, `feature-sliced`). Zones are defined by glob patterns, and rules can be expressed as allowlists ("this zone can only import from these zones") rather than enumerating forbidden paths. Fallow's boundary analysis understands re-export chains: if `shared/index.ts` re-exports a symbol from `core/`, that import is correctly attributed to `core/` when evaluating boundary rules.
 
 ```jsonc
 {
@@ -111,7 +145,7 @@ If your team has defined architecture rules ("the UI layer must not import from 
 
 ## Recommended CI pipeline
 
-Run all three in parallel. They catch mostly different things (linter plugins like `no-cycle` and `no-unused-modules` overlap with fallow on a subset of issues, but fallow handles them faster and more completely):
+Run all three in parallel. Some linter plugins (`no-cycle`, `no-unused-modules`) overlap with fallow on a subset of issues. If you already have those enabled, fallow covers the same ground faster and adds the issues linters cannot detect (unused files, unused deps, duplication, churn hotspots). If you don't have them enabled, fallow covers everything in one pass:
 
 <Tabs>
   <Tab title="GitHub Actions">
