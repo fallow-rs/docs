@@ -37,25 +37,26 @@ The key distinction: **linters read files**. Fallow **builds the import graph** 
 | Missing `useEffect` dependency | Yes | No |
 | Suspicious `==` vs `===` | Yes | No |
 | Code style violations | Yes | No |
-| Exported symbol never imported anywhere | No | Yes |
+| Exported symbol never imported anywhere | Partial (`no-unused-modules`) | Yes |
 | File not reachable from any entry point | No | Yes |
-| Circular import chain across 5 files | No | Yes |
+| Circular import chain across 5 files | Partial (`no-cycle`) | Yes |
 | Package in `dependencies` but never imported | No | Yes |
 | Architecture boundary enforcement | Partial (manual rules) | Yes (zone presets) |
 | Duplicated logic blocks across modules | No | Yes |
-| Complexity hotspots with git churn correlation | No | Yes |
+| Per-function complexity thresholds | Yes (`complexity` rule) | Yes |
+| Complexity + git churn hotspot correlation | No | Yes |
 
 <Info>
 ESLint's `no-unused-vars` catches variables unused within the same file but cannot detect cross-file dead code — exported functions nobody imports, unreachable files, unused `package.json` dependencies, or multi-hop circular imports. The `eslint-plugin-import` rule `no-unused-modules` does cross-file analysis but doesn't handle barrel file re-exports, monorepo workspaces, or TypeScript path aliases. Project-wide graph traversal is required for those.
 </Info>
 
-## Issues that require graph-level analysis
+## Where fallow goes further
 
-These are things a linter structurally cannot detect, because they require knowing the relationships between files across the entire project.
+Some of these issues have partial linter solutions via `eslint-plugin-import`. Fallow handles them through full module graph traversal, which is faster, more complete, and doesn't require per-file ESLint execution.
 
 ### Unused exports
 
-`no-unused-vars` flags `const x = 1` when `x` is never used in the same file. But if you write `export const x = 1`, the linter stops — it has no way to know whether another file imports `x`.
+`no-unused-vars` flags `const x = 1` when `x` is never used in the same file. But if you write `export const x = 1`, `no-unused-vars` stops. The `eslint-plugin-import` rule `no-unused-modules` attempts this but doesn't handle barrel file re-exports, monorepo workspaces, or TypeScript path aliases.
 
 Fallow builds the full import graph, traces re-export chains through <Tooltip tip="Index files (typically index.ts) that re-export symbols from other modules for cleaner imports">barrel files</Tooltip>, and tells you exactly which exports have zero references across the entire project.
 
@@ -88,7 +89,7 @@ Fallow starts from your entry points (detected via 84 framework plugins) and mar
 src/auth.ts → src/user.ts → src/permissions.ts → src/auth.ts
 ```
 
-Each individual file looks fine to a linter. The cycle only appears when you trace the full import chain. Circular dependencies cause subtle initialization bugs, bundler issues, and make refactoring risky. For decorator-driven frameworks like NestJS and Angular, fallow's [framework plugins](/frameworks/built-in) auto-detect registrations so fallow doesn't flag decorator-wired modules.
+ESLint's `no-cycle` rule from `eslint-plugin-import` detects circular imports, but runs inside the ESLint process on each file individually, which is slow on large projects and misses cycles involving files ESLint doesn't lint. Fallow detects cycles during module graph construction at zero extra cost. Circular dependencies cause subtle initialization bugs, bundler issues, and make refactoring risky. For decorator-driven frameworks like NestJS and Angular, fallow's [framework plugins](/frameworks/built-in) auto-detect registrations so fallow doesn't flag decorator-wired modules.
 
 ### Architecture boundary violations
 
@@ -110,7 +111,7 @@ If your team has defined architecture rules ("the UI layer must not import from 
 
 ## Recommended CI pipeline
 
-Run all three in parallel. They have zero overlap and catch different things:
+Run all three in parallel. They catch mostly different things (linter plugins like `no-cycle` and `no-unused-modules` overlap with fallow on a subset of issues, but fallow handles them faster and more completely):
 
 <Tabs>
   <Tab title="GitHub Actions">
