@@ -46,6 +46,7 @@ By default, all three sections are included. Use these flags to select individua
 | `--hotspots` | Show only hotspot analysis: files that are both complex and frequently changing. Combines git churn history with complexity data. Requires a git repository. |
 | `--targets` | Show only refactoring targets: ranked recommendations with priority scores, effort estimates, contributing factors, and evidence for AI agents. |
 | `--score` | Show only the project health score (0-100) with letter grade (A/B/C/D/F). The score is included by default when no section flags are set. |
+| `--coverage-gaps` | Show runtime files and exports that no test dependency path reaches. Opt-in (default off). Configure severity via the `coverage-gaps` rule. |
 
 Multiple section flags can be combined (e.g., `--complexity --hotspots`). Without any section flags, all sections are included.
 
@@ -202,7 +203,7 @@ The `--save-snapshot` flag forces file-scores and hotspot computation so that al
 ```json title="snapshot.json"
 {
   "snapshot_schema_version": 2,
-  "version": "2.13.4",
+  "version": "2.14.0",
   "timestamp": "2026-03-25T14:30:00Z",
   "git_sha": "a1b2c3d",
   "git_branch": "main",
@@ -385,6 +386,17 @@ fallow health --trend
 # JSON output with trend deltas
 fallow health --trend --format json
 ```
+
+```bash Coverage gaps
+# Find runtime code not reached by any test
+fallow health --coverage-gaps
+
+# Coverage gaps in JSON
+fallow health --coverage-gaps --format json
+
+# Combine with file scores
+fallow health --coverage-gaps --file-scores
+```
 </CodeGroup>
 
 ## Example output
@@ -443,7 +455,7 @@ fallow health --trend --format json
 ```json title="$ fallow health --format json --top 2"
 {
   "schema_version": 3,
-  "version": "2.13.4",
+  "version": "2.14.0",
   "elapsed_ms": 140,
   "summary": {
     "files_analyzed": 252,
@@ -474,7 +486,7 @@ When `--file-scores` is used, the JSON output includes additional fields:
 ```json title="$ fallow health --file-scores --format json --top 2"
 {
   "schema_version": 3,
-  "version": "2.13.4",
+  "version": "2.14.0",
   "elapsed_ms": 320,
   "summary": {
     "files_analyzed": 252,
@@ -525,7 +537,7 @@ When `--hotspots` is used, the JSON output includes a `hotspots` array and `hots
 ```json title="$ fallow health --hotspots --format json --top 2"
 {
   "schema_version": 3,
-  "version": "2.13.4",
+  "version": "2.14.0",
   "elapsed_ms": 480,
   "summary": {
     "files_analyzed": 252,
@@ -591,7 +603,7 @@ When `--targets` is used, the JSON output includes a `targets` array:
 ```json title="$ fallow health --targets --format json --top 2"
 {
   "schema_version": 3,
-  "version": "2.13.4",
+  "version": "2.14.0",
   "elapsed_ms": 520,
   "summary": {
     "files_analyzed": 252,
@@ -661,7 +673,7 @@ When file-scores are enabled (via `--file-scores` or implicitly via `--save-snap
 ```json title="$ fallow health --file-scores --format json (vital_signs excerpt)"
 {
   "schema_version": 3,
-  "version": "2.13.4",
+  "version": "2.14.0",
   "vital_signs": {
     "dead_file_pct": 4.2,
     "dead_export_pct": 12.8,
@@ -795,6 +807,66 @@ Each metric includes `direction` (`improving`, `declining`, or `stable`) based o
   `--trend` requires at least one saved snapshot in `.fallow/snapshots/`. Use `--save-snapshot` to create snapshots first. Without any snapshots, the `health_trend` object is omitted.
 </Note>
 
+### With coverage gaps
+
+When `--coverage-gaps` is used, the JSON output includes a `coverage_gaps` object listing runtime files and exports that no test dependency path reaches. This helps identify production code with no transitive test coverage.
+
+The `coverage-gaps` rule supports `error`, `warn`, or `off` severity in your config (default `off`):
+
+<CodeGroup>
+```jsonc .fallowrc.json
+{
+  "rules": {
+    "coverage-gaps": "warn"
+  }
+}
+```
+
+```toml fallow.toml
+[rules]
+coverage-gaps = "warn"
+```
+</CodeGroup>
+
+```json title="$ fallow health --coverage-gaps --format json"
+{
+  "schema_version": 3,
+  "version": "2.14.0",
+  "elapsed_ms": 280,
+  "coverage_gaps": {
+    "summary": {
+      "uncovered_files": 12,
+      "total_runtime_files": 84,
+      "uncovered_exports": 38,
+      "total_runtime_exports": 210
+    },
+    "files": [
+      {
+        "path": "src/utils/parser.ts",
+        "exports": ["parseExpression", "tokenize"]
+      },
+      {
+        "path": "src/legacy/handler.ts",
+        "exports": ["handleRequest"]
+      }
+    ],
+    "exports": [
+      {
+        "path": "src/core/processor.ts",
+        "name": "transform",
+        "line": 42
+      }
+    ]
+  }
+}
+```
+
+The `files` array lists runtime files where no export is reached by any test dependency path. The `exports` array lists individual exports in otherwise-covered files that lack test reachability.
+
+<Note>
+  Without `--coverage-gaps`, the `coverage_gaps` object is omitted entirely from the JSON output. The flag is opt-in and the `coverage-gaps` rule defaults to `off`.
+</Note>
+
 ## Markdown output
 
 Formatted for PR comments. Pipe directly to `gh pr comment`:
@@ -832,7 +904,7 @@ fallow health --format sarif
 ```json title="$ fallow health --format sarif (excerpt)"
 {
   "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-  "version": "2.1.0",
+  "version": "2.14.0",
   "runs": [{
     "tool": { "driver": { "name": "fallow" } },
     "results": [
