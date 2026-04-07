@@ -1,7 +1,7 @@
 ---
 title: "Health explained"
 description: "What each metric in fallow's health output means, how it's computed, and how to interpret the values."
-keywords: ["health", "maintainability index", "cyclomatic complexity", "cognitive complexity", "hotspots", "refactoring targets", "fan-in", "fan-out", "complexity density"]
+keywords: ["health", "maintainability index", "cyclomatic complexity", "cognitive complexity", "hotspots", "refactoring targets", "fan-in", "fan-out", "complexity density", "untested complexity risk", "CRAP", "coverage gaps"]
 icon: "chart-line"
 ---
 
@@ -170,6 +170,92 @@ Because the formula differs, fallow's MI scores are **not directly comparable** 
 
 <Accordion title="Research: fan-in/fan-out">
 Fan-in/fan-out coupling metrics originate from [Henry and Kafura (1981)](https://doi.org/10.1109/TSE.1981.231113). Later refined in the [Chidamber & Kemerer OO metrics suite (1994)](https://doi.org/10.1109/32.295895), where Coupling Between Objects (CBO) captures the same idea for class-level dependencies.
+</Accordion>
+
+
+## Untested complexity risk
+
+Complex code without test coverage is the most likely source of production bugs. Fallow quantifies this risk per function using a score based on the CRAP metric (Change Risk Anti-Patterns), originally developed by Alberto Savoia and Bob Evans at Agitar Labs in 2007.
+
+The score appears in [`fallow health --file-scores`](/cli/health) output and JSON.
+
+### How the score is computed
+
+Fallow uses a **binary coverage model**: a file is either test-reachable or not. "Test-reachable" means the file is imported (directly or transitively) by at least one test file in the module graph.
+
+The per-function formula:
+
+| Condition | Formula | Example (CC = 8) |
+|:----------|:--------|:-----------------|
+| File is test-reachable | score = CC | 8 |
+| File is **not** test-reachable | score = CC^2 + CC | 72 |
+
+For untested files, the quadratic term makes complexity hurt fast. A function with cyclomatic complexity 5 in an untested file scores 5^2 + 5 = 30, which is exactly the default threshold.
+
+**Default threshold:** 30 (functions scoring at or above this value are flagged)
+
+### Interpreting the numbers
+
+| Score | Interpretation | Action |
+|:------|:---------------|:-------|
+| < 30 | Acceptable risk | No action needed |
+| 30-99 | Moderate risk, complex untested code | Add test coverage or reduce complexity |
+| 100-999 | High risk | Prioritize: add tests, then simplify |
+| > 999 | Extreme risk (shown as ">999" in terminal) | Refactor urgently, this code is both complex and invisible to tests |
+
+In human output, scores above 999 are capped to `>999` for readability. JSON output always contains the exact value.
+
+### File-level aggregation
+
+Each file reports two aggregated values:
+
+| Field | Meaning |
+|:------|:--------|
+| `crap_max` | Highest per-function score in the file |
+| `crap_above_threshold` | Count of functions scoring >= 30 |
+
+The `coverage_model` field on the health summary indicates which model produced the scores. Currently this is always `"static_binary"`.
+
+### Refactoring targets
+
+The `AddTestCoverage` refactoring target fires when both conditions are true:
+
+- `crap_above_threshold` >= 2 (multiple risky functions, not just one outlier)
+- `complexity_density` > 0.3 (the file is genuinely complex, not just large)
+
+This combination identifies files where adding test coverage will reduce the most risk per effort spent.
+
+### Suppression
+
+To exclude a file from untested complexity risk reporting:
+
+```typescript
+// fallow-ignore-file coverage-gaps
+```
+
+This suppresses all coverage-related findings for the file, including the CRAP-based scores.
+
+<Accordion title="Binary model vs. full coverage">
+
+The original CRAP formula uses actual line-level coverage percentages:
+
+```
+CRAP(m) = CC^2 × (1 - cov/100)^3 + CC
+```
+
+Where `cov` is the percentage of lines covered by tests (0-100). A fully tested function (cov = 100) always scores exactly CC, regardless of complexity. A completely untested function (cov = 0) scores CC^2 + CC.
+
+Fallow's binary model is an approximation: it treats coverage as either 0% or 100% based on whether the file is reachable from test files. This means:
+
+- **False negatives**: A file imported by tests but with functions that are never actually exercised will score lower than it should.
+- **False positives**: Not possible. If a file has no path from any test file, none of its functions can be covered.
+
+The binary model is useful without any coverage tooling setup. For projects that generate Istanbul/c8 coverage reports, a future version of fallow will support ingesting actual coverage data for precise per-function scores.
+
+</Accordion>
+
+<Accordion title="Research">
+The CRAP metric was introduced by Alberto Savoia and Bob Evans at Agitar Labs. Original presentation: ["CRAP4J" (2007)](http://www.artima.com/weblogs/viewpost.jsp?thread=215899). The core insight is that complexity alone is not dangerous if the code is well-tested, and simple code is low-risk even without tests. Risk concentrates where complexity and missing coverage overlap.
 </Accordion>
 
 

@@ -117,6 +117,8 @@ Additional metrics reported per file (informational, not in the formula):
 | `total_cognitive` | Sum of cognitive complexity across all functions |
 | `function_count` | Number of functions in the file |
 | `lines` | Total lines of code |
+| `crap_max` | Highest CRAP score among the file's functions. Combines cyclomatic complexity with test coverage to estimate untested risk. See [CRAP metric](/explanations/health#crap-metric) for details. |
+| `crap_above_threshold` | Number of functions in the file with a CRAP score at or above the threshold (default: 30). |
 
 ## Hotspot score formula
 
@@ -416,15 +418,15 @@ fallow health --coverage-gaps --file-scores
 ● File health scores (3 files)
 
    52.3    src/legacy/handler.ts
-           2 fan-in   18 fan-out   45% dead  0.38 density
+           2 fan-in   18 fan-out   45% dead  0.38 density  42.0 risk
 
    68.4    src/diff/index.js
-           3 fan-in   12 fan-out    0% dead  0.89 density
+           3 fan-in   12 fan-out    0% dead  0.89 density  12.0 risk
 
    75.1    src/utils/parser.ts
-           8 fan-in    4 fan-out   25% dead  0.22 density
+           8 fan-in    4 fan-out   25% dead  0.22 density   6.0 risk
 
-  Composite file quality scores based on complexity, coupling, and dead code — https://docs.fallow.tools/explanations/health#file-health-scores
+  Composite file quality scores based on complexity, coupling, and dead code. Risk: low <15, moderate 15-30, high >=30. — https://docs.fallow.tools/explanations/health#file-health-scores
 
 ✗ 24 above threshold · 847 analyzed (0.08s)
 ```
@@ -495,7 +497,8 @@ When `--file-scores` is used, the JSON output includes additional fields:
     "max_cyclomatic_threshold": 20,
     "max_cognitive_threshold": 15,
     "files_scored": 2,
-    "average_maintainability": 68.9
+    "average_maintainability": 68.9,
+    "coverage_model": "static_binary"
   },
   "findings": [
     {
@@ -520,14 +523,16 @@ When `--file-scores` is used, the JSON output includes additional fields:
       "total_cyclomatic": 2,
       "total_cognitive": 1,
       "function_count": 2,
-      "lines": 54
+      "lines": 54,
+      "crap_max": 6.0,
+      "crap_above_threshold": 0
     }
   ]
 }
 ```
 
 <Note>
-  Without `--file-scores`, the `file_scores` array and `summary.files_scored` / `summary.average_maintainability` fields are omitted entirely from the JSON output.
+  Without `--file-scores`, the `file_scores` array and `summary.files_scored` / `summary.average_maintainability` / `summary.coverage_model` fields are omitted entirely from the JSON output. The `coverage_model` field indicates how test coverage was estimated (`static_binary` for static analysis without runtime data). Each file score includes `crap_max` (highest CRAP score among the file's functions) and `crap_above_threshold` (count of functions at or above the CRAP threshold).
 </Note>
 
 ### With hotspots
@@ -660,7 +665,19 @@ When `--targets` is used, the JSON output includes a `targets` array:
 }
 ```
 
-Targets are sorted by `efficiency` (priority / effort) descending, surfacing quick wins first. Each target includes `efficiency`, `effort` (`low`/`medium`/`high`), `confidence` (`high`/`medium`/`low`, based on data source reliability), and `factors` with raw `value`/`threshold` for programmatic use. The `target_thresholds` object exposes the adaptive percentile-based thresholds used for scoring, so consumers can interpret scores in context. The `evidence` field provides actionable detail for supported categories (`remove_dead_code`, `extract_complex_functions`, `break_circular_dependency`); omitted for other categories.
+Targets are sorted by `efficiency` (priority / effort) descending, surfacing quick wins first. Each target includes `efficiency`, `effort` (`low`/`medium`/`high`), `confidence` (`high`/`medium`/`low`, based on data source reliability), and `factors` with raw `value`/`threshold` for programmatic use. The `target_thresholds` object exposes the adaptive percentile-based thresholds used for scoring, so consumers can interpret scores in context. The `evidence` field provides actionable detail for supported categories (`remove_dead_code`, `extract_complex_functions`, `break_circular_dependency`, `add_test_coverage`); omitted for other categories.
+
+### Target categories
+
+| Category | Label | Description |
+|:---------|:------|:------------|
+| `urgent_churn_complexity` | churn+complexity | Actively-changing file with growing complexity |
+| `break_circular_dependency` | circular dependency | File participates in a dependency cycle |
+| `split_high_impact` | high impact | High fan-in with high complexity; changes ripple widely |
+| `remove_dead_code` | dead code | Majority of exports are unused |
+| `extract_complex_functions` | complexity | Contains functions with very high cognitive complexity |
+| `extract_dependencies` | coupling | Excessive imports reduce testability and increase coupling |
+| `add_test_coverage` | untested risk | Multiple complex functions lack test dependency path. Fires when a file has 2+ functions above the CRAP threshold and complexity density > 0.3. The `crap_max` contributing factor appears on these targets. |
 
 <Note>
   Without `--targets`, the `targets` array and `target_thresholds` are omitted entirely from the JSON output.
@@ -962,6 +979,9 @@ See [Configuration](/configuration/overview) for the full config reference.
 ## See also
 
 <CardGroup cols={3}>
+  <Card title="Health metrics explained" icon="chart-line" href="/explanations/health">
+    CRAP metric, maintainability index, hotspot scoring, and coverage model details.
+  </Card>
   <Card title="Dead code analysis" icon="skull-crossbones" href="/analysis/dead-code">
     Find unused code alongside complexity hotspots.
   </Card>
