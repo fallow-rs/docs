@@ -172,6 +172,45 @@ Because the formula differs, fallow's MI scores are **not directly comparable** 
 Fan-in/fan-out coupling metrics originate from [Henry and Kafura (1981)](https://doi.org/10.1109/TSE.1981.231113). Later refined in the [Chidamber & Kemerer OO metrics suite (1994)](https://doi.org/10.1109/32.295895), where Coupling Between Objects (CBO) captures the same idea for class-level dependencies.
 </Accordion>
 
+### Coupling concentration
+
+Two vital signs metrics summarize coupling at the project level:
+
+| Metric | Description |
+|:-------|:------------|
+| `p95_fan_in` | 95th percentile fan-in across all files |
+| `coupling_high_pct` | Percentage of files with fan-in above the effective threshold |
+
+The effective threshold is `max(p95_fan_in, 10)` — the floor of 10 prevents false positives in small projects where even moderate fan-in is normal.
+
+### Risk profiles
+
+Risk profiles show what percentage of functions fall into each risk bin. Two profiles are reported as vital signs:
+
+**Unit size** (function length in lines of code):
+
+| Bin | LOC range |
+|:----|:----------|
+| Low risk | 1–15 |
+| Medium risk | 16–30 |
+| High risk | 31–60 |
+| Very high risk | > 60 |
+
+**Unit interfacing** (function parameter count):
+
+| Bin | Parameters |
+|:----|:-----------|
+| Low risk | 0–2 |
+| Medium risk | 3–4 |
+| High risk | 5–6 |
+| Very high risk | 7+ |
+
+Both profiles appear as `unit_size_profile` and `unit_interfacing_profile` in the vital signs JSON, each containing `low_risk`, `medium_risk`, `high_risk`, and `very_high_risk` percentage values.
+
+<Accordion title="Research: SIG quality model">
+Risk profiles follow the [SIG/TÜViT quality model](https://www.softwareimprovementgroup.com/wp-content/uploads/SIG-TUViT-Evaluation-Criteria-Trusted-Product-Maintainability-Guidance-for-producers.pdf), which benchmarks codebases by the distribution of code across risk categories rather than by averages. A codebase where 95% of functions are low-risk is healthier than one with the same average complexity but a fat tail of very-high-risk functions.
+</Accordion>
+
 
 ## Untested complexity risk
 
@@ -214,7 +253,7 @@ Each file reports two aggregated values:
 | `crap_max` | Highest per-function score in the file |
 | `crap_above_threshold` | Count of functions scoring >= 30 |
 
-The `coverage_model` field on the health summary indicates which model produced the scores. Currently this is always `"static_binary"`.
+The `coverage_model` field on the health summary indicates which model produced the scores: `"static_estimated"` (default, per-function estimation from export references) or `"istanbul"` (real coverage data from `--coverage`).
 
 ### Refactoring targets
 
@@ -489,6 +528,36 @@ With `--format json`, each target includes structured data for programmatic cons
 ```
 
 Each factor includes raw `value` and `threshold` for programmatic use. The `evidence` field provides actionable detail for categories that support it. AI agents can use `evidence.unused_exports` to generate removal PRs without a second tool call. Categories without evidence omit the field entirely.
+
+
+## Health score
+
+The health score is a single 0–100 number summarizing overall codebase quality. Available via [`fallow health --score`](/cli/health).
+
+```
+score = 100 - sum(penalties)
+```
+
+Clamped to \[0, 100\]. Each penalty targets a different quality dimension:
+
+| Penalty | Formula | Max |
+|:--------|:--------|----:|
+| Dead files | `min(dead_file_pct × 0.2, 15)` | 15 |
+| Dead exports | `min(dead_export_pct × 0.2, 15)` | 15 |
+| Complexity | `min(max(0, avg_cyclomatic − 1.5) × 5, 20)` | 20 |
+| P90 complexity | `min(max(0, p90_cyclomatic − 10), 10)` | 10 |
+| Maintainability | `min(max(0, 70 − maintainability_avg) × 0.5, 15)` | 15 |
+| Hotspots | `min(hotspot_count / total_files × 200, 10)` | 10 |
+| Unused deps | `min(unused_dep_count, 10)` | 10 |
+| Circular deps | `min(circular_dep_count, 10)` | 10 |
+| Unit size | `min(max(0, very_high_risk_pct − 5) × 0.5, 10)` | 10 |
+| Coupling | `min(max(0, p95_fan_in − 30) × 0.25, 5)` | 5 |
+
+The **unit size** penalty kicks in when more than 5% of functions exceed 60 LOC (very high risk). The **coupling** penalty kicks in when the 95th percentile fan-in exceeds 30.
+
+**Letter grades:** A (score >= 85), B (70–84), C (55–69), D (40–54), F (below 40).
+
+Penalty fields are `null` in JSON when the corresponding analysis didn't run. Use `--score` (which forces the full pipeline) for maximum accuracy.
 
 
 ## Limitations
