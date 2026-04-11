@@ -16,7 +16,7 @@ Fallow analyzes more than `.js` and `.ts` files. It extracts imports and exports
     - `<script src="./main.js">` script references
     - `<link rel="stylesheet" href="./styles.css">` stylesheet references
     - `<link rel="modulepreload" href="./vendor.js">` module preload references
-    - Root-relative paths (e.g., `<script src="/src/main.tsx">`) are resolved against the project root, matching the convention used by Vite, Parcel, and similar dev servers
+    - Root-relative paths (e.g., `<script src="/src/main.tsx">`) are resolved against the project root, matching the convention used by Vite, Parcel, and similar dev servers. Root-relative resolution also applies when the reference comes from a JSX/TSX/JS/TS source file (see the JSX templates tab).
 
     ```html index.html
     <!DOCTYPE html>
@@ -84,6 +84,55 @@ Fallow analyzes more than `.js` and `.ts` files. It extracts imports and exports
     <Warning>
     Svelte components export props implicitly. Fallow cannot distinguish between props and utility exports, which may cause false negatives for unused exports in `.svelte` files. See [Limitations](/analysis/limitations) for details.
     </Warning>
+  </Tab>
+  <Tab title="JSX templates">
+    SSR frameworks like [Hono](https://hono.dev) render HTML by returning JSX from layout components. Fallow treats `<script src="...">` and `<link rel="stylesheet|modulepreload" href="...">` inside JSX/TSX files the same way it treats them in plain HTML: as asset references that keep the target file reachable.
+
+    **What's supported:**
+
+    - `<script src="./app.js">` inside JSX/TSX layouts
+    - `<link rel="stylesheet" href="./global.css">` inside JSX/TSX layouts
+    - `<link rel="modulepreload" href="./vendor.js">` inside JSX/TSX layouts
+    - Root-relative paths (`<link href="/static/style.css">`) resolve against the source file's parent directory first, then the project root, matching how Vite/Parcel/Hono serve static assets
+
+    ```tsx Layout.tsx
+    export const Layout = () => (
+      <html>
+        <head>
+          <link rel="stylesheet" href="/static/style.css" />
+          <script src="/static/app.js"></script>
+        </head>
+        <body>
+          <h1>Hello from Hono</h1>
+        </body>
+      </html>
+    );
+    ```
+
+    Fallow sees this file as referencing `/static/style.css` and `/static/app.js`, so sibling files in `static/` are correctly marked reachable.
+
+    <Note>
+    Only lowercase intrinsic elements (`<script>`, `<link>`) and plain string literals (`src="foo.css"`) are tracked. Capitalized React-style components (`<Script>`, `<Link>`) and expression containers (`href={someVar}`) are intentionally skipped because they have component-specific semantics that fallow can't statically resolve.
+    </Note>
+  </Tab>
+  <Tab title="JSDoc">
+    Plain JavaScript files can reference TypeScript types through JSDoc `import()` expressions. Fallow extracts these references and marks the referenced types as used, so untyped JS files don't produce false unused-export reports.
+
+    ```js app.js
+    /**
+     * @param cfg {import('./types.ts').Config}
+     * @returns {import('./types.ts').Result}
+     */
+    function boot(cfg) {
+      return { ok: true };
+    }
+    ```
+
+    Fallow tracks the `Config` and `Result` types from `./types.ts` as used, even though no `import` statement binds them. This works across all JSDoc tag contexts (`@param`, `@returns`, `@type`, `@typedef`, `@callback`) and supports union annotations with multiple `import()` expressions (`{import('./a').A | import('./b').B}`), nested member access, bare package specifiers, and parent-relative paths.
+
+    <Note>
+    Only `/** */` JSDoc blocks are scanned. Single-star `/* */` comments are not JSDoc and are ignored, matching the TypeScript compiler's behavior.
+    </Note>
   </Tab>
   <Tab title="Astro">
     Astro components use a frontmatter block delimited by `---` at the top of the file. Fallow extracts everything between the two `---` delimiters and analyzes it as TypeScript.
