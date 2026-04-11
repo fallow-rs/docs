@@ -85,14 +85,14 @@ Fallow analyzes more than `.js` and `.ts` files. It extracts imports and exports
     Svelte components export props implicitly. Fallow cannot distinguish between props and utility exports, which may cause false negatives for unused exports in `.svelte` files. See [Limitations](/analysis/limitations) for details.
     </Warning>
   </Tab>
-  <Tab title="JSX templates">
-    SSR frameworks like [Hono](https://hono.dev) render HTML by returning JSX from layout components. Fallow treats `<script src="...">` and `<link rel="stylesheet|modulepreload" href="...">` inside JSX/TSX files the same way it treats them in plain HTML: as asset references that keep the target file reachable.
+  <Tab title="SSR layouts">
+    SSR frameworks like [Hono](https://hono.dev) render HTML from layout components using either JSX or a tagged template literal (`` html`...` ``). Fallow treats `<script src="...">` and `<link rel="stylesheet|modulepreload" href="...">` inside both forms the same way it treats them in plain HTML: as asset references that keep the target file reachable.
 
     **What's supported:**
 
-    - `<script src="./app.js">` inside JSX/TSX layouts
-    - `<link rel="stylesheet" href="./global.css">` inside JSX/TSX layouts
-    - `<link rel="modulepreload" href="./vendor.js">` inside JSX/TSX layouts
+    - `<script src="./app.js">` inside JSX/TSX layouts and `` html`...` `` tagged templates
+    - `<link rel="stylesheet" href="./global.css">` inside JSX/TSX layouts and `` html`...` `` tagged templates
+    - `<link rel="modulepreload" href="./vendor.js">` inside JSX/TSX layouts and `` html`...` `` tagged templates
     - Root-relative paths (`<link href="/static/style.css">`) resolve against the source file's parent directory first, then the project root, matching how Vite/Parcel/Hono serve static assets
 
     ```tsx Layout.tsx
@@ -109,10 +109,28 @@ Fallow analyzes more than `.js` and `.ts` files. It extracts imports and exports
     );
     ```
 
-    Fallow sees this file as referencing `/static/style.css` and `/static/app.js`, so sibling files in `static/` are correctly marked reachable.
+    ```ts layout.ts
+    import { html } from 'hono/html'
+
+    export const Layout = ({ title, body }: { title: string; body: string }) => html`
+      <!doctype html>
+      <html>
+        <head>
+          <title>${title}</title>
+          <link rel="stylesheet" href="/static/style.css" />
+          <script defer src="/static/app.js"></script>
+        </head>
+        <body>${body}</body>
+      </html>
+    `
+    ```
+
+    Fallow sees both files as referencing `/static/style.css` and `/static/app.js`, so sibling files in `static/` are correctly marked reachable.
 
     <Note>
-    Only lowercase intrinsic elements (`<script>`, `<link>`) and plain string literals (`src="foo.css"`) are tracked. Capitalized React-style components (`<Script>`, `<Link>`) and expression containers (`href={someVar}`) are intentionally skipped because they have component-specific semantics that fallow can't statically resolve.
+    In JSX, only lowercase intrinsic elements (`<script>`, `<link>`) and plain string literals (`src="foo.css"`) are tracked. Capitalized React-style components (`<Script>`, `<Link>`) and expression containers (`href={someVar}`) are intentionally skipped because they have component-specific semantics that fallow can't statically resolve.
+
+    In tagged templates, only the bare identifier tag `html` is matched — `css`, `sql`, `gql`, and similar tags are left alone. Asset references split across an interpolation boundary (`` html`<script src="${base}/app.js">` ``) are skipped rather than producing garbled specifiers.
     </Note>
   </Tab>
   <Tab title="JSDoc">
