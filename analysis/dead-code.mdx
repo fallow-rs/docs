@@ -1,7 +1,7 @@
 ---
 title: "Dead code analysis"
-description: "Find unused files, exports, dependencies, types, circular dependencies, and boundary violations in TypeScript and JavaScript. One of five codebase analysis areas fallow covers."
-keywords: ["dead code", "unused files", "unused exports", "unused dependencies", "unused types", "module graph", "tree shaking", "circular dependencies", "madge", "dpdm"]
+description: "Find unused files, exports, dependencies, types, class members, circular dependencies, and boundary violations in TypeScript and JavaScript. Inheritance-aware class member detection, CSS/SCSS tracking, and cycle detection built into the module graph."
+keywords: ["dead code", "unused files", "unused exports", "unused dependencies", "unused types", "unused class members", "class member detection", "circular dependencies", "CSS modules", "SCSS", "module graph", "tree shaking"]
 icon: "skull-crossbones"
 ---
 
@@ -26,7 +26,7 @@ Fallow detects 15 types of dead code:
 | **Unused devDependencies** | Packages in `devDependencies` never imported or used as script binaries |
 | **Unused optionalDependencies** | Packages in `optionalDependencies` never imported or used as script binaries |
 | **Unused enum members** | Enum values never referenced |
-| **Unused class members** | Class methods and properties never referenced |
+| **Unused class members** | Class methods and properties never referenced outside their class, with inheritance tracking, decorator exclusion, and framework lifecycle allowlists |
 | **Unresolved imports** | Import specifiers that cannot be resolved |
 | **Unlisted dependencies** | Imported packages missing from `package.json` |
 | **Duplicate exports** | Same symbol exported from multiple modules |
@@ -437,6 +437,41 @@ Fallow also uses `oxc_semantic` scope analysis to detect imports where the bindi
 <Note>
 Whole-object consumption patterns like `Object.values(ns)`, `{ ...ns }`, `for (const k in ns)`, and rest destructuring (`const { a, ...rest } = ns`) conservatively mark all exports as used. Fallow can't determine which specific members are accessed in these cases.
 </Note>
+
+## Class member detection
+
+Fallow detects unused public class members (methods and properties) that are never referenced outside their defining class. Unlike simple text matching, fallow understands class inheritance, decorators, and framework conventions.
+
+```typescript
+class OrderService {
+  // Used: called in checkout.ts
+  async createOrder(items: Item[]) { /* ... */ }
+  
+  // Unused: never called outside this class
+  private validateItems(items: Item[]) { /* ... */ }
+  
+  // Excluded: decorator indicates runtime wiring
+  @Post('/orders')
+  handleCreateOrder() { /* ... */ }
+}
+```
+
+What fallow handles automatically:
+
+- **Inheritance**: A method defined on a parent class and called via the parent type credits the child's override as used
+- **Decorators**: Any decorated member is excluded from detection. Decorators like `@Get()`, `@Column()`, `@Injectable()` indicate runtime wiring
+- **Framework lifecycle methods**: `componentDidMount`, `ngOnInit`, `connectedCallback`, and other framework lifecycle methods are never flagged
+- **Whole-object patterns**: `Object.values(instance)`, `Object.keys()`, spread operators, and `for..in` loops conservatively mark all members as used
+
+<Note>
+Class member detection works via syntactic analysis, without invoking the TypeScript compiler. This means fallow tracks member access through the import graph, not through type resolution.
+</Note>
+
+## CSS and SCSS tracking
+
+Fallow tracks CSS and SCSS imports using dedicated AST-based extraction. SCSS `@use`, `@forward`, and partial imports (`_prefix` files) are resolved accurately. CSS Module class names are extracted as named exports and tracked through `styles.className` member accesses.
+
+See [CSS, SCSS, and Tailwind analysis](/analysis/css-analysis) for full details.
 
 ## Entry-point partial unused exports
 

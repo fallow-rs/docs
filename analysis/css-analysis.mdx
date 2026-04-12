@@ -1,0 +1,166 @@
+---
+title: "CSS, SCSS, and Tailwind analysis"
+description: "How fallow tracks CSS imports, SCSS partials, Tailwind dependencies, and CSS Module class names using AST-based extraction. Zero false positives on @use, @forward, and partial imports."
+keywords: ["CSS", "SCSS", "Tailwind", "CSS Modules", "SCSS partials", "@use", "@forward", "@import", "@apply", "@tailwind", "false positives", "unused dependencies", "dead code"]
+icon: "paintbrush"
+---
+
+Fallow tracks CSS and SCSS files using dedicated extraction, not regex pattern matching against source text. `@use`, `@forward`, SCSS partials (`_prefix` files), and Tailwind directives are all resolved accurately. No manual configuration needed.
+
+## SCSS import resolution
+
+Fallow understands the full SCSS module system. Imports create edges in the module graph, and re-exports propagate through the dependency chain.
+
+| Directive | How fallow handles it |
+|:----------|:----------------------|
+| `@use 'path'` | Resolved as a module import, creating a graph edge |
+| `@forward 'path'` | Treated as a re-export in the module graph |
+| `@import 'path'` | Legacy import, tracked as a side-effect edge |
+| `@use 'sass:math'` | Recognized as a Sass built-in module, not flagged as missing |
+
+SCSS partial resolution follows the standard convention. When fallow encounters `@use 'components/button'`, it resolves through these candidates in order:
+
+1. `components/_button.scss` (partial convention)
+2. `components/button/_index.scss` (directory index)
+3. `components/button/index.scss` (plain index)
+
+```scss styles/theme.scss
+@use 'sass:color';
+@use 'variables';
+@use 'mixins/responsive';
+
+@forward 'tokens' show $primary, $secondary;
+```
+
+Fallow sees this file as:
+- Importing the `sass:color` built-in (correctly ignored, not a project dependency)
+- Importing `./variables`, resolved to `_variables.scss` via partial convention
+- Importing `./mixins/responsive`, resolved to `mixins/_responsive.scss`
+- Re-exporting `$primary` and `$secondary` from `./tokens`
+
+<Note>
+SCSS include paths (configured via frameworks like Angular) are also supported. When a bare specifier like `@use 'variables'` cannot be resolved locally, fallow searches configured include directories with the same partial and index conventions.
+</Note>
+
+## CSS Module class tracking
+
+Files with `.module.css` or `.module.scss` extensions receive special treatment. Fallow extracts every class name from selectors and exposes them as named exports.
+
+```css Button.module.css
+.root {
+  display: flex;
+  align-items: center;
+}
+
+.primary {
+  background: var(--color-primary);
+}
+
+.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+```
+
+This file exports three named symbols: `root`, `primary`, and `disabled`.
+
+When a component imports a CSS module, fallow tracks which classes are actually accessed:
+
+```tsx Button.tsx
+import styles from './Button.module.css';
+
+export const Button = ({ variant }: Props) => (
+  <button className={`${styles.root} ${styles.primary}`}>
+    Click me
+  </button>
+);
+```
+
+Here, `styles.root` and `styles.primary` are marked as used. The `disabled` class is never referenced, so fallow reports it as an unused export.
+
+```bash title="$ fallow dead-code --unused-exports"
+Unused exports (1)
+
+  src/Button.module.css
+    unused-export  disabled
+```
+
+<Tip>
+Start with `fallow dead-code --unused-exports` to see which CSS module class names are unused across your project.
+</Tip>
+
+## Tailwind CSS integration
+
+When fallow encounters `@apply` or `@tailwind` directives in any CSS or SCSS file, it creates a synthetic dependency on the `tailwindcss` package. This prevents false "unused dependency" reports.
+
+```css globals.css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.btn {
+  @apply px-4 py-2 rounded-md font-medium;
+}
+```
+
+Fallow detects both `@tailwind` and `@apply` directives and marks `tailwindcss` as a used dependency.
+
+The Tailwind plugin provides additional coverage by parsing `tailwind.config.{js,ts,cjs,mjs}`:
+
+- **Content globs** from the `content` array are treated as always-used file patterns
+- **Plugin packages** referenced via `require()` or string arrays are marked as used dependencies
+- **Presets** are tracked as referenced dependencies
+- **Imports** in the config file (e.g., `import defaultTheme from 'tailwindcss/defaultTheme'`) are tracked
+
+```js tailwind.config.js
+import defaultTheme from 'tailwindcss/defaultTheme';
+
+export default {
+  content: ['./src/**/*.{js,ts,jsx,tsx}'],
+  plugins: [
+    require('@tailwindcss/typography'),
+    require('@tailwindcss/forms'),
+  ],
+};
+```
+
+Fallow marks `tailwindcss`, `@tailwindcss/typography`, and `@tailwindcss/forms` as used dependencies.
+
+## CSS `@import` tracking
+
+Plain CSS `@import` statements create edges in the module graph. Both relative paths and package imports are tracked.
+
+```css styles/main.css
+@import './reset.css';
+@import './typography.css';
+@import '@fontsource/inter/400.css';
+```
+
+Fallow resolves `./reset.css` and `./typography.css` as local file imports, and `@fontsource/inter` as a package dependency. Remote URLs (`https://...`) and data URIs are correctly ignored.
+
+## Common patterns that just work
+
+| Pattern | Example | How fallow handles it |
+|:--------|:--------|:----------------------|
+| SCSS partial imports | `@use 'mixins'` | Resolves to `_mixins.scss` |
+| Sass built-in modules | `@use 'sass:math'` | Correctly ignored, not flagged as missing |
+| `@use` with namespace | `@use 'colors' as c` | Tracked as module import |
+| `@forward` with `show`/`hide` | `@forward 'tokens' show $primary` | Re-export with filtering |
+| CSS custom properties | `var(--color-primary)` | File-level tracking (not per-property) |
+| PostCSS plugins | `postcss.config.js` | Plugin dependencies detected via PostCSS plugin config |
+| Scoped CSS packages | `@import '@company/tokens/base.scss'` | Resolved as npm package, not local file |
+| SCSS directory index | `@use 'components'` | Resolves to `components/_index.scss` |
+
+## See also
+
+<CardGroup cols={3}>
+  <Card title="Dead code analysis" icon="skull-crossbones" href="/analysis/dead-code">
+    How fallow builds the module graph and detects unused code.
+  </Card>
+  <Card title="Non-JS file types" icon="file-code" href="/analysis/file-types">
+    All non-JavaScript file types fallow analyzes automatically.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/overview">
+    Configure entry points, rules, and analysis scope.
+  </Card>
+</CardGroup>
