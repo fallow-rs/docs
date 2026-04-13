@@ -47,6 +47,7 @@ fallow check      # Hidden alias for fallow dead-code
 | `--duplicate-exports` | Only report duplicate exports |
 | `--circular-deps` | Only report circular dependencies |
 | `--boundary-violations` | Only report boundary violations |
+| `--stale-suppressions` | Only report stale suppression comments and `@expected-unused` JSDoc tags |
 | `--type-only-deps` | Only report type-only dependencies |
 | `--include-dupes` | Also run duplication analysis and cross-reference with dead code |
 
@@ -362,6 +363,67 @@ When `--baseline` is used, a `baseline_deltas` object shows changes since the ba
   }
 }
 ```
+
+## Stale suppression detection
+
+Fallow detects `// fallow-ignore` comments and `/** @expected-unused */` JSDoc tags that no longer match any issue. This prevents suppression comments from accumulating after the underlying issues are resolved.
+
+```bash
+# Only report stale suppressions
+fallow dead-code --stale-suppressions
+
+# JSON output includes stale_suppressions array
+fallow dead-code --format json --stale-suppressions
+```
+
+Two types of staleness are detected:
+
+| Origin | When it's stale |
+|:-------|:----------------|
+| `// fallow-ignore-next-line` / `// fallow-ignore-file` | The suppression no longer matches any issue on the target line or in the file |
+| `/** @expected-unused */` JSDoc tag | The tagged export is now imported by another module |
+
+The `stale-suppressions` rule defaults to `warn`. Promote to `error` for CI enforcement:
+
+```jsonc
+{
+  "rules": {
+    "stale-suppressions": "error"
+  }
+}
+```
+
+When using `--format json`, stale suppressions appear in the `stale_suppressions` array:
+
+```json
+{
+  "stale_suppressions": [
+    {
+      "path": "src/utils.ts",
+      "line": 5,
+      "col": 0,
+      "origin": {
+        "type": "inline_comment",
+        "issue_type": "unused-export",
+        "is_file_level": false
+      }
+    },
+    {
+      "path": "src/lib.ts",
+      "line": 10,
+      "col": 0,
+      "origin": {
+        "type": "jsdoc_tag",
+        "export_name": "createWidget"
+      }
+    }
+  ]
+}
+```
+
+<Tip>
+Use `/** @expected-unused */` instead of `// fallow-ignore-next-line` when you want fallow to alert you if a suppressed export later becomes used. Both are tracked for staleness, but `@expected-unused` communicates intent more clearly.
+</Tip>
 
 ## See also
 

@@ -14,7 +14,7 @@ Pass `--explain` to any command with `--format json` to include issue type defin
 
 ## Issue types
 
-Fallow detects 15 types of dead code. Each type has a default severity that determines whether it causes a non-zero exit code with `--fail-on-issues`.
+Fallow detects 16 types of dead code. Each type has a default severity that determines whether it causes a non-zero exit code with `--fail-on-issues`.
 
 ### Unused files
 
@@ -240,6 +240,44 @@ Production dependencies (`dependencies`) that are only ever imported by test fil
 
 **When to act:** Move to `devDependencies`. This reduces the production install size and makes it clear the package is only needed for testing.
 
+### Stale suppressions {#stale-suppressions}
+
+`// fallow-ignore` comments and `/** @expected-unused */` JSDoc tags that no longer match any issue. Suppression comments accumulate as codebases evolve. A suppression that once silenced a real finding may become stale when the underlying issue is fixed, the code is moved, or another module starts importing a previously unused export.
+
+| Severity | Default |
+|:---------|:--------|
+| Warning | Yes |
+
+**Two origins are tracked:**
+
+- **Inline comments** (`// fallow-ignore-next-line`, `// fallow-ignore-file`): reported as stale when the target line or file no longer has a matching issue.
+- **`@expected-unused` JSDoc tags**: reported as stale when the tagged export is now imported by another module. Use `/** @expected-unused */` to mark exports that are intentionally dead code but should be flagged if they become used again.
+
+```typescript
+// STALE: this suppression no longer matches any issue
+// fallow-ignore-next-line unused-export
+export const helper = () => {};  // now imported in app.ts
+
+// @expected-unused marks intentional dead code
+/** @expected-unused */
+export const deprecatedApi = () => {};
+// ^ reported as stale if something starts importing deprecatedApi
+```
+
+**When to act:** Remove the stale suppression comment or JSDoc tag. Stale suppressions add noise and may hide future issues if the code changes again.
+
+**Configuration:**
+
+```jsonc
+{
+  "rules": {
+    "stale-suppressions": "error"  // default: "warn"
+  }
+}
+```
+
+Use `--stale-suppressions` as a filter flag to show only stale suppression findings.
+
 
 ## Prioritizing findings
 
@@ -255,7 +293,8 @@ Not all findings are equally important. Use this priority order:
 8. **Type-only dependencies**: install size optimization
 9. **Test-only dependencies**: install size optimization
 10. **Duplicate exports**: developer experience
-11. **Unused types / enum members / class members**: code hygiene
+11. **Stale suppressions**: suppression hygiene
+12. **Unused types / enum members / class members**: code hygiene
 
 <Info>
 The first two categories indicate correctness issues that may cause runtime failures. Everything else is maintenance and hygiene.
