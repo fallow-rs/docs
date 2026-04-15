@@ -64,6 +64,8 @@ Multiple section flags can be combined (e.g., `--complexity --hotspots`). Withou
 |:-----|:------------|
 | `--since <DURATION>` | Git history window for hotspot analysis (default: `6m`). Accepts durations (`6m`, `90d`, `1y`, `2w`) or ISO dates (`2025-06-01`). |
 | `--min-commits <N>` | Minimum number of commits for a file to be included in hotspot ranking (default: 3). |
+| `--ownership` | Attach ownership signals to each hotspot entry: bus factor (Avelino truck factor), contributor count, top contributor with stale-days, recent contributors (top-3), `suggested_reviewers`, declared CODEOWNERS owner, ownership drift, unowned-hotspot detection. Human output gains a project-level summary line above the hotspot list. Test paths get a `[test]` tag. Implies `--hotspots`. Requires a git repository. |
+| `--ownership-emails <MODE>` | Privacy mode for author emails: `handle` (default, local-part only with GitHub noreply unwrap), `hash` (stable `xxh3:` pseudonym), or `raw` (full email). Implies `--ownership`. Use `hash` in regulated environments where author identities are sensitive. Configure the default via `health.ownership.emailMode` in config. |
 
 ### Scoping
 
@@ -174,6 +176,97 @@ The hotspot summary (included in JSON output) provides context about the analysi
 <Warning>
   Hotspot analysis requires a git repository. Shallow clones may produce incomplete results. Fallow detects this and warns you. For best results, ensure a full clone with `git fetch --unshallow`.
 </Warning>
+
+## Ownership analysis
+
+Pass `--ownership` (alongside or instead of `--hotspots`) to enrich each hotspot entry with ownership signals derived from git author history and the repository's CODEOWNERS file. Useful for surfacing knowledge-loss risk, finding unowned high-churn files, and routing review requests.
+
+```bash
+fallow health --hotspots --ownership
+fallow health --hotspots --ownership --ownership-emails hash --format json
+```
+
+### Project-level summary
+
+Human output prepends a summary line above the hotspot list showing how many hotspots depend on a single recent contributor and the top authors across the set:
+
+```
+● Hotspots (10 files, since 6 months)
+
+  9/10 hotspots depend on a single recent contributor  ·  top authors: alice (6), bob (4)
+```
+
+### Per-hotspot ownership fields
+
+| Field | Description |
+|:------|:------------|
+| `bus_factor` | Avelino truck factor: minimum contributors covering at least 50% of recency-weighted commits. `1` is the canonical "single point of failure" signal. |
+| `contributor_count` | Distinct authors after bot-pattern filtering. |
+| `top_contributor` | Object with `identifier`, `format` (`raw`/`handle`/`hash`), `share` (0..1), `stale_days`, and `commits` for the highest-share contributor. The `identifier` is rendered per the configured `ownership.emailMode`; do not assume it is an email address. |
+| `recent_contributors` | Up to three additional contributors by share (top-3 excluding the top contributor). |
+| `suggested_reviewers` | Subset of `recent_contributors` whose `stale_days` is below 90. First-class field so AI agents can route "Request review from @X, @Y" without re-filtering. Omitted when empty. |
+| `declared_owner` | The CODEOWNERS-resolved primary owner for this file, when a rule matches. |
+| `unowned` | Tristate: `true` = a CODEOWNERS file exists but no rule matches; `false` = a rule matches; `null` = no CODEOWNERS file was discovered (cannot determine). |
+| `drift` | True when the file's original author no longer maintains it. Fires only when file age >= 30 days AND the original author's recency-weighted share is below 10%. |
+| `drift_reason` | Human-readable explanation of the drift, populated only when `drift` is `true`. |
+
+### Severity in human output
+
+The `bus=` marker is color-coded proportional to the actual risk:
+
+- `bus=1 (sole author)` — **red + bold** when share is 100% (one person, no co-authors)
+- `bus=1 (at risk)` — **red + bold** when bus=1 AND trend is accelerating (active, high-concentration file)
+- `bus=1` — **yellow** for the common case (bus=1 without extreme share or acceleration)
+- `bus=2` / `bus=N` — dimmed (healthy)
+
+This keeps red reserved for the strongest signals so it stays meaningful on repos where most hotspots are single-contributor.
+
+### Test-path tag
+
+Files matching common test conventions (`**/__tests__/**`, `**/__mocks__/**`, `**/*.test.*`, `**/*.spec.*`, `**/test/**`, `**/tests/**`) are intentionally kept in the hotspot ranking (test maintenance IS real work) but tagged with `[test]` so readers can distinguish them from production code. JSON consumers see an `is_test_path: true` field.
+
+### Ownership-derived JSON actions
+
+When `--ownership` is enabled, the `actions` array on hotspot entries gains up to three additional action types so AI agents can act on ownership signals:
+
+| Action type | When emitted | Suggested follow-up |
+|:------------|:-------------|:--------------------|
+| `low-bus-factor` | `bus_factor == 1` | Add a second reviewer to the file. The `note` names specific candidate reviewers (from `suggested_reviewers`) when they exist, softens for low-commit files, or is omitted to avoid boilerplate. |
+| `unowned-hotspot` | `unowned == true` (CODEOWNERS exists, no rule matches) | Add a CODEOWNERS entry. The action's `suggested_pattern` field offers a sensible default (the deepest directory containing the file, e.g. `/src/api/users/`), and a `heuristic: "directory-deepest"` field discriminates the strategy. |
+| `ownership-drift` | `drift == true` | Update CODEOWNERS to the new top contributor. |
+
+### Email privacy
+
+By default, fallow renders author emails as their local-part (e.g. `alice@example.com` shows as `alice`). GitHub-style noreply prefixes are unwrapped (`12345+alice@users.noreply.github.com` shows as `alice`). Override with `--ownership-emails`:
+
+| Mode | Output | When to use |
+|:-----|:-------|:------------|
+| `handle` (default) | Local-part only | Most projects. Balances readability and privacy. |
+| `hash` | `xxh3:<16hex>` non-cryptographic pseudonym | Regulated environments where author identities are sensitive. |
+| `raw` | Full email address | Public OSS repositories where git history is already exposed. |
+
+The hash mode uses `xxh3` for stable pseudonyms across runs but is **not** a cryptographic primitive: a known list of org emails can be brute-forced into a rainbow table. The intent is to keep raw PII out of CI artifacts (SARIF, code-scanning uploads), not to provide strong privacy.
+
+### Configuration
+
+Configure ownership defaults under `health.ownership`:
+
+```json
+{
+  "health": {
+    "ownership": {
+      "botPatterns": ["custom-svc-*", "*\\[bot\\]*"],
+      "emailMode": "handle"
+    }
+  }
+}
+```
+
+`botPatterns` are glob patterns matched against the raw author email. The default list covers `*\[bot\]*` (escaped brackets, since globset treats `[abc]` as a character class), `dependabot*`, `renovate*`, `github-actions*`, `svc-*`, and `*-service-account*`. `*noreply*` is intentionally NOT a default: most human GitHub contributors commit from `<id>+<handle>@users.noreply.github.com` (GitHub's privacy default), so filtering on `noreply` would silently exclude the majority of real authors. The actual bot accounts already match via `\[bot\]`.
+
+<Note>
+  Ownership signals are computed only when `--hotspots` runs and a file passes the `min_commits` threshold (default 3). This gates the analysis on enough history to be meaningful. Squash-merged commits inflate single-author dominance, and shallow clones distort the picture further; fallow warns about both when `--ownership` is active.
+</Note>
 
 ## Vital signs
 
