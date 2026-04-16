@@ -1,0 +1,97 @@
+---
+title: "Production coverage"
+description: "Merge runtime coverage into fallow health to see which functions actually execute in production-like traffic, which stay cold, and which hot paths changed."
+keywords: ["production coverage", "runtime coverage", "cold code", "hot paths", "v8 coverage", "istanbul", "fallow-cov", "license"]
+icon: "chart-network"
+---
+
+Production coverage adds a runtime layer on top of `fallow health`. Static analysis can tell you which exports have no references and which files are not test-reachable. Production coverage answers a different question: which functions actually executed when your deployed app handled real traffic.
+
+```bash
+fallow license activate --trial --email you@company.com
+fallow coverage setup
+fallow health --production-coverage ./coverage
+```
+
+## What it tells you
+
+When production coverage is enabled, fallow merges runtime evidence into the existing health report and classifies functions as:
+
+| State | Meaning |
+|:------|:--------|
+| `called` | The function executed at least once in the provided coverage input. |
+| `never-called` | The function was tracked statically but had zero observed invocations. |
+| `coverage-unavailable` | Fallow could not map runtime coverage back to that function with enough confidence. |
+| `unknown` | The sidecar returned an unresolved state. Rare; usually indicates incomplete or mixed inputs. |
+
+Fallow also surfaces:
+
+| Output | Meaning |
+|:-------|:--------|
+| `verdict` | Overall status for the analyzed coverage input: `clean`, `cold-code-detected`, `hot-path-changes-needed`, `license-expired-grace`, or `unknown`. |
+| `findings` | Cold or unresolved functions that need follow-up. |
+| `hot_paths` | The busiest runtime functions by invocation count. |
+| `watermark` | Trial/license grace marker applied when paid-feature access is in warning mode. |
+| `warnings` | Non-fatal merge diagnostics, for example partial source-map remapping. |
+
+## Static coverage vs runtime coverage
+
+These three surfaces live side by side inside `fallow health`, but they answer different questions:
+
+| Surface | Flag | Input | Answers | Paid |
+|:--------|:-----|:------|:--------|:-----|
+| Static reachability gaps | `--coverage-gaps` | none | Which runtime files and exports have no transitive test path? | no |
+| Exact CRAP scoring | `--coverage` | Istanbul JSON | How covered is each function for CRAP calculation? | no |
+| Runtime production coverage | `--production-coverage` | V8 directory, V8 JSON file, or Istanbul JSON | Which functions actually ran, which stayed cold, and which hot paths changed? | yes |
+
+Use `--coverage-gaps` when you want to find untested code. Use `--coverage` when you want better CRAP scores. Use `--production-coverage` when you want runtime evidence about real execution paths.
+
+## Accepted input
+
+`fallow health --production-coverage <path>` accepts:
+
+| Input | Example |
+|:------|:--------|
+| V8 dump directory | `./coverage` created with `NODE_V8_COVERAGE=./coverage` |
+| Single V8 JSON file | `./coverage/12345.json` |
+| Single Istanbul coverage map JSON file | `./coverage/coverage-final.json` |
+
+If a V8 dump includes Node's `source-map-cache`, fallow remaps supported source-map URLs before analysis, including file paths, relative paths, `webpack://...`, and `vite://...`. Unsupported virtual schemes fall back safely to raw V8 handling instead of failing the whole run.
+
+## First-run workflow
+
+The intended first-run path is:
+
+1. Start a trial or activate a license with [`fallow license`](/cli/license).
+2. Run [`fallow coverage setup`](/cli/coverage).
+3. Follow the generated recipe in `docs/collect-coverage.md`.
+4. Re-run `fallow coverage setup` or `fallow health --production-coverage <path>` once coverage exists.
+
+`fallow coverage setup` is resumable. It checks license state, installs or locates `fallow-cov`, writes a framework-specific collection recipe, detects an existing coverage artifact when present, and then hands off into `fallow health --production-coverage`.
+
+## Review changed code
+
+Production coverage becomes especially useful during change review:
+
+```bash
+fallow health --changed-since main --production-coverage ./coverage
+```
+
+When changed files touch hot runtime code, fallow can upgrade the overall verdict to `hot-path-changes-needed`. That gives PR review a stronger signal than static complexity alone.
+
+## Trial and watermark behavior
+
+Production coverage is a paid feature with a trial flow. Verification is offline against a compiled-in Ed25519 public key; only `fallow license activate --trial` and `fallow license refresh` require network access.
+
+If a license is expired but still inside the grace window, fallow keeps the analysis available but annotates the output with a watermark. Once the hard-fail window is exceeded, paid features are blocked until the license is refreshed.
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="fallow health" icon="terminal" href="/cli/health">
+    Runtime coverage merges into the standard health report and output formats.
+  </Card>
+  <Card title="License commands" icon="key" href="/cli/license">
+    Start a trial, inspect license status, refresh, or deactivate a local token.
+  </Card>
+</CardGroup>

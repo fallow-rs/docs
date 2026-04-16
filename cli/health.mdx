@@ -1,11 +1,11 @@
 ---
 title: "fallow health"
-description: "CLI reference for fallow health. Analyze function complexity, per-file maintainability, git-churn hotspots, and refactoring targets to find code that needs attention."
-keywords: ["fallow health", "complexity", "cyclomatic", "cognitive", "CLI", "code health", "refactoring", "maintainability", "file scores", "hotspots", "churn", "git history", "refactoring targets"]
+description: "CLI reference for fallow health. Analyze function complexity, per-file maintainability, git-churn hotspots, refactoring targets, static coverage gaps, and runtime production coverage."
+keywords: ["fallow health", "complexity", "cyclomatic", "cognitive", "CLI", "code health", "refactoring", "maintainability", "file scores", "hotspots", "churn", "git history", "refactoring targets", "coverage gaps", "production coverage", "fallow-cov"]
 icon: "terminal"
 ---
 
-Analyze function complexity and file-level health across your codebase. By default, fallow reports all sections: health score, complexity findings, file health scores, hotspot analysis, and refactoring targets. Use `--complexity`, `--file-scores`, `--hotspots`, `--targets`, or `--score` to select individual sections.
+Analyze function complexity and file-level health across your codebase. By default, fallow reports all standard health sections: health score, complexity findings, file health scores, hotspot analysis, and refactoring targets. Coverage layers are opt-in: static reachability via `--coverage-gaps`, exact CRAP scoring via `--coverage`, and runtime production evidence via `--production-coverage`.
 
 <Tip>
   All sections are enabled by default, including the health score. Use section flags to select individual sections. Add `--top N` to limit results.
@@ -37,7 +37,7 @@ fallow health
 
 ### Section selection
 
-By default, all three sections are included. Use these flags to select individual sections:
+By default, all standard sections are included. Use these flags to select individual sections:
 
 | Flag | Description |
 |:-----|:------------|
@@ -49,6 +49,8 @@ By default, all three sections are included. Use these flags to select individua
 | `--coverage-gaps` | Show runtime files and exports that no test dependency path reaches. Opt-in (default off). Configure severity via the `coverage-gaps` rule. |
 | `--coverage <PATH>` | Path to Istanbul-format coverage data (`coverage-final.json`) for accurate per-function CRAP scores. Produced by Jest, Vitest, c8, nyc. When provided, uses the canonical formula `CC^2 * (1-cov/100)^3 + CC` instead of the static binary model. |
 | `--coverage-root <PATH>` | Rebase file paths in coverage data by stripping this prefix and prepending the project root. Use when coverage was generated in a different environment (CI runner, Docker). |
+| `--production-coverage <PATH>` | Merge runtime production coverage into the health report. Accepts a V8 coverage directory, a single V8 JSON file, or a single Istanbul coverage map JSON file. This is a paid feature and requires a valid license or trial. |
+| `--min-invocations-hot <N>` | Threshold for hot-path classification when `--production-coverage` is active (default: `100`). |
 
 Multiple section flags can be combined (e.g., `--complexity --hotspots`). Without any section flags, all sections are included.
 
@@ -1064,6 +1066,66 @@ The `files` array lists runtime files where no export is reached by any test dep
 <Note>
   Without `--coverage-gaps`, the `coverage_gaps` object is omitted entirely from the JSON output. The flag is opt-in and the `coverage-gaps` rule defaults to `off`.
 </Note>
+
+### With production coverage
+
+When `--production-coverage` is used, the JSON output includes a `production_coverage` object that merges runtime evidence into the standard health report.
+
+```json title="$ fallow health --production-coverage ./coverage --format json"
+{
+  "schema_version": 3,
+  "version": "2.38.0",
+  "elapsed_ms": 412,
+  "production_coverage": {
+    "verdict": "cold-code-detected",
+    "summary": {
+      "functions_total": 128,
+      "functions_called": 93,
+      "functions_never_called": 21,
+      "functions_coverage_unavailable": 14,
+      "percent_dead_in_production": 16.4
+    },
+    "findings": [
+      {
+        "path": "src/server/featureFlags.ts",
+        "function": "staleGate",
+        "line": 44,
+        "state": "never-called",
+        "invocations": 0,
+        "confidence": "high",
+        "actions": [
+          {
+            "type": "remove-dead-code",
+            "description": "Tracked in production coverage with zero invocations.",
+            "auto_fixable": false
+          }
+        ]
+      }
+    ],
+    "hot_paths": [
+      {
+        "path": "src/server/router.ts",
+        "function": "handleRequest",
+        "line": 42,
+        "invocations": 1842
+      }
+    ]
+  }
+}
+```
+
+Key points:
+
+| Field | Meaning |
+|:------|:--------|
+| `verdict` | Overall runtime verdict: `clean`, `cold-code-detected`, `hot-path-changes-needed`, `license-expired-grace`, or `unknown`. |
+| `summary` | Aggregate counts of tracked, called, cold, and unresolved functions. |
+| `findings` | Cold or unresolved functions. The `state` field is one of `called`, `never-called`, `coverage-unavailable`, or `unknown`. |
+| `hot_paths` | Highest-invocation runtime functions, filtered by `--min-invocations-hot`. |
+| `watermark` | Present only when trial/license grace rules require visible annotation in the output. |
+| `warnings` | Non-fatal coverage merge diagnostics. |
+
+`--production-coverage` accepts a V8 directory, a single V8 JSON file, or a single Istanbul coverage map JSON file. For the intended first-run flow, start with [`fallow license`](/cli/license), then run [`fallow coverage setup`](/cli/coverage). For the conceptual model and trade-offs, see [Production coverage](/analysis/production-coverage).
 
 ## Markdown output
 
