@@ -1,0 +1,128 @@
+---
+title: "fallow license"
+description: "CLI reference for fallow license. Activate a trial or JWT, inspect status, refresh a license, or deactivate the local token for paid production coverage."
+keywords: ["fallow license", "trial", "license activate", "license refresh", "production coverage", "JWT", "CLI"]
+icon: "key"
+---
+
+Manage the local license used for paid production-coverage features.
+
+```bash
+fallow license status
+```
+
+Verification is offline against an Ed25519 public key compiled into the binary. Only the trial and refresh flows make network requests to `api.fallow.cloud`.
+
+## Subcommands
+
+### `activate`
+
+Activate a local JWT or start a 30-day email-gated trial.
+
+```bash
+fallow license activate --trial --email you@company.com
+fallow license activate eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9...
+fallow license activate --from-file ./license.jwt
+cat ./license.jwt | fallow license activate --stdin
+```
+
+JWT input precedence is:
+
+1. positional JWT argument
+2. `--from-file <path>`
+3. `--stdin`
+
+Whitespace is normalized before verification, so copied multiline tokens still work.
+
+#### Flags
+
+| Flag | Description |
+|:-----|:------------|
+| `--trial` | Start a 30-day email-gated trial instead of reading a JWT locally. Requires `--email`. Rate-limited to **5 requests per hour per IP**; in CI or behind a shared NAT, start the trial from a developer machine and set `FALLOW_LICENSE` on the runner. |
+| `--email <ADDR>` | Email address for the trial flow. On success, fallow also prints the server-reported `trialEndsAt` ISO timestamp so you do not need to decode the JWT. |
+| `--from-file <PATH>` | Read a JWT from a file. |
+| `--stdin` | Read a JWT from standard input. |
+
+### `status`
+
+Print the current license status, tier, seats, enabled features, and expiry state.
+
+```bash
+fallow license status
+```
+
+Example output:
+
+```text
+license: VALID, tier=trial seats=1 features=production_coverage days_until_expiry=29
+  → production_coverage: ENABLED
+```
+
+If the token is expired but still in the grace window, fallow reports that explicitly and tells you to refresh it. If no token is present, the command suggests starting a trial.
+
+If the JWT includes a `refresh_after` claim (issued at `iat + 15 days` by `api.fallow.cloud`) and that timestamp has already passed, `status` appends a one-line refresh hint. This is a proactive nudge while the license is still valid, not an error.
+
+### `refresh`
+
+Fetch a fresh JWT for the currently active license.
+
+```bash
+fallow license refresh
+```
+
+This is the preferred way to renew a token before the hard-fail window is reached.
+
+### `deactivate`
+
+Remove the local license file.
+
+```bash
+fallow license deactivate
+```
+
+## Storage and precedence
+
+By default, the local token is stored at `~/.fallow/license.jwt`. On Unix, fallow writes the file with mode `0600` (owner read/write only) so other users on the same host cannot read the bearer token. Windows relies on the ACL of the containing directory.
+
+Lookup precedence is:
+
+1. `FALLOW_LICENSE`
+2. `FALLOW_LICENSE_PATH`
+3. `~/.fallow/license.jwt`
+
+Use `FALLOW_LICENSE` on shared CI runners where writing to a user home directory is not desirable.
+
+## Exit behavior
+
+Common outcomes:
+
+| Situation | Result |
+|:----------|:-------|
+| Valid license | exit code `0` |
+| No license or hard-fail expired license | non-zero status |
+| Network failure during `--trial` or `refresh` | exit code `7` |
+| Malformed or truncated JWT | non-zero status with a verification error |
+
+### Actionable error messages
+
+When the backend returns a structured error envelope, fallow maps known `code` values to targeted hints instead of printing the raw HTTP body:
+
+| Operation + code | Message |
+|:-----------------|:--------|
+| `refresh` + `token_stale` | `your stored license is too stale to refresh. Reactivate with: fallow license activate --trial --email <addr>` (fires when the stored JWT is more than 45 days past its `exp`) |
+| `refresh` + `invalid_token` | `your stored license token is missing required claims. Reactivate with: fallow license activate --trial --email <addr>` |
+| `refresh` or `trial` + `unauthorized` | `authentication failed. Reactivate with: fallow license activate --trial --email <addr>` |
+| `trial` + `rate_limit_exceeded` | `trial creation is rate-limited to 5 per hour per IP. Wait an hour or retry from a different network (in CI, start the trial locally and set FALLOW_LICENSE on the runner).` |
+
+For unknown codes, fallow surfaces the backend's `message` field if present, otherwise the raw body.
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="Production coverage" icon="chart-network" href="/analysis/production-coverage">
+    Understand what the paid runtime-coverage layer adds on top of health analysis.
+  </Card>
+  <Card title="Coverage setup" icon="wand-magic-sparkles" href="/cli/coverage">
+    Guided first-run workflow that bootstraps the sidecar and writes a collection recipe.
+  </Card>
+</CardGroup>
