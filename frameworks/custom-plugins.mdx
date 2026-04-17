@@ -53,7 +53,7 @@ Start with JSONC format for `$schema` support and IDE autocomplete.
     | `toolingDependencies` | string[] | Packages used via CLI, not imports |
     | `detection` | object | Rich activation logic (see below) |
     | `usedExports` | object[] | Exports always considered used |
-    | `usedClassMembers` | string[] | Class method/property names the framework invokes at runtime |
+    | `usedClassMembers` | (string \| object)[] | Class method/property names the framework invokes at runtime; scoped objects `{ extends?, implements?, members }` match only classes with matching heritage |
   </Step>
   <Step title="Verify the plugin">
     Confirm fallow picks up your plugin:
@@ -132,13 +132,20 @@ Mark specific exports as always-used for convention-based frameworks. These are 
 
 Mark class method or property names that the framework invokes at runtime via an interface or contract pattern. Listed names extend fallow's built-in Angular and React lifecycle allowlist, so members implementing these contracts are never flagged as unused class members.
 
+Each entry is either a plain member name (global suppression) or a scoped object that only matches classes whose heritage clause includes the configured `extends` or `implements` identifier:
+
 ```jsonc
 {
   "name": "ag-grid",
   "enablers": ["ag-grid-angular"],
-  "usedClassMembers": ["agInit", "refresh"]
+  "usedClassMembers": [
+    "agInit",
+    { "implements": "ICellRendererAngularComp", "members": ["refresh"] }
+  ]
 }
 ```
+
+Plain names like `agInit` are unique enough to suppress globally. Common names like `refresh` or `execute` would produce false negatives on unrelated classes, so scope them with `implements` or `extends`. A scoped rule requires at least one of `extends` or `implements`; an unconstrained object rule is rejected at load time.
 
 This is the right tool for libraries that call methods on consumer classes reflectively — ag-Grid's `AgFrameworkComponent<T>`, TypeORM's `MigrationInterface` (`up`, `down`), Web Components (`connectedCallback`, `disconnectedCallback`, `attributeChangedCallback`), or any strategy/plugin pattern where the library invokes your methods rather than your code doing so directly.
 
@@ -191,11 +198,14 @@ Fallow searches for plugin files in this order:
   "$schema": "./plugin-schema.json",
   "name": "ag-grid",
   "enablers": ["ag-grid-angular"],
-  "usedClassMembers": ["agInit", "refresh"]
+  "usedClassMembers": [
+    "agInit",
+    { "implements": "ICellRendererAngularComp", "members": ["refresh"] }
+  ]
 }
 ```
 
-ag-Grid Angular cell renderers implement `ICellRendererAngularComp`, which requires `agInit(params)` and `refresh(params)` methods that ag-Grid calls at runtime. Without this allowlist, fallow flags both as unused class members.
+ag-Grid Angular cell renderers implement `ICellRendererAngularComp`, which requires `agInit(params)` and `refresh(params)` methods that ag-Grid calls at runtime. `agInit` is unique to ag-Grid so it stays global. `refresh` is a common method name, so scoping it to classes that `implements ICellRendererAngularComp` keeps suppression off unrelated `refresh()` methods elsewhere in the codebase.
 
 ### Internal tooling
 
