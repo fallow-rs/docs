@@ -51,6 +51,8 @@ By default, all standard sections are included. Use these flags to select indivi
 | `--coverage-root <PATH>` | Rebase file paths in coverage data by stripping this prefix and prepending the project root. Use when coverage was generated in a different environment (CI runner, Docker). |
 | `--production-coverage <PATH>` | Merge runtime production coverage into the health report. Accepts a V8 coverage directory, a single V8 JSON file, or a single Istanbul coverage map JSON file. This is a paid feature and requires a valid license or trial. |
 | `--min-invocations-hot <N>` | Threshold for hot-path classification when `--production-coverage` is active (default: `100`). |
+| `--min-observation-volume <N>` | Minimum total trace volume before the sidecar may emit high-confidence `safe_to_delete` / `review_required` verdicts. Below this, confidence is capped at `medium` (default: `5000`). |
+| `--low-traffic-threshold <RATIO>` | Fraction of total trace count below which an invoked function is classified `low_traffic` rather than `active` (default: `0.001` = 0.1%). |
 
 Multiple section flags can be combined (e.g., `--complexity --hotspots`). Without any section flags, all sections are included.
 
@@ -310,7 +312,7 @@ The `--save-snapshot` flag forces file-scores and hotspot computation so that al
 ```json title="snapshot.json"
 {
   "snapshot_schema_version": 5,
-  "version": "2.38.0",
+  "version": "2.39.0",
   "timestamp": "2026-03-25T14:30:00Z",
   "git_sha": "a1b2c3d",
   "git_branch": "main",
@@ -576,7 +578,7 @@ fallow health --coverage-gaps --file-scores
 ```json title="$ fallow health --format json --top 2"
 {
   "schema_version": 3,
-  "version": "2.38.0",
+  "version": "2.39.0",
   "elapsed_ms": 140,
   "summary": {
     "files_analyzed": 252,
@@ -607,7 +609,7 @@ When `--file-scores` is used, the JSON output includes additional fields:
 ```json title="$ fallow health --file-scores --format json --top 2"
 {
   "schema_version": 3,
-  "version": "2.38.0",
+  "version": "2.39.0",
   "elapsed_ms": 320,
   "summary": {
     "files_analyzed": 252,
@@ -661,7 +663,7 @@ When `--hotspots` is used, the JSON output includes a `hotspots` array and `hots
 ```json title="$ fallow health --hotspots --format json --top 2"
 {
   "schema_version": 3,
-  "version": "2.38.0",
+  "version": "2.39.0",
   "elapsed_ms": 480,
   "summary": {
     "files_analyzed": 252,
@@ -727,7 +729,7 @@ When `--targets` is used, the JSON output includes a `targets` array:
 ```json title="$ fallow health --targets --format json --top 2"
 {
   "schema_version": 3,
-  "version": "2.38.0",
+  "version": "2.39.0",
   "elapsed_ms": 520,
   "summary": {
     "files_analyzed": 252,
@@ -809,7 +811,7 @@ When file-scores are enabled (via `--file-scores` or implicitly via `--save-snap
 ```json title="$ fallow health --file-scores --format json (vital_signs excerpt)"
 {
   "schema_version": 3,
-  "version": "2.38.0",
+  "version": "2.39.0",
   "vital_signs": {
     "dead_file_pct": 4.2,
     "dead_export_pct": 12.8,
@@ -1029,7 +1031,7 @@ coverage-gaps = "warn"
 ```json title="$ fallow health --coverage-gaps --format json"
 {
   "schema_version": 3,
-  "version": "2.38.0",
+  "version": "2.39.0",
   "elapsed_ms": 280,
   "coverage_gaps": {
     "summary": {
@@ -1073,26 +1075,37 @@ When `--production-coverage` is used, the JSON output includes a `production_cov
 
 ```json title="$ fallow health --production-coverage ./coverage --format json"
 {
-  "schema_version": 3,
-  "version": "2.38.0",
+  "schema_version": 4,
+  "version": "2.39.0",
   "elapsed_ms": 412,
   "production_coverage": {
     "verdict": "cold-code-detected",
     "summary": {
-      "functions_total": 128,
-      "functions_called": 93,
-      "functions_never_called": 21,
-      "functions_coverage_unavailable": 14,
-      "percent_dead_in_production": 16.4
+      "functions_tracked": 128,
+      "functions_hit": 93,
+      "functions_unhit": 21,
+      "functions_untracked": 14,
+      "coverage_percent": 72.7,
+      "trace_count": 284729,
+      "period_days": 7,
+      "deployments_seen": 3
     },
     "findings": [
       {
+        "id": "fallow:prod:a7f3b2c1",
         "path": "src/server/featureFlags.ts",
         "function": "staleGate",
         "line": 44,
-        "state": "never-called",
+        "verdict": "review_required",
         "invocations": 0,
-        "confidence": "high",
+        "confidence": "medium",
+        "evidence": {
+          "static_status": "used",
+          "test_coverage": "not_covered",
+          "v8_tracking": "tracked",
+          "observation_days": 7,
+          "deployments_observed": 3
+        },
         "actions": [
           {
             "type": "remove-dead-code",
@@ -1104,10 +1117,12 @@ When `--production-coverage` is used, the JSON output includes a `production_cov
     ],
     "hot_paths": [
       {
+        "id": "fallow:hot:c9f5d4e3",
         "path": "src/server/router.ts",
         "function": "handleRequest",
         "line": 42,
-        "invocations": 1842
+        "invocations": 1842,
+        "percentile": 99
       }
     ]
   }
@@ -1119,11 +1134,13 @@ Key points:
 | Field | Meaning |
 |:------|:--------|
 | `verdict` | Overall runtime verdict: `clean`, `cold-code-detected`, `hot-path-changes-needed`, `license-expired-grace`, or `unknown`. |
-| `summary` | Aggregate counts of tracked, called, cold, and unresolved functions. |
-| `findings` | Cold or unresolved functions. The `state` field is one of `called`, `never-called`, `coverage-unavailable`, or `unknown`. |
-| `hot_paths` | Highest-invocation runtime functions, filtered by `--min-invocations-hot`. |
+| `summary` | Aggregate counts of tracked, hit, unhit, and untracked functions; the coverage ratio; total trace volume; and the observation window. |
+| `findings` | Cold or unresolved functions. Each finding has a stable `id` (`fallow:prod:<hash>`), `verdict` (`safe_to_delete` / `review_required` / `low_traffic` / `coverage_unavailable` / `active` / `unknown`), and an `evidence` block explaining the verdict. |
+| `hot_paths` | Highest-invocation runtime functions, filtered by `--min-invocations-hot`. Each has a stable `id` (`fallow:hot:<hash>`) and `percentile` rank. |
 | `watermark` | Present only when trial/license grace rules require visible annotation in the output. |
 | `warnings` | Non-fatal coverage merge diagnostics. |
+
+The `schema_version: 4` envelope reflects the production-coverage shape that landed with `fallow-cov-protocol 0.2`. Earlier `schema_version: 3` output used a different finding shape (`state` instead of `verdict`, no stable IDs, renamed summary fields) — see the [v2.39.0 release notes](https://github.com/fallow-rs/fallow/releases/tag/v2.39.0) for the full migration.
 
 `--production-coverage` accepts a V8 directory, a single V8 JSON file, or a single Istanbul coverage map JSON file. For the intended first-run flow, start with [`fallow license`](/cli/license), then run [`fallow coverage setup`](/cli/coverage). For the conceptual model and trade-offs, see [Production coverage](/analysis/production-coverage).
 
@@ -1166,7 +1183,7 @@ fallow health --format sarif
   "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
   "version": "2.1.0",
   "runs": [{
-    "tool": { "driver": { "name": "fallow", "version": "2.38.0" } },
+    "tool": { "driver": { "name": "fallow", "version": "2.39.0" } },
     "results": [
       {
         "ruleId": "fallow/high-cyclomatic-complexity",

@@ -15,24 +15,49 @@ fallow health --production-coverage ./coverage
 
 ## What it tells you
 
-When production coverage is enabled, fallow merges runtime evidence into the existing health report and classifies functions as:
+When production coverage is enabled, fallow merges runtime evidence into the existing health report and assigns each function a **per-finding verdict** combining the static reachability signal with observed production invocations:
 
-| State | Meaning |
-|:------|:--------|
-| `called` | The function executed at least once in the provided coverage input. |
-| `never-called` | The function was tracked statically but had zero observed invocations. |
-| `coverage-unavailable` | Fallow could not map runtime coverage back to that function with enough confidence. |
-| `unknown` | The sidecar returned an unresolved state. Rare; usually indicates incomplete or mixed inputs. |
+| Verdict | Meaning |
+|:--------|:--------|
+| `safe_to_delete` | Statically unused AND V8 tracked AND zero invocations. The strongest delete signal fallow emits. |
+| `review_required` | Statically used but never invoked in production. Needs a human look — could be seasonal, error-path-only, or legitimately dead. |
+| `low_traffic` | Invoked in production, but below the configured `--low-traffic-threshold` ratio of total trace count (spec default 0.1%). Effectively dead for the observed period. |
+| `coverage_unavailable` | V8 could not track the function (lazy-parsed, worker-thread isolate, dynamic `eval`, or the source map did not resolve). Advisory, not a dead-code signal. |
+| `active` | Invoked in production above the low-traffic threshold — not dead. |
+| `unknown` | Forward-compat sentinel returned by newer sidecars. Rare. |
 
 Fallow also surfaces:
 
 | Output | Meaning |
 |:-------|:--------|
-| `verdict` | Overall status for the analyzed coverage input: `clean`, `cold-code-detected`, `hot-path-changes-needed`, `license-expired-grace`, or `unknown`. |
-| `findings` | Cold or unresolved functions that need follow-up. |
-| `hot_paths` | The busiest runtime functions by invocation count. |
+| `verdict` | Overall report status: `clean`, `cold-code-detected`, `hot-path-changes-needed`, `license-expired-grace`, or `unknown`. |
+| `summary` | Aggregate counts (`functions_tracked`, `functions_hit`, `functions_unhit`, `functions_untracked`, `coverage_percent`) plus `trace_count`, `period_days`, `deployments_seen`. |
+| `findings` | Cold or unresolved functions with a stable `id` (`fallow:prod:<hash>`), `line`, per-finding `verdict`, `confidence`, supporting `evidence`, and machine-readable `actions`. |
+| `hot_paths` | The busiest runtime functions with a stable `id`, `line`, `invocations`, and `percentile` rank. |
 | `watermark` | Trial/license grace marker applied when paid-feature access is in warning mode. |
 | `warnings` | Non-fatal merge diagnostics, for example partial source-map remapping. |
+
+Every finding carries an **evidence block** so the "why" behind a verdict is machine-readable without re-deriving it:
+
+```json
+"evidence": {
+  "static_status": "used",
+  "test_coverage": "not_covered",
+  "v8_tracking": "tracked",
+  "untracked_reason": null,
+  "observation_days": 30,
+  "deployments_observed": 14
+}
+```
+
+## Confidence thresholds
+
+Two flags tune how aggressively fallow applies verdicts:
+
+| Flag | Default | Effect |
+|:-----|:--------|:-------|
+| `--min-observation-volume <N>` | 5000 | Minimum total trace volume before the sidecar is allowed to emit high-confidence `safe_to_delete` or `review_required` verdicts. Below this threshold, confidence is capped at `medium` to protect against overconfident verdicts on new or low-traffic services. |
+| `--low-traffic-threshold <RATIO>` | 0.001 | Fraction of `trace_count` below which an invoked function is classified `low_traffic` rather than `active`. Expressed as a decimal (0.001 = 0.1%). |
 
 ## Static coverage vs runtime coverage
 
