@@ -32,7 +32,7 @@ These flags are available on every fallow command (`dead-code`, `check`, `dupes`
 | `--ci` | CI mode: equivalent to `--format sarif --fail-on-issues --quiet` |
 | `--fail-on-issues` | Exit with code 1 if issues are found |
 | `--sarif-file <PATH>` | Write SARIF output to a file (in addition to the primary `--format` output) |
-| `--group-by <MODE>` | Group output by CODEOWNERS ownership (`owner`), first directory component (`directory`), or workspace package (`package`). When active, all output formats partition issues into labeled groups. |
+| `--group-by <MODE>` | Group output by CODEOWNERS ownership (`owner`), first directory component (`directory`), workspace package (`package`), or GitLab CODEOWNERS section (`section`). When active, all output formats partition issues into labeled groups. |
 | `--summary` | Print a one-line summary of issue counts at the end of the run. In JSON format, adds a `summary` counts object to the output. |
 | `--only <check,dupes,health>` | Run only specific analyses when no subcommand is given |
 | `--skip <check,dupes,health>` | Skip specific analyses when no subcommand is given |
@@ -88,6 +88,9 @@ fallow dead-code --group-by directory
 # Group issues by workspace package
 fallow dead-code --group-by package
 
+# Group issues by GitLab CODEOWNERS section
+fallow dead-code --group-by section
+
 # Health score in combined mode
 fallow --score
 
@@ -105,6 +108,7 @@ The `--group-by` flag partitions all issues into labeled groups. This works with
 | `owner` | CODEOWNERS file ownership. Auto-probes `CODEOWNERS`, `.github/CODEOWNERS`, `.gitlab/CODEOWNERS`, `docs/CODEOWNERS`. First owner on multi-owner lines wins. | A CODEOWNERS file (or set `codeowners` in config) |
 | `directory` | First path component (e.g. `src/utils/foo.ts` groups under `src`) | Nothing |
 | `package` | Workspace package name (e.g. `@myorg/ui`). Issues are grouped by the package they belong to. | A monorepo with workspace packages |
+| `section` | GitLab CODEOWNERS `[Section]` header name. Distinct sections stay in distinct groups even when they share a default reviewer, so teams with one shared lead reviewer across many sections get per-section triage instead of one giant bucket. | A GitLab-style CODEOWNERS file with at least one `[Section]` header |
 
 With `--format json`, the output shape changes to a grouped envelope:
 
@@ -118,6 +122,31 @@ With `--format json`, the output shape changes to a grouped envelope:
   ]
 }
 ```
+
+For `--group-by section`, each group also carries an `owners` array with the section's default owners:
+
+```json
+{
+  "grouped_by": "section",
+  "total_issues": 6,
+  "groups": [
+    {
+      "key": "billing",
+      "owners": ["@core-reviewers", "@alice", "@bob"],
+      "total_issues": 2,
+      "unused_exports": []
+    },
+    {
+      "key": "notifications",
+      "owners": ["@core-reviewers", "@alice", "@bob"],
+      "total_issues": 1,
+      "unused_exports": []
+    }
+  ]
+}
+```
+
+Section and owner groups are not interchangeable: `owner` collapses all sections that share a lead reviewer into a single bucket, while `section` preserves the `[Section]` headers as stable group keys across reviewer rotation.
 
 <Tip>
   Set a custom CODEOWNERS path via the `codeowners` field in `.fallowrc.json` if your file isn't in a standard location.
