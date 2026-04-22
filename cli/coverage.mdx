@@ -130,6 +130,7 @@ fallow coverage upload-inventory \
 | `--git-sha <SHA>` | Commit SHA this inventory is keyed to. Max 64 chars; `[A-Za-z0-9._-]` only. |
 | `--allow-dirty` | Silence the warning when the working tree has uncommitted changes. |
 | `--exclude-paths <GLOB>` | Additional globs to skip, applied after the configured fallow ignore rules. Repeatable. |
+| `--path-prefix <PREFIX>` | Prefix prepended to every emitted `filePath` so the static inventory matches the path shape the runtime beacon reports. Required for containerized deployments: the beacon reports V8's absolute path inside the container (e.g. `/app/src/foo.ts`) while the walker emits repo-relative paths (`src/foo.ts`) by default. Must start with `/` and use POSIX separators. Common values: `/app` (typical Dockerfile), `/workspace` (Buildpacks / Cloud Run), `/usr/src/app` (older Node images), `/var/task` (Lambda), `/home/runner/work/<repo>/<repo>` (GitHub Actions). |
 | `--dry-run` | Print what would be uploaded and exit. No network call. |
 | `--ignore-upload-errors` | Treat upload failures as warnings (exit 0). Validation errors still fail hard. |
 
@@ -142,6 +143,28 @@ Inventory entries use names that match `oxc-coverage-instrument` byte-for-byte s
 3. `(anonymous_N)` where `N` is a file-scoped monotonic counter.
 
 TypeScript declaration files (`*.d.ts`, `*.d.mts`, `*.d.cts`, `*.d.tsx`) and overload signatures with no body are intentionally skipped: they have no runtime footprint, so including them would pollute the dashboard with permanently `untracked` entries.
+
+### Path prefix (containerized deployments)
+
+The runtime beacon reports V8's `filePath` as it sees it at runtime. In a container, that is the path inside the image (e.g. `/app/src/foo.ts` when the Dockerfile sets `WORKDIR /app`). The static inventory walker, running in CI against the checkout, emits repo-relative paths (`src/foo.ts`) by default. The server joins runtime and inventory on the exact `(filePath, functionName)` pair; if the two sides don't share a prefix shape, the Untracked filter never lights up and the dashboard surfaces a `mismatched` state.
+
+The fix: pass `--path-prefix` matching your deployed `WORKDIR`:
+
+```bash
+fallow coverage upload-inventory --path-prefix /app
+```
+
+Common values by deployment target:
+
+| Target | Prefix |
+|:-------|:-------|
+| Docker image with `WORKDIR /app` (most Node services) | `/app` |
+| Cloud Run / Buildpacks | `/workspace` |
+| Older official Node images | `/usr/src/app` |
+| AWS Lambda | `/var/task` |
+| GitHub Actions default checkout | `/home/runner/work/<repo>/<repo>` |
+
+After upload, the server samples up to 100 recent runtime rows and reports the overlap with the inventory. The CLI prints a yellow warning if overlap < 50% with an example mismatch, and the dashboard renders a configuration-needed state on the repo detail page until the prefix is corrected.
 
 ### Exit codes
 
