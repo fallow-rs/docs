@@ -92,29 +92,58 @@ Once installed, agents know how to respond to natural language requests like the
 
 ## Workflow recipe: adopt Fallow in an existing repo
 
-When the goal is to bring an existing codebase to a clean Fallow policy (not just audit a single PR), point the agent at the structured [adoption guide](/adoption) and use this prompt. The full version with context, reasoning, and decision tree lives on the adoption page; this shorter prompt is the one to paste into an agent.
+When the goal is to bring an existing codebase to a clean Fallow policy (not just audit a single PR), fallow's approach is to hand the cleanup work to the agent: fallow finds the problems, the agent fixes them in code.
 
-````text
+Three ways to run this, pick whichever your agent supports:
+
+1. **Install the skill** (best). `fallow-skills` ships the full adoption workflow offline. No URL fetches, no network required. Installation is one line per agent, above.
+2. **Add the MCP server.** Combine with the skill or use standalone. The agent gets `audit`, `dead_code`, `dupes`, and `health` as structured tools with `_meta` explanations on every finding. See [MCP](/integrations/mcp).
+3. **Paste the prompt below.** Self-contained fallback for agents without skill or MCP support, or for sandboxed agents that cannot fetch URLs.
+
+<Accordion title="Copy-paste adoption prompt (self-contained)">
+```text
 Adopt Fallow in this repository.
 
-Read https://docs.fallow.tools/adoption and follow it end to end.
+Goal:
+- use full-repo analysis first (`fallow`, `fallow dead-code`, `fallow dupes`, `fallow health`), not `fallow audit`
+- fix real dead code, duplication, and complexity issues in code
+- model intentional exceptions with the narrowest correct mechanism
+- end with no functions above the repo's chosen health thresholds, or a consciously widened threshold with written justification
+- then set up `fallow audit` as a PR gate
 
-Constraints:
-- Use full-repo analysis first (`fallow`, `fallow dead-code`, `fallow dupes`, `fallow health`), not `fallow audit`.
-- Fix real issues before suppressing anything.
-- Match each intentional exception to the narrowest correct mechanism:
-  visibility tags, `publicPackages`, `entry`, `dynamicallyLoaded`, `ignorePatterns`,
-  `ignoreDependencies`, `@expected-unused`, or a `rules`/`health` policy change.
-- Only fall back to inline `fallow-ignore-*` comments for true one-offs.
-- Turn on `fallow audit` as a PR gate only after the repo is clean.
+Process:
+1. Run `npx fallow`, then `npx fallow dead-code`, `npx fallow dupes`, and `npx fallow health`. Use `--format json` for structured output.
+2. If no config exists, run `fallow init` and create a minimal repo policy.
+3. Fix high-confidence issues first:
+   - unresolved imports
+   - unlisted dependencies
+   - unused files (sanity-check with `fallow list --entry-points`)
+   - unused dependencies
+4. For each remaining finding, choose one path:
+   - fix it in code (preferred)
+   - model it in config
+   - add a narrow inline exception only if it is truly one-off
+5. Match reasons to mechanisms:
+   - external API: `@public` / `@internal` / `@beta` / `@alpha` JSDoc tags, or `publicPackages`
+   - runtime or framework entry point: `entry`, `dynamicallyLoaded`, plugin-aware config
+   - generated code: `ignorePatterns`, `health.ignore`
+   - intentionally retained dependency: `ignoreDependencies`
+   - intentional unused export: `@expected-unused` (preferred over inline comments because it self-cleans)
+   - one-off false positive: `fallow-ignore-next-line`
+   - repo-wide policy: `rules`, `health`, duplication settings, `overrides`
+6. Prefer config-level modeling over repeated suppression.
+7. Keep every exception narrow and explain why it exists in a commit message.
+8. Re-run Fallow after each batch until the repo is clean under the chosen policy.
+9. Only after repo cleanup, run `npx fallow audit` and wire it into CI.
 
-Report at the end: code changes, config changes, exceptions added (with reasons),
-anything left, and the final commands that demonstrate the repo is clean.
-````
-
-<Tip>
-  The MCP server exposes `audit`, `dead_code`, `dupes`, and `health` as structured tools. Combine the adoption skill with [MCP](/integrations/mcp) so the agent gets JSON output with `_meta` explanations for every finding.
-</Tip>
+At the end, report:
+- code changes
+- config changes
+- exceptions added and why
+- anything left
+- the final commands and outputs that show the repo is clean
+```
+</Accordion>
 
 ## Skills vs MCP vs CLI
 

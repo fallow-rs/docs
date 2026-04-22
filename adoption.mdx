@@ -1,7 +1,7 @@
 ---
 title: "Adopt Fallow in an existing repo"
-description: "Bring an existing TypeScript or JavaScript codebase to a clean Fallow policy, then keep new changes clean with fallow audit."
-keywords: ["adoption", "existing codebase", "brownfield", "migration", "fallow audit", "baselines", "policy", "cleanup", "rollout"]
+description: "Bring an existing TypeScript or JavaScript codebase to a clean Fallow policy, then keep new changes clean with fallow audit. Drive the cleanup with an AI agent."
+keywords: ["adoption", "existing codebase", "brownfield", "migration", "fallow audit", "baselines", "policy", "cleanup", "rollout", "agent-driven cleanup"]
 icon: "rocket"
 ---
 
@@ -10,9 +10,9 @@ This guide is for repositories that already have backlog: unused code, duplicate
 By the end of this guide you will have:
 
 - a repo-level Fallow policy encoded in config
-- dead code findings either fixed or intentionally modeled
+- dead code fixed or intentionally modeled
 - duplication at or below your chosen threshold
-- zero functions above your chosen health thresholds
+- complex functions refactored or consciously widened with a written justification
 - `fallow audit` enforcing the same policy on changed files
 
 ## Repo clean vs PR clean
@@ -22,7 +22,7 @@ These are different goals. Both matter. Do them in order.
 <CardGroup cols={2}>
   <Card title="Repo clean (this guide)" icon="broom">
     Full-repo analysis to understand and clean the whole codebase.
-    Use `fallow`, `fallow dead-code`, `fallow dupes`, `fallow health`, and `fallow fix --dry-run`.
+    Use `fallow`, `fallow dead-code`, `fallow dupes`, and `fallow health`.
   </Card>
   <Card title="PR clean" icon="shield-check" href="/cli/audit">
     Changed-files gate that enforces the policy on every PR.
@@ -32,6 +32,17 @@ These are different goals. Both matter. Do them in order.
 
 Start with repo clean. Then turn on PR clean.
 
+## Before you start
+
+<CardGroup cols={2}>
+  <Card title="Coming from knip?" icon="right-left" href="/migration/from-knip">
+    Run `fallow migrate` first to port your knip config, then follow this guide.
+  </Card>
+  <Card title="Large monorepo?" icon="folder-tree" href="/configuration/workspaces">
+    Apply this flow per workspace package. Use `fallow --workspace <name>` and a shared root config.
+  </Card>
+</CardGroup>
+
 ## 1. First run: get the whole picture
 
 From your project root:
@@ -40,13 +51,12 @@ From your project root:
 npx fallow
 ```
 
-Then run the focused commands you will use during cleanup:
+Then the focused commands you will use during cleanup:
 
 ```bash
 npx fallow dead-code          # Cleanup candidates
 npx fallow dupes              # Repeated logic
 npx fallow health             # Complexity and refactor targets
-npx fallow fix --dry-run      # Preview automatic cleanup
 ```
 
 If you do not yet have a config file:
@@ -60,6 +70,10 @@ fallow init
 ## 2. Decide the project policy before triage
 
 Do not start by suppressing findings one by one. That path turns into an ever-growing list of inline exceptions and no coherent policy.
+
+<Info>
+  Not the policy owner? Run section 3 first on a branch, then bring the findings into the policy discussion. Fallow output is a good forcing function for the "what do we actually care about" conversation.
+</Info>
 
 First decide, as a team:
 
@@ -77,24 +91,17 @@ A reasonable starting point:
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
   "ignorePatterns": ["**/*.generated.ts", "**/*.d.ts"],
   "rules": {
-    "unused-files": "warn",
-    "unused-exports": "warn",
-    "unused-types": "warn",
-    "unused-dependencies": "warn",
-    "unused-dev-dependencies": "warn",
     "unresolved-imports": "error",
     "unlisted-dependencies": "error",
-    "stale-suppressions": "warn"
-  },
-  "health": {
-    "maxCyclomatic": 20,
-    "maxCognitive": 15
+    "unused-exports": "warn"
   }
 }
 ```
 
+Rules you do not list inherit their defaults. Health thresholds default to `maxCyclomatic: 20` and `maxCognitive: 15`; override in a `health` block only when your repo's realistic baseline differs.
+
 <Tip>
-  Use `warn` during rollout when you need visibility without blocking CI. Promote rules to `error` as the backlog shrinks. See the [rules reference](/configuration/rules) for all severity options.
+  Use `warn` during rollout when you need visibility without blocking CI. Promote rules to `error` as the backlog shrinks. See the [rules reference](/configuration/rules) for every issue type and severity.
 </Tip>
 
 ## 3. Work findings in the right order
@@ -112,11 +119,11 @@ Use this order for most existing repos. Each step removes noise that would other
   </Step>
 
   <Step title="Delete unused files">
-    Unreachable files are usually safe cleanup. Use `fallow list entries` to sanity-check reachability before deleting anything you are unsure about.
+    Unreachable files are usually safe cleanup. Use `fallow list --entry-points` to sanity-check reachability before deleting anything you are unsure about.
 
     ```bash
     npx fallow dead-code --unused-files
-    npx fallow list entries
+    npx fallow list --entry-points
     ```
   </Step>
 
@@ -129,12 +136,13 @@ Use this order for most existing repos. Each step removes noise that would other
   </Step>
 
   <Step title="Clean up unused exports, types, enum members, and class members">
-    Usually the biggest category. Fix real dead code. Model intentional API surface with visibility tags or config instead of suppressing it.
+    Usually the biggest category. Fix real dead code. Model intentional API surface with visibility tags or config instead of suppressing it. Hand this step to an agent using the [prompt in section 8](#8-clean-up-with-an-agent): the findings are mechanical but the decisions (delete vs. mark `@public` vs. add to `entry`) benefit from code-aware judgement.
 
     ```bash
     npx fallow dead-code --unused-exports --unused-types
-    npx fallow fix --dry-run
     ```
+
+    The same command reports unused enum members and class members alongside exports and types.
   </Step>
 
   <Step title="Consolidate duplication">
@@ -147,7 +155,7 @@ Use this order for most existing repos. Each step removes noise that would other
   </Step>
 
   <Step title="Split health hotspots">
-    Use `hotspots` and `targets` to prioritize the worst offenders. Do not bike-shed every file above the mean.
+    `fallow health` output includes Hotspots and Targets sections that rank the worst offenders. Use those to prioritize. Do not bike-shed every file above the mean.
 
     ```bash
     npx fallow health
@@ -157,7 +165,7 @@ Use this order for most existing repos. Each step removes noise that would other
 
 ## 4. Match the reason to the right mechanism
 
-Do not default to inline suppression. Pick the mechanism that matches the reason. Each row is a reason; the right column is the mechanism Fallow provides for it.
+Do not default to inline suppression. Pick the mechanism that matches the reason.
 
 ### External or public API
 
@@ -166,19 +174,21 @@ Exports consumed outside the repo (published libraries, SDKs, public packages).
 Prefer, in order:
 
 - `@public`, `@internal`, `@beta`, `@alpha` JSDoc visibility tags on the export
-- [`publicPackages`](/configuration/overview#publicpackages) for packages that publish to a registry
+- [`publicPackages`](/configuration/overview#publicpackages) as the coarse switch for "this whole package is external API"
 - [`ignoreExports`](/configuration/overview#ignoreexports) only when file-level or export-level exceptions cannot be expressed any other way
+
+`publicPackages` and visibility tags are complementary, not alternatives: `publicPackages` marks the package as externally consumed; `@public`/`@internal` tags distinguish public API from internal helpers that happen to be exported for cross-file use.
 
 ### Framework or runtime-discovered entry points
 
-Files that your framework or runtime invokes, but that no other module imports directly (workers, CLI scripts, route files, plugin modules).
+Files your framework or runtime invokes but no other module imports directly (workers, CLI scripts, route files, plugin modules).
 
 Prefer, in order:
 
-- built-in plugin detection (Next.js, Vite, Remotion, and [dozens more](/frameworks/built-in) are handled out of the box)
+- built-in plugin detection (Next.js, Vite, NestJS, Remotion, and [dozens more](/frameworks/built-in) are handled out of the box)
 - [`entry`](/configuration/overview#entry) for project-specific entry globs
 - [`dynamicallyLoaded`](/configuration/overview#dynamicallyloaded) for code pulled in through reflection, manifests, or dynamic imports
-- `fallow list entries` to inspect what Fallow already considers reachable
+- `fallow list --entry-points` to inspect what Fallow already considers reachable
 
 ### Generated or vendored files
 
@@ -200,11 +210,15 @@ Prefer:
 
 ### One-off intentional unused export
 
-An export you want to keep around deliberately (shims, compatibility shims, future API).
+An export you want to keep around deliberately (compatibility shims, future API).
 
 Prefer:
 
-- `/** @expected-unused */` on the export. Unlike `@public`, this tag is tracked for staleness: if the export later becomes imported, Fallow reports the tag as a stale suppression so you can remove it.
+- `/** @expected-unused */` on the export
+
+<Tip>
+  `@expected-unused` is self-cleaning. Unlike inline `fallow-ignore` comments, Fallow tracks the tag for staleness: the moment the export becomes imported, the tag is reported as a stale suppression so you can remove it. No other tool in the TypeScript dead-code ecosystem tracks suppression staleness; use this tag liberally for shims and future API surface.
+</Tip>
 
 ### One-off false positive
 
@@ -243,25 +257,31 @@ Good:
 Bad:
 
 - broad `ignorePatterns` that silently exclude half the repo
-- raising global `health.maxCyclomatic` to avoid fixing a handful of functions
 - repeated inline suppressions that could be one config rule
+- raising global `health.maxCyclomatic` to hide a handful of hotspots (acceptable only when the new threshold reflects a thought-through project standard with written justification)
 
 If you cannot explain an exception in one sentence, it is probably the wrong mechanism.
 
 ## 6. Define done
 
-A repo is adopted when:
+Work in two stages. Most teams ship `fallow audit` at the end of stage 1 and finish stage 2 over the following weeks.
+
+### Stage 1: good enough to ship `fallow audit`
 
 - the chosen policy is encoded in config, not accumulated in scattered suppressions
-- dead code findings are fixed or intentionally modeled
-- duplication is at or below the chosen threshold
-- no functions remain above the chosen health thresholds
-- stale suppressions are gone or consciously accepted
-- `fallow audit` is ready to enforce the same policy on changed files
+- unresolved imports and unlisted dependencies are cleared
+- blatant dead code (unused files, unused dependencies) is removed
+- `fallow audit` runs cleanly on the default branch
+
+### Stage 2: ideal state
+
+- no functions above your chosen health thresholds, either by refactoring or by consciously widening the threshold with written justification
+- duplication at or below the chosen threshold
+- stale suppressions gone or consciously accepted
 
 ## 7. Turn on PR enforcement
 
-Once the repo is clean, add the PR gate:
+Once stage 1 is done, add the PR gate:
 
 ```bash
 npx fallow audit
@@ -269,22 +289,44 @@ npx fallow audit
 
 `fallow audit` runs dead code, duplication, and complexity analysis scoped to changed files, then returns a `pass`, `warn`, or `fail` verdict. See the [`fallow audit` reference](/cli/audit) for flags and CI recipes.
 
-### Gradual rollout with baselines
+### Pick one rollout strategy
 
-If the repo still has pre-existing debt you are not ready to fix today, use per-analysis baselines to ignore old debt on touched files while blocking new debt.
+<Tabs>
+  <Tab title="Option A: warn-everywhere">
+    Best for teams under ~20 developers. CI never blocks; fixes land under social pressure.
 
-```bash
-# Save baselines once on the default branch
-fallow dead-code --save-baseline .fallow/dead-code-baseline.json
-fallow health    --save-baseline .fallow/health-baseline.json
-fallow dupes     --save-baseline .fallow/dupes-baseline.json
+    ```jsonc
+    {
+      "rules": {
+        "unused-exports": "warn",
+        "unused-files": "warn",
+        "unused-dependencies": "warn"
+      }
+    }
+    ```
 
-# Audit only new issues
-fallow audit \
-  --dead-code-baseline .fallow/dead-code-baseline.json \
-  --health-baseline    .fallow/health-baseline.json \
-  --dupes-baseline     .fallow/dupes-baseline.json
-```
+    Risk: warn-only gates become warning-forever gates. Set a calendar reminder to promote rules to `error` after the first clean month.
+  </Tab>
+
+  <Tab title="Option B: error + baselines">
+    Best for larger orgs where warning-only gates are ignored. CI blocks on new issues; pre-existing debt on touched files is baselined.
+
+    ```bash
+    # Save baselines once on the default branch
+    fallow dead-code --save-baseline .fallow/dead-code-baseline.json
+    fallow health    --save-baseline .fallow/health-baseline.json
+    fallow dupes     --save-baseline .fallow/dupes-baseline.json
+
+    # Audit only new issues on PRs
+    fallow audit \
+      --dead-code-baseline .fallow/dead-code-baseline.json \
+      --health-baseline    .fallow/health-baseline.json \
+      --dupes-baseline     .fallow/dupes-baseline.json
+    ```
+
+    Commit the baseline files to the repo so every PR compares against the same snapshot. Regenerate on a schedule (quarterly, or per release) rather than per merge, otherwise teams silently absorb new debt every time CI runs.
+  </Tab>
+</Tabs>
 
 You can also configure baselines in `.fallowrc.json` and run `fallow audit` with no flags:
 
@@ -299,36 +341,50 @@ You can also configure baselines in `.fallowrc.json` and run `fallow audit` with
 ```
 
 <Warning>
-  Baselines are for bootstrapping, not the steady state. Treat the baseline file as a debt ledger you actively pay down, not a permanent opt-out.
+  Baselines are a debt ledger, not a steady state. If the baseline file only grows, the policy is not being enforced.
 </Warning>
 
-## 8. Use this with agents
+## 8. Clean up with an agent
 
-If your coding agent can run shell commands, it can drive this workflow directly. If it supports skills or MCP, use those for better command selection and structured output. See the [agent skills guide](/integrations/agent-skills) and the [MCP integration](/integrations/mcp) for setup.
+Fallow finds the problems. An AI agent (Claude Code, Cursor, Codex, Windsurf, any shell-capable coding assistant) is the right tool to fix them: edits are mechanical but decisions ("delete this export" vs. "mark it `@public`" vs. "add it to `entry`") benefit from code-aware judgement.
 
-### Copy-paste prompt
+Three levels of integration, pick whichever your agent supports:
 
-Use this prompt to drive a full adoption pass with an agent. It mirrors the steps on this page.
+<CardGroup cols={3}>
+  <Card title="Skills (best)" icon="wand-magic-sparkles" href="/integrations/agent-skills">
+    Install `fallow-skills` for Claude Code, Cursor, Windsurf, or any Agent Skills compatible agent. Works offline; the agent gets full workflow knowledge without fetching URLs.
+  </Card>
+  <Card title="MCP" icon="robot" href="/integrations/mcp">
+    Structured tool calling with JSON output and `_meta` explanations. Works alongside skills.
+  </Card>
+  <Card title="Plain shell" icon="terminal">
+    Any agent that can run a shell command can drive Fallow. Use the copy-paste prompt below.
+  </Card>
+</CardGroup>
 
-````text
-Make this repository clean under its chosen Fallow policy.
+<Accordion title="Copy-paste adoption prompt (for agents without skills or MCP)">
+Paste this prompt into your agent. It is self-contained: the agent does not need to fetch this page to follow it.
+
+```text
+Adopt Fallow in this repository.
 
 Goal:
-- use full-repo analysis first, not only changed-file audit
-- fix real dead code, duplication, and complexity issues
+- use full-repo analysis first (`fallow`, `fallow dead-code`, `fallow dupes`, `fallow health`), not `fallow audit`
+- fix real dead code, duplication, and complexity issues in code
 - model intentional exceptions with the narrowest correct mechanism
-- end with no functions above the repo's chosen health thresholds
-- then set up `fallow audit` to keep new changes clean
+- end with no functions above the repo's chosen health thresholds, or a consciously widened threshold with written justification
+- then set up `fallow audit` as a PR gate
 
 Process:
-1. Run `npx fallow`, then `npx fallow dead-code`, `npx fallow dupes`, and `npx fallow health`.
+1. Run `npx fallow`, then `npx fallow dead-code`, `npx fallow dupes`, and `npx fallow health`. Use `--format json` if you want structured output.
 2. If no config exists, run `fallow init` and create a minimal repo policy.
 3. Fix high-confidence issues first:
    - unresolved imports
    - unlisted dependencies
-   - unused files
+   - unused files (sanity-check with `fallow list --entry-points`)
+   - unused dependencies
 4. For each remaining finding, choose one path:
-   - fix it in code
+   - fix it in code (preferred)
    - model it in config
    - add a narrow inline exception only if it is truly one-off
 5. Match reasons to mechanisms:
@@ -336,21 +392,22 @@ Process:
    - runtime or framework entry point: `entry`, `dynamicallyLoaded`, plugin-aware config
    - generated code: `ignorePatterns`, `health.ignore`
    - intentionally retained dependency: `ignoreDependencies`
-   - intentional unused export: `@expected-unused`
+   - intentional unused export: `@expected-unused` (preferred over inline comments because it self-cleans)
    - one-off false positive: `fallow-ignore-next-line`
    - repo-wide policy: `rules`, `health`, duplication settings, `overrides`
 6. Prefer config-level modeling over repeated suppression.
-7. Keep every exception narrow and explain why it exists.
+7. Keep every exception narrow and explain why it exists in a commit message.
 8. Re-run Fallow after each batch until the repo is clean under the chosen policy.
-9. Only after repo cleanup, run `npx fallow audit` and prepare PR gating.
+9. Only after repo cleanup, run `npx fallow audit` and wire it into CI.
 
 At the end, report:
-- what was fixed in code
-- what config was added or changed
-- what exceptions were added and why
-- what still remains, if anything
+- code changes
+- config changes
+- exceptions added and why
+- anything left
 - the final commands and outputs that show the repo is clean
-````
+```
+</Accordion>
 
 ## Next steps
 
@@ -364,7 +421,7 @@ At the end, report:
   <Card title="Suppression" icon="comment-slash" href="/configuration/suppression">
     Visibility tags, inline comments, and when to use each.
   </Card>
-  <Card title="Rules" icon="list-check" href="/configuration/rules">
-    Severity options for every issue type.
+  <Card title="Agent Skills" icon="wand-magic-sparkles" href="/integrations/agent-skills">
+    Install `fallow-skills` for agent-driven adoption.
   </Card>
 </CardGroup>
