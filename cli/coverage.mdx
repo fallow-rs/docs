@@ -1,17 +1,20 @@
 ---
 title: "fallow coverage"
-description: "CLI reference for fallow coverage. Run the resumable setup flow for paid production coverage: license check, sidecar install, recipe generation, and health handoff."
-keywords: ["fallow coverage", "coverage setup", "fallow-cov", "production coverage", "runtime coverage", "CLI"]
+description: "CLI reference for fallow coverage. Run the resumable setup flow and push a static function inventory so the dashboard can surface untracked code."
+keywords: ["fallow coverage", "coverage setup", "upload-inventory", "fallow-cov", "production coverage", "runtime coverage", "CLI"]
 icon: "wand-magic-sparkles"
 ---
 
-`fallow coverage` currently exposes a single workflow command: `setup`.
+`fallow coverage` groups the paid Production Coverage workflow commands:
 
 ```bash
-fallow coverage setup
+fallow coverage setup              # resumable first-run flow
+fallow coverage upload-inventory   # push a static function inventory
 ```
 
-This command is the guided first-run path for paid production coverage. It is intentionally resumable: run it once to bootstrap the workflow, follow the generated recipe, then run it again after traffic has been captured.
+`setup` is the guided first-run path: license check, sidecar install, recipe generation, health handoff. It is intentionally resumable: run it once to bootstrap, follow the generated recipe, then run it again after traffic has been captured.
+
+`upload-inventory` is the CI step that unlocks the `Untracked` filter in the dashboard by pairing the runtime V8/Istanbul data (what actually ran) with the AST view of every function that exists.
 
 ## `setup`
 
@@ -94,6 +97,89 @@ Every sidecar spawn runs an Ed25519 signature check against the compiled-in publ
 
 ```bash
 pnpm add -D @fallow-cli/fallow-cov
+```
+
+## `upload-inventory`
+
+`fallow coverage upload-inventory` walks every JS/TS source in the project and POSTs a static function inventory (one row per declaration, expression, arrow, or method) to fallow cloud. The server computes `inventory − runtime-seen = untracked` for the matching git SHA, which lights up the dashboard's **Untracked** filter.
+
+This is the only fallow subcommand that does network I/O outside of `fallow license`. `check`, `dupes`, and `health` stay offline.
+
+```bash
+fallow coverage upload-inventory \
+  --api-key $FALLOW_API_KEY \
+  --project-id acme/web
+```
+
+### Defaults and inference
+
+| Flag | Default |
+|:-----|:--------|
+| `--api-key` | `$FALLOW_API_KEY` |
+| `--api-endpoint` | `$FALLOW_API_URL` or `https://api.fallow.cloud` |
+| `--project-id` | `$GITHUB_REPOSITORY`, then `$CI_PROJECT_PATH`, then `git remote get-url origin` parsed to `owner/repo` |
+| `--git-sha` | `git rev-parse HEAD` |
+
+### Flags
+
+| Flag | Description |
+|:-----|:------------|
+| `--api-key <KEY>` | Fallow cloud bearer token. |
+| `--api-endpoint <URL>` | Override the base URL. Useful for staging and on-prem deployments. |
+| `--project-id <OWNER/REPO>` | Project identifier, `owner/repo` form. |
+| `--git-sha <SHA>` | Commit SHA this inventory is keyed to. Max 64 chars; `[A-Za-z0-9._-]` only. |
+| `--allow-dirty` | Silence the warning when the working tree has uncommitted changes. |
+| `--exclude-paths <GLOB>` | Additional globs to skip, applied after the configured fallow ignore rules. Repeatable. |
+| `--dry-run` | Print what would be uploaded and exit. No network call. |
+| `--ignore-upload-errors` | Treat upload failures as warnings (exit 0). Validation errors still fail hard. |
+
+### Function naming
+
+Inventory entries use names that match `oxc-coverage-instrument` byte-for-byte so the runtime join succeeds. Precedence:
+
+1. Parent context (method key, variable binding, property key, `export default`).
+2. The function's own `id` (`function foo() {}`, named function expression).
+3. `(anonymous_N)` where `N` is a file-scoped monotonic counter.
+
+TypeScript declaration files (`*.d.ts`, `*.d.mts`, `*.d.cts`, `*.d.tsx`) and overload signatures with no body are intentionally skipped: they have no runtime footprint, so including them would pollute the dashboard with permanently `untracked` entries.
+
+### Exit codes
+
+| Code | Meaning | When it fires |
+|:----:|:--------|:--------------|
+| `0`  | ok | Upload succeeded, or `--dry-run`, or `--ignore-upload-errors` downgraded a transient failure. |
+| `7`  | network | DNS, TLS, connect, or transport failure. |
+| `10` | validation | Missing API key, unresolvable project-id, zero functions in walk. |
+| `11` | payload too large | Inventory exceeds the server's 200,000-function cap. Scope with `--exclude-paths`. |
+| `12` | auth rejected | 401 / 403 from the server. Rotate the token or widen its scope. |
+| `13` | server error | 5xx after retries, or other non-2xx status. |
+
+### Example CI job (GitHub Actions)
+
+```yaml
+- name: Upload function inventory to fallow cloud
+  run: |
+    npx fallow coverage upload-inventory
+  env:
+    FALLOW_API_KEY: ${{ secrets.FALLOW_API_KEY }}
+```
+
+### Dry-run output
+
+```text
+fallow coverage upload-inventory (dry run)
+  project-id:    acme/web
+  git-sha:       a1b2c3d4e5f6...
+  functions:     14,280
+  endpoint:      https://api.fallow.cloud/v1/coverage/acme/web/inventory
+
+first 5 of 14,280 entries:
+  src/index.ts:1   bootstrap
+  src/index.ts:12  (anonymous_1)
+  src/user.ts:3    createUser
+  src/user.ts:18   default
+  src/user.ts:42   (anonymous_5)
+  ... and 14,275 more
 ```
 
 ## See also
