@@ -44,6 +44,20 @@ fallow setup-hooks --user
 
 Project-level installs override the global one when both are present, so you can still opt a specific repo into a stricter or laxer policy.
 
+## Version floor
+
+The installed gate enforces a minimum fallow version via the `FALLOW_GATE_MIN_VERSION` env var (default `2.46.0`). Older binaries miss the uncommitted-changes inclusion fix and can silently pass audits that should fail, so the gate blocks with an upgrade hint when the `fallow` on `PATH` is below the floor. This prevents a stale npm-global or `~/.cargo/bin/fallow` from masquerading as a working gate.
+
+```bash
+# Override (require a newer fallow across your team)
+export FALLOW_GATE_MIN_VERSION=2.48.0
+
+# Disable (only do this if you know why)
+export FALLOW_GATE_MIN_VERSION=
+```
+
+Every block logs the binary path and version that fired it, e.g. `fallow-gate: blocked by fallow 2.48.0 at /usr/local/bin/fallow`, so "which binary ran this?" is answered without re-diagnosis. The header of the installed script also stamps `# Installer version: X.Y.Z` for forensics when the gate disagrees with your current `fallow --version`.
+
 ## Remove it
 
 ```bash
@@ -85,6 +99,8 @@ The uninstall flow is idempotent: running it a second time prints `unchanged` / 
 
 ### 2. Create `.claude/hooks/fallow-gate.sh`
 
+The canonical source of this file lives in the fallow repo at [`crates/cli/src/setup_hooks/fallow-gate.sh`](https://github.com/fallow-rs/fallow/blob/main/crates/cli/src/setup_hooks/fallow-gate.sh). For a hands-off install, prefer `fallow setup-hooks`; the inline listing below is for environments where you cannot run that command. When copied by hand, omit the `# Installer version:` line (it is stamped automatically by `setup-hooks` for forensics).
+
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
@@ -93,6 +109,13 @@ set -euo pipefail
 # Requires bash and jq. On Windows run via git-bash or WSL.
 # Blocks Claude Code git commit and git push when fallow audit returns verdict fail.
 # Runtime errors fail open with a single stderr notice so skips stay visible.
+#
+# Version floor (FALLOW_GATE_MIN_VERSION, default 2.46.0). Older binaries miss
+# the uncommitted-changes inclusion fix (aabb8e1b) and can silently pass
+# audits that should fail. Set the env var to the empty string to disable.
+# Floor comparison uses `sort -V`; GNU and BSD agree on plain semver but
+# diverge on prereleases (BSD sorts `2.48.0-alpha.1` ABOVE `2.48.0`, GNU below).
+# If you set a prerelease floor explicitly, verify the behavior on the target OS.
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "fallow-gate: jq not on PATH, skipping audit." >&2
@@ -108,11 +131,32 @@ fi
 
 if command -v fallow >/dev/null 2>&1; then
   RUNNER=(fallow)
-elif command -v npx >/dev/null 2>&1 && VER="$(npx --no-install fallow --version 2>/dev/null || true)" && [[ "$VER" == fallow* ]]; then
+  BIN_DESC="$(command -v fallow)"
+elif command -v npx >/dev/null 2>&1 && VER_PROBE="$(npx --no-install fallow --version 2>/dev/null || true)" && [[ "$VER_PROBE" == fallow* ]]; then
   RUNNER=(npx --no-install fallow)
+  BIN_DESC="npx --no-install fallow"
 else
   echo "fallow-gate: fallow binary not found (tried PATH and npx --no-install), skipping audit." >&2
   exit 0
+fi
+
+VERSION_RAW="$("${RUNNER[@]}" --version 2>/dev/null || true)"
+VERSION="${VERSION_RAW#fallow }"
+VERSION="${VERSION%% *}"
+
+MIN_VERSION="${FALLOW_GATE_MIN_VERSION-2.46.0}"
+if [ -n "$MIN_VERSION" ] && [ -n "$VERSION" ]; then
+  LOWER="$(printf '%s\n%s\n' "$MIN_VERSION" "$VERSION" | sort -V | head -n1)"
+  if [ "$LOWER" != "$MIN_VERSION" ]; then
+    {
+      echo "fallow-gate: blocked: $BIN_DESC is fallow $VERSION, below required $MIN_VERSION."
+      echo "fallow-gate: older binaries miss the uncommitted-changes fix (v2.46.0) and can"
+      echo "fallow-gate: silently pass audits that would otherwise fail."
+      echo "fallow-gate: upgrade the fallow on PATH (e.g. npm install -g fallow@latest or"
+      echo "fallow-gate: cargo install fallow-cli), or set FALLOW_GATE_MIN_VERSION= to disable."
+    } >&2
+    exit 2
+  fi
 fi
 
 TMP_JSON="$(mktemp)"
@@ -132,6 +176,7 @@ VERDICT="$(jq -r '.verdict // empty' <"$TMP_JSON" 2>/dev/null || true)"
 IS_ERROR="$(jq -r '.error // false' <"$TMP_JSON" 2>/dev/null || echo false)"
 
 if [ "$VERDICT" = "fail" ]; then
+  echo "fallow-gate: blocked by fallow ${VERSION:-unknown} at $BIN_DESC" >&2
   cat "$TMP_JSON" >&2
   exit 2
 fi
