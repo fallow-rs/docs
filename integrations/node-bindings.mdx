@@ -1,0 +1,153 @@
+---
+title: "Node.js bindings"
+description: "Call fallow analyses directly from Node.js via NAPI bindings. No CLI subprocess, no JSON parsing, same JSON envelopes the CLI emits."
+keywords: ["Node.js", "napi", "bindings", "programmatic API", "JavaScript", "TypeScript", "embed fallow", "library"]
+icon: "node-js"
+---
+
+The `@fallow-cli/fallow-node` package exposes the main fallow analyses as async Node.js functions. No subprocess, no JSON parsing, no binary lookup: the bindings reuse the CLI orchestration layer and return the same JSON report envelopes the CLI emits for `--format json`.
+
+Use them when you want to embed fallow inside another tool, a Node.js server, an editor extension, or a custom script that otherwise would shell out to the CLI.
+
+## Install
+
+```bash
+npm install @fallow-cli/fallow-node
+```
+
+The package is a native NAPI-RS addon with platform-specific `optionalDependencies` for macOS (arm64, x64), Linux (gnu + musl on arm64 and x64), and Windows (x64). npm picks the matching binary at install time.
+
+Node 18 or newer is required.
+
+## Basic usage
+
+```ts
+import {
+  detectDeadCode,
+  detectDuplication,
+  computeHealth,
+} from '@fallow-cli/fallow-node';
+
+const deadCode = await detectDeadCode({
+  root: process.cwd(),
+  explain: true,
+});
+
+console.log(deadCode.summary.total_issues);
+console.log(deadCode.unused_exports);
+```
+
+Every function returns a promise resolving to the same JSON envelope the CLI emits when called with `--format json`: `schema_version`, `summary`, relative paths, injected `actions` arrays, and (when `explain: true`) a `_meta` block with docs links.
+
+## API
+
+All six functions are async and accept an optional options object. Unknown fields are ignored. Enum-like fields take lowercase CLI-style literals (`"mild"`, `"cyclomatic"`, `"handle"`, `"low"`).
+
+| Function | CLI equivalent | Returns |
+|:---------|:---------------|:--------|
+| `detectDeadCode(options?)` | `fallow dead-code --format json` | `DeadCodeReport` |
+| `detectCircularDependencies(options?)` | `fallow dead-code --circular-deps` | `DeadCodeReport` filtered to the `circular_dependencies` category |
+| `detectBoundaryViolations(options?)` | `fallow dead-code --boundary-violations` | `DeadCodeReport` filtered to the `boundary_violations` category |
+| `detectDuplication(options?)` | `fallow dupes --format json` | `DuplicationReport` |
+| `computeComplexity(options?)` | `fallow health --format json` | `HealthReport` |
+| `computeHealth(options?)` | `fallow health --format json` | Alias for `computeComplexity` with a product-oriented name |
+
+### Shared options
+
+Every options object extends `AnalysisOptions`:
+
+| Field | Type | Default | Purpose |
+|:------|:-----|:--------|:--------|
+| `root` | `string` | `process.cwd()` | Project root directory |
+| `configPath` | `string` | auto-discover | Path to `.fallowrc.json` / `fallow.toml` |
+| `noCache` | `boolean` | `false` | Skip the extraction cache |
+| `threads` | `number` | CPU count | Parallelism; must be > 0 |
+| `production` | `boolean` | `false` | Production mode (excludes test/build files) |
+| `changedSince` | `string` | unset | Scope analysis to files changed since a git ref |
+| `workspace` | `string[]` | unset | Restrict to named workspace packages (monorepo) |
+| `changedWorkspaces` | `string` | unset | Restrict to workspaces whose files changed since a git ref. Mutually exclusive with `workspace`. |
+| `explain` | `boolean` | `false` | Inject a `_meta` block with metric / rule documentation |
+
+### Dead-code options
+
+`detectDeadCode`, `detectCircularDependencies`, and `detectBoundaryViolations` accept the same superset, `DeadCodeOptions`. Setting any of the filter booleans below restricts the report to the selected issue types; leaving them all unset returns every category (the CLI's default behavior).
+
+| Field | Type |
+|:------|:-----|
+| `unusedFiles` / `unusedExports` / `unusedDeps` / `unusedTypes` | `boolean` |
+| `unusedEnumMembers` / `unusedClassMembers` | `boolean` |
+| `unresolvedImports` / `unlistedDeps` | `boolean` |
+| `duplicateExports` / `circularDeps` / `boundaryViolations` / `staleSuppressions` | `boolean` |
+| `files` | `string[]` | Restrict to specific files (like `fallow dead-code path/to/file.ts`) |
+| `includeEntryExports` | `boolean` | Report unused exports on entry files |
+
+### Duplication options
+
+`DuplicationOptions` adds duplication-specific fields on top of `AnalysisOptions`:
+
+| Field | Type | Default |
+|:------|:-----|:--------|
+| `mode` | `"strict" \| "mild" \| "weak" \| "semantic"` | `"mild"` |
+| `minTokens` | `number` | `50` |
+| `minLines` | `number` | `5` |
+| `threshold` | `number` | `0` (no limit) |
+| `skipLocal` | `boolean` | `false` |
+| `crossLanguage` | `boolean` | `false` |
+| `ignoreImports` | `boolean` | `false` |
+| `top` | `number` | unset |
+
+### Complexity / health options
+
+`ComplexityOptions` mirrors the `fallow health` flag surface:
+
+| Field | Type | Notes |
+|:------|:-----|:------|
+| `maxCyclomatic`, `maxCognitive` | `number` (0 to 65535) | Per-function thresholds |
+| `maxCrap` | `number` | CRAP score ceiling |
+| `top` | `number` | Truncate rankings |
+| `sort` | `"cyclomatic" \| "cognitive" \| "lines"` | Finding sort order |
+| `complexity`, `fileScores`, `coverageGaps`, `hotspots`, `targets`, `score` | `boolean` | Enable individual report sections |
+| `ownership`, `ownershipEmails` | `boolean` + `"raw" \| "handle" \| "hash"` | Ownership-aware hotspots |
+| `effort` | `"low" \| "medium" \| "high"` | Filter refactoring targets |
+| `since`, `minCommits` | `string`, `number` | Git history window for hotspots |
+| `coverage`, `coverageRoot` | `string` | Istanbul coverage file + root |
+
+## Structured errors
+
+Rejected promises throw a `FallowNodeError` (a plain `Error` with extra fields) that mirrors the CLI's structured error surface:
+
+```ts
+import type { FallowNodeError } from '@fallow-cli/fallow-node';
+
+try {
+  await detectDeadCode({ root: '/does/not/exist' });
+} catch (err) {
+  const e = err as FallowNodeError;
+  console.error(e.name);      // "FallowNodeError"
+  console.error(e.message);   // "analysis root does not exist: ..."
+  console.error(e.exitCode);  // 2
+  console.error(e.code);      // "FALLOW_INVALID_ROOT"
+  console.error(e.context);   // "analysis.root"
+  console.error(e.help);      // optional remediation hint
+}
+```
+
+The exit-code ladder matches the CLI: `0` ok, `2` generic / validation, `7` network (paid features only), etc.
+
+## When to use bindings vs the CLI
+
+| Use the bindings | Use the CLI |
+|:-----------------|:-----------|
+| Embedding fallow in a long-running Node process (editor, devserver, CI runner) | One-off invocation from a shell script or GitHub Action |
+| You already have a Node runtime and want to skip subprocess + JSON parse overhead | You want zero runtime dependencies (native binary via `npx fallow`) |
+| You need to call many analyses in sequence without re-initializing | You want CLI human output, progress bars, or interactive flags |
+| You need typed access to the result envelope in TypeScript | You consume the analysis from Rust, Python, Go, or any non-Node language |
+
+Both paths run the same analysis engine and return the same data. The bindings are not a reduced subset.
+
+## Limitations
+
+- The bindings wrap the **one-shot** analyses. Commands that write to the filesystem (`fix`, `init`, `setup-hooks`, `audit --save-baseline`, `license activate`, `coverage setup`) are not exposed.
+- No baseline or regression support yet. Use the CLI's `--baseline` / `--save-baseline` flags for those workflows.
+- No watch mode. If you want incremental analysis, re-invoke the relevant function; fallow's per-file cache makes repeat runs fast.
+- The API surface is young; breaking changes between minor versions are possible until it stabilizes.
