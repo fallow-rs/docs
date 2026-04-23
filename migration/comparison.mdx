@@ -17,23 +17,24 @@ Fallow is a compiled Rust binary with rayon-based parallelism. Knip runs on Node
   <Tab title="Real-world projects">
     | Project | Files | fallow | knip v5 | knip v6 | vs v5 | vs v6 |
     |:--------|------:|-------:|--------:|--------:|------:|------:|
-    | [zod](https://github.com/colinhacks/zod) | 174 | **17ms** | 577ms | 300ms | **34x** | **18x** |
-    | [fastify](https://github.com/fastify/fastify) | 286 | **19ms** | 791ms | 232ms | **41x** | **12x** |
-    | [preact](https://github.com/preactjs/preact) | 244 | **20ms** | 767ms | 2.02s | **39x** | **103x** |
-    | [TanStack/query](https://github.com/TanStack/query) | 901 | **170ms** | 2.50s | 1.28s | **15x** | **8x** |
-    | [svelte](https://github.com/sveltejs/svelte) | 3,337 | **359ms** | 1.73s | 749ms | **5x** | **2x** |
-    | [next.js](https://github.com/vercel/next.js) | 20,416 | **1.66s** | ---* | ---* | --- | --- |
+    | [zod](https://github.com/colinhacks/zod) | 174 | **25ms** | 650ms | 330ms | **26x** | **13x** |
+    | [preact](https://github.com/preactjs/preact) | 244 | **200ms** | 911ms | 2.15s | **5x** | **11x** |
+    | [fastify](https://github.com/fastify/fastify) | 286 | **27ms** | 933ms | 222ms | **34x** | **8x** |
+    | [vue/core](https://github.com/vuejs/core) | 522 | **68ms** | ---* | ---* | --- | --- |
+    | [vite](https://github.com/vitejs/vite) | 1,420 | **322ms** | 302ms | 155ms | 0.9x | 0.5x |
+    | [svelte](https://github.com/sveltejs/svelte) | 3,337 | **363ms** | 1.95s | 714ms | **5x** | **2x** |
+    | [next.js](https://github.com/vercel/next.js) | 20,416 | **1.72s** | ---* | ---* | --- | --- |
   </Tab>
   <Tab title="Synthetic benchmarks">
     | Project size | fallow | knip v5 | knip v6 | vs v5 | vs v6 |
     |:-------------|-------:|--------:|--------:|------:|------:|
-    | 1,000 files | **45ms** | 380ms | 196ms | **8x** | **4x** |
-    | 5,000 files | **201ms** | 646ms | 340ms | **3x** | **1.7x** |
+    | 1,000 files | **35ms** | 477ms | 232ms | **14x** | **7x** |
+    | 5,000 files | **144ms** | 791ms | 421ms | **5x** | **3x** |
   </Tab>
 </Tabs>
 
 <Info>
-  Benchmarked on 6 real-world open-source projects from 174 to 20,416 files. On small-to-medium projects, fallow is 5-41x faster than knip v5 and 2-18x faster than knip v6. On the largest monorepos (next.js, vue/core), knip errors out without producing results. Fallow is the only tool that completes. * knip errors out on next.js (exits without valid results).
+  Benchmarked on 7 real-world open-source projects from 174 to 20,416 files against fallow 2.46.0, knip 5.87.0, and knip 6.6.1 on Apple M5, 32 GB RAM, Node 22. Median of 5 runs with 2 warmups. On small-to-medium projects, fallow is 5-34x faster than knip v5 and 2-13x faster than knip v6. On the largest monorepos (next.js, vue/core), knip errors out without producing results; fallow is the only tool that completes. On vite specifically, knip v6 is faster than fallow (155ms vs 322ms) because knip's dedicated vite plugin narrows entry points more aggressively than fallow's general resolver. TanStack/query is omitted pending investigation of a regression in fallow 2.46.0. * knip errors on next.js and vue/core (exits without valid results).
 </Info>
 
 ### Why fallow is faster
@@ -68,6 +69,11 @@ Fallow uses flat edge storage and lock-free parallel resolution, so it handles l
     | Duplicate exports | Yes | No |
     | Code duplication | Yes (`fallow dupes`) | No |
     | Circular dependencies | Yes | Yes |
+    | Complexity hotspots | Yes (`fallow health`) | No |
+    | Architecture boundary violations | Yes | No |
+    | Feature flag detection | Yes (`fallow flags`) | No |
+    | CRAP score thresholds (`--max-crap`) | Yes | No |
+    | Production coverage (paid) | Yes (`--production-coverage`) | No |
     | TS namespace declaration members | No | Yes (new in v6) |
   </Tab>
   <Tab title="Details">
@@ -77,6 +83,10 @@ Fallow uses flat edge storage and lock-free parallel resolution, so it handles l
     - **Code duplication**: Built-in `fallow dupes` command with four detection modes (strict, mild, weak, semantic), clone family grouping, and refactoring suggestions. No need for a separate tool like jscpd.
     - **Circular dependencies**: Detected via the module graph. Both fallow and knip support circular dependency detection.
     - **Namespace import narrowing**: `import * as ns from './x'` followed by `ns.foo` or `const { foo } = ns` narrows to only mark accessed exports as used. Includes scope-aware unused import binding detection via `oxc_semantic`. Imports where the binding is never read don't count as references.
+    - **Complexity hotspots**: `fallow health` reports per-function cyclomatic and cognitive complexity, CRAP (Change Risk Anti-Patterns) score with optional Istanbul coverage, unit size, and a composite health score. `--max-crap`, `--max-cyclomatic`, and `--max-cognitive` gate CI on thresholds.
+    - **Architecture boundary violations**: Enforces cross-package or cross-layer import rules declared in config. Flags imports that cross defined boundaries.
+    - **Feature flag detection**: `fallow flags` scans for feature flag patterns, correlates them with dead code, and outputs SARIF / markdown / JSON / MCP.
+    - **Production coverage (paid)**: Merges V8 runtime samples with the static graph to surface hot / cold paths and runtime-weighted health.
 
     **Knip extras:**
     - **TS namespace declaration members**: New in v6, detecting unused members of TypeScript `namespace` declarations (the `namespace Foo { export const bar }` syntax).
@@ -87,7 +97,7 @@ Fallow uses flat edge storage and lock-free parallel resolution, so it handles l
 
 | Metric | fallow | knip |
 |:-------|:-------|:-----|
-| Total plugins | 90 | 141 |
+| Total plugins | 90 | 147 |
 | Plugins with config parsing | 33 | -- |
 | Custom plugin support | Yes (JSONC, JSON, TOML, or inline) | Yes (JS functions) |
 
@@ -124,8 +134,26 @@ Knip has broader plugin coverage, particularly for niche and legacy tooling. Fal
   <Card title="Code duplication" icon="clone">
     Built-in `fallow dupes` with four detection modes, clone family grouping, cross-language matching, and refactoring suggestions.
   </Card>
+  <Card title="Complexity and health score" icon="heart-pulse">
+    `fallow health` reports cyclomatic / cognitive complexity, CRAP score, risk profiles, and a composite health score. `--max-crap`, `--max-cyclomatic`, and `--max-cognitive` gate CI on per-function thresholds.
+  </Card>
+  <Card title="Architecture boundaries" icon="shield">
+    Enforce cross-package or cross-layer import rules. Boundary violations fail the build without needing ESLint plugins.
+  </Card>
+  <Card title="Feature flag detection" icon="flag">
+    `fallow flags` detects feature flag patterns across the codebase, cross-references them with dead code, and exports to SARIF, markdown, and MCP.
+  </Card>
+  <Card title="Combined audit" icon="clipboard-check">
+    `fallow audit` runs dead code, health, and duplication with a single verdict. Per-analysis baselines (`--dead-code-baseline`, `--health-baseline`, `--dupes-baseline`) let each slice use its own reference.
+  </Card>
   <Card title="Git-aware analysis" icon="code-branch">
-    `--changed-since` analyzes only files changed since a git ref. Perfect for PR-only CI checks.
+    `--changed-since <ref>` for file-level scoping and `--changed-workspaces <ref>` for monorepo-level scoping. Perfect for PR-only CI checks.
+  </Card>
+  <Card title="Workspace filtering" icon="layer-group">
+    `--workspace` accepts comma-separated values, globs, and `!` negations (`-w 'apps/*' -w '!apps/legacy'`). Works across every command.
+  </Card>
+  <Card title="Output grouping" icon="folder-tree">
+    `--group-by owner|directory|package|section` partitions findings. `owner` and `section` read GitHub / GitLab CODEOWNERS so unused code is routed to the right reviewer.
   </Card>
   <Card title="Auto-fix dry run" icon="wand-magic-sparkles">
     Preview all fixes with `fallow fix --dry-run` before applying. JSON output for programmatic review.
@@ -136,6 +164,12 @@ Knip has broader plugin coverage, particularly for niche and legacy tooling. Fal
   <Card title="CSS Modules tracking" icon="paintbrush">
     `.module.css` and `.module.scss` class names are extracted as named exports and tracked through `styles.className` member accesses.
   </Card>
+  <Card title="MCP server" icon="robot">
+    Built-in `fallow-mcp` exposes `analyze`, `find_dupes`, `check_health`, `audit`, `health_production_coverage`, and more as typed tools for AI agents.
+  </Card>
+  <Card title="Claude Code hooks" icon="hammer">
+    `fallow setup-hooks` installs a `PreToolUse` gate that blocks `git commit` / `git push` when `fallow audit` fails, with a structured envelope agents can act on.
+  </Card>
 </CardGroup>
 
 **Additional features:**
@@ -144,14 +178,14 @@ Knip has broader plugin coverage, particularly for niche and legacy tooling. Fal
 - **Production mode**: `--production` excludes test/dev files and detects type-only dependencies that should be devDependencies.
 - **Duplicate export detection**: Finds the same symbol exported from multiple modules.
 - **TOML configuration**: In addition to JSONC/JSON, fallow supports `fallow.toml` for teams that prefer TOML.
-- **MCP server**: Built-in MCP server (`fallow-mcp`) for AI agent integration via the Model Context Protocol.
 - **Cross-reference analysis**: `check --include-dupes` finds dead code that is also duplicated, showing high-priority cleanup targets.
+- **Production coverage intelligence (paid)**: V8 runtime evidence merged with static analysis via a signed sidecar. Adds hot/cold paths, runtime-weighted health scoring, and stale-flag evidence.
 
 ## Features knip has that fallow doesn't
 
 <CardGroup cols={2}>
   <Card title="More plugins" icon="puzzle-piece">
-    141 plugins vs 90. Knip covers more niche, legacy, and ecosystem-specific tooling.
+    147 plugins vs 90. Knip covers more niche, legacy, and ecosystem-specific tooling.
   </Card>
   <Card title="Custom reporters" icon="paintbrush">
     Write custom reporter functions in JavaScript for fully custom output formatting.
@@ -163,7 +197,6 @@ Knip has broader plugin coverage, particularly for niche and legacy tooling. Fal
 
 **Additional features:**
 
-- **Codeowners reporter**: Maps unused code to GitHub CODEOWNERS for targeted cleanup assignments.
 - **TS namespace declaration member detection**: New in v6, detects unused members in TypeScript `namespace` declarations (not `import * as ns`, fallow already handles that via namespace import narrowing).
 
 ## When to choose fallow
@@ -206,16 +239,22 @@ Knip has broader plugin coverage, particularly for niche and legacy tooling. Fal
 |:--|:-------|:-----|
 | Language | Rust | Node.js (TypeScript) |
 | Parser | Oxc (native) | Oxc (NAPI bindings) |
-| Speed vs knip v6 | **2-18x faster** | Baseline |
+| Speed vs knip v6 | **2-13x faster** on common cases | Baseline |
 | Parallelism | Multi-core (rayon) | Single-threaded |
-| Dead code issue types | 15 | 10 |
+| Dead code issue types | 12 | 10 |
 | Code duplication | Built-in | Not included |
-| Plugins | 90 | 141 |
+| Complexity and health score | Built-in (`fallow health`) | No |
+| Architecture boundaries | Yes | No |
+| Feature flag detection | Yes (`fallow flags`) | No |
+| Combined audit verdict | Yes (`fallow audit`) | No |
+| Plugins | 90 | 147 |
 | Custom plugins | JSONC/JSON/TOML | JavaScript |
 | SARIF output | Yes | No |
-| Baseline comparison | Yes | No |
+| Baseline comparison | Yes (per-analysis) | No |
 | Inline suppression | Yes | No |
-| Git-aware (`--changed-since`) | Yes | No |
+| Git-aware (`--changed-since`, `--changed-workspaces`) | Yes | Partial |
+| CODEOWNERS grouping | Yes (`--group-by owner`, `section`) | Yes (reporter) |
+| Workspace filtering (globs, negation) | Yes | Yes |
 | Circular dependencies | Yes | Yes |
 | Auto-fix | Yes | Yes |
 | Config formats | JSONC, JSON, TOML | JSON, TS |
