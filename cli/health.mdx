@@ -1236,7 +1236,8 @@ Configure default thresholds and ignore patterns in your config file:
     "maxCyclomatic": 20,
     "maxCognitive": 15,
     "maxCrap": 30,
-    "ignore": ["**/*.generated.ts", "src/legacy/**"]
+    "ignore": ["**/*.generated.ts", "src/legacy/**"],
+    "suggestInlineSuppression": true
   }
 }
 ```
@@ -1247,6 +1248,7 @@ maxCyclomatic = 20
 maxCognitive = 15
 maxCrap = 30
 ignore = ["**/*.generated.ts", "src/legacy/**"]
+suggestInlineSuppression = true
 ```
 </CodeGroup>
 
@@ -1266,6 +1268,25 @@ function* parseCsv(text) {
 Both cyclomatic and cognitive metrics are suppressed together. File scores and vital signs are unaffected (they reflect actual complexity, not alerting). Use `// fallow-ignore-file complexity` to suppress all functions in a file.
 
 For coverage gaps: `// fallow-ignore-file coverage-gaps` excludes the file from untested-code reporting.
+
+### `suggestInlineSuppression` and baselines
+
+The JSON output for each health finding includes an `actions` array with machine-actionable hints (refactor, add coverage, suppress). The `suppress-line` hint is omitted automatically when:
+
+- `--baseline` or `--save-baseline` is active. The baseline file already suppresses existing findings, so adding `// fallow-ignore-next-line` comments on top would create dead annotations once the baseline regenerates.
+- `health.suggestInlineSuppression` is set to `false` in config. Use this when your team manages suppressions exclusively through hand-authored `// fallow-ignore-*` comments and does not want CI-driven inline suppression hints in JSON output.
+
+When the hint is omitted, a top-level `actions_meta: { "suppression_hints_omitted": true, "reason": "baseline-active" | "config-disabled" }` breadcrumb is added to the health JSON envelope so consumers can audit the omission.
+
+### Action selection by coverage tier
+
+For findings triggered by CRAP, the primary action is selected based on a bucketed `coverage_tier` field on each finding:
+
+- `none` (file not test-reachable, or Istanbul reports 0%): emits `add-tests` with a "start from scratch" description.
+- `partial` (some coverage exists, Istanbul `(0, 70]`, or estimated 40% band): emits `increase-coverage` with a "targeted branch coverage" description, since the file already has a test path.
+- `high` (Istanbul `> 70`, or estimated 85% band) AND CRAP-only: emits `refactor-function` instead of a coverage action, because at high coverage additional tests cannot meaningfully reduce CRAP. Reducing cyclomatic complexity is the only remaining lever.
+
+When CRAP-only and the function's cyclomatic count is within 5 of `maxCyclomatic`, a secondary `refactor-function` action is also emitted alongside the coverage action.
 
 See [Inline suppression](/configuration/suppression) for all suppressible issue types.
 
