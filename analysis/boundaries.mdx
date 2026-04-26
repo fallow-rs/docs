@@ -183,6 +183,58 @@ allow = []
 - A zone with **no rule entry** is unrestricted: it can import from any zone
 - A zone with a rule and an **empty `allow` list** is isolated: it cannot import from other zones
 
+### Subtree scope (`root`)
+
+Monorepos with per-package boundaries usually have the same internal directory layout under each package (`packages/app/src/`, `packages/core/src/`, ...). Writing flat patterns from the project root forces zone definitions to scale with the cross product of (zones, packages):
+
+```jsonc
+// Without `root`: one zone per (layer, package) pair.
+{ "name": "ui-app",      "patterns": ["packages/app/src/**"] },
+{ "name": "domain-core", "patterns": ["packages/core/src/**"] }
+```
+
+Set `root` on a zone to scope its patterns to a subtree. At classification time, fallow checks that the file's path starts with the `root` prefix and strips that prefix before matching the patterns against the remainder. Files outside the subtree never match the zone.
+
+<CodeGroup>
+```jsonc .fallowrc.json
+{
+  "boundaries": {
+    "zones": [
+      { "name": "ui",     "patterns": ["src/**"], "root": "packages/app/" },
+      { "name": "domain", "patterns": ["src/**"], "root": "packages/core/" }
+    ],
+    "rules": [
+      { "from": "ui", "allow": [] }
+    ]
+  }
+}
+```
+
+```toml fallow.toml
+[[boundaries.zones]]
+name = "ui"
+patterns = ["src/**"]
+root = "packages/app/"
+
+[[boundaries.zones]]
+name = "domain"
+patterns = ["src/**"]
+root = "packages/core/"
+
+[[boundaries.rules]]
+from = "ui"
+allow = []
+```
+</CodeGroup>
+
+In this example, `packages/app/src/login.tsx` classifies as `ui` and `packages/core/src/order.ts` classifies as `domain`. Adding `packages/billing/` later only requires another zone entry with the same `patterns: ["src/**"]` and a different `root`.
+
+Trailing slashes and a leading `./` are normalized for you, so `"packages/app"`, `"packages/app/"`, and `"./packages/app/"` are equivalent. Backslashes are converted to forward slashes.
+
+<Warning>
+  Patterns must NOT redundantly include the root prefix. `root: "packages/app/"` paired with `patterns: ["packages/app/src/**"]` is rejected at config-resolve time with `FALLOW-BOUNDARY-ROOT-REDUNDANT-PREFIX`, because patterns are already resolved relative to the root. Drop the root prefix from the pattern (`patterns: ["src/**"]`).
+</Warning>
+
 ### Overriding preset zones
 
 Start from a preset and customize specific zones or rules. Zones with the same name replace the preset zone; rules with the same `from` replace the preset rule.
