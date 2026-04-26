@@ -1280,13 +1280,15 @@ When the hint is omitted, a top-level `actions_meta: { "suppression_hints_omitte
 
 ### Action selection by coverage tier
 
-For findings triggered by CRAP, the primary action is selected based on a bucketed `coverage_tier` field on each finding:
+For findings triggered by CRAP, the primary action is selected by a formula-aware rule, with the `coverage_tier` field choosing the description:
 
-- `none` (file not test-reachable, or Istanbul reports 0%): emits `add-tests` with a "start from scratch" description.
-- `partial` (some coverage exists, Istanbul `(0, 70]`, or estimated 40% band): emits `increase-coverage` with a "targeted branch coverage" description, since the file already has a test path.
-- `high` (Istanbul `>= 70`, or estimated 85% band) AND CRAP-only: emits `refactor-function` instead of a coverage action, because at high coverage additional tests cannot meaningfully reduce CRAP. Reducing cyclomatic complexity is the only remaining lever.
+- **Coverage CAN clear CRAP** (`cyclomatic < maxCrap`): the function's CRAP score can be brought below `maxCrap` by improving coverage, since `CRAP = CC^2 * (1 - cov/100)^3 + CC` bottoms out at `CC` at 100% coverage. The tier picks the description:
+  - `none` (file not test-reachable, or Istanbul reports 0%): emits `add-tests` with a "start from scratch" description.
+  - `partial` (some coverage exists, Istanbul `(0, 70)`, or estimated 40% band): emits `increase-coverage` with a "targeted branch coverage" description, since the file already has a test path.
+  - `high` (Istanbul `>= 70`, or estimated 85% band): emits `increase-coverage` (NOT refactor) because additional coverage can still drop CRAP below threshold for a function whose cyclomatic is small enough.
+- **Coverage CANNOT clear CRAP** (`cyclomatic >= maxCrap`): no amount of coverage will bring CRAP under threshold; emits `refactor-function` instead, regardless of tier. Reducing cyclomatic complexity is the only remaining lever.
 
-When CRAP-only and the function's cyclomatic count is within 5 of `maxCyclomatic`, a secondary `refactor-function` action is also emitted alongside the coverage action.
+When CRAP-only and the function's cyclomatic count is within 5 of `maxCyclomatic`, a secondary `refactor-function` action is also emitted alongside the coverage action, but only when cognitive complexity is at or above `maxCognitive / 2`. The cognitive floor suppresses the secondary refactor on flat type-tag dispatchers and JSX render maps where high cyclomatic comes from a single switch with near-zero cognitive load (refactoring those is wrong-target advice).
 
 See [Inline suppression](/configuration/suppression) for all suppressible issue types.
 
