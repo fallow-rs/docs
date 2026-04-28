@@ -146,8 +146,8 @@ CI catches unused code, duplication, and complexity issues that get past agent w
         | `FALLOW_REVIEW` | `false` | Post inline MR discussions on changed lines with suggestion blocks for auto-fixable issues |
         | `FALLOW_MAX_COMMENTS` | `50` | Maximum number of inline review comments to post (applies to `FALLOW_REVIEW`) |
         | `FALLOW_CODEQUALITY` | `true` | Generate Code Quality report (inline MR annotations) |
-        | `FALLOW_VERSION` | `latest` | Fallow version to use. GitLab CI does not auto-detect the project `package.json` pin; set this explicitly when CI should match a locally pinned `fallow` dependency. |
-        | `FALLOW_SCRIPTS_REF` | `main` | Pin CI scripts to a specific git ref (tag, branch, or SHA) for reproducible builds |
+        | `FALLOW_VERSION` | -- | Fallow version to use. Empty auto-detects the project `package.json` `fallow` dependency and falls back to `latest`; set explicitly to override the local pin. |
+        | `FALLOW_SCRIPTS_REF` | -- | Pin CI scripts to a specific git ref (tag, branch, or SHA) for reproducible builds. Empty prefers vendored scripts, then derives from an exact installed fallow version when possible. |
         | `FALLOW_WORKSPACE` | -- | Scope output to one or more workspaces (exact names, globs, `!` negation; comma-separated) |
         | `FALLOW_CHANGED_WORKSPACES` | -- | Git-derived monorepo scoping: scope to workspaces containing any file changed since `REF`. Requires full git history. Mutually exclusive with `FALLOW_WORKSPACE`. Missing ref is a hard error. |
         | `FALLOW_DUPES_MODE` | `mild` | Detection mode for dupes (`strict`, `mild`, `weak`, `semantic`) |
@@ -187,7 +187,7 @@ CI catches unused code, duplication, and complexity issues that get past agent w
       <Step title="Code Quality reports">
         The template automatically generates a GitLab Code Quality report (CodeClimate format). This shows fallow findings as **inline annotations** directly on the MR diff, the GitLab equivalent of GitHub Code Scanning.
 
-        No additional configuration needed. The report is uploaded as a CI artifact automatically.
+        No additional configuration needed. The report is uploaded as a CI artifact automatically. If you invoke fallow yourself outside the template, both `--format codeclimate` and the alias `--format gitlab-codequality` produce the same JSON array consumed by GitLab.
       </Step>
       <Step title="Rich MR comments">
         **Summary comment**: Set `FALLOW_COMMENT: "true"` to post a rich MR comment with collapsible sections for dead code, duplication, and complexity findings. The comment is updated on each push (no spam).
@@ -204,14 +204,30 @@ CI catches unused code, duplication, and complexity issues that get past agent w
         ```
       </Step>
       <Step title="Authentication">
-        MR comments and inline reviews require API access. Two options:
-
-        - **`GITLAB_TOKEN`** (recommended): a project or personal access token with `api` scope. Set it as a CI/CD variable. Required for full features including comment cleanup on resolved issues.
-        - **`CI_JOB_TOKEN`**: works for posting comments but cannot clean up outdated comments when issues are resolved. Requires the project to allow job token API access.
+        MR summary comments (`FALLOW_COMMENT`) and inline review (`FALLOW_REVIEW`) require a `GITLAB_TOKEN` (project access token or PAT) with `api` scope. Set it as a CI/CD variable.
 
         <Warning>
-        `CI_JOB_TOKEN` cannot delete or update comments from previous runs. Use a `GITLAB_TOKEN` with `api` scope for the best experience. Stale comments are automatically removed when issues are fixed.
+        GitLab's documented `CI_JOB_TOKEN` permissions allow reading MR notes, but not creating, updating, or deleting them. The template skips MR comment / review posting with a warning when `GITLAB_TOKEN` is unset rather than failing the pipeline. `CI_JOB_TOKEN` is still useful for GitLab package registry authentication.
         </Warning>
+      </Step>
+      <Step title="Vendoring (offline runners)">
+        If your runners cannot reach `raw.githubusercontent.com`, vendor the template and helper scripts into your repo. Run once locally:
+
+        ```bash
+        npx fallow ci-template gitlab --vendor
+        ```
+
+        This writes `ci/gitlab-ci.yml` plus 13 jq/bash helpers under `ci/` and `action/`. Commit the generated files and switch to a local include:
+
+        ```yaml
+        include:
+          - local: 'ci/gitlab-ci.yml'
+
+        fallow:
+          extends: .fallow
+        ```
+
+        The vendored template prefers the local scripts and skips the remote fetch path entirely. Pass `--force` to overwrite files that have diverged from the bundled template.
       </Step>
     </Steps>
 
