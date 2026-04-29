@@ -224,16 +224,23 @@ The score appears in [`fallow health --file-scores`](/cli/health) output and JSO
 
 ### How the score is computed
 
-Fallow uses a **binary coverage model**: a file is either test-reachable or not. "Test-reachable" means the file is imported (directly or transitively) by at least one test file in the module graph.
+Fallow uses the canonical CRAP formula:
 
-The per-function formula:
+```
+score = CC^2 × (1 - cov/100)^3 + CC
+```
 
-| Condition | Formula | Example (CC = 8) |
-|:----------|:--------|:-----------------|
-| File is test-reachable | score = CC | 8 |
-| File is **not** test-reachable | score = CC^2 + CC | 72 |
+Where `cov` is per-function coverage (0–100). Fallow obtains that value in one of three ways:
 
-For untested files, the quadratic term makes complexity hurt fast. A function with cyclomatic complexity 5 in an untested file scores 5^2 + 5 = 30, which is exactly the default threshold.
+| Model (`coverage_model`) | When | How `cov` is determined |
+|:-------------------------|:-----|:------------------------|
+| `static_estimated` | Default | Graph-based per-function estimate: directly test-referenced = 85%, transitively test-reachable = 40%, not test-reachable = 0%. |
+| `istanbul` | `--coverage <coverage-final.json>` (auto-detected from `coverage/` and `.nyc_output/`, or via `FALLOW_COVERAGE`) | Real per-function statement coverage produced by Jest, Vitest, c8, or nyc. |
+| `static_binary` | Legacy, snapshot/JSON compatibility only | Whole-file binary: test-reachable file = 100% (score = CC), untested file = 0% (score = CC^2 + CC). Superseded by `static_estimated`. |
+
+For untested code the quadratic term makes complexity hurt fast. Under the default `static_estimated` model, a not-test-reachable function with cyclomatic complexity 5 scores 5^2 × 1 + 5 = 30, which is exactly the default flag threshold.
+
+For execution evidence from real traffic (hot/cold paths, runtime-weighted dead-code verdicts), see [Runtime coverage](/analysis/runtime-coverage). Runtime coverage is a paid Fallow Runtime feature and accepts V8 or Istanbul runtime data via `--runtime-coverage`; it merges on top of whichever static `coverage_model` is active.
 
 **Default threshold:** 30 (functions scoring at or above this value are flagged)
 
@@ -257,7 +264,7 @@ Each file reports two aggregated values:
 | `crap_max` | Highest per-function score in the file |
 | `crap_above_threshold` | Count of functions scoring >= 30 |
 
-The `coverage_model` field on the health summary indicates which model produced the scores: `"static_estimated"` (default, per-function estimation from export references) or `"istanbul"` (real coverage data from `--coverage`).
+The active model is reported as `coverage_model` on the health summary (`static_estimated`, `istanbul`, or the legacy `static_binary`).
 
 ### Refactoring targets
 
@@ -287,22 +294,24 @@ function* parseCsv(text) { /* ... */ }
 
 See [Inline suppression](/configuration/suppression) for all suppressible issue types.
 
-<Accordion title="Binary model vs. full coverage">
+<Accordion title="Static estimation vs. real coverage">
 
-The original CRAP formula uses actual line-level coverage percentages:
+The CRAP formula needs a per-function coverage percentage:
 
 ```
 CRAP(m) = CC^2 × (1 - cov/100)^3 + CC
 ```
 
-Where `cov` is the percentage of lines covered by tests (0-100). A fully tested function (cov = 100) always scores exactly CC, regardless of complexity. A completely untested function (cov = 0) scores CC^2 + CC.
+A fully tested function (cov = 100) always scores exactly CC, regardless of complexity. A completely untested function (cov = 0) scores CC^2 + CC.
 
-Fallow's binary model is an approximation: it treats coverage as either 0% or 100% based on whether the file is reachable from test files. This means:
+Without coverage input, the default `static_estimated` model derives `cov` from the dependency graph: 85% for directly test-referenced exports, 40% for transitively test-reachable code, 0% for code with no path from any test file. This is an approximation of test coverage:
 
-- **False negatives**: A file imported by tests but with functions that are never actually exercised will score lower than it should.
-- **False positives**: Not possible. If a file has no path from any test file, none of its functions can be covered.
+- **False negatives**: A file imported by tests but with functions that are never actually exercised will score lower (look healthier) than it should.
+- **False positives**: A file referenced only from non-test code can score worse than it deserves if it is in fact unit-tested through indirect paths.
 
-The binary model is useful without any coverage tooling setup. For projects that generate Istanbul/c8 coverage reports, a future version of fallow will support ingesting actual coverage data for precise per-function scores.
+For exact per-function scores, pass `--coverage <coverage-final.json>` (Jest, Vitest, c8, or nyc). Fallow auto-detects `coverage/coverage-final.json` and `.nyc_output/coverage-final.json`, or set `FALLOW_COVERAGE` to point at a custom path. The `coverage_model` field flips from `static_estimated` to `istanbul` when real coverage is in use.
+
+The legacy `static_binary` model (whole-file 0%/100% based on test reachability) is superseded by `static_estimated` and is retained only for snapshot/JSON backwards compatibility.
 
 </Accordion>
 
