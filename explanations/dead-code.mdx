@@ -57,6 +57,39 @@ Type aliases and interfaces never referenced by any module.
 **When it's OK to keep:**
 - **Shared type packages**: Types exported for external consumers. Mark the package entry point in `entry`.
 
+### Private type leaks
+
+Exported values, functions, classes, and types whose public TypeScript signature references a same-file type declaration that is NOT itself exported. Consumers see the private type's name in the function or class shape but cannot import it, so they end up retyping it or using `Parameters<typeof X>[0]` / `ReturnType<typeof X>` workarounds.
+
+| Severity | Default |
+|:---------|:--------|
+| Error | Yes |
+
+**Example:**
+
+```typescript
+type Props = { label: string; }; // private to the module
+
+export function Component(p: Props): void {} // public, but Props leaks
+```
+
+**When to act:** Export the backing type alongside the exported symbol, or restructure the public signature so it doesn't reference the private type:
+
+```typescript
+export type Props = { label: string; };
+export function Component(p: Props): void {}
+```
+
+**Interaction with unused types:** when you export the backing type to fix a leak, fallow does not turn around and report the new export as `unused-types` even if no other module imports it. Any type whose name is referenced from a public signature in the same file is treated as load-bearing for the public API and is excluded from the unused-types check.
+
+**Skipped patterns:**
+- **ECMAScript `#field` private members and TypeScript `private` accessibility**: these are not part of the public signature, so types they reference do not leak. `class Service { #state: InternalState; }` does not flag `InternalState`.
+- **Storybook story files**: `*.stories.{ts,tsx,js,jsx,mts,cts,mjs,cjs}` and `*.story.*` variants are skipped because the canonical `type Story = StoryObj<typeof X>; export const Default: Story = ...` pattern would otherwise generate one finding per story.
+
+**Suppression:** add `// fallow-ignore-next-line private-type-leak` above the affected export, or set `private-type-leaks: "off"` in [`rules`](/configuration/rules).
+
+**Prior art:** Rust's `unreachable_pub` lint, TypeScript's TS4023 / TS4060 errors emitted with `--declaration`. ESLint has no equivalent rule today.
+
 ### Unused dependencies
 
 Packages listed in `dependencies` that are never imported in source code and not used as script binaries in `package.json`.
