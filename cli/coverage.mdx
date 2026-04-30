@@ -1,7 +1,7 @@
 ---
 title: "fallow coverage"
-description: "CLI reference for fallow coverage. Run the resumable setup flow, analyze local or cloud runtime coverage, and push static inventory so the dashboard can surface untracked code."
-keywords: ["fallow coverage", "coverage setup", "upload-inventory", "fallow-cov", "runtime coverage", "runtime coverage", "CLI"]
+description: "CLI reference for fallow coverage. Run the resumable setup flow, analyze local or cloud runtime coverage, upload source maps, and push static inventory so the dashboard can surface untracked code."
+keywords: ["fallow coverage", "coverage setup", "upload-inventory", "upload-source-maps", "source maps", "fallow-cov", "runtime coverage", "runtime coverage", "CLI"]
 icon: "wand-magic-sparkles"
 ---
 
@@ -11,6 +11,7 @@ icon: "wand-magic-sparkles"
 fallow coverage setup              # resumable first-run flow
 fallow coverage analyze --cloud --repo owner/repo
 fallow coverage upload-inventory   # push a static function inventory
+fallow coverage upload-source-maps           # upload build source maps for bundled code
 ```
 
 `setup` is the guided first-run path: license check, sidecar install, recipe generation, health handoff. It is intentionally resumable: run it once to bootstrap, follow the generated recipe, then run it again after traffic has been captured.
@@ -18,6 +19,8 @@ fallow coverage upload-inventory   # push a static function inventory
 `analyze` is the focused agent/CLI loop. Local mode reads a V8 or Istanbul artifact from disk. Cloud mode is explicit opt-in only and pulls the latest runtime facts for a repo before merging them with the current local AST/static analysis.
 
 `upload-inventory` is the CI step that unlocks the `Untracked` filter in the dashboard by pairing the runtime V8/Istanbul data (what actually ran) with the AST view of every function that exists.
+
+`coverage upload-source-maps` is the CI step for bundled/minified apps. It uploads build `.map` files so cloud runtime coverage can resolve bundle paths back to original source files.
 
 ## `setup`
 
@@ -301,6 +304,81 @@ first 5 of 14,280 entries:
   src/user.ts:42   (anonymous_5)
   ... and 14,275 more
 ```
+
+## `coverage upload-source-maps`
+
+`fallow coverage upload-source-maps` scans a build output directory for source maps and POSTs each map to fallow cloud under the current repo and git SHA. The production beacon reports coverage against deployed bundles; uploaded source maps let the cloud resolver remap those bundle positions back to original source files.
+
+```bash
+FALLOW_API_KEY=fallow_live_... \
+  fallow coverage upload-source-maps --dir dist --repo my-app --git-sha "$GITHUB_SHA"
+```
+
+### Source-map defaults
+
+| Flag | Default | Description |
+|:-----|:--------|:------------|
+| `--dir <PATH>` | `dist` | Directory scanned recursively. Relative paths resolve from the project root. |
+| `--include <GLOB>` | `**/*.map` | Include glob, matched relative to `--dir`. |
+| `--exclude <GLOB>` | `**/node_modules/**` | Exclude glob, repeatable. |
+| `--repo <NAME>` | `package.json` `repository.url`, then `git remote get-url origin` | Repo name used in `/v1/coverage/:repo/source-maps`. Auto-detection trims common git URLs to the repo name. |
+| `--git-sha <SHA>` | `$GITHUB_SHA`, `$CI_COMMIT_SHA`, `$COMMIT_SHA`, then `git rev-parse HEAD` | Commit SHA the beacon will report for the deployed build. Must be 7-40 hex chars. |
+| `--endpoint <URL>` | `$FALLOW_API_URL` or `https://api.fallow.cloud` | Override for staging or enterprise deployments. |
+| `--strip-path <BOOL>` | `true` | Upload only the basename as `fileName`, e.g. `dist/assets/app.js.map` -> `app.js.map`. Set `--strip-path=false` when runtime coverage reports bundle paths with directories, e.g. `assets/app.js`. |
+| `--dry-run` | `false` | Print what would upload without reading `FALLOW_API_KEY` or making network calls. |
+| `--concurrency <N>` | `4` | Parallel upload fanout. |
+| `--fail-fast` | `false` | Stop on the first failed map instead of uploading the rest and reporting a partial-failure summary. |
+
+The API key comes only from `FALLOW_API_KEY`; there is intentionally no `--api-key` flag, so secrets do not land in shell history or process lists.
+
+### Source-map CI snippets
+
+<Tabs>
+  <Tab title="GitHub Actions">
+
+    ```yaml
+    - name: Build
+      run: npm run build
+
+    - name: Upload source maps to fallow
+      run: npx fallow coverage upload-source-maps --dir dist --git-sha "$GITHUB_SHA"
+      env:
+        FALLOW_API_KEY: ${{ secrets.FALLOW_API_KEY }}
+    ```
+
+  </Tab>
+  <Tab title="GitLab CI">
+
+    ```yaml
+    upload_source_maps:
+      stage: deploy
+      script:
+        - npm run build
+        - npx fallow coverage upload-source-maps --dir dist --git-sha "$CI_COMMIT_SHA"
+      variables:
+        FALLOW_API_KEY: $FALLOW_API_KEY
+    ```
+
+  </Tab>
+  <Tab title="CircleCI">
+
+    ```yaml
+    - run: npm run build
+    - run:
+        name: Upload source maps to fallow
+        command: npx fallow coverage upload-source-maps --dir dist --git-sha "$CIRCLE_SHA1"
+    ```
+
+  </Tab>
+</Tabs>
+
+### Source-map failure modes
+
+| Exit | Meaning |
+|:----:|:--------|
+| `0` | All maps uploaded, or dry-run completed. |
+| `1` | Partial or full upload failure, including invalid JSON maps, auth rejection, rate limits, server errors, or exhausted network retries. |
+| `2` | Bad invocation: missing `FALLOW_API_KEY`, unresolvable repo/SHA, missing directory, or zero maps found. |
 
 ## See also
 
