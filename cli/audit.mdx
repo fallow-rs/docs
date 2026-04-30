@@ -5,7 +5,7 @@ keywords: ["fallow audit", "code review", "AI code review", "quality gate", "ver
 icon: "terminal"
 ---
 
-Audit changed files for dead code, complexity, and duplication. Returns a **pass**, **warn**, or **fail** verdict based on the severity of issues found. Scoping to changed files keeps signal-to-noise high: only issues in the current PR or commit, not the project backlog.
+Audit changed files for dead code, complexity, and duplication. Returns a **pass**, **warn**, or **fail** verdict based on the severity of issues found. Scoping to changed files keeps signal-to-noise high: by default only issues introduced by the current PR or commit fail the gate; inherited findings in touched files are shown as context.
 
 <Note>
   `fallow audit` is the PR-time gate. For the initial full-repo cleanup on an existing codebase, start with [Adopt Fallow in an existing repo](/adoption), which walks through `fallow`, `fallow dead-code`, `fallow dupes`, and `fallow health`, and hands the actual cleanup to an AI agent before turning `audit` on in CI.
@@ -26,6 +26,20 @@ fallow audit
 | Flag | Description |
 |:-----|:------------|
 | `--base <REF>` | Git ref to compare against (e.g., `main`, `HEAD~5`, a commit SHA). Alias for `--changed-since`. Auto-detects the default branch if omitted. |
+
+### Gate
+
+| Flag | Description |
+|:-----|:------------|
+| `--gate new-only` | Default. Compare against the base ref and fail only on findings introduced by the current changeset. Inherited findings are reported in JSON `attribution` and annotated with `introduced: false`. |
+| `--gate all` | Strict mode. Fail on every finding in changed files, including findings inherited from the base ref. Skips the extra base-snapshot attribution pass for lower latency. |
+
+You can also set the default in config:
+
+```toml
+[audit]
+gate = "all"
+```
 
 ### Output
 
@@ -79,12 +93,12 @@ CLI flags override config. Baselines are a no-op if unset; any subset (e.g. dead
 
 | Verdict | Exit code | When | What to do |
 |:--------|:----------|:-----|:-----------|
-| **pass** | 0 | No issues in changed files | Ship it. |
+| **pass** | 0 | No introduced issues in changed files (`new-only`) or no issues at all (`all`) | Ship it. |
 | **warn** | 0 | Issues found, all warn-severity | CI passes, but consider fixing before they become errors. |
 | **fail** | 1 | Error-severity issues found | Fix the reported issues before merging. |
 | **error** | 2 | Runtime error (invalid ref, not a git repo, config error) | Check the error message. In JSON format, emits `{"error": true, "message": "...", "exit_code": 2}`. |
 
-Dead code issues follow your [rules configuration](/configuration/rules) severity (error/warn/off). Complexity findings above configured thresholds are always errors; thresholds are inherited from your `fallow health` config (defaults: cyclomatic 20, cognitive 15). Duplication is a warning unless a `--threshold` is configured.
+Dead code issues follow your [rules configuration](/configuration/rules) severity (error/warn/off). Complexity findings above configured thresholds are always errors; thresholds are inherited from your `fallow health` config (defaults: cyclomatic 20, cognitive 15). Duplication is a warning unless a `--threshold` is configured. With the default `new-only` gate, inherited error-severity findings can appear in the report while the audit exits 0.
 
 <Info>
   Inline suppression comments (`// fallow-ignore-next-line`) work in audit. Findings in changed files are suppressed the same way as in `fallow dead-code`.
@@ -102,6 +116,9 @@ fallow audit --base main
 
 # Audit last 3 commits
 fallow audit --base HEAD~3
+
+# Strict mode: fail on inherited findings too
+fallow audit --gate all
 ```
 
 ```bash CI integration
@@ -202,7 +219,8 @@ Audit scope: 12 changed files vs main (d4a2f91..HEAD)
 1. **Resolve base ref**: uses `--base` if provided, otherwise auto-detects the default branch (`git symbolic-ref refs/remotes/origin/HEAD` → `main` → `master`). Hard-errors if no base can be determined.
 2. **Find changed files**: runs `git diff --name-only <base>...HEAD` (three-dot diff, showing changes since the merge base).
 3. **Run three analyses** scoped to changed files: [dead code](/cli/dead-code), [complexity](/cli/health), [duplication](/cli/dupes).
-4. **Compute verdict**: aggregates severity across all three analyses into pass/warn/fail.
+4. **Compute attribution**: with `new-only`, runs the same analyses at the base ref and compares structural issue keys.
+5. **Compute verdict**: `new-only` gates only introduced findings; `all` gates every finding in changed files without the extra base-snapshot analysis.
 
 ## JSON output
 
@@ -223,10 +241,21 @@ Audit scope: 12 changed files vs main (d4a2f91..HEAD)
     "max_cyclomatic": 28,
     "duplication_clone_groups": 0
   },
+  "attribution": {
+    "gate": "new-only",
+    "dead_code_introduced": 2,
+    "dead_code_inherited": 0,
+    "complexity_introduced": 1,
+    "complexity_inherited": 0,
+    "duplication_introduced": 0,
+    "duplication_inherited": 0
+  },
   "dead_code": {
     "schema_version": 3,
     "total_issues": 2,
-    "unused_exports": [...]
+    "unused_exports": [
+      { "path": "src/components/Button.tsx", "export_name": "OldButton", "introduced": true, "actions": [...] }
+    ]
   },
   "complexity": {
     "findings": [...]
@@ -250,8 +279,11 @@ Audit scope: 12 changed files vs main (d4a2f91..HEAD)
 | `summary.complexity_findings` | integer | Functions exceeding complexity thresholds |
 | `summary.max_cyclomatic` | integer \| null | Highest cyclomatic complexity found (null if none) |
 | `summary.duplication_clone_groups` | integer | Clone groups involving changed files |
+| `attribution.*_introduced` | integer | Findings whose structural key did not exist at the base ref. With `gate=all`, these stay `0` because audit skips the base-snapshot attribution pass. |
+| `attribution.*_inherited` | integer | Findings already present at the base ref. With `gate=all`, these stay `0` because audit skips the base-snapshot attribution pass. |
+| `dead_code.*[].introduced` | boolean | Present in audit JSON sub-results when base attribution is available. `true` means the finding is new relative to the base ref. |
 
-The `dead_code`, `complexity`, and `duplication` sub-objects contain full results in the same format as [`fallow dead-code`](/cli/dead-code#json-output), [`fallow health`](/cli/health#json-output), and [`fallow dupes`](/cli/dupes#json-output) respectively. These are omitted when no files changed.
+The `dead_code`, `complexity`, and `duplication` sub-objects contain full results in the same format as [`fallow dead-code`](/cli/dead-code#json-output), [`fallow health`](/cli/health#json-output), and [`fallow dupes`](/cli/dupes#json-output) respectively. These are omitted when no files changed. In audit output, individual findings and clone groups include an optional `introduced` boolean when the base ref comparison is available.
 
 <Note>
   On exit code 2 (runtime error), JSON format emits `{"error": true, "message": "...", "exit_code": 2}` to stdout instead of the audit envelope.
@@ -265,12 +297,15 @@ The `audit` MCP tool wraps `fallow audit --format json --quiet --explain`:
 {
   "tool": "audit",
   "arguments": {
-    "base": "main"
+    "base": "main",
+    "gate": "new-only"
   }
 }
 ```
 
-Auto-detects the base branch if `base` is not specified. The response always includes `_meta` explanatory metadata (the MCP wrapper enables `--explain` by default). Returns the same JSON envelope as the CLI.
+Auto-detects the base branch if `base` is not specified. Set `gate` to `all` for strict mode. The response always includes `_meta` explanatory metadata (the MCP wrapper enables `--explain` by default). Returns the same JSON envelope as the CLI.
+
+`audit` creates a temporary git worktree to compare against the base ref and removes it on normal exit. If the process is force-killed, run `git worktree prune` to clean up stale `.git/worktrees/fallow-audit-base-*` entries.
 
 See [MCP integration](/integrations/mcp) for setup instructions.
 

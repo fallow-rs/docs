@@ -1,6 +1,6 @@
 ---
 title: "fallow coverage"
-description: "CLI reference for fallow coverage. Run the resumable setup flow and push a static function inventory so the dashboard can surface untracked code."
+description: "CLI reference for fallow coverage. Run the resumable setup flow, analyze local or cloud runtime coverage, and push static inventory so the dashboard can surface untracked code."
 keywords: ["fallow coverage", "coverage setup", "upload-inventory", "fallow-cov", "runtime coverage", "runtime coverage", "CLI"]
 icon: "wand-magic-sparkles"
 ---
@@ -9,10 +9,13 @@ icon: "wand-magic-sparkles"
 
 ```bash
 fallow coverage setup              # resumable first-run flow
+fallow coverage analyze --cloud --repo owner/repo
 fallow coverage upload-inventory   # push a static function inventory
 ```
 
 `setup` is the guided first-run path: license check, sidecar install, recipe generation, health handoff. It is intentionally resumable: run it once to bootstrap, follow the generated recipe, then run it again after traffic has been captured.
+
+`analyze` is the focused agent/CLI loop. Local mode reads a V8 or Istanbul artifact from disk. Cloud mode is explicit opt-in only and pulls the latest runtime facts for a repo before merging them with the current local AST/static analysis.
 
 `upload-inventory` is the CI step that unlocks the `Untracked` filter in the dashboard by pairing the runtime V8/Istanbul data (what actually ran) with the AST view of every function that exists.
 
@@ -133,6 +136,39 @@ On the second run, if coverage is present, setup runs the actual analysis for yo
 ```bash
 fallow health --runtime-coverage ./coverage
 ```
+
+## `analyze`
+
+Use local mode when you have a coverage artifact on disk:
+
+```bash
+fallow coverage analyze --runtime-coverage ./coverage --format json
+```
+
+Use cloud mode when you want the latest fallow.cloud runtime context for a repo:
+
+```bash
+FALLOW_API_KEY=fallow_live_... \
+  fallow coverage analyze --cloud --repo owner/repo --format json
+```
+
+`FALLOW_API_KEY` alone never selects cloud mode. You must pass `--cloud`, `--runtime-coverage-cloud`, or set `FALLOW_RUNTIME_COVERAGE_SOURCE=cloud`.
+
+### Analyze flags
+
+| Flag | Description |
+|:-----|:------------|
+| `--runtime-coverage <PATH>` | Local V8 directory, V8 JSON file, or Istanbul coverage map. Mutually exclusive with cloud mode. |
+| `--cloud`, `--runtime-coverage-cloud` | Explicitly fetch cloud runtime facts from `/v1/coverage/:repo/runtime-context`. |
+| `--repo <OWNER/REPO>` | Repository to fetch in cloud mode. Falls back to `$FALLOW_REPO`, then parsed `origin`. Slashes are URL-encoded as one route segment. |
+| `--api-key <KEY>` | Fallow cloud bearer token. Falls back to `$FALLOW_API_KEY`, but only after explicit cloud opt-in. |
+| `--api-endpoint <URL>` | Override the API base URL. Useful for staging and on-prem deployments. |
+| `--coverage-period <DAYS>` | Cloud observation window, 1 through 90 days. Default: 30. |
+| `--project-id <ID>` | Optional monorepo/project discriminator. |
+| `--environment <NAME>` | Optional cloud environment filter. |
+| `--commit-sha <SHA>` | Optional cloud commit filter. |
+
+Cloud analysis emits the same `runtime_coverage` JSON block as local mode. Its summary includes `data_source: "cloud"`, `last_received_at`, and `capture_quality` derived from the pulled runtime window. Cloud functions that cannot be matched to the local AST/static index are omitted from findings and reported through a `cloud_functions_unmatched` warning.
 
 ## Sidecar installation
 
