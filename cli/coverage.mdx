@@ -38,7 +38,7 @@ fallow coverage setup --yes --json
 |:-----|:------------|
 | `-y, --yes` | Accept prompts automatically. Useful for local setup when you want fallow to continue without confirmation prompts. |
 | `--non-interactive` | Print instructions instead of prompting. Useful in CI, remote shells, or agent workflows. |
-| `--json` | Emit deterministic agent-readable setup instructions as JSON. Implies `--non-interactive` and does not prompt, write files, install packages, activate a license, or make network calls. |
+| `--json` | Emit deterministic agent-readable setup instructions as JSON. Implies `--non-interactive` and does not prompt, write files, install packages, activate a license, or make network calls. Workspace projects emit a `members[]` array with one entry per runtime-bearing workspace (each with its own `framework_detected`, `runtime_targets`, `files_to_edit`, `snippets`, `dockerfile_snippet`); the top-level fields mirror the root member. |
 
 ## What setup detects automatically
 
@@ -46,12 +46,57 @@ fallow coverage setup --yes --json
 
 | Detection | Purpose |
 |:----------|:--------|
-| Framework | Chooses a recipe for Next.js, NestJS, Nuxt, SvelteKit, Astro, Remix, Vite browser apps, plain Node services, or a generic fallback. |
+| Framework | Chooses a recipe for Next.js, NestJS, Nuxt, SvelteKit, Astro, Remix, Vite browser apps, plain Node services, or a generic fallback. When both a Node-server framework (Elysia, Hono, Fastify, Express, Koa, `@trpc/server`) and Vite appear in the same `package.json`, the Node-server framework wins so the recipe targets the API rather than the bundled client. |
+| Workspace topology | Walks `workspaces` (npm/pnpm/yarn/bun) and emits one recipe per runtime-bearing member. Library-only workspaces (no `start`/`preview`/`dev` script and no Node-server dependency) are skipped. The top-level `runtime_targets` array is the union (`["node"]`, `["browser"]`, or `["node", "browser"]`) across all members. |
 | Package manager | Uses `packageManager`, lockfiles, or both to choose install commands for npm, pnpm, yarn, or bun. |
 | Coverage artifact | Detects existing `coverage/coverage-final.json`, `.nyc_output/coverage-final.json`, or JSON-containing V8 directories. |
 | Sidecar binary | Resolves `FALLOW_COV_BIN`, `FALLOW_COV_BINARY_PATH`, project-local shims, package-manager bin lookups, `~/.fallow/bin/fallow-cov`, and `PATH`. |
 
 If the project does not match a built-in framework recipe, fallow still writes a fallback `docs/collect-coverage.md` with a link to the public coverage docs for manual setup.
+
+### Agent-readable JSON
+
+`fallow coverage setup --yes --json` is the agent-driven entry point. The payload is deterministic, side-effect-free, and stable across reruns. On a workspace monorepo (Elysia API at root + two Vite browser apps in `dashboard/` and `site/`):
+
+```json
+{
+  "schema_version": "1",
+  "framework_detected": "plain_node",
+  "package_manager": "bun",
+  "runtime_targets": ["node", "browser"],
+  "members": [
+    {
+      "name": "fallow-cloud",
+      "path": ".",
+      "framework_detected": "plain_node",
+      "runtime_targets": ["node"],
+      "files_to_edit": [{"path": "src/index.ts", "reason": "..."}],
+      "snippets": [{"label": "Node entrypoint", "path": "src/index.ts", "content": "..."}],
+      "dockerfile_snippet": "ENV FALLOW_TRANSPORT=fs\nENV FALLOW_WRITE_TO_DIR=/tmp/fallow-coverage",
+      "warnings": []
+    },
+    {
+      "name": "fallow-dashboard",
+      "path": "dashboard",
+      "framework_detected": "vite",
+      "runtime_targets": ["browser"],
+      "files_to_edit": [{"path": "dashboard/src/main.ts", "reason": "..."}],
+      "snippets": [{"label": "Vite browser entry", "path": "dashboard/src/main.ts", "content": "..."}],
+      "dockerfile_snippet": null,
+      "warnings": []
+    }
+  ],
+  "config_written": null,
+  "commands": ["bun add @fallow-cli/beacon", "bun add -d @fallow-cli/fallow-cov"],
+  "files_to_edit": [{"path": "src/index.ts", "reason": "..."}],
+  "snippets": [{"label": "Node entrypoint", "path": "src/index.ts", "content": "..."}],
+  "dockerfile_snippet": "ENV FALLOW_TRANSPORT=fs\nENV FALLOW_WRITE_TO_DIR=/tmp/fallow-coverage",
+  "next_steps": [...],
+  "warnings": []
+}
+```
+
+`framework_detected` uses canonical ids (`nextjs`, `nestjs`, `nuxt`, `sveltekit`, `astro`, `remix`, `vite`, `plain_node`, `unknown`). The top-level `dockerfile_snippet` mirrors the root member, so on a browser-rooted monorepo with a Node child, agents should read each member's `dockerfile_snippet` rather than the top-level one. Single-app projects emit a `members` array of length 1 (path `"."`), so consumers can treat `members[]` uniformly.
 
 ## Generated recipe
 
