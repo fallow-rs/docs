@@ -26,16 +26,18 @@ fallow init
 | Flag | Description |
 |:-----|:------------|
 | `--toml` | Generate `fallow.toml` instead of `.fallowrc.json` |
-| `--hooks` | Scaffold a pre-commit git hook that runs fallow on changed files |
-| `--branch <REF>` | Base branch for the hook (requires `--hooks`, default: auto-detected via git or `main`) |
+| `--hooks` | Scaffold a pre-commit git hook that runs fallow on changed files. Alias for `fallow hooks install --target git` |
+| `--branch <REF>` | Fallback base branch for the hook when no upstream is set (requires `--hooks`, default: `main`) |
 
 ## Pre-commit hook
 
-Use `--hooks` to scaffold a git hook that runs `fallow audit` against the base branch before each commit:
+Use the hooks namespace to scaffold a git hook that runs `fallow audit` against the base branch before each commit:
 
 ```bash
-fallow init --hooks
+fallow hooks install --target git
 ```
+
+`fallow init --hooks` remains available as a project-initialization shortcut.
 
 Fallow detects your hook manager and writes to the right location:
 
@@ -46,21 +48,22 @@ Fallow detects your hook manager and writes to the right location:
 The generated hook:
 
 - Includes a binary guard (`command -v fallow`) so commits still work when fallow isn't installed
-- Runs `fallow audit --base <base> --quiet`, which combines dead-code, complexity, and duplication analysis
+- Resolves the base ref at commit time: `git merge-base @{upstream} HEAD` when an upstream is set, falling back to the configured branch (or `main`) otherwise. Feature branches forked from a non-default integration branch (next-release / hotfix / LTS) compare against the right base, not against their own remote tracking branch
+- Runs `fallow audit --base "$BASE" --quiet`, which combines dead-code, complexity, and duplication analysis
 - Defaults to `gate=new-only`, so inherited findings on touched files do not block the commit; only findings introduced by the changeset fail the gate. Set `[audit] gate = "all"` in `fallow.toml` to fail on every finding in changed files
 - Returns exit code 1 on `verdict: "fail"` (default audit semantics); no `--fail-on-issues` is needed
 - Prints `git commit --no-verify` as the bypass option in the success message
 
 <Info>
-  Want to gate Claude Code or Codex agent commits as well? Use [`fallow setup-hooks`](/integrations/claude-hooks) for the agent enforcement path. The two hooks are complementary: `fallow init --hooks` catches human commits, `fallow setup-hooks` catches agent commits.
+  Want to gate Claude Code or Codex agent commits as well? Use [`fallow hooks install --target agent`](/integrations/claude-hooks) for the agent enforcement path. The two hooks are complementary: `fallow hooks install --target git` catches human commits, `fallow hooks install --target agent` catches agent commits.
 </Info>
 
 ### Custom base branch
 
-By default, the hook uses the auto-detected base branch (or `main` as fallback). Override with `--branch`:
+By default, the hook compares against the merge-base of the current branch's upstream and `HEAD`, falling back to `main` when no upstream is set. Override the fallback with `--branch`:
 
 ```bash
-fallow init --hooks --branch develop
+fallow hooks install --target git --branch develop
 ```
 
 ## Gitignore
