@@ -64,7 +64,7 @@ CI catches unused code, duplication, and complexity issues that get past agent w
         | `save-snapshot` | -- | Save vital signs snapshot for trend tracking. Set to `true` for default path or provide a custom path (health and bare command) |
         | `dry-run` | `true` | Preview changes without modifying files (fix command) |
         | `coverage` | -- | Path to Istanbul `coverage-final.json` for accurate per-function CRAP scores (health and audit commands) |
-        | `coverage-root` | -- | Rebase Istanbul file paths before matching (health and audit commands). Use when coverage was generated under a different checkout root in CI / Docker (e.g., `/home/runner/work/myapp`). |
+        | `coverage-root` | -- | Absolute prefix to strip from Istanbul file paths before matching (health and audit commands). Use when coverage was generated under a different checkout root in CI / Docker (e.g., `/home/runner/work/myapp`). |
         | `max-crap` | `30.0` | CRAP score threshold (health and audit commands). Functions meeting or exceeding this score contribute to the verdict. |
         | `gate` | `new-only` | Audit verdict gate. `new-only` fails only on findings introduced by the changeset; `all` fails on every finding in changed files. |
         | `dead-code-baseline` / `health-baseline` / `dupes-baseline` | -- | Per-analysis baseline file paths for the audit command (saved by `fallow dead-code|health|dupes --save-baseline`). Used so pre-existing issues on touched files do not dominate the verdict. |
@@ -463,6 +463,74 @@ Only analyze files changed in the current pull request or merge request:
   Baselines must be committed to your repo. If you regenerate on every CI run, new issues are never reported.
   </Warning>
 </Accordion>
+
+### Severity-aware PR gate (audit)
+
+The default combined run gates on raw issue count: any finding in the changed files fails CI. That's the right contract for a tight feedback loop, but it doesn't honor rule severity. A project with `unused-exports: warn` (or any warn-tier rule) still fails CI when a PR touches a file with pre-existing warn-tier findings.
+
+`fallow audit` is the severity-aware alternative. It combines dead-code, complexity, and duplication analysis scoped to changed files and returns a verdict (`pass` / `warn` / `fail`):
+
+- **`pass`**: no issues in changed files
+- **`warn`**: only warn-tier issues; CI does not fail
+- **`fail`**: error-tier issues found; CI fails
+
+By default audit runs in `gate: new-only` mode, so only findings *introduced* by the current changeset affect the verdict. Pre-existing findings show up in the PR comment as inherited (with a count), but they do not gate the merge.
+
+<Tabs>
+  <Tab title="GitHub Action">
+    ```yaml
+    - uses: fallow-rs/fallow@v2
+      with:
+        command: audit
+        gate: new-only        # default; fails only on findings introduced by this PR
+        fail-on-issues: true
+    ```
+
+    The action exposes `outputs.verdict` (`pass`/`warn`/`fail`) and `outputs.gate` so downstream steps can branch on the verdict:
+
+    ```yaml
+    - uses: fallow-rs/fallow@v2
+      id: fallow
+      with:
+        command: audit
+
+    - name: Block release on regression
+      if: steps.fallow.outputs.verdict == 'fail'
+      run: exit 1
+    ```
+  </Tab>
+  <Tab title="GitLab CI">
+    ```yaml
+    fallow:
+      extends: .fallow
+      variables:
+        FALLOW_COMMAND: "audit"
+        FALLOW_AUDIT_GATE: "new-only"
+        FALLOW_FAIL_ON_ISSUES: "true"
+    ```
+  </Tab>
+  <Tab title="Manual">
+    ```bash
+    npx fallow audit --base origin/main --gate new-only --quiet
+    ```
+
+    Exits 0 on `pass`/`warn`, 1 on `fail`.
+  </Tab>
+</Tabs>
+
+#### Migrating from combined to audit
+
+If your project is on the default combined run today and you want severity-aware gating, add `command: audit` (`FALLOW_COMMAND: audit`) and the existing PR comment, annotations, and review comments continue to work. The audit run produces an extra verdict banner at the top of the PR comment:
+
+```
+> :x: Audit failed · gate: `new-only` · 2 new findings introduced by this PR · 5 inherited (not gated)
+```
+
+Use `gate: all` (`FALLOW_AUDIT_GATE: "all"`) if you want every finding in changed files to gate, ignoring the inherited-vs-introduced split. This is the strict posture: nothing slips in, but pre-existing findings on touched files block the merge until cleaned up.
+
+<Tip>
+Audit needs a base ref. The action and GitLab CI template auto-detect the PR/MR base, so no extra configuration is needed for that workflow. On non-PR pipelines (release branches, scheduled jobs), set `changed-since` (`FALLOW_CHANGED_SINCE`) explicitly; the runners hard-error rather than silently analyze nothing.
+</Tip>
 
 ## The three tracks together
 
