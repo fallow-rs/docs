@@ -37,17 +37,19 @@ preset = "bulletproof"
 Run `fallow list --boundaries` to see the expanded zones and rules:
 
 ```bash title="$ fallow list --boundaries"
-Boundaries: 4 zones, 4 rules
+Boundaries: 5 zones, 5 rules
 
 Zones:
   app                  3 files  src/app/**
-  features             12 files src/features/**
+  features/auth        7 files  src/features/auth/**
+  features/billing     5 files  src/features/billing/**
   shared               8 files  src/components/**, src/hooks/**, src/lib/**, ...
   server               4 files  src/server/**
 
 Rules:
-  app                  → features, shared, server
-  features             → shared, server
+  app                  → features/auth, features/billing, shared, server
+  features/auth        → shared, server
+  features/billing     → shared, server
   server               → shared
   shared               (isolated — no imports allowed)
 ```
@@ -58,13 +60,13 @@ Rules:
   <Tab title="Bulletproof">
     A widely used React/Next.js pattern. Feature modules are isolated from each other; shared utilities and server infrastructure form the base layers.
 
-    **4 zones:** `app`, `features`, `shared`, `server`
+    **4 logical zones:** `app`, `features`, `shared`, `server`. The `features` zone auto-discovers immediate child directories so sibling features are isolated as `features/<name>` zones.
 
     ```
-    app       → features, shared, server
-    features  → shared, server
-    server    → shared
-    shared    (isolated)
+    app              → every feature, shared, server
+    features/<name>  → shared, server
+    server           → shared
+    shared           (isolated)
     ```
 
     The `shared` zone covers: `components`, `hooks`, `lib`, `utils`, `utilities`, `providers`, `shared`, `types`, `styles`, `i18n`.
@@ -182,6 +184,28 @@ allow = []
 - **Self-imports** are always allowed (files in the same zone can freely import each other)
 - A zone with **no rule entry** is unrestricted: it can import from any zone
 - A zone with a rule and an **empty `allow` list** is isolated: it cannot import from other zones
+
+### Auto-discovered feature zones
+
+Use `autoDiscover` when one logical zone should create one concrete zone per child directory. This is useful for feature-module architectures where `src/features/auth` and `src/features/billing` should be isolated from each other without writing a zone and rule for every feature.
+
+```jsonc
+{
+  "boundaries": {
+    "zones": [
+      { "name": "app", "patterns": ["src/app/**"] },
+      { "name": "features", "autoDiscover": ["src/features"] },
+      { "name": "shared", "patterns": ["src/shared/**"] }
+    ],
+    "rules": [
+      { "from": "app", "allow": ["features", "shared"] },
+      { "from": "features", "allow": ["shared"] }
+    ]
+  }
+}
+```
+
+If `src/features/auth` and `src/features/billing` exist, fallow expands this to `features/auth` and `features/billing`. Rules that reference the logical `features` parent apply to every discovered feature. Explicit child rules, such as `from: "features/auth"`, override generated parent rules.
 
 ### Subtree scope (`root`)
 
