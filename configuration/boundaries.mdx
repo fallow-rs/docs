@@ -174,6 +174,7 @@ Rules define which zones may import from which. Each rule has:
 |:------|:-----|:------------|
 | `from` | `string` | The importing zone |
 | `allow` | `string[]` | Zones that `from` may import from |
+| `allowTypeOnly` | `string[]` | Zones that `from` may type-only-import from even when not in `allow` (optional) |
 
 <CodeGroup>
 ```jsonc .fallowrc.json
@@ -230,6 +231,62 @@ allow = []
 <Tip>
 Start with rules for your lowest-level zones (the ones that should import from nothing) and work upward.
 </Tip>
+
+## Type-only imports across boundaries
+
+TypeScript projects sometimes need type-level contracts between modules that must not have runtime dependencies on each other. A plugin system, for example, may declare a contribution interface in one feature that consumers in other features depend on at the type level only:
+
+```ts
+// features/metrics-panel/extension-api.ts
+export interface MetricsPanelContribution { items?: MetricItemProvider[]; }
+
+// features/extra-metrics/index.ts
+import type { MetricsPanelContribution } from '#/features/metrics-panel/extension-api';
+```
+
+The import is fully erased at compile time, so it carries no runtime coupling. To admit it without opening the full `allow` list to the target zone, add `allowTypeOnly`:
+
+<CodeGroup>
+```jsonc .fallowrc.json
+{
+  "boundaries": {
+    "rules": [
+      {
+        "from": "features/extra-metrics",
+        "allow": [],
+        "allowTypeOnly": ["features/metrics-panel"]
+      }
+    ]
+  }
+}
+```
+
+```toml fallow.toml
+[[boundaries.rules]]
+from = "features/extra-metrics"
+allow = []
+allowTypeOnly = ["features/metrics-panel"]
+```
+</CodeGroup>
+
+**What `allowTypeOnly` admits:**
+
+- Whole-declaration type imports: `import type { Foo } from '...'`
+- Namespace type imports: `import type * as ns from '...'`
+- Inline-type imports where every named specifier carries the `type` qualifier: `import { type Foo } from '...'`
+- Type-only re-exports: `export type { Foo } from '...'`
+
+**What it does NOT admit:**
+
+- Mixed-specifier imports where at least one specifier is value-typed (`import { type Foo, Bar }`) -- the runtime dependency on `Bar` still fires a violation
+- Plain value imports (`import { Foo } from '...'`)
+- Side-effect imports (`import '...'`) -- these run the target at runtime
+
+**Semantics:**
+
+- `allowTypeOnly` is independent of `allow`. A type-only edge is admitted if its target zone is in EITHER list.
+- The default value is an empty list, so omitting the field preserves pre-feature behavior exactly.
+- No preset (Layered, Hexagonal, FeatureSliced, Bulletproof) defaults the field on; type-only crossings are opt-in per rule.
 
 ## Merging presets with custom config
 
