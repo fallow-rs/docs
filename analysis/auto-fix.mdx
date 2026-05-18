@@ -78,6 +78,21 @@ Always commit your changes before running `fallow fix`. Git lets you undo if nee
 Auto-fix does not delete entire files or remove unused class members. Use `fallow dead-code` to find those and remove them manually.
 </Warning>
 
+## `auto_fixable` is per-finding, not per action type
+
+Every action in a finding's `actions[]` array carries an `auto_fixable` bool. The value is evaluated **per finding**, not per action type: the same action type may appear with `auto_fixable: true` on one finding and `auto_fixable: false` on another, depending on per-instance guards in the `fallow fix` applier.
+
+Agents that filter on `auto_fixable: true` to decide what is safe to apply blindly must branch on the bool of each individual action, not on the action `type` alone.
+
+Per-instance flips today:
+
+- **`remove-catalog-entry`** (unused-catalog-entries): `true` only when the finding's `hardcoded_consumers` array is empty. When a workspace package still pins a hardcoded version of the same package, `fallow fix` skips the entry to avoid breaking `pnpm install`, and the action is emitted with `auto_fixable: false`.
+- **`remove-dependency` vs `move-dependency`** (dependency findings): when the finding's `used_in_workspaces` array is non-empty, the primary action flips to `move-dependency` with `auto_fixable: false` because `fallow fix` will not remove a dependency that another workspace imports. On findings without cross-workspace consumers the action stays `remove-dependency` with `auto_fixable: true`.
+- **`add-to-config` for `ignoreExports`** (duplicate-exports): `true` when a fallow config file exists on disk; `false` otherwise. The applier declines to materialize a config file from scratch.
+- **`update-catalog-reference`** (unresolved-catalog-references): always `false` today. The catalog-switching applier is not yet wired; the field is non-singleton so future enablement does not require a schema change.
+
+All `suppress-line` and `suppress-file` actions are uniformly `auto_fixable: false`.
+
 ## JSON output
 
 For scripting, CI, and agent workflows:
