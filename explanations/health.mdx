@@ -104,6 +104,24 @@ function processOrder(order: Order): string {
 
 The `switch` has higher cyclomatic complexity (more paths to test) but is trivially readable. The nested `if` chain has lower cyclomatic complexity but is harder to follow. Cognitive complexity captures that difference.
 
+### Synthetic `<template>` and `<component>` findings
+
+Angular components render their work across two surfaces: a TypeScript class (methods, getters, lifecycle hooks) and a template (HTML control flow, bindings, interpolations). Fallow flags both, but the per-half findings would understate the total complexity an agent or developer is responsible for. Two synthetic finding shapes close that gap:
+
+| Finding `name`  | Path                                                                     | What `cyclomatic` and `cognitive` count                                                                                                                                                       |
+|:----------------|:-------------------------------------------------------------------------|:----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `<template>`    | The `.html` file or the `.ts` file containing the inline literal         | Template control-flow blocks (`@if`, `@for`, `@switch`, `@defer`, `@let`, legacy `*ngIf`/`*ngFor`), bound attributes, and interpolations                                                      |
+| `<component>`   | The `.ts` file declaring the `@Component`                                | `worst_class_method + template` for each metric. Anchored at the worst class method's line. Ranking and `--targets` use this rollup; the `component_rollup` payload carries the per-half breakdown |
+
+Both shapes route to the same rule ids as function findings: `fallow/high-cyclomatic-complexity`, `fallow/high-cognitive-complexity`, and `fallow/high-complexity`. They use the same thresholds (`max_cyclomatic`, `max_cognitive`) and the same severity bands. Templates that exceed the configured threshold are surfaced individually; if both a `<template>` and at least one class method on the same component file exceed thresholds, a `<component>` rollup is added alongside them.
+
+Acting on these findings differs from function findings:
+
+- **`<template>` findings** are easiest to address by splitting into child components, hoisting derived data into the class as computed signals (`computed(...)`), or replacing nested control flow with a flatter structure.
+- **`<component>` rollup findings** point to a component whose two halves together exceed the budget. Attack the larger half first: the `component_rollup.class_*` and `component_rollup.template_*` fields show which side contributes more.
+
+CRAP scoring on `<template>` findings inherits from the owning component class: the `templateUrl` edge means a template is reachable iff its class is reachable, and tests that exercise the class also exercise the template. The `inherited_from` field on a `<template>` finding's payload names the `.component.ts` file whose coverage drove the score, so the `increase-coverage` action targets the testable surface (the class) rather than the structurally untestable `.html`.
+
 
 ## File health scores
 
