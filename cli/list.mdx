@@ -56,20 +56,52 @@ fallow list --boundaries --format json
 ## Example output
 
 ```bash title="$ fallow list --boundaries"
-Boundaries: 4 zones, 4 rules
+Boundaries: 6 zones, 6 rules, 1 logical group
 
 Zones:
   app                  3 files  src/app/**
-  features             12 files src/features/**
+  features/auth        4 files  src/features/auth/**
+  features/billing     5 files  src/features/billing/**
+  features             3 files  src/features/**
   shared               8 files  src/components/**, src/hooks/**, src/lib/**, ...
   server               4 files  src/server/**
 
 Rules:
-  app                  → features, shared, server
-  features             → shared, server
+  features/auth        → shared, server
+  features/billing     → shared, server
+  app                  → features/auth, features/billing, features, shared, server
+  features             → shared, server, features/auth, features/billing
   server               → shared
-  shared               (isolated — no imports allowed)
+  shared               (isolated, no imports allowed)
+
+Logical groups:
+  features             12 files autoDiscover: src/features
+    children: features/auth, features/billing
 ```
+
+The `Logical groups:` section appears whenever the config (or a preset) uses
+`autoDiscover` to fan a parent zone out into one zone per child directory.
+Each entry shows the user-authored parent name, the exact `autoDiscover` paths
+as written, the discovered children, and a summed file count. The human output
+puts misconfigured entries (`invalid path`, `empty`) first inside the section
+and splits the file count into `N files (X children + Y fallback)` when the
+parent has both `patterns` and `autoDiscover` (e.g. the Bulletproof preset).
+The `--format json` output mirrors this in a parallel
+`boundaries.logical_groups[]` array, with extra fields for round-trip config
+tooling: `auto_discover` (verbatim user strings), `source_zone_index`
+(position in the pre-expansion `zones[]`), `status` (`ok` / `empty` /
+`invalid_path`), `authored_rule` (the pre-expansion rule keyed on the parent),
+`fallback_zone` (a back-reference when the parent kept its own `patterns` and
+stayed in `zones[]`, as in the Bulletproof preset), `merged_from` (parent zone
+indices when the user declared the same parent name twice; surfaces the
+duplicate that would otherwise only appear in `tracing::warn!`),
+`original_zone_root` (echo of the parent's `root` subtree scope so monorepo
+patchers can tell whether `root` was authored on the parent or per-child), and
+`child_source_indices` (parallel to `children`, attributing each child to a
+specific `auto_discover` entry when multiple paths were authored). The full
+shape is documented in
+[`docs/output-schema.json`](https://github.com/fallow-rs/fallow/blob/main/docs/output-schema.json)
+under `ListBoundariesOutput`.
 
 ```bash title="$ fallow list --plugins"
 Active plugins:
