@@ -25,6 +25,7 @@ fallow fix
 |:-----|:------------|
 | `--dry-run` | Preview changes without applying |
 | `--yes, --force` | Skip confirmation (required in non-TTY) |
+| `--no-create-config` | Refuse to create a new `.fallowrc.json` when none exists (use in pre-commit hooks, CI bots, and `fallow watch`) |
 | `-f, --format <FORMAT>` | Output format: `human` (default), `json` |
 
 ## What gets fixed
@@ -33,8 +34,60 @@ fallow fix
 - **Unused dependencies**: removed from `package.json` when they are not imported by another workspace
 - **Unused enum members**: removed from the enum declaration. When every member of an exported enum is unused, the whole declaration is deleted in one pass instead of leaving behind an empty `export enum X {}` shell. Importers in other files now reference a name that no longer exists, so run your TypeScript build to find and clean them up.
 - **Unused pnpm catalog entries**: removed from `pnpm-workspace.yaml` by line-aware deletion (comments and stylistic choices in the file are preserved). Object-form entries such as `react:\n  specifier: ^18.2.0` are removed as one block. When the last entry of a catalog group is removed, the header is rewritten to `catalog: {}` (or `<name>: {}`) so the file stays installable; bare `catalog:` with no value parses as null and pnpm errors at install time. Entries whose `hardcoded_consumers` is non-empty (a workspace package still pins a hardcoded version of the same package) are skipped to avoid breaking the next `pnpm install`; the skip is surfaced in stderr and in the JSON output (`{"type": "remove_catalog_entry", "applied": false, "skipped": true, "skip_reason": "hardcoded_consumers", "consumers": [...]}`). After a successful catalog edit fallow reminds you to run `pnpm install` so `pnpm-lock.yaml` stays in sync. The JSON envelope grows a top-level `"skipped"` count alongside `"total_fixed"` for partial-fix gating in CI.
+- **Duplicate exports**: an `ignoreExports` rule is appended to your fallow config file. Common in shadcn / Radix / bits-ui namespace-barrel codebases where dozens of `components/<name>/index.ts` files intentionally re-export the same short names. When no fallow config file exists, `.fallowrc.json` is created using the same scaffolding `fallow init` would emit (framework detection, `$schema`, `entry`, `ignorePatterns`, etc.) and the rules are layered on top, so the post-fix `fallow check` doesn't start surfacing new findings.
 
 Unused files and class members are not auto-fixed. Use `fallow dead-code` to find those.
+
+## Missing config file
+
+When `fallow fix` finds duplicate-export issues and no fallow config exists, it creates `.fallowrc.json` automatically, scaffolded the same way as `fallow init` (TypeScript / Storybook / Vitest / Jest / Playwright / React / Vue / Angular / Svelte detection, sensible defaults, plus the new `ignoreExports` rules). The created file is reported on stderr:
+
+```
+Created .fallowrc.json with 2 ignoreExports rule(s). Add it to git.
+```
+
+In monorepo subpackages (one of `pnpm-workspace.yaml`, `package.json#workspaces`, `turbo.json`, `lerna.json`, `rush.json` above the invocation directory), the create-fallback refuses to avoid fragmenting one config file across N sub-packages. Instead it emits a directive pointing at the workspace root:
+
+```
+Skipped duplicate-export config fix: no fallow config file at packages/ui and the
+directory is inside a monorepo (workspace root: /repo). Run `fallow init` at the
+workspace root, or invoke `fallow fix` from /repo instead of from a subpackage.
+```
+
+For pre-commit hooks, CI bots, and `fallow watch` where silently materialising a new top-level file would surprise the user, pass `--no-create-config`:
+
+```bash
+# Pre-commit hook
+fallow fix --yes --no-create-config
+
+# CI: never create configs as a side effect
+fallow fix --yes --no-create-config --format json
+```
+
+The duplicate-export config-add path is skipped with an explanatory message; source-file edits (unused exports, dependencies, enum members, catalog entries) proceed normally.
+
+## Dry-run config diff
+
+`fallow fix --dry-run` against duplicate-export findings prints the proposed config write as a unified diff so you can audit the exact bytes that would land before passing `--yes`. For the create-fallback case the diff shows the full proposed file (BEFORE is empty):
+
+```diff
+Would create .fallowrc.json with 2 ignoreExports rule(s):
+--- .fallowrc.json (does not exist)
++++ .fallowrc.json (proposed)
+@@ -0,0 +1,35 @@
++{
++  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
++  "entry": ["src/index.{ts,tsx,js,jsx}", "src/main.{ts,tsx,js,jsx}"],
++  "ignorePatterns": [".storybook/**"],
++  ...
++  "ignoreExports": [
++    { "file": "src/components/Button/index.ts", "exports": ["*"] },
++    { "file": "src/components/Card/index.ts", "exports": ["*"] }
++  ]
++}
+```
+
+For the edit case (existing config), the diff shows context lines around the proposed additions. JSON output (`--dry-run --format json`) includes the same diff under a `proposed_diff` field on the fix entry, plus a `created_files: [".fallowrc.json"]` array on the create-fallback path so agents can detect file-creation side effects programmatically.
 
 ## Examples
 
