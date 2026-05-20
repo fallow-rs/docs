@@ -396,6 +396,25 @@ CI catches unused code, duplication, and complexity issues that get past agent w
 Both the GitHub Action and GitLab CI template automatically scope analysis to changed files in PR/MR context. No extra configuration needed.
 </Tip>
 
+### Binary verification
+
+The `fallow-rs/fallow` GitHub Action and the GitLab CI template both install fallow via `npm install -g fallow@<spec>`. As of v2.77, each `@fallow-cli/<platform>` npm package ships an Ed25519 `.sig` next to every binary, and verification runs in two places:
+
+1. The npm postinstall script (`npm/fallow/scripts/postinstall.js`) verifies all three binaries (`fallow`, `fallow-lsp`, `fallow-mcp`) against the embedded public key. A tampered binary aborts the install with exit code 1.
+2. The GitHub Action installer (`action/scripts/install.sh`) re-runs the same verification explicitly after `npm install -g` as defense in depth on CI runners, where the secrets exposure is highest.
+
+A failed verification produces a `::error::` annotation in the Action log and a non-zero exit, aborting the workflow before any user code reads a swapped binary.
+
+To override verification (only when deliberately replacing the published binary, for example with a source build or a private-mirror re-pack), set `FALLOW_SKIP_BINARY_VERIFY=1` in the step's environment:
+
+```yaml
+- uses: fallow-rs/fallow@v2
+  env:
+    FALLOW_SKIP_BINARY_VERIFY: '1'
+```
+
+Do not set this in normal CI configurations. The public key fingerprint and the manual out-of-band verification recipe live in [`SECURITY.md`](https://github.com/fallow-rs/fallow/blob/main/SECURITY.md) on the main repo. The VS Code extension performs the same Ed25519 verification on its auto-downloaded binary; see [the extension docs](/integrations/vscode) for details.
+
 ### PR/MR-only analysis
 
 Only analyze files changed in the current pull request or merge request:
