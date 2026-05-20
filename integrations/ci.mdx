@@ -398,10 +398,11 @@ Both the GitHub Action and GitLab CI template automatically scope analysis to ch
 
 ### Binary verification
 
-The `fallow-rs/fallow` GitHub Action and the GitLab CI template both install fallow via `npm install -g fallow@<spec>`. As of v2.77, each `@fallow-cli/<platform>` npm package ships an Ed25519 `.sig` next to every binary, and verification runs in two places:
+The `fallow-rs/fallow` GitHub Action and the GitLab CI template both install fallow via `npm install -g fallow@<spec>`. As of v2.77, each `@fallow-cli/<platform>` npm package ships an Ed25519 `.sig` next to every binary, and verification runs in two layers across two surfaces:
 
-1. The npm postinstall script (`npm/fallow/scripts/postinstall.js`) verifies all three binaries (`fallow`, `fallow-lsp`, `fallow-mcp`) against the embedded public key. A tampered binary aborts the install with exit code 1.
-2. The GitHub Action installer (`action/scripts/install.sh`) re-runs the same verification explicitly after `npm install -g` as defense in depth on CI runners, where the secrets exposure is highest.
+1. **Ed25519 signature** (offline, rooted in the workflow's signing key): the npm postinstall script (`npm/fallow/scripts/postinstall.js`) verifies all three binaries (`fallow`, `fallow-lsp`, `fallow-mcp`) against the embedded public key. A tampered binary aborts the install with exit code 1.
+2. **SHA-256 digest** (online, rooted in GitHub's release integrity surface): the verifier also fetches the matching `asset.digest` field from `https://api.github.com/repos/fallow-rs/fallow/releases/tags/v<version>` and confirms each binary's SHA-256 matches. A swapped binary that somehow carried a valid signature would still fail the digest check.
+3. **Action installer re-runs both layers** (`action/scripts/install.sh`) after `npm install -g --ignore-scripts`. The verifier is loaded from the checked-out Action tree, not the installed npm package, so a tampered postinstall cannot self-validate. This is defense in depth on CI runners, where secrets exposure is highest.
 
 A failed verification produces a `::error::` annotation in the Action log and a non-zero exit, aborting the workflow before any user code reads a swapped binary.
 
@@ -413,7 +414,7 @@ To override verification (only when deliberately replacing the published binary,
     FALLOW_SKIP_BINARY_VERIFY: '1'
 ```
 
-Do not set this in normal CI configurations. The public key fingerprint and the manual out-of-band verification recipe live in [`SECURITY.md`](https://github.com/fallow-rs/fallow/blob/main/SECURITY.md) on the main repo. The VS Code extension performs the same Ed25519 verification on its auto-downloaded binary; see [the extension docs](/integrations/vscode) for details.
+Do not set this in normal CI configurations. The public key fingerprint and the manual out-of-band verification recipe live in [`SECURITY.md`](https://github.com/fallow-rs/fallow/blob/main/SECURITY.md) on the main repo. The VS Code extension performs Ed25519 verification on its auto-downloaded binary; see [the extension docs](/integrations/vscode) for details.
 
 ### PR/MR-only analysis
 
