@@ -26,7 +26,7 @@ Fallow detects 17 types of dead code:
 | **Unused devDependencies** | Packages in `devDependencies` never imported or used as script binaries |
 | **Unused optionalDependencies** | Packages in `optionalDependencies` never imported or used as script binaries |
 | **Unused enum members** | Enum values never referenced |
-| **Unused class members** | Class methods and properties never referenced outside their class, with inheritance tracking, decorator exclusion, and framework lifecycle allowlists |
+| **Unused class members** | Class methods and properties never referenced outside their class, with inheritance tracking, configurable decorator exclusion via `ignoreDecorators`, and framework lifecycle allowlists |
 | **Unused catalog entries** | Entries in `pnpm-workspace.yaml`'s `catalog:` or `catalogs:` maps that no workspace package references via the `catalog:` protocol |
 | **Unresolved imports** | Import specifiers that cannot be resolved |
 | **Unlisted dependencies** | Imported packages missing from `package.json` |
@@ -462,9 +462,30 @@ class OrderService {
 What fallow handles automatically:
 
 - **Inheritance**: A method defined on a parent class and called via the parent type credits the child's override as used
-- **Decorators**: Any decorated member is excluded from detection. Decorators like `@Get()`, `@Column()`, `@Injectable()` indicate runtime wiring
+- **Decorators**: Decorated members are excluded from detection by default. Decorators like `@Get()`, `@Column()`, `@Injectable()` indicate runtime wiring
 - **Framework lifecycle methods**: `componentDidMount`, `ngOnInit`, `connectedCallback`, and other framework lifecycle methods are never flagged
 - **Whole-object patterns**: `Object.values(instance)`, `Object.keys()`, spread operators, and `for..in` loops conservatively mark all members as used
+
+### Opting decorators out via `ignoreDecorators`
+
+If you use utility decorators that do NOT imply reflective consumption (Playwright's `@step("label")`, internal labeling decorators like `@measure`, `@log`, `@retry`), list their names in the `ignoreDecorators` config option so methods decorated with ONLY those names are checked for usage like undecorated methods.
+
+```jsonc
+// .fallowrc.json
+{
+  "ignoreDecorators": ["@step"]
+}
+```
+
+Conservative semantics: a method carrying any decorator NOT in the list still gets skipped, so `@step` combined with `@Inject` on the same method stays treated as framework-managed.
+
+Matching rule:
+
+- Entries containing `.` (`"decorators.log"`) match the full dotted decorator path.
+- Bare entries (`"step"` or `"decorators"`) match the leftmost segment, so a single bare `"decorators"` entry collapses an entire `@decorators.*` namespace.
+- Both `"@step"` and `"step"` round-trip equivalently (a leading `@` is stripped before matching).
+
+Unmatched entries (a decorator name in the config that never appears in your codebase) surface as a one-time warning at end of run, mirroring the existing `usedClassMembers` behavior. The default empty list preserves today's skip-all behavior, so existing NestJS / Angular / TypeORM projects see no change.
 
 <Note>
 Class member detection works via syntactic analysis, without invoking the TypeScript compiler. This means fallow tracks member access through the import graph, not through type resolution.
