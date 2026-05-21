@@ -17,6 +17,7 @@ Fallow reads a small set of environment variables to override default behavior. 
 | `FALLOW_PRODUCTION_DEAD_CODE` | Per-analysis production override for dead-code (combined runs and `fallow audit`) | Same values as `FALLOW_PRODUCTION` |
 | `FALLOW_PRODUCTION_HEALTH` | Per-analysis production override for health | Same values as `FALLOW_PRODUCTION` |
 | `FALLOW_PRODUCTION_DUPES` | Per-analysis production override for duplication | Same values as `FALLOW_PRODUCTION` |
+| `FALLOW_AUDIT_CACHE_MAX_AGE_DAYS` | Max age of persistent reusable `fallow audit` base-snapshot worktree caches | Whole days (default `30`; `0` disables) |
 
 ## FALLOW_FORMAT
 
@@ -74,6 +75,19 @@ fallow dead-code   # cache capped at 64 MB
 Defaults to `256` (MB) when not set. The cache triggers LRU eviction when its serialized size crosses 80% of the cap and evicts down to 60%. Intended for CI runners with disk quotas; local dev machines on full-size disks rarely need to touch this knob.
 
 `--no-cache` disables the cache entirely; this env var is then irrelevant.
+
+## FALLOW_AUDIT_CACHE_MAX_AGE_DAYS
+
+Maximum age (in whole days, since last reuse or fresh create) of a persistent reusable `fallow audit` base-snapshot worktree cache. Older entries are removed at the top of the next `fallow audit` invocation. Wins over the `audit.cacheMaxAgeDays` config field when both are set.
+
+```bash
+export FALLOW_AUDIT_CACHE_MAX_AGE_DAYS=7
+fallow audit --base origin/main   # caches older than 7 days are reclaimed
+```
+
+Defaults to `30` days when not set. Setting the value to `0` disables the GC entirely (escape hatch for CI runners that prune `/tmp` out-of-band). Invalid values (non-integer, negative) silently fall back to the config field / default; a typo in a runner env var does not fail audits.
+
+The sweep runs once per `fallow audit` invocation, walks git-registered worktrees only (not raw `/tmp` content), and never removes a cache entry that another in-flight `fallow audit` is using (per-entry kernel `flock(2)` guard). On reclaim, fallow writes a single `fallow: reclaimed N stale base-snapshot caches` line to stderr (unless `--quiet` is set) so the disk-space recovery is observable.
 
 ## FALLOW_PRODUCTION and per-analysis overrides
 
