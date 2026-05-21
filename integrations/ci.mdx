@@ -240,7 +240,7 @@ CI catches unused code, duplication, and complexity issues that get past agent w
         npx fallow ci-template gitlab --vendor
         ```
 
-        This writes `ci/gitlab-ci.yml` plus 13 jq/bash helpers under `ci/` and `action/`. Commit the generated files and switch to a local include:
+        This writes `ci/gitlab-ci.yml` plus two helper scripts (`ci/scripts/comment.sh`, `ci/scripts/review.sh`) under `ci/`. Commit the generated files and switch to a local include:
 
         ```yaml
         include:
@@ -342,6 +342,89 @@ CI catches unused code, duplication, and complexity issues that get past agent w
         ```
       </Tab>
     </Tabs>
+
+    ### Consuming review envelopes from your own code
+
+    Use this path when your CI runners cannot use remote includes, do not have `jq` installed, or cannot delegate API tokens to third-party binaries. Run fallow to emit the typed `review-github` or `review-gitlab` envelope, then POST the comments yourself from the same job that already holds the token. Fallow has already done the rendering, fingerprinting, and DiffNote positioning; the consumer just iterates and POSTs.
+
+    #### Envelope shape
+
+    ```bash
+    gh pr diff $PR_NUMBER | npx fallow audit --diff-stdin --format review-github
+    glab mr diff $CI_MERGE_REQUEST_IID | npx fallow audit --diff-stdin --format review-gitlab
+    ```
+
+    Output:
+
+    ```json
+    {
+      "event": "COMMENT",
+      "body": "### Fallow audit\n\n3 inline findings selected for GitHub review.\n\n<!-- fallow-review -->",
+      "comments": [
+        {
+          "path": "src/utils.ts",
+          "line": 42,
+          "side": "RIGHT",
+          "body": "**error** `fallow/unused-export`: ...\n\n<!-- fallow-fingerprint: 9a8b7c6d5e -->",
+          "fingerprint": "9a8b7c6d5e"
+        }
+      ],
+      "meta": {
+        "schema": "fallow-review-envelope/v1",
+        "provider": "github",
+        "check_conclusion": "failure"
+      }
+    }
+    ```
+
+    Every entry under `comments[]` is fully rendered Markdown, ready to POST as-is. The `<!-- fallow-fingerprint: <hash> -->` marker embedded in each body is the stable identifier used for reconciliation across runs.
+
+    For GitLab, each comment additionally carries a `position` block with `base_sha`, `start_sha`, `head_sha`, `position_type`, `old_path`, `new_path`, and `new_line`, matching the fields GitLab's discussions API expects.
+
+    #### Environment variables that feed the envelope
+
+    | Variable | Provider | Purpose |
+    |:---------|:---------|:--------|
+    | `FALLOW_MAX_COMMENTS` | Both | Caps the number of inline comments (default 50). |
+    | `CI_MERGE_REQUEST_DIFF_BASE_SHA` | GitLab | Auto-populates `position.base_sha`. |
+    | `CI_COMMIT_SHA` | GitLab | Auto-populates `position.head_sha`. |
+    | `FALLOW_GITLAB_BASE_SHA` / `FALLOW_GITLAB_START_SHA` / `FALLOW_GITLAB_HEAD_SHA` | GitLab | Overrides the auto-populated SHAs when running outside a standard GitLab MR pipeline. |
+
+    If neither `CI_MERGE_REQUEST_DIFF_BASE_SHA` nor `FALLOW_GITLAB_BASE_SHA` is set, the `position` block is emitted with `null` SHAs and the consumer must supply them from the MR's `diff_refs` before POSTing.
+
+    #### Minimal consumer (GitLab)
+
+    ```bash
+    fallow audit --diff-stdin --format review-gitlab < diff.patch > plan.json
+
+    jq -c '.comments[]' plan.json | while read -r comment; do
+      curl --silent --request POST \
+        --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+        --header "Content-Type: application/json" \
+        --data "$comment" \
+        "$CI_API_V4_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID/discussions"
+    done
+    ```
+
+    If `jq` is also unavailable on your runner, parse the JSON in your CI language of choice (Node, Python, Go) and POST each entry verbatim. The wire shape under `comments[].position` matches GitLab's discussions API one-for-one, so no field remapping is required.
+
+    #### Reconciliation across runs
+
+    To avoid duplicate threads on later pushes, fetch the existing MR discussions before POSTing and skip entries whose `fingerprint` already appears in an existing note body. Match against the `<!-- fallow-fingerprint: <hash> -->` marker, which is stable across fallow versions:
+
+    ```bash
+    existing=$(curl --silent --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+      "$CI_API_V4_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID/discussions?per_page=100")
+
+    # For each comment in plan.json, only POST when its fingerprint
+    # is not already present in $existing.
+    ```
+
+    For automated stale-thread cleanup (mark threads as resolved when a finding disappears between runs), use `fallow ci reconcile-review --provider gitlab` if you can grant a token to fallow itself. If you cannot, mirror the same fingerprint diff logic in your own script: the marker convention is the contract that lets both reconciliation paths agree.
+
+    #### Schema stability
+
+    The envelope is tagged `meta.schema: "fallow-review-envelope/v1"`. Field additions are backwards-compatible (consumers should ignore unknown fields). The fingerprint hash is derived from `rule_id + path + snippet`, so it survives whitespace-only changes and body Markdown evolution.
 
     ### Duplication checks
 
