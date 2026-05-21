@@ -354,32 +354,51 @@ CI catches unused code, duplication, and complexity issues that get past agent w
     glab mr diff $CI_MERGE_REQUEST_IID | npx fallow audit --diff-stdin --format review-gitlab
     ```
 
-    Output:
+    Output (v2 envelope, fallow >= 2.77.0):
 
     ```json
     {
       "event": "COMMENT",
-      "body": "### Fallow audit\n\n3 inline findings selected for GitHub review.\n\n<!-- fallow-review -->",
+      "body": "### Fallow audit\n\n3 inline findings selected for GitHub review.\n\n<!-- fallow-review -->\n\n<!-- fallow-fingerprint:v2: 06bf55db1c35210d -->",
+      "summary": {
+        "body": "### Fallow audit\n\n3 inline findings selected for GitHub review.\n\n<!-- fallow-review -->\n\n<!-- fallow-fingerprint:v2: 06bf55db1c35210d -->",
+        "fingerprint": "06bf55db1c35210d"
+      },
       "comments": [
         {
           "path": "src/utils.ts",
           "line": 42,
           "side": "RIGHT",
-          "body": "**error** `fallow/unused-export`: ...\n\n<!-- fallow-fingerprint: 9a8b7c6d5e -->",
-          "fingerprint": "9a8b7c6d5e"
+          "body": "**error** `fallow/unused-export`: ...\n\n<!-- fallow-fingerprint:v2: 9a8b7c6d5e4f3a2b -->",
+          "fingerprint": "9a8b7c6d5e4f3a2b"
+        },
+        {
+          "path": "package.json",
+          "line": 5,
+          "side": "RIGHT",
+          "body": "**error** `fallow/unused-dependency`: ...\n\n**warn** `fallow/unused-dev-dependency`: ...\n\n<!-- fallow-fingerprint:v2: linecomp:9a18387f430bc48d -->",
+          "fingerprint": "linecomp:9a18387f430bc48d",
+          "constituent_fingerprints": ["1d04d08d81daf650", "2a4393b133ea1523"]
         }
       ],
+      "marker_regex": "(?m)^<!-- fallow-fingerprint:v2: ((?:[a-z]+:)?[0-9a-f]{16}) -->\\s*$",
       "meta": {
-        "schema": "fallow-review-envelope/v1",
+        "schema": "fallow-review-envelope/v2",
         "provider": "github",
         "check_conclusion": "failure"
       }
     }
     ```
 
-    Every entry under `comments[]` is fully rendered Markdown, ready to POST as-is. The `<!-- fallow-fingerprint: <hash> -->` marker embedded in each body is the stable identifier used for reconciliation across runs.
+    Every entry under `comments[]` is fully rendered Markdown, ready to POST as-is. The `<!-- fallow-fingerprint:v2: <fingerprint> -->` marker embedded in each body is the stable identifier used for reconciliation across runs. The top-level `marker_regex` is the canonical extraction pattern; running it (with one capture group) against any existing PR/MR comment yields the fingerprint string. The `(?m)` inline-multiline flag makes the regex work in both Rust's `regex` crate and JavaScript ES2018 RegExp without flag-awareness on the consumer side.
 
-    For GitLab, each comment additionally carries a `position` block with `base_sha`, `start_sha`, `head_sha`, `position_type`, `old_path`, `new_path`, and `new_line`, matching the fields GitLab's discussions API expects.
+    The top-level `summary: { body, fingerprint }` block carries the sticky-summary comment. `summary.body` is byte-identical to the legacy top-level `body` field (which is retained for v1 consumers); `summary.fingerprint` is what consumers match against existing comments to upsert the sticky summary in place. One fallow invocation now produces both the summary and the inline comments, so consumers no longer need a second `fallow --format pr-comment-{github,gitlab}` run.
+
+    When multiple findings collide on the same `path:line` (e.g., three `unused-dependency` variants on `package.json:5`), they collapse into one comment with stacked body paragraphs and a stable `fingerprint = "linecomp:<16-hex of path:line>"` keyed on `(path, line)`. The primary fingerprint stays stable across runs even when constituent findings change membership, enabling update-in-place reconciliation that preserves reviewer reply threads. The `constituent_fingerprints` array carries the per-finding v1-style fingerprints in stable sort order so consumers detect content change between runs. Single-finding comments keep the bare 16-hex `fingerprint` shape and omit `constituent_fingerprints` entirely.
+
+    Each comment may also carry a `truncated: bool` field. When `true`, the body was truncated to fit under a conservative 65,536-byte cap (GitHub PR review comments empirically reject anything larger; GitLab note bodies accept up to 1,000,000 characters per the [GitLab application limits docs](https://docs.gitlab.com/administration/instance_limits/)). Truncated bodies always contain three co-present signals: the typed `truncated: true` flag, an inline `<!-- fallow-truncated -->` HTML marker, and a `> Body truncated by fallow.` blockquote breadcrumb. The closing fallow-fingerprint marker survives truncation so reconciliation continues to work.
+
+    For GitLab, each comment additionally carries a `position` block with `base_sha`, `start_sha`, `head_sha`, `position_type`, `old_path`, `new_path`, and `new_line`, matching the fields GitLab's discussions API expects. **For renamed files** (when fallow is run with `--diff-file` or `--diff-stdin`), `old_path` is populated with the base-side filename from the diff's `rename from` / `rename to` extended headers; inline comments on renamed files now anchor correctly via GitLab's discussion-position API. Falls back to the head-side path when no rename is present in the diff (the common case).
 
     #### Environment variables that feed the envelope
 
@@ -410,21 +429,31 @@ CI catches unused code, duplication, and complexity issues that get past agent w
 
     #### Reconciliation across runs
 
-    To avoid duplicate threads on later pushes, fetch the existing MR discussions before POSTing and skip entries whose `fingerprint` already appears in an existing note body. Match against the `<!-- fallow-fingerprint: <hash> -->` marker, which is stable across fallow versions:
+    To avoid duplicate threads on later pushes, fetch the existing MR discussions before POSTing and extract their fingerprints with the regex fallow emits in the envelope's `marker_regex` field. The capture group yields the fingerprint string; consumers compare against `comments[].fingerprint` to filter to new entries:
 
     ```bash
     existing=$(curl --silent --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
       "$CI_API_V4_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID/discussions?per_page=100")
 
+    # Extract fingerprints from existing discussion bodies via the
+    # marker_regex fallow emits in plan.marker_regex (one capture group).
+    # The regex uses (?m) inline-multiline, so it works in both Rust and JS.
+    marker_regex=$(jq -r '.marker_regex' plan.json)
+    existing_fps=$(echo "$existing" | jq -r '.[].notes[].body? // empty' \
+      | sed -nE "s|.*${marker_regex}.*|\\1|p" \
+      | sort -u)
+
     # For each comment in plan.json, only POST when its fingerprint
-    # is not already present in $existing.
+    # is not already present in $existing_fps.
     ```
 
-    For automated stale-thread cleanup (mark threads as resolved when a finding disappears between runs), use `fallow ci reconcile-review --provider gitlab` if you can grant a token to fallow itself. If you cannot, mirror the same fingerprint diff logic in your own script: the marker convention is the contract that lets both reconciliation paths agree.
+    For automated stale-thread cleanup (mark threads as resolved when a finding disappears between runs), use `fallow ci reconcile-review --provider gitlab` if you can grant a token to fallow itself. If you cannot, mirror the same fingerprint diff logic in your own script: the marker convention is the contract that lets both reconciliation paths agree. The bundled reconciler accepts both v1 (`<!-- fallow-fingerprint: <hash> -->`) and v2 (`<!-- fallow-fingerprint:v2: <fingerprint> -->`) markers during the migration window, so re-processing a v1 backlog after upgrading is transparent.
+
+    **Stable-fingerprint reconciliation for merged comments**: when same-(`path`, `line`) findings collapse to one comment with a `linecomp:<...>` primary fingerprint, the comment's fingerprint stays stable across runs even when constituent findings change membership. Consumers detect content change by diffing the `constituent_fingerprints` array between runs and PATCH the comment body in place via the GitLab discussion-notes API (preserving reviewer reply threads on the thread) instead of delete-and-recreate.
 
     #### Schema stability
 
-    The envelope is tagged `meta.schema: "fallow-review-envelope/v1"`. Field additions are backwards-compatible (consumers should ignore unknown fields). The fingerprint hash is derived from `rule_id + path + snippet`, so it survives whitespace-only changes and body Markdown evolution.
+    The envelope is tagged `meta.schema: "fallow-review-envelope/v2"` (issue #528 evolution). Field additions are backwards-compatible (consumers should ignore unknown fields). The fingerprint hash is derived from `rule_id + path + snippet`, so it survives whitespace-only changes and body Markdown evolution. Consumers running v1-shaped logic against v2 output continue to work; the v1 top-level `body` field is retained for that path. Consumers running v2-aware logic should validate the schema marker against `^fallow-review-envelope/v[0-9]+$` so the same code keeps working when fallow bumps to v3 in the future.
 
     ### Duplication checks
 
