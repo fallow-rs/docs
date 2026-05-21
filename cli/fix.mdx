@@ -66,6 +66,12 @@ fallow fix --yes --no-create-config --format json
 
 The duplicate-export config-add path is skipped with an explanatory message; source-file edits (unused exports, dependencies, enum members, catalog entries) proceed normally.
 
+## On-disk drift protection
+
+`fallow fix` re-runs analysis in-process and then writes each per-file rewrite. If a parallel editor save, CI rebase, or other tool mutates a target file between the analysis read and the write, the line offsets computed during analysis no longer line up with what is currently on disk. fallow now captures every parsed source file's xxh3 content hash during analysis (the same hash the extract cache uses), recomputes it at fix time, and skips files whose content drifted. The diagnostic surfaces on stderr (`Skipping <path>: file content changed since fallow check ran. Re-run fallow fix to refresh the analysis first.`) and in the JSON output (`{"type": "skipped", "path": "...", "skipped": true, "skip_reason": "content_changed"}`). A run with any content-changed skip exits with code 2 so CI does not treat the partial run as a clean no-op. The JSON envelope's top-level `skipped_content_changed: number` (always present) carries the count separately from `skipped` (which still tallies catalog / YAML guard skips only).
+
+`fallow fix` also batches its writes: each per-file rewrite is staged into a sibling temp file, and the orchestrator promotes every stage to its final path only after every stage has succeeded. A stage failure (read-only directory, full disk) leaves every target file at its original content. A rename failure mid-batch (rare; the per-file rename is atomic but POSIX has no atomic multi-rename primitive) reports per-path so the user can re-run with confidence. Hash precondition covers source files (TS, JS, Vue, Svelte, Astro, MDX); `package.json` and `pnpm-workspace.yaml` are not in the captured hash map because the extract layer does not parse them, but the dep and catalog fixers re-parse those files at fix time as the natural safety net (a key-lookup miss is a no-op, not a corruption).
+
 ## Dry-run config diff
 
 `fallow fix --dry-run` against duplicate-export findings prints the proposed config write as a unified diff so you can audit the exact bytes that would land before passing `--yes`. For the create-fallback case the diff shows the full proposed file (BEFORE is empty):
