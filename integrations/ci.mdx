@@ -380,7 +380,8 @@ CI catches unused code, duplication, and complexity issues that get past agent w
           "fingerprint": "merged:37df0011a9d7ac87"
         }
       ],
-      "marker_regex": "(?m)^<!-- fallow-fingerprint:v2: ((?:[a-z]+:)?[0-9a-f]{16}) -->\\s*$",
+      "marker_regex": "^<!-- fallow-fingerprint:v2: ((?:[a-z]+:)?[0-9a-f]{16}) -->\\s*$",
+      "marker_regex_flags": "m",
       "meta": {
         "schema": "fallow-review-envelope/v2",
         "provider": "github",
@@ -389,7 +390,17 @@ CI catches unused code, duplication, and complexity issues that get past agent w
     }
     ```
 
-    Every entry under `comments[]` is fully rendered Markdown, ready to POST as-is. The `<!-- fallow-fingerprint:v2: <fingerprint> -->` marker embedded in each body is the stable identifier used for reconciliation across runs. The top-level `marker_regex` is the canonical extraction pattern; running it (with one capture group) against any existing PR/MR comment yields the fingerprint string. The `(?m)` inline-multiline flag makes the regex work in both Rust's `regex` crate and JavaScript ES2018 RegExp without flag-awareness on the consumer side.
+    Every entry under `comments[]` is fully rendered Markdown, ready to POST as-is. The `<!-- fallow-fingerprint:v2: <fingerprint> -->` marker embedded in each body is the stable identifier used for reconciliation across runs. The top-level `marker_regex` is the canonical extraction pattern; running it (with one capture group) against any existing PR/MR comment yields the fingerprint string. fallow emits the multiline `m` flag separately in `marker_regex_flags` rather than baking `(?m)` into the pattern, because JavaScript RegExp rejects standalone inline flag groups. Consumers pass both fields to their regex engine:
+
+    ```js
+    const re = new RegExp(env.marker_regex, env.marker_regex_flags);
+    ```
+
+    ```rust
+    let re = regex::RegexBuilder::new(&env.marker_regex)
+        .multi_line(env.marker_regex_flags.contains('m'))
+        .build()?;
+    ```
 
     The top-level `summary: { body, fingerprint }` block carries the sticky-summary comment. `summary.body` is byte-identical to the legacy top-level `body` field (which is retained for v1 consumers); `summary.fingerprint` is what consumers match against existing comments to upsert the sticky summary in place. One fallow invocation now produces both the summary and the inline comments, so consumers no longer need a second `fallow --format pr-comment-{github,gitlab}` run.
 
@@ -430,23 +441,21 @@ CI catches unused code, duplication, and complexity issues that get past agent w
 
     #### Reconciliation across runs
 
-    To avoid duplicate threads on later pushes, fetch the existing MR discussions before POSTing and extract their fingerprints with the regex fallow emits in the envelope's `marker_regex` field. The capture group yields the fingerprint string; consumers compare against `comments[].fingerprint` to filter to new entries:
+    To avoid duplicate threads on later pushes, fetch the existing MR discussions before POSTing and extract their fingerprints via the marker. The simplest sed-based extraction matches the marker prefix `<!-- fallow-fingerprint:v2: ` plus the fingerprint token, then compares against `comments[].fingerprint`:
 
     ```bash
     existing=$(curl --silent --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
       "$CI_API_V4_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID/discussions?per_page=100")
 
-    # Extract fingerprints from existing discussion bodies via the
-    # marker_regex fallow emits in plan.marker_regex (one capture group).
-    # The regex uses (?m) inline-multiline, so it works in both Rust and JS.
-    marker_regex=$(jq -r '.marker_regex' plan.json)
     existing_fps=$(echo "$existing" | jq -r '.[].notes[].body? // empty' \
-      | sed -nE "s|.*${marker_regex}.*|\\1|p" \
+      | sed -n 's|.*fallow-fingerprint:v2: \([^ ]*\) .*|\1|p' \
       | sort -u)
 
     # For each comment in plan.json, only POST when its fingerprint
     # is not already present in $existing_fps.
     ```
+
+    Consumers that prefer to use the envelope's `marker_regex` + `marker_regex_flags` directly (e.g., from a Node or Python script rather than sed) pass both fields to their regex engine. The pattern is anchored with `^` / `$` and the `m` flag is required for those anchors to match per-line within a multi-line comment body.
 
     For automated stale-thread cleanup (mark threads as resolved when a finding disappears between runs), use `fallow ci reconcile-review --provider gitlab` if you can grant a token to fallow itself. If you cannot, mirror the same fingerprint diff logic in your own script: the marker convention is the contract that lets both reconciliation paths agree. The bundled reconciler accepts both v1 (`<!-- fallow-fingerprint: <hash> -->`) and v2 (`<!-- fallow-fingerprint:v2: <fingerprint> -->`) markers during the migration window, so re-processing a v1 backlog after upgrading is transparent.
 
