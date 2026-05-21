@@ -47,6 +47,7 @@ fallow check      # Hidden alias for fallow dead-code
 | `--unlisted-deps` | Only report unlisted dependencies |
 | `--duplicate-exports` | Only report duplicate exports |
 | `--circular-deps` | Only report circular dependencies |
+| `--re-export-cycles` | Only report re-export cycles (barrel files re-exporting from each other in a loop, or self-loops). See [explanations/dead-code#re-export-cycles](/explanations/dead-code#re-export-cycles) |
 | `--boundary-violations` | Only report boundary violations |
 | `--stale-suppressions` | Only report stale suppression comments and `@expected-unused` JSDoc tags |
 | `--type-only-deps` | Only report type-only dependencies |
@@ -236,7 +237,43 @@ unused-file:src/server/jobs/cron.ts
 unused-export:src/server/jobs/queue.ts:61:enqueueJobDelayed
 unused-export:src/server/jobs/queue.ts:206:sweepStuckProcessingJobs
 unused-export:src/components/Card/index.ts:1:CardFooter
+re-export-cycle:src/api/index.ts:src/api/index.ts <-> src/api/internal/index.ts
+re-export-cycle:src/utils/index.ts:src/utils/index.ts (self-loop)
 ```
+
+Re-export cycles ship under their own field in `--format json` with the cycle's structural shape:
+
+```json title="$ fallow dead-code --format json (excerpt)"
+{
+  "re_export_cycles": [
+    {
+      "files": ["src/api/index.ts", "src/api/internal/index.ts"],
+      "kind": "multi-node",
+      "actions": [
+        {
+          "type": "fix",
+          "kind": "refactor-re-export-cycle",
+          "auto_fixable": false,
+          "description": "Remove one `export * from` (or `export { ... } from`) statement on any one member to break the cycle"
+        },
+        {
+          "type": "suppress-file",
+          "kind": "suppress-file",
+          "auto_fixable": false,
+          "comment": "// fallow-ignore-file re-export-cycle"
+        }
+      ]
+    },
+    {
+      "files": ["src/utils/index.ts"],
+      "kind": "self-loop",
+      "actions": [...]
+    }
+  ]
+}
+```
+
+`files` is sorted lexicographically; the `multi-node` shape carries two or more entries, the `self-loop` shape exactly one. See [explanations/dead-code#re-export-cycles](/explanations/dead-code#re-export-cycles) for the structural rationale.
 
 ## Grouped output
 

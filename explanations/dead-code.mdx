@@ -255,6 +255,59 @@ This makes it straightforward to identify the weakest edge to break.
 **When it's OK to keep:**
 - **Type-only cycles**: If the cycle only involves `import type`, there is no runtime initialization risk. These are filtered from circular dependency reports automatically.
 
+### Re-export cycles {#re-export-cycles}
+
+Two or more barrel files that re-export from each other in a loop, or a single barrel file that re-exports from itself. Distinct from circular dependencies: circular deps describe runtime import loops; re-export cycles describe **declarative** loops in the `export * from` graph where chain propagation has no terminating module to resolve names against.
+
+| Severity | Default |
+|:---------|:--------|
+| Warning | Yes |
+
+**Why this is its own category:** Circular dependencies in the runtime import graph are sometimes intentional (mutual recursion between application modules). Re-export cycles are essentially always bugs. When `src/api/index.ts` does `export * from './internal'` and `src/api/internal/index.ts` does `export * from '../index'`, neither file actually declares anything; the chain has no terminating source. Any consumer doing `import { foo } from './api'` is asking the chain to resolve `foo` against a graph with no leaf, and the import silently comes up `undefined` at runtime.
+
+**Two structural shapes:**
+- **`multi-node`** -- a strongly connected component of two or more files in the re-export edge subgraph. Example: `barrel-a.ts` re-exports from `barrel-b.ts` and `barrel-b.ts` re-exports back from `barrel-a.ts`.
+- **`self-loop`** -- a single file that re-exports from itself. Almost always a rename leftover where `barrel.ts` ended up doing `export * from './'` or `export * from './barrel'`. Surfaces under the same rule with a distinct `kind` discriminator so consumers can tell the two shapes apart.
+
+**Detection runs in the graph layer:** detection happens during Phase 4 (re-export chain resolution) via iterative Tarjan SCC over the `(barrel, source)` edge subgraph. Same Tarjan implementation that already powers circular-dependency detection; the SCC pass runs once and surfaces both findings (and the `tracing::warn!` lines for operators running `RUST_LOG=warn` stay, additive to the typed finding).
+
+**Type-only cycles still fire:** `export type * from './b'` paired symmetrically with `export type * from './a'` is also a re-export cycle. Chain propagation through a type-only loop is the same no-op as through a value loop; the cycle is reported regardless.
+
+**Mock human output:**
+
+```
+Re-Export Cycles (Architecture)
+
+  src/api/index.ts
+    Cycle (2 files):
+      - src/api/index.ts
+      - src/api/internal/index.ts
+    To fix: remove one `export * from` statement on any member file.
+
+  src/utils/index.ts
+    Self-loop (1 file):
+      - src/utils/index.ts
+    To fix: remove the `export * from './'` (or equivalent) inside this file.
+```
+
+**How to fix it:**
+1. Pick any one file in the loop.
+2. Remove the `export * from` (or `export { ... } from`) statement that points back into the cycle.
+3. Any single removal breaks the cycle and restores working re-exports. You do not need to touch every member.
+
+For a self-loop, the fix is unambiguous: open the offending file and delete the stray `export * from './'` (or `export * from './<this-file>'` after a rename).
+
+**Suppression:** the finding is file-scoped (the cycle spans multiple files; there is no single line to anchor at). Suppress with a file-level comment on any member:
+
+```ts
+// fallow-ignore-file re-export-cycle
+export * from "./internal";
+```
+
+The four spellings `re-export-cycle`, `re-export-cycles`, `reexport-cycle`, and `reexport-cycles` are all accepted. Per-file `overrides.rules.re-export-cycle` is a **no-op** because the rule's severity is project-wide and the finding spans multiple files; configure it at the top-level `rules` block instead, or use the file-level `fallow-ignore-file` suppression above.
+
+**When to keep it as a warning:** legacy projects with hand-written barrels predating ESM strictness may have benign-looking cycles that no consumer actually relies on. Leaving the rule at `warn` keeps the diagnostic visible without breaking CI; promote to `error` once the cycles are cleaned up. Marcus's rule of thumb on upgrade: expect `total_issues` to step up on the first run because cycles that existed before this rule shipped now appear as findings.
+
 ### Boundary violations
 
 Imports that cross user-defined architecture zone boundaries. Zones are defined in the `boundaries` config section and map file path patterns to named architecture zones. A boundary violation occurs when a file in one zone imports from a file in another zone that the boundary rules disallow.
