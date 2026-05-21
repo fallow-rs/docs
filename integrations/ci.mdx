@@ -551,6 +551,60 @@ By default audit runs in `gate: new-only` mode, so only findings *introduced* by
   </Tab>
 </Tabs>
 
+### Detecting silent failures
+
+CI integrations can degrade silently when the GitHub or GitLab API returns a 5xx, rate-limit response, or partial-pagination failure. Three structured signals let workflow operators detect this:
+
+<Tabs>
+  <Tab title="GitHub Actions">
+    Three composite-action outputs are emitted on every run, regardless of whether the failure path was taken. Default values let downstream `if:` gates match positively (`== 'false'` or `== 'none'`) without an absent-vs-false ambiguity:
+
+    | Output | Values | Meaning |
+    | --- | --- | --- |
+    | `changed-files-unavailable` | `false` (default) / `true` | The analyze step could not enumerate PR-changed files. Analysis ran against the full codebase. Common cause: transient GitHub API failure or token without `pull_requests: read` scope. |
+    | `post-skipped-reason` | `none` (default) / `pagination_failure` | The Post review comments step aborted the inline-review POST. Only set to `pagination_failure` when the multi-comment fingerprint dedup lookup failed and the action skipped posting to avoid duplicate threads. |
+    | `dedup-lookup-failed` | `false` (default) / `true` | A dedup lookup failed on either the Post PR comment or the Post review comments step. Distinct from `post-skipped-reason`: the summary-only paths post a fresh comment anyway (potential duplicate) when their lookup fails. Gate on this to detect either degraded state. |
+
+    ```yaml
+    - uses: fallow-rs/fallow@v2
+      id: fallow
+
+    - name: Alert on degraded scoping
+      if: steps.fallow.outputs.changed-files-unavailable == 'true'
+      run: echo "::warning::Fallow ran unscoped; PR scoping disabled by API failure"
+
+    - name: Alert on dedup degradation
+      if: steps.fallow.outputs.dedup-lookup-failed == 'true'
+      run: echo "::warning::Fallow PR comments may be duplicated"
+    ```
+
+    A 4xx response (auth, scope, permission errors) on the multi-comment review path escalates to `exit 1` and fails the action step, because re-running will not resolve a configuration error. 5xx responses, retry-exhausted 429s, and network errors return `exit 0` with the warning so transient blips do not break PRs.
+  </Tab>
+  <Tab title="GitLab CI">
+    Two sidecar artifacts written by `comment.sh` and `review.sh` carry the same signals; both are declared in the template's `artifacts: paths:` so downstream jobs can read them:
+
+    | Artifact | Values | Meaning |
+    | --- | --- | --- |
+    | `fallow-skip-reason.txt` | `none` (default) / `pagination_failure` | The inline-review POST was aborted because the dedup lookup against `/discussions` failed and posting would risk N duplicate threads. |
+    | `fallow-dedup-lookup-failed.txt` | `false` (default) / `true` | A dedup lookup failed on either `comment.sh` or `review.sh`. The summary-only paths still post (potential duplicate); set this for the degraded-state signal. |
+
+    ```yaml
+    alert-degraded-fallow:
+      stage: notify
+      needs: [fallow]
+      script: |
+        if [ "$(cat fallow-skip-reason.txt)" = "pagination_failure" ]; then
+          echo "WARNING: Fallow inline review skipped to avoid duplicates"
+        fi
+        if [ "$(cat fallow-dedup-lookup-failed.txt)" = "true" ]; then
+          echo "WARNING: Fallow MR comments may be duplicated; re-run the fallow job"
+        fi
+    ```
+
+    A 4xx response on the multi-discussion review path returns `exit 1`, but the template's existing `bash review.sh || echo "WARNING: ..."` swallows it. Operators who want CI-fatal behavior on auth misconfiguration should drop the `|| echo` from their template or gate on the sidecar markers.
+  </Tab>
+</Tabs>
+
 #### Migrating from combined to audit
 
 If your project is on the default combined run today and you want severity-aware gating, add `command: audit` (`FALLOW_COMMAND: audit`) and the existing PR comment, annotations, and review comments continue to work. The audit run produces an extra verdict banner at the top of the PR comment:
