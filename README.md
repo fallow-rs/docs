@@ -21,7 +21,7 @@ Preview at `http://localhost:3000`.
 ## Structure
 
 ```
-analysis/       - Dead code, duplication, auto-fix, debugging
+analysis/       - Codebase health, cleanup, duplication, auto-fix, debugging
 cli/            - CLI command reference
 configuration/  - Config files, rules, workspaces
 frameworks/     - Built-in and custom plugins

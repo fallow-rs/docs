@@ -2,7 +2,7 @@
 
 ## What this is
 
-Mintlify documentation site for [fallow](https://github.com/fallow-rs/fallow), a dead code and duplication analyzer for TypeScript/JavaScript. Built in Rust. Three audiences: AI agents, human developers, CI pipelines.
+Mintlify documentation site for [fallow](https://github.com/fallow-rs/fallow), deterministic codebase intelligence for TypeScript/JavaScript. Built in Rust. Three audiences: AI agents, human developers, CI pipelines.
 
 ## Dev server
 
@@ -20,7 +20,7 @@ npx mintlify dev
 
 ## Key files
 
-- `index.mdx`: landing page. Speed benchmarks, feature overview, "three tracks" narrative.
+- `index.mdx`: landing page. Codebase intelligence positioning, speed benchmarks, feature overview, "three tracks" narrative.
 - `quickstart.mdx`: getting started for all three tracks (agents, humans, CI).
 - `integrations/mcp.mdx`: agent integration via CLI and MCP. Core page for agent audience.
 
@@ -36,12 +36,12 @@ npx mintlify dev
 
 ### Terminology
 - "fallow" lowercase. "Fallow" only at sentence start.
-- "dead code" in prose, `unused-exports` (hyphenated) for rule names.
+- "cleanup opportunities" for the product pillar, "dead code" only for the specific analysis family, `unused-exports` (hyphenated) for rule names.
 - "duplication" not "code clones". "plugins" not "presets".
 
 ### Numbers to keep accurate
 - 15 issue types (unused files, exports, types, dependencies, devDependencies, optionalDependencies, enum members, class members, unresolved imports, unlisted deps, duplicate exports, circular dependencies, boundary violations, type-only dependencies, test-only dependencies).
-- 95 built-in plugins.
+- 96 built-in plugins.
 - Benchmarks must match the fallow repo README.
 
 ### Narrative structure
@@ -66,4 +66,4 @@ Tabs, Steps, Cards, CardGroup, Accordion, Info, Tip, Warning, Note, CodeGroup.
 2. Check all links resolve (no broken hrefs).
 3. Confirm frontmatter has all four required fields.
 4. If you added a page, add it to the correct group in `docs.json`.
-5. Verify counts still match: 95 plugins, 15 issue types, 141 knip plugins.
+5. Verify counts still match: 96 plugins, 15 issue types, 141 knip plugins.
