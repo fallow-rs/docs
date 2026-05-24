@@ -52,6 +52,7 @@ CI catches changed-code risk, cleanup opportunities, duplication, and complexity
         | `changed-workspaces` | -- | Git-derived monorepo scoping: scope to workspaces containing any file changed since `REF` (e.g. `origin/main`). Requires `fetch-depth: 0`. Mutually exclusive with `workspace`. A missing ref is a hard error (exit 2) rather than silent full-scope fallback. |
         | `comment` | `false` | Post results as a PR comment |
         | `review-comments` | `false` | Post inline PR review comments with typed `review-github` output and reconcile resolved threads on later runs |
+        | `review-guidance` | `false` | Add collapsed "What to do" guidance blocks to inline PR review comments. Requires `review-comments: true` |
         | `annotations` | `true` | Emit findings as inline PR annotations via workflow commands (no Advanced Security required) |
         | `max-annotations` | `50` | Maximum number of inline annotations to emit |
         | `github-token` | `${{ github.token }}` | GitHub token for PR comments and SARIF upload |
@@ -162,6 +163,8 @@ CI catches changed-code risk, cleanup opportunities, duplication, and complexity
         | `FALLOW_SAVE_BASELINE` | -- | Save current results as a baseline file. Rejected with exit 2 when `FALLOW_COMMAND=audit` (audit runs three analyses with incompatible baseline formats). |
         | `FALLOW_COMMENT` | `false` | Post a rich MR summary comment with collapsible sections for each analysis |
         | `FALLOW_REVIEW` | `false` | Post inline MR discussions on changed lines with suggestion blocks for auto-fixable issues |
+        | `FALLOW_REVIEW_GUIDANCE` | `false` | Add collapsed "What to do" guidance blocks to inline MR discussions |
+        | `FALLOW_SUMMARY_SCOPE` | `all` | Sticky MR summary scope. Use `diff` to apply the diff filter to project-level dependency/catalog/override findings too. Inline review discussions are unaffected |
         | `FALLOW_MAX_COMMENTS` | `50` | Maximum number of inline review comments to post (applies to `FALLOW_REVIEW`) |
         | `FALLOW_CODEQUALITY` | `true` | Generate Code Quality report (inline MR annotations) |
         | `FALLOW_VERSION` | -- | Fallow version to use. Empty auto-detects the project `package.json` `fallow` dependency and falls back to `latest`; set explicitly to override the local pin. |
@@ -213,16 +216,18 @@ CI catches changed-code risk, cleanup opportunities, duplication, and complexity
         No additional configuration needed. The report is uploaded as a CI artifact automatically. If you invoke fallow yourself outside the template, both `--format codeclimate` and the alias `--format gitlab-codequality` produce the same JSON array consumed by GitLab.
       </Step>
       <Step title="Rich MR comments">
-        **Summary comment**: Set `FALLOW_COMMENT: "true"` to post a rich MR comment with collapsible sections for dead code, duplication, and complexity findings. The comment is updated on each push (no spam).
+        **Summary comment**: Set `FALLOW_COMMENT: "true"` to post a rich MR comment with collapsible sections for dead code, duplication, and complexity findings. The comment is updated on each push (no spam). Set `FALLOW_SUMMARY_SCOPE: "diff"` when the sticky summary should hide pre-existing project-level dependency/catalog/override findings outside the diff.
 
-        **Inline review**: Set `FALLOW_REVIEW: "true"` to post inline MR discussions directly on changed lines. Auto-fixable issues include GitLab suggestion blocks that can be applied with one click. Use `FALLOW_MAX_COMMENTS` to cap the number of inline comments (default: 50). The template renders native `review-gitlab` envelopes with `position_type`, `base_sha`, `start_sha`, and `head_sha` from GitLab diff refs, then runs `fallow ci reconcile-review --provider gitlab` so stale fallow discussions are resolved after fixes.
+        **Inline review**: Set `FALLOW_REVIEW: "true"` to post inline MR discussions directly on changed lines. Auto-fixable issues include GitLab suggestion blocks that can be applied with one click. Use `FALLOW_MAX_COMMENTS` to cap the number of inline comments (default: 50). Set `FALLOW_REVIEW_GUIDANCE: "true"` to add collapsed "What to do" guidance to each inline finding. The template renders native `review-gitlab` envelopes with `position_type`, `base_sha`, `start_sha`, and `head_sha` from GitLab diff refs, then runs `fallow ci reconcile-review --provider gitlab` so stale fallow discussions are resolved after fixes.
 
         ```yaml
         fallow:
           extends: .fallow
           variables:
             FALLOW_COMMENT: "true"    # Rich summary comment
+            FALLOW_SUMMARY_SCOPE: "diff" # Filter project-level findings in the summary too
             FALLOW_REVIEW: "true"     # Inline discussions with suggestions
+            FALLOW_REVIEW_GUIDANCE: "true" # Collapsed "What to do" blocks
             FALLOW_MAX_COMMENTS: "30" # Limit inline comments
         ```
       </Step>
@@ -417,6 +422,8 @@ CI catches changed-code risk, cleanup opportunities, duplication, and complexity
     | Variable | Provider | Purpose |
     |:---------|:---------|:--------|
     | `FALLOW_MAX_COMMENTS` | Both | Caps the number of inline comments (default 50). |
+    | `FALLOW_REVIEW_GUIDANCE` | Both | Adds collapsed "What to do" guidance blocks to each inline finding when set to a truthy value. |
+    | `FALLOW_SUMMARY_SCOPE` | Both | Controls sticky PR/MR summary scope only: `all` keeps project-level findings outside the diff, `diff` applies the diff filter to them too. |
     | `CI_MERGE_REQUEST_DIFF_BASE_SHA` | GitLab | Auto-populates `position.base_sha`. |
     | `CI_COMMIT_SHA` | GitLab | Auto-populates `position.head_sha`. |
     | `FALLOW_GITLAB_BASE_SHA` / `FALLOW_GITLAB_START_SHA` / `FALLOW_GITLAB_HEAD_SHA` | GitLab | Overrides the auto-populated SHAs when running outside a standard GitLab MR pipeline. |
