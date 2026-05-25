@@ -466,6 +466,8 @@ CI catches changed-code risk, cleanup opportunities, duplication, and complexity
 
     For automated stale-thread cleanup (mark threads as resolved when a finding disappears between runs), use `fallow ci reconcile-review --provider gitlab` if you can grant a token to fallow itself. If you cannot, mirror the same fingerprint diff logic in your own script: the marker convention is the contract that lets both reconciliation paths agree. The bundled reconciler accepts both v1 (`<!-- fallow-fingerprint: <hash> -->`) and v2 (`<!-- fallow-fingerprint:v2: <fingerprint> -->`) markers during the migration window, so re-processing a v1 backlog after upgrading is transparent.
 
+    The reconciler applies provider changes fail-fast. When a provider target disappears or a mutation fails, JSON output keeps the existing `apply_errors` array and may add `apply_hint`, `failed_fingerprints`, and `unapplied_fingerprints` so CI wrappers and custom integrations can surface a retry hint without guessing which stale findings were left unresolved.
+
     **Composite-fingerprint semantics for merged comments**: same-(`path`, `line`) findings collapse to one comment with a `merged:<16-char hash>` primary fingerprint over sorted constituent fingerprints. Content change shifts the hash, so the skip-if-fingerprint-exists logic above naturally re-posts a merged comment when its constituents change. Consumers that want true update-in-place (preserve thread replies across edits) implement their own delta tracking via `marker_regex` and the vendor edit endpoints; the bundled wrappers and `fallow ci reconcile-review` do not.
 
     #### Schema stability
@@ -527,15 +529,29 @@ Both the GitHub Action and GitLab CI template automatically scope analysis to ch
 
 ### Binary verification
 
-The `fallow-rs/fallow` GitHub Action and the GitLab CI template both install fallow via `npm install -g fallow@<spec>`. As of v2.77, each `@fallow-cli/<platform>` npm package ships an Ed25519 `.sig` next to every binary, and verification runs in two layers across two surfaces:
+The `fallow-rs/fallow` GitHub Action and the GitLab CI template both install fallow via `npm install -g fallow@<spec>`. Each `@fallow-cli/<platform>` npm package ships an Ed25519 `.sig` next to every binary plus an embedded SHA-256 digest in its `package.json#fallowDigests` field. Verification runs in two layers across two independent surfaces:
 
-1. **Ed25519 signature** (offline, rooted in the workflow's signing key): the npm postinstall script (`npm/fallow/scripts/postinstall.js`) verifies all three binaries (`fallow`, `fallow-lsp`, `fallow-mcp`) against the embedded public key. A tampered binary aborts the install with exit code 1.
-2. **SHA-256 digest** (online, rooted in GitHub's release integrity surface): the verifier also fetches the matching `asset.digest` field from `https://api.github.com/repos/fallow-rs/fallow/releases/tags/v<version>` and confirms each binary's SHA-256 matches. A swapped binary that somehow carried a valid signature would still fail the digest check.
-3. **Action installer re-runs both layers** (`action/scripts/install.sh`) after `npm install -g --ignore-scripts`. The verifier is loaded from the checked-out Action tree, not the installed npm package, so a tampered postinstall cannot self-validate. This is defense in depth on CI runners, where secrets exposure is highest.
+1. **Ed25519 signature** (offline, rooted in the workflow's signing key): the embedded public key in fallow's npm wrapper verifies all three binaries (`fallow`, `fallow-lsp`, `fallow-mcp`). A tampered binary fails closed with a specific failure code (`sig-invalid`, `digest-mismatch`, `binary-missing`, `sig-missing`, or `digest-unavailable`).
+2. **SHA-256 digest** (offline, rooted in the platform package's `fallowDigests` field): the verifier confirms each binary's SHA-256 matches the digest written into the platform package's `package.json` at release time. A swapped binary that somehow carried a valid signature would still fail the digest check.
+
+These two layers run on every install surface:
+
+- **`fallow`, `fallow-lsp`, `fallow-mcp` first invocation**: the bin wrapper runs Ed25519 + SHA-256 before exec'ing the platform binary on the first run after install or upgrade. A small JSON sentinel next to the platform binary (or in `$XDG_CACHE_HOME/fallow/sentinels/` when the platform pkg dir is read-only, e.g. yarn PnP, Docker layered images) caches the verified state so subsequent invocations skip verification on a cache hit. `fallow --version` adds a trailing `verified: yes (<sentinel-path>)` line so vendor questionnaires and CI logs can confirm the integrity posture in one command.
+- **Action installer re-runs both layers** (`action/scripts/install.sh`) after `npm install -g --ignore-scripts`. The verifier is loaded from the checked-out Action tree, not the installed npm package, so a tampered installer cannot self-validate. This is defense in depth on CI runners, where secrets exposure is highest.
 
 A failed verification produces a `::error::` annotation in the Action log and a non-zero exit, aborting the workflow before any user code reads a swapped binary.
 
-To override verification (only when deliberately replacing the published binary, for example with a source build or a private-mirror re-pack), set `FALLOW_SKIP_BINARY_VERIFY=1` in the step's environment:
+<Note>
+The npm wrapper used to run verification during `postinstall`. That hook is removed ahead of [npm RFC 868](https://github.com/npm/rfcs/pull/868) (`npm/cli#9360`) Phase 2, which will block postinstall hooks by default unless consumers add fallow to their `package.json#allowScripts`. The cryptographic property is preserved bit-for-bit by the first-invocation path; same public key, same offline `fallowDigests` lookup, same fail-closed behavior.
+</Note>
+
+Three environment variables tune the lazy-verify path:
+
+- `FALLOW_SKIP_BINARY_VERIFY=1` skips Ed25519 + SHA-256 verification. Use only when deliberately replacing the published binary (source builds, airgapped mirrors, signed-repack registries). The skipped state is recorded in `fallow --version` output as `verified: skipped (FALLOW_SKIP_BINARY_VERIFY is set)` so the bypass remains visible in CI logs and vendor audits.
+- `FALLOW_VERIFY_CACHE_DIR=<path>` redirects the sentinel file to a writable directory when the platform package dir is read-only. Cascade is platform-pkg-dir, then this override, then `$XDG_CACHE_HOME/fallow/sentinels/` (or `%LOCALAPPDATA%\fallow\sentinels\` on Windows).
+- `FALLOW_VERIFY_LOG=1` emits one structured stderr line per outcome (`fallow-verify outcome=ok cache=hit sentinel=...`) for CI diagnostic logs.
+
+To override verification in the Action:
 
 ```yaml
 - uses: fallow-rs/fallow@v2
@@ -543,7 +559,7 @@ To override verification (only when deliberately replacing the published binary,
     FALLOW_SKIP_BINARY_VERIFY: '1'
 ```
 
-Do not set this in normal CI configurations. The public key fingerprint and the manual out-of-band verification recipe live in [`SECURITY.md`](https://github.com/fallow-rs/fallow/blob/main/SECURITY.md) on the main repo. The VS Code extension performs Ed25519 verification on its auto-downloaded binary; see [the extension docs](/integrations/vscode) for details.
+Do not set this in normal CI configurations. The public key fingerprint and the manual out-of-band verification recipe live in [`SECURITY.md`](https://github.com/fallow-rs/fallow/blob/main/SECURITY.md) on the main repo. The VS Code extension performs its own Ed25519 verification on its auto-downloaded binary; see [the extension docs](/integrations/vscode) for details.
 
 ### PR/MR-only analysis
 
