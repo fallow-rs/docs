@@ -93,16 +93,33 @@ fallow dupes --performance
 │  resolve imports:       3ms
 │  build graph:           1ms
 │  analyze:               2ms
+│  (other):               1ms
 │  ────────────────────────────────────────────────
 │  TOTAL:                31ms
 └───────────────────────────────────────────────────
 ```
+
+The `(other)` row is the time inside `TOTAL` not attributed to a named stage (report assembly and inter-stage glue), so the sequential stages plus `(other)` sum to `TOTAL`. In combined mode (`fallow` with no subcommand) the `duplication` stage runs concurrently with the rest of the pipeline and is marked `(concurrent)`; it is shown for reference but is not part of the `TOTAL` sum, so it can legitimately exceed `TOTAL` when duplication detection runs longer than the dead-code pass.
 
 Use this when:
 
 - Analysis is slower than expected and you want to find the bottleneck.
 - You want to verify the cache is working (high hit rate means incremental runs are fast).
 - You're comparing performance across different configuration options.
+
+### Parallel parse timing
+
+`parse/extract` runs across all cores. When the parse work was substantial and genuinely parallel, the line gains a `(parallel: ~Nms CPU)` suffix reporting the summed parse CPU across workers:
+
+```bash title="$ fallow dead-code --performance (cold cache)"
+│  parse/extract:       382ms  (21033 modules)  (parallel: ~594ms CPU)
+```
+
+Here the stage finished in 382ms of wall-clock but spent ~594ms of CPU across cores. When that figure is much larger than the wall-clock the stage is CPU-bound and benefits from more cores; when it is close to the wall-clock the stage is I/O-bound and extra threads will not help. The suffix is omitted on warm or trivial runs where there is little real parse work to report.
+
+In combined mode (`fallow` with no subcommand), the health breakdown reuses the discovered and parsed files from the dead-code pass, so its `discover files` and `parse/extract` rows read `(measured above)` and point you at the Pipeline Performance box where that cost is attributed.
+
+In `--format json`, the timings carry `parse_cpu_ms` (summed parse CPU) alongside the wall-clock fields, and the health timings carry `shared_parse`. These are observational and vary run to run, so do not gate CI on them.
 
 ## Cache behavior
 
