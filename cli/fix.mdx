@@ -72,6 +72,17 @@ The duplicate-export config-add path is skipped with an explanatory message; sou
 
 `fallow fix` also batches its writes: each per-file rewrite is staged into a sibling temp file, and the orchestrator promotes every stage to its final path only after every stage has succeeded. A stage failure (read-only directory, full disk) leaves every target file at its original content. A rename failure mid-batch (rare; the per-file rename is atomic but POSIX has no atomic multi-rename primitive) reports per-path so the user can re-run with confidence. Hash precondition covers source files (TS, JS, Vue, Svelte, Astro, MDX); `package.json` and `pnpm-workspace.yaml` are not in the captured hash map because the extract layer does not parse them, but the dep and catalog fixers re-parse those files at fix time as the natural safety net (a key-lookup miss is a no-op, not a corruption).
 
+## Low-confidence export removals
+
+Removing an `export` keyword is only safe when fallow can see every consumer of that symbol. Some consumers are invisible to static analysis: Vitest mock aliases (`test.alias` pointing at a `__mocks__` file), off-workspace end-to-end suites that import shared helpers, and fixture or golden harnesses wired up by a build step. Stripping an export that one of these actually uses turns an analysis false positive into a `tsc` error and a broken build.
+
+`fallow fix` therefore withholds export removals in two low-confidence cases:
+
+- **Off-graph consumer directories.** The file sits under any of `__mocks__`, `__fixtures__`, `fixtures`, `e2e`, `e2e-tests`, `cypress`, `playwright`, `examples`, `evals`, or `golden` (matched on any path segment). Plain test directories (`test`, `tests`, `__tests__`) are intentionally not on the list, because genuinely-dead test helpers are common and should still auto-remove.
+- **Files with an unresolved import.** The file itself imports something fallow could not resolve, so its local usage graph is incomplete and the "this export is unused" conclusion is lower confidence.
+
+In both cases the per-file entry is emitted as `{"type": "skipped", "path": "...", "skipped": true, "skip_reason": "low_confidence_off_graph"}` (or `"low_confidence_unresolved_imports"`), and the JSON envelope's top-level `skipped_low_confidence_exports: number` (always present) carries the combined count, disjoint from `skipped`. Unlike the drift and encoding skips, this is an intentional, conservative decision rather than a recoverable failure: it does **not** change the exit code. The export is still reported by `fallow check`, so you can confirm it is truly unused and remove it by hand. High-confidence exports in normal source files are removed exactly as before.
+
 ## File encoding contract
 
 `fallow fix` is UTF-8 only. Two encoding shapes that previously caused silent corruption are now handled explicitly:
