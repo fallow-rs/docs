@@ -1,0 +1,89 @@
+---
+title: "fallow telemetry"
+description: "CLI reference for fallow telemetry. Opt-in, off-by-default product telemetry for improving agent, CI, MCP, and editor workflows. Inspect the exact payload, enable, disable, or check status."
+keywords: ["fallow telemetry", "opt-in telemetry", "DO_NOT_TRACK", "FALLOW_TELEMETRY", "FALLOW_AGENT_SOURCE", "privacy", "CLI"]
+icon: "chart-simple"
+---
+
+Manage opt-in product telemetry. Telemetry is **off by default** and exists only to improve agent, CI, JSON, MCP, and editor workflows.
+
+```bash
+fallow telemetry status
+```
+
+Fallow never collects repository names, file paths, package or dependency names, workspace names, source code, config values, environment variable names or values, raw command lines, raw errors, or stack traces. Hashing those values is not used as a workaround. See [Telemetry](/explanations/telemetry) for the full data and privacy contract.
+
+## Subcommands
+
+### `status`
+
+Show the effective telemetry state, where that state comes from (admin env, env, user config, or default), the config file path, and the control commands.
+
+```bash
+fallow telemetry status
+```
+
+### `enable` / `disable`
+
+Turn telemetry on or off in the user-level config file. This requires an explicit human action; agents and wrappers must not enable telemetry automatically.
+
+```bash
+fallow telemetry enable
+fallow telemetry disable
+```
+
+Enabling is refused when `DO_NOT_TRACK` or `FALLOW_TELEMETRY_DISABLED` is set.
+
+### `inspect`
+
+Explain inspect mode, or print documented example payloads with field purposes.
+
+```bash
+fallow telemetry inspect            # explain how to inspect a real run
+fallow telemetry inspect --example  # print an example payload + field purposes
+```
+
+To see the exact payload a real command would send, **without sending it**, prefix the command with `FALLOW_TELEMETRY=inspect`:
+
+```bash
+FALLOW_TELEMETRY=inspect fallow audit --format json --quiet
+```
+
+The inspected payload is printed to stderr; your command's normal output (including `--format json` on stdout) is untouched.
+
+## How it is sent
+
+When telemetry is enabled, Fallow sends one small JSON event per analysis run to `https://api.fallow.cloud/v1/telemetry/events` (override the host with `FALLOW_API_URL`). The request is an HTTPS POST with no authentication token and no cookies. The upload runs on a background thread and never blocks your command from exiting for meaningful time; network errors are ignored and never change your output or exit code. Delivery is best-effort and lossy by design, so event counts are a biased sample, not a usage census.
+
+## Precedence
+
+```text
+DO_NOT_TRACK / FALLOW_TELEMETRY_DISABLED   (admin kill switch)
+> FALLOW_TELEMETRY                          (per-shell override)
+> user telemetry config                     (fallow telemetry enable/disable)
+> default: off
+```
+
+In CI, telemetry is off unless `FALLOW_TELEMETRY` is explicitly set in that CI environment. A developer's local `fallow telemetry enable` does not enable organization CI telemetry.
+
+## Environment controls
+
+| Variable | Description | Values |
+|:---------|:------------|:-------|
+| `FALLOW_TELEMETRY` | Per-shell mode override | `off`/`0`/`false`/`disabled`, `on`/`1`/`true`/`enabled`, `inspect`/`debug`/`log` |
+| `FALLOW_TELEMETRY_DISABLED` | Admin/fleet kill switch (top precedence) | `1`, `true`, `yes`, `on` |
+| `FALLOW_TELEMETRY_DEBUG` | Alias for `FALLOW_TELEMETRY=inspect` | `1`, `true`, `yes`, `on` |
+| `DO_NOT_TRACK` | Honored as a top-precedence kill switch ([consoledonottrack.com](https://consoledonottrack.com)) | `1`, `true`, `yes`, `on` |
+| `FALLOW_AGENT_SOURCE` | Declare the calling agent for classification | see [Agent source](#agent-source) |
+
+## Agent source
+
+Agents and wrappers can identify their integration with one normalized, allowlisted value when the user has enabled telemetry:
+
+```bash
+export FALLOW_AGENT_SOURCE=codex
+```
+
+Accepted values: `codex`, `claude_code`, `cursor`, `copilot`, `opencode`, `aider`, `roo`, `windsurf`, `gemini` (aliases `gemini_cli` / `antigravity`), `cline`, `continue`, `zed`, `goose`, `other_known`, `unknown`, `none`. Hyphen aliases such as `claude-code` are normalized. Unrecognized values are ignored rather than uploaded. Agents not on the list (for example enterprise IDE assistants) are grouped under `other_known`.
+
+Fallow does not upload raw client info, process names, parent process paths, editor or extension identifiers, environment variable names, model names, account or organization IDs, prompts, versions, or free-form vendor strings. When several agent environments coexist, heuristic attribution is best-effort and order-dependent; set `FALLOW_AGENT_SOURCE` explicitly for deterministic attribution.

@@ -1,0 +1,93 @@
+---
+title: "Telemetry & privacy"
+description: "What fallow's opt-in telemetry collects and, more importantly, what it never collects. Off by default, allowlisted, no identifiers, inspect-before-consent."
+keywords: ["telemetry", "privacy", "opt-in", "DO_NOT_TRACK", "anonymous", "data collection", "fallow"]
+icon: "shield-halved"
+---
+
+Fallow telemetry is **opt-in** and **off by default**. It exists to improve agent, CI, JSON, MCP, and editor workflows, not to track individuals or codebases. For the commands and environment controls, see [`fallow telemetry`](/cli/telemetry).
+
+## What is collected
+
+When you enable telemetry, Fallow sends one coarse, workflow-level event per analysis run:
+
+```json
+{
+  "schema_version": 1,
+  "event": "workflow_completed",
+  "fallow_version": "2.84.0",
+  "workflow": "audit",
+  "integration_surface": "cli_json",
+  "invocation_context": "agent",
+  "agent_source": "codex",
+  "output_format": "json",
+  "quiet": true,
+  "ci": false,
+  "tty": false,
+  "os": "linux",
+  "arch": "x86_64",
+  "duration_bucket_ms": "500-2000",
+  "outcome": "issues_found",
+  "exit_code_bucket": "1"
+}
+```
+
+| Field | Purpose |
+|:------|:--------|
+| `workflow` | Prioritize audit, dead-code, health, duplication, CI, and runtime-coverage workflows. |
+| `integration_surface` | Understand whether Fallow is used through human CLI, CLI JSON, MCP, CI, editor, or programmatic surfaces. |
+| `invocation_context` | Separate human, CI, editor, and agent-driven use without uploading detection evidence. |
+| `agent_source` | Improve compatibility with specific agent integrations using a documented allowlist. |
+| `output_format` / `quiet` | Protect the output contracts that users and agents rely on most. |
+| `duration_bucket_ms` | Find slow workflow classes without collecting exact timings. |
+| `outcome` / `exit_code_bucket` | Measure clean runs, findings, and failures without uploading raw error text. |
+| `parent_run` | Link explicit agent follow-up runs using a short allowlisted token, never a path or free-form string. |
+
+You can print the exact payload for any real command without sending it:
+
+```bash
+FALLOW_TELEMETRY=inspect fallow audit --format json --quiet
+```
+
+## What is never collected
+
+Fallow telemetry never includes:
+
+- repository, organization, project, branch, or git remote names
+- file paths, import specifiers, source snippets, or stack traces
+- package, dependency, workspace, or framework package names
+- raw command-line arguments
+- config contents or config values
+- environment variable names or values
+- raw errors, logs, or serialized exceptions
+- stable machine, user, project, or repository identifiers
+
+Hashing these values is not used as a workaround.
+
+## Agent source
+
+When telemetry is enabled and a run is classified as agent-driven, Fallow may emit one normalized `agent_source` value from a fixed allowlist:
+
+```text
+none codex claude_code cursor copilot opencode aider roo
+windsurf gemini cline continue zed goose other_known unknown
+```
+
+`none` is an internal classifier state, not a wire value: `agent_source` is only emitted when a run is classified as agent-driven, which by definition is not `none`. Agents not on the list (for example enterprise IDE assistants) are grouped under `other_known`. Fallow does not upload raw MCP client info, process names, parent process paths, editor or extension identifiers, environment variable names, model names, account or organization IDs, prompts, versions, or free-form vendor strings. Agent wrappers should set `FALLOW_AGENT_SOURCE=<allowlisted-value>`; ambiguous sources emit `unknown`.
+
+## Transport and server privacy
+
+- requests are HTTPS POST JSON to `https://api.fallow.cloud/v1/telemetry/events` (override with `FALLOW_API_URL`)
+- no cookies are used and no authentication token is sent
+- the upload runs on a background thread and never blocks command exit for meaningful time; delivery is best-effort and lossy, so event counts are a biased sample rather than a usage census
+- network errors are ignored and never affect command output or exit code
+- telemetry is never written to stdout
+- server-side handling does not enrich telemetry with customer, repository, organization, git, package-registry, or license data
+- IP addresses are dropped or truncated as early as practical
+- raw events are retained only for a short window, then aggregated and deleted
+
+Public reporting uses only coarse aggregate trends after privacy review.
+
+## Disabling everywhere
+
+The `DO_NOT_TRACK` and `FALLOW_TELEMETRY_DISABLED` environment variables are top-precedence kill switches: when either is truthy, telemetry stays off and `fallow telemetry enable` is refused. Use `FALLOW_TELEMETRY_DISABLED=1` as the fleet-wide switch in managed and CI environments.
