@@ -11,13 +11,15 @@ Manage opt-in product telemetry. Telemetry is **off by default** and exists only
 fallow telemetry status
 ```
 
-Fallow never collects repository names, file paths, package or dependency names, workspace names, source code, config values, environment variable names or values, raw command lines, raw errors, or stack traces. Hashing those values is not used as a workaround. See [Telemetry](/explanations/telemetry) for the full data and privacy contract.
+Fallow never collects repository names, file paths, package or dependency names, workspace names, source code, config values, environment variable names or values, raw command lines, raw errors, or stack traces. Hashing those values is not used as a workaround. See [Telemetry & privacy](/explanations/telemetry) for the full data and privacy contract.
+
+To keep telemetry off everywhere, set `FALLOW_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`. To opt out on one machine, run `fallow telemetry disable`.
 
 ## Subcommands
 
 ### `status`
 
-Show the effective telemetry state, where that state comes from (admin env, env, user config, or default), the config file path, and the control commands.
+Show whether telemetry is on or off, what decided that (admin env var, shell env var, user config, or the default), the config file path, and the commands to change it.
 
 ```bash
 fallow telemetry status
@@ -53,14 +55,16 @@ The inspected payload is printed to stderr; your command's normal output (includ
 
 ## How it is sent
 
-When telemetry is enabled, Fallow sends one small JSON event per analysis run to `https://api.fallow.cloud/v1/telemetry/events` (override the host with `FALLOW_API_URL`). The request is an HTTPS POST with no authentication token and no cookies. The upload runs on a background thread and never blocks your command from exiting for meaningful time; network errors are ignored and never change your output or exit code. Delivery is best-effort and lossy by design, so event counts are a biased sample, not a usage census.
+When telemetry is enabled, Fallow sends one small JSON event per analysis run to `https://api.fallow.cloud/v1/telemetry/events` (override the host with `FALLOW_API_URL`). The request is an HTTPS POST with no authentication token and no cookies. The upload runs on a background thread, so it does not slow down your command, and network errors are ignored and never change your output or exit code. Fallow does not wait for the upload to finish, so the fastest runs and runs on slow networks often drop their event. Event counts are a rough, biased sample, not an exact count of usage.
 
 ## Precedence
 
 ```text
-DO_NOT_TRACK / FALLOW_TELEMETRY_DISABLED   (admin kill switch)
-> FALLOW_TELEMETRY                          (per-shell override)
-> user telemetry config                     (fallow telemetry enable/disable)
+DO_NOT_TRACK / FALLOW_TELEMETRY_DISABLED   (admin/fleet kill switch)
+> FALLOW_TELEMETRY_DEBUG                     (forces inspect mode)
+> FALLOW_TELEMETRY                           (per-shell override)
+> CI: off unless FALLOW_TELEMETRY is set
+> user telemetry config                      (fallow telemetry enable/disable)
 > default: off
 ```
 
@@ -78,12 +82,12 @@ In CI, telemetry is off unless `FALLOW_TELEMETRY` is explicitly set in that CI e
 
 ## Agent source
 
-Agents and wrappers can identify their integration with one normalized, allowlisted value when the user has enabled telemetry:
+If the user has already enabled telemetry, an agent or wrapper can tag the run with its own name, using one value from the fixed list below:
 
 ```bash
 export FALLOW_AGENT_SOURCE=codex
 ```
 
-Accepted values: `codex`, `claude_code`, `cursor`, `copilot`, `opencode`, `aider`, `roo`, `windsurf`, `gemini` (aliases `gemini_cli` / `antigravity`), `cline`, `continue`, `zed`, `goose`, `other_known`, `unknown`, `none`. Hyphen aliases such as `claude-code` are normalized. Unrecognized values are ignored rather than uploaded. Agents not on the list (for example enterprise IDE assistants) are grouped under `other_known`.
+Accepted values: `codex`, `claude_code`, `cursor`, `copilot`, `opencode`, `aider`, `roo`, `windsurf`, `gemini` (aliases `gemini_cli` / `antigravity`), `cline`, `continue`, `zed`, `goose`, `other_known`, `unknown`, `none`. Hyphen aliases such as `claude-code` are normalized. Unrecognized values are ignored rather than uploaded. Agents not on the list (for example enterprise IDE assistants) are grouped under `other_known`. **Setting `FALLOW_AGENT_SOURCE` never enables telemetry by itself and uploads no codebase content.**
 
-Fallow does not upload raw client info, process names, parent process paths, editor or extension identifiers, environment variable names, model names, account or organization IDs, prompts, versions, or free-form vendor strings. When several agent environments coexist, heuristic attribution is best-effort and order-dependent; set `FALLOW_AGENT_SOURCE` explicitly for deterministic attribution.
+Fallow does not upload raw MCP client info, process names, parent process paths, editor or extension identifiers, environment variable names, model names, account or organization IDs, prompts, versions, or free-form vendor strings. When more than one agent environment is present at once, Fallow guesses which one is calling, and the guess can depend on the order it checks them. Set `FALLOW_AGENT_SOURCE` to name the agent yourself and get a reliable result.

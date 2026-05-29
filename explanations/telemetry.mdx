@@ -1,15 +1,42 @@
 ---
 title: "Telemetry & privacy"
-description: "What fallow's opt-in telemetry collects and, more importantly, what it never collects. Off by default, allowlisted, no identifiers, inspect-before-consent."
-keywords: ["telemetry", "privacy", "opt-in", "DO_NOT_TRACK", "anonymous", "data collection", "fallow"]
+description: "What fallow's opt-in telemetry collects and, more importantly, what it never collects. Off by default, no identifiers, inspect it before you consent."
+keywords: ["telemetry", "privacy", "opt-in", "DO_NOT_TRACK", "data collection", "fallow"]
 icon: "shield-halved"
 ---
 
 Fallow telemetry is **opt-in** and **off by default**. It exists to improve agent, CI, JSON, MCP, and editor workflows, not to track individuals or codebases. For the commands and environment controls, see [`fallow telemetry`](/cli/telemetry).
 
+To keep telemetry off everywhere, set `FALLOW_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`. See [Disabling everywhere](#disabling-everywhere).
+
+## What is never collected
+
+Fallow telemetry never includes:
+
+- repository, organization, project, branch, or git remote names
+- file paths, import specifiers, source snippets, or stack traces
+- package, dependency, workspace, or framework package names
+- raw command-line arguments
+- config contents or config values
+- environment variable names or values
+- raw errors, logs, or serialized exceptions
+- stable machine, user, project, or repository identifiers
+
+Hashing these values is not used as a workaround.
+
+## Inspect what is sent
+
+Do not take the list on trust. You can print the exact payload any real command would send, without sending it:
+
+```bash
+FALLOW_TELEMETRY=inspect fallow audit --format json --quiet
+```
+
+The payload prints to stderr; your command's normal output is untouched.
+
 ## What is collected
 
-When you enable telemetry, Fallow sends one coarse, workflow-level event per analysis run:
+When you enable telemetry, Fallow sends one small, high-level event per analysis run:
 
 ```json
 {
@@ -34,8 +61,8 @@ When you enable telemetry, Fallow sends one coarse, workflow-level event per ana
 
 | Field | Purpose |
 |:------|:--------|
-| `workflow` | Prioritize audit, dead-code, health, duplication, CI, and runtime-coverage workflows. |
-| `integration_surface` | Understand whether Fallow is used through human CLI, CLI JSON, MCP, CI, editor, or programmatic surfaces. |
+| `workflow` | Prioritize audit, dead-code, health, duplication, CI, and runtime-coverage setup workflows. |
+| `integration_surface` | Understand whether Fallow is used through human CLI, CLI JSON, MCP, CI, editor, or as a library. |
 | `invocation_context` | Separate human, CI, editor, and agent-driven use without uploading detection evidence. |
 | `agent_source` | Improve compatibility with specific agent integrations using a documented allowlist. |
 | `output_format` / `quiet` | Protect the output contracts that users and agents rely on most. |
@@ -43,26 +70,7 @@ When you enable telemetry, Fallow sends one coarse, workflow-level event per ana
 | `outcome` / `exit_code_bucket` | Measure clean runs, findings, and failures without uploading raw error text. |
 | `parent_run` | Link explicit agent follow-up runs using a short allowlisted token, never a path or free-form string. |
 
-You can print the exact payload for any real command without sending it:
-
-```bash
-FALLOW_TELEMETRY=inspect fallow audit --format json --quiet
-```
-
-## What is never collected
-
-Fallow telemetry never includes:
-
-- repository, organization, project, branch, or git remote names
-- file paths, import specifiers, source snippets, or stack traces
-- package, dependency, workspace, or framework package names
-- raw command-line arguments
-- config contents or config values
-- environment variable names or values
-- raw errors, logs, or serialized exceptions
-- stable machine, user, project, or repository identifiers
-
-Hashing these values is not used as a workaround.
+The `schema_version` field increments if the collected fields ever change, and this page is updated before any new field ships.
 
 ## Agent source
 
@@ -73,13 +81,16 @@ none codex claude_code cursor copilot opencode aider roo
 windsurf gemini cline continue zed goose other_known unknown
 ```
 
-`none` is an internal classifier state, not a wire value: `agent_source` is only emitted when a run is classified as agent-driven, which by definition is not `none`. Agents not on the list (for example enterprise IDE assistants) are grouped under `other_known`. Fallow does not upload raw MCP client info, process names, parent process paths, editor or extension identifiers, environment variable names, model names, account or organization IDs, prompts, versions, or free-form vendor strings. Agent wrappers should set `FALLOW_AGENT_SOURCE=<allowlisted-value>`; ambiguous sources emit `unknown`.
+`none` appears in the list because it is the internal default before a run is classified, but it is never sent: Fallow only sends `agent_source` for runs it identifies as agent-driven, and those are never `none`. Agents not on the list (for example enterprise IDE assistants) are grouped under `other_known`. Hyphen aliases such as `claude-code`, and CLI aliases such as `gemini_cli` and `antigravity` (both map to `gemini`), are normalized.
+
+Fallow does not upload raw MCP client info, process names, parent process paths, editor or extension identifiers, environment variable names, model names, account or organization IDs, prompts, versions, or free-form vendor strings. Agent wrappers should set `FALLOW_AGENT_SOURCE=<allowlisted-value>`; ambiguous sources emit `unknown`. **Setting `FALLOW_AGENT_SOURCE` never enables telemetry by itself and uploads no codebase content.** When more than one agent environment is present at once, attribution is best-effort and can depend on check order; set `FALLOW_AGENT_SOURCE` to name the agent yourself.
 
 ## Transport and server privacy
 
-- requests are HTTPS POST JSON to `https://api.fallow.cloud/v1/telemetry/events` (override with `FALLOW_API_URL`)
+- requests are HTTPS POST JSON to `https://api.fallow.cloud/v1/telemetry/events` (override the host with `FALLOW_API_URL`)
 - no cookies are used and no authentication token is sent
-- the upload runs on a background thread and never blocks command exit for meaningful time; delivery is best-effort and lossy, so event counts are a biased sample rather than a usage census
+- the upload runs on a background thread, so it does not slow down your command
+- Fallow does not wait for the upload, so the fastest runs and runs on slow networks often drop their event; counts are a rough, biased sample, not an exact usage count
 - network errors are ignored and never affect command output or exit code
 - telemetry is never written to stdout
 - server-side handling does not enrich telemetry with customer, repository, organization, git, package-registry, or license data
