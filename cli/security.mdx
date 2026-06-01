@@ -1,0 +1,115 @@
+---
+title: "fallow security"
+description: "CLI reference for fallow security. Surface opt-in local security candidates for agent or human verification."
+keywords: ["fallow security", "client-server-leak", "process.env", "use client", "Next.js", "React Server Components", "SARIF", "CLI"]
+icon: "shield"
+---
+
+Surface local security candidates for verification. The first rule, `client-server-leak`, looks for a `"use client"` file that directly reads, or transitively imports a module that reads, a non-public `process.env` secret.
+
+<Note>
+  Findings are candidates, not confirmed vulnerabilities. Fallow reports a structural trace so an agent or human can verify whether the value can actually reach client-bundled code.
+</Note>
+
+```bash
+fallow security
+```
+
+## Options
+
+### Output
+
+| Flag | Description |
+|:-----|:------------|
+| `-f, --format <FORMAT>` | Output format: `human` (default), `json`, or `sarif` |
+| `-q, --quiet` | Suppress progress output |
+| `--summary` | Show a compact human summary instead of per-finding detail |
+| `--ci` | CI mode: equivalent to `--format sarif --fail-on-issues --quiet` |
+| `--fail-on-issues` | Exit with code 1 if security candidates are found |
+| `--sarif-file <PATH>` | Write SARIF output to a file in addition to the primary output |
+| `--legacy-envelope` | Emit JSON without the top-level `kind` discriminator for one migration cycle |
+
+### Scoping
+
+| Flag | Description |
+|:-----|:------------|
+| `-r, --root <PATH>` | Project root directory (default: current working directory) |
+| `-c, --config <PATH>` | Path to config file (default: auto-detected) |
+| `--changed-since <REF>` (alias: `--base`) | Only report candidates whose client anchor or trace hops touch files changed since a git ref |
+| `--diff-file <PATH>` | Narrow candidates to added hunks on the client anchor or import trace. Secret-source hops use file-level retention because member-access spans are not yet stored. Use `-` to read from stdin. |
+| `--diff-stdin` | Read the unified diff from stdin |
+| `-w, --workspace <PATTERNS>` | Scope output to selected workspace packages |
+| `--changed-workspaces <REF>` | Scope output to workspace packages touched since the given git ref |
+
+### Performance
+
+| Flag | Description |
+|:-----|:------------|
+| `--no-cache` | Disable incremental caching |
+| `--threads <N>` | Number of parser threads |
+
+## Rule: client-server-leak
+
+The detector starts at files with a top-level `"use client"` directive and walks static imports. It reports a candidate when the client boundary can reach a module that reads a non-public `process.env` value.
+
+Public-by-convention env values are excluded:
+
+| Public prefix | Example |
+|:--------------|:--------|
+| `NODE_ENV` | `process.env.NODE_ENV` |
+| `NEXT_PUBLIC_*` | `process.env.NEXT_PUBLIC_API_URL` |
+| `VITE_*` | `process.env.VITE_API_URL` |
+| `NUXT_PUBLIC_*` | `process.env.NUXT_PUBLIC_SITE_URL` |
+| `REACT_APP_*` | `process.env.REACT_APP_API_URL` |
+| `PUBLIC_*` | `process.env.PUBLIC_SITE_URL` |
+| `GATSBY_*` | `process.env.GATSBY_SITE_URL` |
+| `EXPO_PUBLIC_*` | `process.env.EXPO_PUBLIC_API_URL` |
+| `STORYBOOK_*` | `process.env.STORYBOOK_THEME` |
+
+Dynamic `import()` edges that the graph cannot follow are counted in the output as unresolved edge files. A clean finding list with a non-zero unresolved count is not a clean bill.
+
+## Suppression
+
+Suppress a known false positive at file level:
+
+```ts
+// fallow-ignore-file security-client-server-leak
+"use client";
+```
+
+Use suppression only after verifying that the value cannot ship to client-bundled code, for example because the import is type-only, server-only, or guarded out by the build.
+
+## JSON output
+
+`--format json` emits a typed root envelope with `kind: "security"` unless `--legacy-envelope` is set.
+
+```json
+{
+  "kind": "security",
+  "schema_version": "1",
+  "security_findings": [],
+  "unresolved_edge_files": 0
+}
+```
+
+Each finding includes `kind`, `path`, `line`, `col`, `evidence`, `trace`, and `actions`.
+
+## Examples
+
+<CodeGroup>
+```bash Basic scan
+fallow security
+```
+
+```bash JSON for agents
+fallow security --format json --quiet
+```
+
+```bash GitHub Code Scanning
+fallow security --ci --sarif-file fallow-security.sarif
+```
+
+```bash PR-scoped scan
+git diff --unified=0 origin/main...HEAD | fallow security --diff-file -
+```
+</CodeGroup>
