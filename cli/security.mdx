@@ -5,7 +5,7 @@ keywords: ["fallow security", "client-server-leak", "process.env", "use client",
 icon: "shield"
 ---
 
-Surface local security candidates for verification. The first rule, `client-server-leak`, looks for a `"use client"` file that directly reads, or transitively imports a module that reads, a non-public `process.env` secret.
+Surface local security candidates for verification. Two rule families ship: the graph-structural `client-server-leak` (a `"use client"` file that directly reads, or transitively imports a module that reads, a non-public `process.env` secret), and the data-driven `tainted-sink` catalogue (syntactic dangerous-sink candidates across nine CWE categories). Both default to `off` and run only under `fallow security`.
 
 <Note>
   Findings are candidates, not confirmed vulnerabilities. Fallow reports a structural trace so an agent or human can verify whether the value can actually reach client-bundled code.
@@ -68,16 +68,63 @@ Public-by-convention env values are excluded:
 
 Dynamic `import()` edges that the graph cannot follow are counted in the output as unresolved edge files. A clean finding list with a non-zero unresolved count is not a clean bill.
 
+## Rule: tainted-sink (catalogue)
+
+A data-driven catalogue of syntactic sink candidates. Where `client-server-leak` is a graph-reachability rule, `tainted-sink` flags a call, member assignment, or tagged template that reaches a **non-literal** argument at a known dangerous sink. A fully literal argument never fires.
+
+All catalogue findings carry `kind: "tainted-sink"` plus a `category` (the catalogue id) and a `cwe` number. The catalogue ships these categories:
+
+| Category | CWE | Sink shape |
+|:---------|:----|:-----------|
+| `dangerous-html` | 79 | `innerHTML` / `outerHTML` / `insertAdjacentHTML` / `dangerouslySetInnerHTML` |
+| `command-injection` | 78 | `child_process` `exec` / `execSync` / `spawn` / `spawnSync` (import-provenance gated) |
+| `code-injection` | 94 | `eval` / `vm.runInNewContext` |
+| `sql-injection` | 89 | `query` / `execute` / a `` sql`` `` tag with interpolation or concatenation |
+| `ssrf` | 918 | `fetch` / `axios` / `http(s).request` |
+| `path-traversal` | 22 | `fs.*` / `path.join` / `path.resolve` |
+| `open-redirect` | 601 | `res.redirect` |
+| `weak-crypto` | 327 | runtime-selectable hash or cipher algorithm |
+| `unsafe-deserialization` | 502 | `js-yaml` `load` / `node-serialize` |
+
+<Note>
+  These are deliberately conservative candidates: a non-literal argument is a signal to verify, not proof of a vulnerability. Fallow does not prove the value is attacker-controlled or reaches the sink unsanitized. Verification is the agent's job.
+</Note>
+
+Sink-shaped nodes whose callee cannot be resolved to a static path (dynamic dispatch, computed members, aliased bindings) are counted in the output as `unresolved_callee_sites`. As with `client-server-leak`, a clean finding list with a non-zero count is not a clean bill.
+
+### Enabling categories
+
+Both `tainted-sink` and `client-server-leak` default to `off` and are surfaced only by `fallow security` (never under bare `fallow` or the `audit` gate). Scope which catalogue categories run with `security.categories` in config:
+
+```json
+{
+  "security": {
+    "categories": {
+      "include": ["dangerous-html", "command-injection"],
+      "exclude": []
+    }
+  }
+}
+```
+
+With both lists empty (the default) every category is active.
+
 ## Suppression
 
-Suppress a known false positive at file level:
+Suppress a known false positive at file level. Each rule has its own token:
 
 ```ts
 // fallow-ignore-file security-client-server-leak
 "use client";
 ```
 
-Use suppression only after verifying that the value cannot ship to client-bundled code, for example because the import is type-only, server-only, or guarded out by the build.
+```ts
+// fallow-ignore-file security-sink
+const el = document.querySelector(".out");
+el.innerHTML = render(userInput);
+```
+
+One `security-sink` token covers every catalogue category. Use suppression only after verifying that the value cannot reach the sink unsanitized, for example because the input is a trusted constant, server-only, or sanitized upstream.
 
 ## JSON output
 
@@ -88,11 +135,12 @@ Use suppression only after verifying that the value cannot ship to client-bundle
   "kind": "security",
   "schema_version": "1",
   "security_findings": [],
-  "unresolved_edge_files": 0
+  "unresolved_edge_files": 0,
+  "unresolved_callee_sites": 0
 }
 ```
 
-Each finding includes `kind`, `path`, `line`, `col`, `evidence`, `trace`, and `actions`.
+Each finding includes `kind`, `path`, `line`, `col`, `evidence`, `trace`, and `actions`. `tainted-sink` findings additionally carry `category` (the catalogue id, for example `"dangerous-html"`) and `cwe` (the category's CWE number); `client-server-leak` findings omit both.
 
 ## Examples
 
