@@ -41,7 +41,7 @@ npx mintlify dev
 
 ### Numbers to keep accurate
 - 15 issue types (unused files, exports, types, dependencies, devDependencies, optionalDependencies, enum members, class members, unresolved imports, unlisted deps, duplicate exports, circular dependencies, boundary violations, type-only dependencies, test-only dependencies).
-- 114 built-in plugins.
+- 118 built-in plugins.
 - Benchmarks must match the fallow repo README.
 
 ### Narrative structure
