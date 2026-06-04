@@ -73,8 +73,9 @@ Multiple section flags can be combined (e.g., `--complexity --hotspots`). Withou
 
 | Flag | Description |
 |:-----|:------------|
-| `--since <DURATION>` | Git history window for hotspot analysis (default: `6m`). Accepts durations (`6m`, `90d`, `1y`, `2w`) or ISO dates (`2025-06-01`). |
+| `--since <DURATION>` | Git history window for hotspot analysis (default: `6m`). Accepts durations (`6m`, `90d`, `1y`, `2w`) or ISO dates (`2025-06-01`). Ignored when `--churn-file` is set (the file is authoritative for the window). |
 | `--min-commits <N>` | Minimum number of commits for a file to be included in hotspot ranking (default: 3). |
+| `--churn-file <PATH>` | Import change history from a `fallow-churn/v1` JSON file instead of `git log`, so hotspots, ownership, and targets work on projects with no git repository (Yandex Arc, Mercurial, Perforce). Resolved relative to `--root`; wins over git when both are present. See [Importing churn from a non-git VCS](#importing-churn-from-a-non-git-vcs). |
 | `--ownership` | Attach ownership signals to each hotspot entry: bus factor (Avelino truck factor), contributor count, top contributor with stale-days, recent contributors (top-3), `suggested_reviewers`, declared CODEOWNERS owner, `ownership_state`, ownership drift, and unowned-hotspot detection. Human output gains a project-level summary line above the hotspot list. Test paths get a `[test]` tag. Implies `--hotspots`. Uses git history; outside a git repository the hotspot/ownership section degrades to empty. |
 | `--ownership-emails <MODE>` | Privacy mode for author emails: `handle` (default, local-part only with GitHub noreply unwrap and deterministic same-handle disambiguation), `anonymized` (stable `xxh3:` pseudonym), legacy `hash` (same as `anonymized`), or `raw` (full email). Implies `--ownership`. Use `anonymized` in regulated environments where author identities are sensitive. Configure the default via `health.ownership.emailMode` in config. |
 
@@ -290,6 +291,85 @@ Configure ownership defaults under `health.ownership`:
 <Note>
   Ownership signals are computed only when `--hotspots` runs and a file passes the `min_commits` threshold (default 3). This gates the analysis on enough history to be meaningful. Squash-merged commits inflate single-author dominance, and shallow clones distort the picture further; fallow warns about both when `--ownership` is active.
 </Note>
+
+## Importing churn from a non-git VCS
+
+`--hotspots`, `--ownership`, and `--targets` read change history from `git log`. On a project with no git repository (Yandex Arc, Mercurial, Perforce) they would otherwise print `note: hotspot analysis skipped: no git repository found` and exit 0.
+
+`--churn-file <PATH>` lets you feed history from a normalized JSON file instead. A small wrapper translates your VCS log into the contract; fallow then runs all the same recency-weighting, trend, and ownership logic on the imported events. The file is resolved relative to `--root` and wins over git when both are present.
+
+```bash
+fallow health --hotspots --ownership --churn-file churn.json
+```
+
+### The `fallow-churn/v1` contract
+
+```json
+{
+  "schema": "fallow-churn/v1",
+  "events": [
+    { "path": "src/foo.ts", "timestamp": 1717459200, "author": "dev@corp", "added": 10, "deleted": 5 }
+  ]
+}
+```
+
+One entry per `(commit, file)` touched, the natural shape of a `<vcs> log --numstat`.
+
+| Field | Required | Meaning |
+|:------|:---------|:--------|
+| `path` | yes | Repo-root-relative, forward-slash. Joined to `--root`. |
+| `timestamp` | yes | Commit time, unix **seconds** UTC (not milliseconds). Drives the recency half-life and the accelerating/stable/cooling trend. |
+| `author` | no | Opaque identity, email recommended. Drives ownership and bus-factor. Absent leaves the event counting toward churn/trend but contributing no author signal. |
+| `added` / `deleted` | yes | Lines changed in that file in that commit. Best-effort: the hotspot score keys on commit-event count, not lines, so imprecise counts still rank correctly; lines feed display only. |
+
+Extra fields are ignored, so a wrapper may carry additional metadata (a `commit` id, a timezone) without breaking.
+
+### Producer requirements
+
+fallow's git path runs `git log --numstat --no-merges --no-renames --use-mailmap`. A wrapper should reproduce these four behaviors or hotspots and ownership skew:
+
+1. **Omit merge commits.** Otherwise the merge author looks like a contributor to every merged file, inflating bus-factor and skewing the trend.
+2. **Omit binary-file rows entirely** (do not emit `0`/`0`). git skips binary `-`/`-` numstat rows.
+3. **Renames: emit under the new path only**, with the real add/delete count; do not emit a delete-of-old row. (Perforce models a move as delete-old + add-new full-size rows, which would create fake hotspots.)
+4. **One row per `(commit, file)`**, with `timestamp` in UTC **seconds**.
+
+Two more notes:
+
+- **Author identity is an opaque key.** fallow does NOT apply mailmap to imported authors, so emit a single canonical form per person (email preferred). If your VCS commits land under a merge/CI bot identity, add it to `health.ownership.botPatterns` in config or bus-factor collapses to 1 everywhere.
+- **Validation is strict where the math depends on it.** A `timestamp` more than a year in the future (almost always a millisecond value mistaken for seconds) is rejected with exit 2; an empty `events` array is valid (no hotspots), not an error; a malformed file is a loud hard error, not a silent skip.
+
+### Reference wrapper (Mercurial)
+
+The wrapper translates your VCS log into the contract. This Mercurial example pulls the last six months, excludes merges, and emits one event per file per commit:
+
+```bash
+# hg-churn.sh: emit fallow-churn/v1 for the last 6 months (no merges).
+hg log --no-merges --rev 'date(">6 months ago")' \
+  --template '{date|hgdate}\t{author|email}\t{join(files, "\t")}\n' \
+| python3 -c '
+import json, sys
+events = []
+for line in sys.stdin:
+    cols = line.rstrip("\n").split("\t")
+    if len(cols) < 3:
+        continue
+    ts = int(cols[0].split()[0])   # hgdate is "epoch tzoffset"; take the epoch
+    author = cols[1]
+    for path in cols[2:]:
+        events.append({"path": path, "timestamp": ts, "author": author,
+                       "added": 0, "deleted": 0})
+print(json.dumps({"schema": "fallow-churn/v1", "events": events}))
+' > churn.json
+```
+
+The hg template separates fields with tabs (`\t`), which never appear in paths or emails. Per-file `added`/`deleted` are left `0`; fill them in if your VCS exposes line counts cheaply. The hotspot score is driven by commit-event count rather than line totals, so ranking stays correct either way. For Yandex Arc, drive the same shape from `arc log`; for Perforce, from `p4 changes` + `p4 describe`.
+
+### Scope
+
+`--churn-file` powers the churn-backed health signals only: `--hotspots`, `--ownership`, and `--targets`. The diff-based commands stay git-only because they need the base revision's tree, not just history:
+
+- `--changed-since` line/file filtering already has a file-based equivalent: `--diff-file` / `--diff-stdin` accept a unified diff. If your VCS can emit a git-format patch, point those at it.
+- `fallow audit` and `fallow impact` check out the base revision into a temporary git worktree and re-analyze it, which needs real base-tree contents. They require git.
 
 ## Vital signs
 
