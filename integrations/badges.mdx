@@ -39,10 +39,10 @@ git commit -m "chore: update health badge"
 Then reference it in your README:
 
 ```markdown
-![fallow health](./github/badges/health.svg)
+![fallow health](.github/badges/health.svg)
 ```
 
-This is the simplest approach but the badge only updates when you regenerate and commit.
+This is the simplest approach but the badge only updates when you regenerate and commit. Because it is a relative link to a file committed in your repo, it also renders in private repositories (see [Private repositories](#private-repositories) below).
 
 ### Option 2: Publish from CI (recommended)
 
@@ -69,6 +69,10 @@ Add a step to your CI workflow that generates the badge and publishes it to a `b
     ```markdown
     ![fallow health](https://raw.githubusercontent.com/your-org/your-repo/badges/badge.svg)
     ```
+
+    <Warning>
+      `raw.githubusercontent.com` URLs only render for **public** repositories. On a private repo the badge shows as a broken image, because GitHub's markdown renderer cannot authenticate to the raw host. See [Private repositories](#private-repositories).
+    </Warning>
   </Tab>
   <Tab title="GitLab CI">
     ```yaml
@@ -101,7 +105,32 @@ Host the JSON file (e.g., in a Gist or on the `badges` branch) and use the shiel
 ![fallow health](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/your-org/your-repo/badges/health-badge.json)
 ```
 
-This keeps the badge rendering on shields.io's CDN and always shows the latest score.
+This keeps the badge rendering on shields.io's CDN and always shows the latest score. Like Option 2, this only works for **public** repositories: shields.io fetches the JSON server-side from `raw.githubusercontent.com`, which cannot read private content. See [Private repositories](#private-repositories).
+
+## Private repositories
+
+`raw.githubusercontent.com` (Option 2) and the shields.io endpoint (Option 3) only render for **public** repositories. Both hosts serve raw content with no access to private repos, so the badge shows as a broken image. Putting a personal access token in the URL is insecure and against GitHub's terms, so avoid that.
+
+For a private repo, commit the badge into the repository and reference it with a **relative link**. GitHub renders relative image links for any viewer with read access to the repo:
+
+```markdown
+![fallow health](.github/badges/health.svg)
+```
+
+To keep it fresh from CI, regenerate the badge and commit it back to a tracked path on your default branch instead of publishing to a separate `badges` branch:
+
+```yaml
+- name: Update health badge
+  run: |
+    fallow health --format badge > .github/badges/health.svg
+    git config user.name "github-actions[bot]"
+    git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+    git add .github/badges/health.svg
+    git diff --quiet --cached || git commit -m "chore: update health badge [skip ci]"
+    git push
+```
+
+The job needs `permissions: contents: write`. A relative link resolves against the branch the README is viewed on, so the badge has to live on that branch: a separate orphan `badges` branch (Option 2) cannot be reached by a relative link, which is why private repos commit the badge directly.
 
 ## Monorepo badges
 
