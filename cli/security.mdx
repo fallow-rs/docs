@@ -36,6 +36,7 @@ fallow security
 | `-r, --root <PATH>` | Project root directory (default: current working directory) |
 | `-c, --config <PATH>` | Path to config file (default: auto-detected) |
 | `--changed-since <REF>` (alias: `--base`) | Only report candidates whose client anchor or trace hops touch files changed since a git ref |
+| `--file <PATH>` | Only report candidates whose finding anchor or trace hop matches the selected file. Repeat to select multiple files. The full graph is still analyzed |
 | `--diff-file <PATH>` | Narrow candidates to added hunks on the client anchor or import trace. Secret-source hops use file-level retention because member-access spans are not yet stored. Use `-` to read from stdin. |
 | `--diff-stdin` | Read the unified diff from stdin |
 | `-w, --workspace <PATTERNS>` | Scope output to selected workspace packages |
@@ -70,7 +71,7 @@ Dynamic `import()` edges that the graph cannot follow are counted in the output 
 
 ## Rule: tainted-sink (catalogue)
 
-A data-driven catalogue of syntactic sink candidates. Where `client-server-leak` is a graph-reachability rule, `tainted-sink` flags a call, member assignment, or tagged template that reaches a **non-literal** argument at a known dangerous sink. A fully literal argument never fires.
+A data-driven catalogue of syntactic sink candidates. Where `client-server-leak` is a graph-reachability rule, `tainted-sink` flags a call, member assignment, or tagged template that reaches a known dangerous sink. Most rows require a **non-literal** argument; narrowly literal-aware rows flag deterministic unsafe literals such as wildcard `postMessage` origins, weak crypto algorithms, disabled TLS validation, and JWT algorithm issues.
 
 All catalogue findings carry `kind: "tainted-sink"` plus a `category` (the catalogue id) and a `cwe` number. The catalogue ships these categories:
 
@@ -80,12 +81,17 @@ All catalogue findings carry `kind: "tainted-sink"` plus a `category` (the catal
 | `template-escape-bypass` | 79 | template-engine `SafeString(...)` wrapping a non-literal value |
 | `command-injection` | 78 | `child_process` `exec` / `execSync` / `spawn` / `spawnSync` (import-provenance gated) |
 | `code-injection` | 94 | `eval` / `vm.runInNewContext` |
+| `dynamic-regex` | 1333 | `RegExp(...)` / `new RegExp(...)` with a non-literal pattern |
 | `dynamic-module-load` | 95 | dynamic `require(...)` |
 | `sql-injection` | 89 | `query` / `execute` with concatenation or interpolation, raw escape hatches (`sql.raw`, Prisma unsafe raw, Knex raw, `sequelize.literal`) |
 | `ssrf` | 918 | `fetch` / `got` / `ky` / `needle` / `request` / `axios` / `superagent` / `undici` / `http(s).request` |
 | `path-traversal` | 22 | `path.join` / `path.resolve` / `node:fs` path methods / route `sendFile` |
 | `header-injection` | 113 | response `setHeader` / `writeHead` |
 | `open-redirect` | 601 | `res.redirect` / `location.href` / `location.assign` / `window.open` |
+| `postmessage-wildcard-origin` | 346 | `postMessage(..., "*")` |
+| `tls-validation-disabled` | 295 | HTTPS/TLS options with `rejectUnauthorized: false`, plus `NODE_TLS_REJECT_UNAUTHORIZED = "0"` |
+| `permissive-cors` | 942 | CORS wildcard origin with credentials |
+| `insecure-cookie` | 614 | cookie options missing or disabling `httpOnly` / `secure` |
 | `mass-assignment` | 915 | source-backed `Object.assign(target, source)` |
 | `weak-crypto` | 327 | runtime-selectable hash or cipher algorithm |
 | `deprecated-cipher` | 327 | `crypto.createCipher` / `createDecipher` (no IV, MD5-based KDF) |
@@ -97,7 +103,11 @@ All catalogue findings carry `kind: "tainted-sink"` plus a `category` (the catal
 | `nosql-injection` | 943 | Mongo / Mongoose query object passthrough |
 | `ssti` | 1336 | template engine compile / render calls |
 | `xxe` | 611 | XML parse calls |
+| `secret-pii-log` | 532 | source-backed secrets or request PII reaching logs |
+| `hardcoded-secret` | 798 | provider-prefix credentials and high-entropy literals assigned to secret-shaped identifiers (include-required) |
 | `xpath-injection` | 643 | `xpath.select` / `select1` with a non-literal expression |
+| `jwt-alg-none` | 347 | JWT signing with algorithm `none` |
+| `jwt-verify-missing-algorithms` | 347 | `jsonwebtoken` verify calls missing an `algorithms` allowlist |
 | `webview-injection` | 94 | react-native-webview `injectJavaScript(...)` / `injectedJavaScript=` (enabler-gated) |
 | `angular-trusted-html` | 79 | Angular `bypassSecurityTrust*` (enabler-gated) |
 | `nextjs-open-redirect` | 601 | Next.js `redirect` / `permanentRedirect` (enabler-gated) |
@@ -113,20 +123,20 @@ Sink-shaped nodes whose callee cannot be resolved to a static path (dynamic disp
 
 ### Enabling categories
 
-Both `tainted-sink` and `client-server-leak` default to `off` and are surfaced only by `fallow security` (never under bare `fallow` or the `audit` gate). Scope which catalogue categories run with `security.categories` in config:
+`tainted-sink`, `hardcoded-secret`, and `client-server-leak` default to `off` and are surfaced only by `fallow security` (never under bare `fallow` or the `audit` gate). Scope which catalogue categories run with `security.categories` in config:
 
 ```json
 {
   "security": {
     "categories": {
-      "include": ["dangerous-html", "command-injection"],
+      "include": ["dangerous-html", "command-injection", "hardcoded-secret"],
       "exclude": []
     }
   }
 }
 ```
 
-With both lists empty (the default) every category is active.
+With both lists empty, ordinary catalogue categories are active. `hardcoded-secret` is intentionally include-required and only runs when listed in `security.categories.include`.
 
 ## Suppression
 
