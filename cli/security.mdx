@@ -144,6 +144,7 @@ All catalogue findings carry `kind: "tainted-sink"` plus a `category` (the catal
 | `xxe` | 611 | XML parse calls |
 | `secret-pii-log` | 532 | source-backed secrets or request PII reaching logs |
 | `hardcoded-secret` | 798 | provider-prefix credentials and high-entropy literals assigned to secret-shaped identifiers (include-required) |
+| `secret-to-network` | 201 | a non-public `process.env` / `import.meta.env` secret reaching a network call body (`fetch` / `axios` / `got` / ...) via same-identifier flow (include-required) |
 | `xpath-injection` | 643 | `xpath.select` / `select1` with a non-literal expression |
 | `jwt-alg-none` | 347 | JWT signing with algorithm `none` |
 | `jwt-verify-missing-algorithms` | 347 | `jsonwebtoken` verify calls missing an `algorithms` allowlist |
@@ -175,7 +176,7 @@ Sink-shaped nodes whose callee cannot be resolved to a static path (dynamic disp
 }
 ```
 
-With both lists empty, ordinary catalogue categories are active. `hardcoded-secret` is intentionally include-required and only runs when listed in `security.categories.include`.
+With both lists empty, ordinary catalogue categories are active. `hardcoded-secret` and `secret-to-network` are intentionally include-required and only run when listed in `security.categories.include`. `secret-to-network` is opt-in because legitimate auth (sending a bearer token to its own provider) is also a secret reaching a network call; each candidate carries the destination (`candidate.network.destination`, the request URL when it is a literal, or absent when the URL is dynamic) so you can tell exfil from intended auth. Public-by-convention env vars (`NEXT_PUBLIC_`, `VITE_`, `REACT_APP_`, ...) are never treated as secrets.
 
 ## Suppression
 
@@ -252,6 +253,8 @@ The `candidate` record has three slots:
 There is no `impact` field. Deciding exploitability and severity is the verifying agent's job, not fallow's; fallow flags candidates with structural evidence.
 
 `taint_flow` is present only when an untrusted source is import-reachable to the sink. It is the `{ source, sink, path }` shape agent SAST tooling expects. `path` is a compact summary (`intra_module` and `cross_module_hops`); the full ordered hop list lives in `reachability.untrusted_source_trace` and is not duplicated.
+
+`candidate.network` is present only on `secret-to-network` (#890) candidates. It carries `destination`: the network call's URL when it is a static string literal (usually intended auth, the credential's own provider) or absent when the destination is dynamic (the higher-signal exfil case). Use it to triage exfil from intended auth without re-reading the code.
 
 `finding_id` is a stable correlation id, identical across runs for the same rule, path, and line, and identical to the finding's SARIF `partialFingerprints` value. Use it to track a candidate across runs (for example after a rebase) and to join JSON and SARIF output.
 
