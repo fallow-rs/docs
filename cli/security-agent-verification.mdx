@@ -1,0 +1,131 @@
+---
+title: "Security agent verification"
+description: "Turn fallow security candidates into verifier-filtered survivor reports without adding model calls to fallow."
+keywords: ["fallow security", "security verification", "security_candidates", "attack_surface", "agent workflow"]
+icon: "shield-check"
+---
+
+`fallow security` produces deterministic candidates. It does not call a model, decide exploitability, or emit verified vulnerabilities. Use this recipe when an agent or external harness should turn raw candidates into a shorter survivor list.
+
+## Inputs
+
+Use the CLI when you want a standalone JSON file:
+
+```bash
+fallow security --format json --surface --quiet > fallow-security.json
+```
+
+Use MCP when an agent is already in an edit loop:
+
+```json
+{
+  "root": "/path/to/repo",
+  "surface": true,
+  "paths": ["src/routes/login.ts"]
+}
+```
+
+`surface: true` forwards `--surface` and includes top-level `attack_surface[]` entries. `paths` forwards repeated `--file` filters and scopes returned candidates to matching anchors, trace hops, or source-trace hops.
+
+## Verifier packet
+
+For each `security_findings[]` item, build one packet from deterministic fallow evidence plus caller-collected source windows:
+
+```json
+{
+  "schema_version": "fallow-security-verifier-input/v1",
+  "finding_id": "security:...",
+  "candidate": {
+    "source_kind": "http-request-input",
+    "sink": {},
+    "boundary": {}
+  },
+  "trace": [],
+  "taint_flow": null,
+  "reachability_trace": [],
+  "attack_surface": null,
+  "source_windows": [
+    {
+      "path": "src/routes/login.ts",
+      "start_line": 12,
+      "end_line": 52,
+      "text": "..."
+    }
+  ],
+  "blind_spots": {
+    "unresolved_edge_files": 0,
+    "unresolved_callee_sites": 0
+  }
+}
+```
+
+Collect source windows from disk after the scan. Keep them outside fallow output so the core stays deterministic, compact, and provider-neutral.
+
+## Prompt contract
+
+Ask the verifier to dismiss candidates unless the supplied evidence supports a real exploit path:
+
+```text
+You are verifying one fallow security candidate.
+
+Fallow is a deterministic candidate producer, not a vulnerability oracle.
+Use only the supplied candidate, trace, attack-surface entry, and source windows.
+Do not assume data flow beyond the provided code.
+
+Check:
+1. Is the input attacker-controlled?
+2. Does the value reach the reported sink?
+3. Is the reported boundary relevant to exploitability?
+4. What concrete impact would remain if the candidate is real?
+5. Is there an existing defensive control that dismisses it?
+
+Return only JSON matching fallow-security-verdict/v1.
+```
+
+If `attack_surface.defensive_boundary.verification_prompt` is present, include it as an additional question, not as a verdict.
+
+## Verdict schema
+
+Require a compact JSON verdict:
+
+```json
+{
+  "schema_version": "fallow-security-verdict/v1",
+  "finding_id": "security:...",
+  "verdict": "survivor",
+  "reason": "The request query value reaches execSync without validation.",
+  "impact": "Command injection through the id query parameter.",
+  "evidence_checked": {
+    "source": true,
+    "sink": true,
+    "boundary": true,
+    "trace": true,
+    "source_window": true
+  },
+  "dismissal_reason": null,
+  "fix_direction": "avoid-shell"
+}
+```
+
+Allowed verdicts:
+
+- `survivor`: the verifier could not dismiss the candidate from the supplied evidence.
+- `dismissed`: the candidate is not exploitable from the supplied evidence.
+- `needs-human-review`: the evidence is incomplete, contradictory, or blocked by missing context.
+
+Store verifier output beside the original fallow JSON, keyed by `finding_id`. Do not write verdict fields back into fallow output.
+
+## Caveats
+
+Candidate quality depends on source and trace fidelity. Known follow-ups track false source matches on ORM query builders and the distinction between argument-level taint and module-level reachability. Treat reachability traces as ranking evidence until those precision fixes land.
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="fallow security" icon="shield" href="/cli/security">
+    CLI reference for security candidates.
+  </Card>
+  <Card title="MCP integration" icon="plug" href="/integrations/mcp">
+    Agent setup and tool contracts.
+  </Card>
+</CardGroup>
