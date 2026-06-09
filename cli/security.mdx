@@ -55,6 +55,7 @@ fallow security
 | Flag | Description |
 |:-----|:------------|
 | `--gate new` | Fail (exit code **8**) only when the change introduces a NEW security-sink candidate in the changed lines, not on the whole candidate backlog. Requires a diff source (`--changed-since`, `--diff-file`, or `--diff-stdin`). |
+| `--gate newly-reachable` | Fail (exit code **8**) when a security candidate that already exists in source becomes reachable from project entry points compared with the base ref. Requires `--changed-since <ref>` because it analyzes the base tree, not only a line diff. |
 
 The gate is the first-line-of-defence form of `fallow security`: a refactor that merely
 touches a file already containing a sink passes, while a change that adds a new sink (or
@@ -62,6 +63,11 @@ wires a new untrusted source into an existing sink) on a changed line fails. Fin
 **unverified candidates**: the human output says `REVIEW REQUIRED` (not `FAIL`), SARIF keeps
 every result at `level: note` with the verdict in `run.properties.fallowGate`, and
 `--format json` carries an additive `gate` block (`mode` / `verdict` / `new_count`).
+
+Use `--gate newly-reachable` for refactors that connect existing sink files to live entry
+points. It ignores unreachable candidates in both trees and reports only reachable candidate
+keys that are new in the head tree. Diff-only inputs (`--diff-file` / `--diff-stdin`) exit 2
+for this mode because there is no base tree to analyze.
 
 Exit codes: **8** = a new candidate was introduced in the changed lines; **0** = clean (or a
 docs-only / empty diff); **2** = the gate could not compute the diff (an unfetched ref on a
@@ -77,6 +83,9 @@ On a shallow clone the merge-base may not be fetched. In GitHub Actions set
 ```bash CI gate on changed lines
 # GitHub Action / generic CI: gate the PR's committed range
 fallow security --gate new --changed-since "$BASE_SHA"
+
+# Gate existing sinks that became entry-point reachable
+fallow security --gate newly-reachable --changed-since "$BASE_SHA"
 
 # Pre-commit hook: gate the STAGED content (not committed HEAD)
 git diff --cached --unified=0 | fallow security --gate new --diff-stdin
