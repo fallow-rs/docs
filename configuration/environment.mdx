@@ -20,6 +20,7 @@ Fallow reads a small set of environment variables to override default behavior. 
 | `FALLOW_REVIEW_GUIDANCE` | Add collapsed "What to do" blocks to `review-github` / `review-gitlab` inline comments | `1`, `true`, `yes`, `on` |
 | `FALLOW_SUMMARY_SCOPE` | Sticky PR/MR summary scope for `pr-comment-github` / `pr-comment-gitlab`. `all` keeps project-level dependency/catalog/override findings outside the diff; `diff` applies the diff filter to those findings too. Inline review comments are unaffected | `all` (default), `diff` |
 | `FALLOW_CACHE_DIR` | Override the extraction cache directory | Any valid path |
+| `FALLOW_AUDIT_BASE` | Pin the `fallow audit` comparison base when `--base` / `--changed-since` is unset (escape hatch for the agent gate and forks) | Any git ref (e.g. `origin/main`, `upstream/main`) |
 | `FALLOW_AUDIT_CACHE_MAX_AGE_DAYS` | Max age of persistent reusable `fallow audit` base-snapshot worktree caches | Whole days (default `30`; `0` disables) |
 | `FALLOW_MAX_FILE_SIZE` | Skip source files larger than this many megabytes at discovery and skip large one-line minified JS assets while the guard is enabled (mirrors `--max-file-size`; `.d.ts` always analyzed) | Whole megabytes (default `5`; `0` disables) |
 | `FALLOW_UPDATE_CHECK` | Disable the local human-TTY upgrade nudge and background latest-version check | `off`, `0`, `false`, `disabled`, `no` |
@@ -100,6 +101,22 @@ fallow dead-code   # cache capped at 64 MB
 Defaults to `256` (MB) when not set. The cache triggers LRU eviction when its serialized size crosses 80% of the cap and evicts down to 60%. Intended for CI runners with disk quotas; local dev machines on full-size disks rarely need to touch this knob.
 
 `--no-cache` disables the cache entirely; this env var is then irrelevant.
+
+## FALLOW_AUDIT_BASE
+
+Pins the `fallow audit` comparison base. It takes effect only when neither `--base` nor `--changed-since` is passed, so the precedence is `--base` flag, then `FALLOW_AUDIT_BASE`, then auto-detection.
+
+```bash
+export FALLOW_AUDIT_BASE=upstream/main
+fallow audit   # compares against upstream/main instead of the auto-detected base
+```
+
+When unset, `fallow audit` auto-detects the base as the `git merge-base` (fork point) against the branch's upstream or the remote default (`origin/HEAD`, then `origin/main`, then `origin/master`). That is the right answer for most repositories, but two cases want an explicit pin:
+
+- **Forks.** On a fork, `origin` is your fork (which can lag the real upstream), so set `FALLOW_AUDIT_BASE=upstream/main` to compare against the true upstream.
+- **The agent gate.** `fallow hooks install --target agent` generates a hook that runs bare `fallow audit`. If your team works entirely in `git worktree`s and never updates the local default branch, the env var lets you pin the base without editing the generated script (which is regenerated on reinstall).
+
+A malformed value (a ref with disallowed characters) fails the audit with exit code `2` rather than being silently ignored, so a typo surfaces immediately.
 
 ## FALLOW_AUDIT_CACHE_MAX_AGE_DAYS
 

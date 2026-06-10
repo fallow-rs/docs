@@ -25,7 +25,7 @@ fallow audit
 
 | Flag | Description |
 |:-----|:------------|
-| `--base <REF>` | Git ref to compare against (e.g., `main`, `HEAD~5`, a commit SHA). Alias for `--changed-since`. Auto-detects the default branch if omitted. |
+| `--base <REF>` | Git ref to compare against (e.g., `main`, `HEAD~5`, a commit SHA). Alias for `--changed-since`. When omitted, the base is the `git merge-base` against the branch's upstream or the remote default (`origin/main`); set [`FALLOW_AUDIT_BASE`](/configuration/environment#fallow_audit_base) to pin it without a flag. |
 
 ### Diff scoping
 
@@ -170,6 +170,9 @@ fallow audit --format json --quiet
 # Environment variables work too (useful when flags can't be passed)
 FALLOW_FORMAT=json FALLOW_QUIET=1 fallow audit
 
+# Pin the comparison base without a flag (handy for forks and the agent gate)
+FALLOW_AUDIT_BASE=upstream/main fallow audit
+
 # Fail CI if audit fails
 fallow audit --base main || exit 1
 
@@ -258,7 +261,7 @@ Audit scope: 12 changed files vs main (d4a2f91..HEAD)
 
 ## How it works
 
-1. **Resolve base ref**: uses `--base` if provided, otherwise auto-detects the default branch (`git symbolic-ref refs/remotes/origin/HEAD` → `main` → `master`). Hard-errors if no base can be determined.
+1. **Resolve base ref**: uses `--base` if provided, then `FALLOW_AUDIT_BASE`, otherwise auto-detects the `git merge-base` (fork point) against the branch's upstream (`@{upstream}`) or the remote default (`origin/HEAD` → `origin/main` → `origin/master`). Resolving the merge-base, rather than a bare branch name, means a feature branch compares against where it actually forked rather than a possibly-stale local `main`. Repositories with no `origin` remote fall back to the local `main` / `master` branch. Hard-errors if no base can be determined.
 2. **Find changed files**: runs `git diff --name-only <base>...HEAD` (three-dot diff, showing changes since the merge base).
 3. **Run three analyses** scoped to changed files: [dead code](/cli/dead-code), [complexity](/cli/health), [duplication](/cli/dupes).
 4. **Compute attribution**: with `new-only`, runs the same analyses at the base ref and compares structural issue keys.
@@ -345,7 +348,7 @@ The `audit` MCP tool wraps `fallow audit --format json --quiet --explain`:
 }
 ```
 
-Auto-detects the base branch if `base` is not specified. Set `gate` to `all` for strict mode. The response always includes `_meta` explanatory metadata (the MCP wrapper enables `--explain` by default). Returns the same JSON envelope as the CLI.
+When `base` is not specified, the base is the `git merge-base` against the branch's upstream or the remote default (`origin/main`); set `FALLOW_AUDIT_BASE` in the server env to pin it. Set `gate` to `all` for strict mode. The response always includes `_meta` explanatory metadata (the MCP wrapper enables `--explain` by default). Returns the same JSON envelope as the CLI.
 
 `audit` creates a temporary git worktree to compare against the base ref. When the current checkout has `node_modules`, audit links it into the base worktree so tsconfig `extends` chains into installed packages and path aliases resolve like the working tree. The worktree is removed on normal exit. If the process is force-killed, run `git worktree prune` to clean up stale `.git/worktrees/fallow-audit-base-*` entries.
 
