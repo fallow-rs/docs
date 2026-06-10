@@ -169,7 +169,7 @@ All catalogue findings carry `kind: "tainted-sink"` plus a `category` (the catal
   These are deliberately conservative candidates: a non-literal argument is a signal to verify, not proof of a vulnerability. Fallow does not prove the value is attacker-controlled or reaches the sink unsanitized. Verification is the agent's job.
 </Note>
 
-Sink-shaped nodes whose callee cannot be resolved to a static path (dynamic dispatch, computed members, aliased bindings) are counted in the output as `unresolved_callee_sites`. As with `client-server-leak`, a clean finding list with a non-zero count is not a clean bill.
+Sink-shaped nodes whose callee cannot be resolved to a static path (dynamic dispatch, computed members, aliased bindings) are counted in the output as `unresolved_callee_sites`. When emitted, `unresolved_callee_diagnostics` adds bounded sample locations, top files, and reason counts for follow-up review. As with `client-server-leak`, a clean finding list with a non-zero count is not a clean bill.
 
 ### Enabling categories
 
@@ -212,10 +212,81 @@ One `security-sink` token covers every catalogue category. Use suppression only 
 ```json
 {
   "kind": "security",
-  "schema_version": "2",
+  "schema_version": "4",
+  "version": "2.91.0",
+  "elapsed_ms": 42,
+  "config": {
+    "rules": {
+      "security_client_server_leak": {
+        "configured": "off",
+        "effective": "warn"
+      },
+      "security_sink": {
+        "configured": "off",
+        "effective": "warn"
+      }
+    },
+    "categories_include": null,
+    "categories_exclude": null
+  },
   "security_findings": [],
   "unresolved_edge_files": 0,
-  "unresolved_callee_sites": 0
+  "unresolved_callee_sites": 0,
+  "unresolved_callee_diagnostics": null
+}
+```
+
+`fallow security --summary --format json --quiet` emits the same `kind`, `schema_version`, `version`, `elapsed_ms`, and `config` metadata, but replaces candidate arrays with `summary` aggregate counts:
+
+```json
+{
+  "kind": "security",
+  "schema_version": "4",
+  "version": "2.91.0",
+  "elapsed_ms": 42,
+  "config": {
+    "rules": {
+      "security_client_server_leak": {
+        "configured": "off",
+        "effective": "warn"
+      },
+      "security_sink": {
+        "configured": "off",
+        "effective": "warn"
+      }
+    },
+    "categories_include": null,
+    "categories_exclude": null
+  },
+  "summary": {
+    "security_findings": 0,
+    "by_severity": {
+      "high": 0,
+      "medium": 0,
+      "low": 0
+    },
+    "by_category": {},
+    "by_reachability": {
+      "entry_reachable": 0,
+      "untrusted_source_reachable": 0,
+      "arg_level": 0,
+      "module_level": 0,
+      "crosses_boundary": 0,
+      "source_backed": 0
+    },
+    "by_runtime_state": {
+      "runtime_hot": 0,
+      "runtime_cold": 0,
+      "never_executed": 0,
+      "low_traffic": 0,
+      "coverage_unavailable": 0,
+      "runtime_unknown": 0,
+      "not_collected": 0
+    },
+    "unresolved_edge_files": 0,
+    "unresolved_callee_sites": 0,
+    "attack_surface_entries": 0
+  }
 }
 ```
 
@@ -224,6 +295,8 @@ One `security-sink` token covers every catalogue category. Use suppression only 
 Each finding includes `kind`, `path`, `line`, `col`, `evidence`, `trace`, `actions`, `severity`, and optional `reachability`. `severity` is a review-priority tier (`high`, `medium`, or `low`) derived from reachability, boundary, source-backed, and runtime-hot signals. It is not a verified vulnerability verdict and does not change gate or exit semantics. SARIF maps high and medium candidates to `warning`, and low candidates to `note`. `tainted-sink` findings additionally carry `category` (the catalogue id, for example `"dangerous-html"`) and `cwe` (the category's CWE number); `client-server-leak` findings omit both. `tainted-sink` findings can also include `reachability.untrusted_source_trace` when a module with a known untrusted source imports the sink module. It is ranking and triage context only, not proof that a specific value reaches the sink.
 
 When `reachability.reachable_from_untrusted_source` is set, `reachability.taint_confidence` tiers the association: `"arg-level"` means the sink argument traces back to a source read in the same statement (the stronger candidate), and `"module-level"` means the sink only lives in a module reachable from a source over the import graph (the weaker candidate). Tier candidates from this field rather than parsing the `evidence` text. For arg-level findings the trace's first hop points at the line of the actual source read; module-level source hops use the role `"module-source"` and never imply a proven value path.
+
+When present, `unresolved_callee_diagnostics` adds bounded unresolved-callee metadata for follow-up review: `sampled[]` rows with `path`, `line`, `col`, `reason`, and `expression_kind`, `top_files[]` counts, `by_reason[]` counts, and the emitted sample/top-file limits. It is blind-spot metadata, not a finding list, and follows the same `--file`, `--workspace`, `--changed-since`, and `--gate new` scoping as security candidates.
 
 ### Agent-actionable candidate record
 
