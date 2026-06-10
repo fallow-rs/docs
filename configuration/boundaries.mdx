@@ -7,6 +7,8 @@ icon: "layer-group"
 
 Boundaries enforce import direction between architectural zones. A zone groups files by glob pattern; a rule declares which zones may import from which. Violations appear as `boundary-violation` issues in `fallow dead-code` output.
 
+Two optional sections extend zones beyond import direction: [`coverage`](#boundary-coverage) reports source files that fall outside every zone, and [`calls`](#forbidden-calls) bans specific callees per zone.
+
 For preset descriptions, output formats, and suppression, see [Architecture boundaries](/analysis/boundaries).
 
 ## Presets
@@ -361,6 +363,107 @@ allow = ["features", "shared", "server"]
 </CodeGroup>
 
 The four bulletproof zones and their rules are preserved. The `test` zone and its rule are added on top.
+
+## Boundary coverage
+
+Zones only constrain files they match; anything unmatched is unrestricted. To catch source files that silently fall outside every zone, enable coverage:
+
+| Field | Type | Description |
+|:------|:-----|:------------|
+| `requireAllFiles` | `boolean` | Report every analyzed source file that matches no zone as a `boundary_coverage_violations` finding (default `false`) |
+| `allowUnmatched` | `string[]` | Glob patterns for intentionally unzoned paths; invalid globs are rejected at config load |
+
+<CodeGroup>
+```jsonc .fallowrc.json
+{
+  "boundaries": {
+    "zones": [
+      { "name": "domain", "patterns": ["src/domain/**"] }
+    ],
+    "coverage": {
+      "requireAllFiles": true,
+      "allowUnmatched": ["src/generated/**"]
+    }
+  }
+}
+```
+
+```toml fallow.toml
+[[boundaries.zones]]
+name = "domain"
+patterns = ["src/domain/**"]
+
+[boundaries.coverage]
+requireAllFiles = true
+allowUnmatched = ["src/generated/**"]
+```
+</CodeGroup>
+
+**Semantics:**
+
+- Coverage only runs when `requireAllFiles` is `true`; the default keeps unmatched files unrestricted, preserving pre-coverage behavior.
+- Findings share the `boundary-violation` rule severity and suppression token.
+- Combine with [forbidden calls](#forbidden-calls) so a zone-scoped call policy cannot be bypassed by leaving files unzoned.
+
+Prefer `allowUnmatched` over file-level suppression comments for generated code: the config keeps the exemption in one reviewable place.
+
+## Forbidden calls
+
+To ban specific calls from a zone (for example, keeping a domain layer free of process execution and logging), add a forbidden-call policy:
+
+| Field | Type | Description |
+|:------|:-----|:------------|
+| `from` | `string` | Zone whose files may not make matching calls |
+| `callee` | `string \| string[]` | Forbidden callee pattern(s), matched segment-aware |
+
+<CodeGroup>
+```jsonc .fallowrc.json
+{
+  "boundaries": {
+    "zones": [
+      { "name": "domain", "patterns": ["src/domain/**"] }
+    ],
+    "calls": {
+      "forbidden": [
+        { "from": "domain", "callee": "child_process.*" },
+        { "from": "domain", "callee": ["console.*", "process.exit"] }
+      ]
+    }
+  }
+}
+```
+
+```toml fallow.toml
+[[boundaries.zones]]
+name = "domain"
+patterns = ["src/domain/**"]
+
+[[boundaries.calls.forbidden]]
+from = "domain"
+callee = "child_process.*"
+
+[[boundaries.calls.forbidden]]
+from = "domain"
+callee = ["console.*", "process.exit"]
+```
+</CodeGroup>
+
+Each matching call reports as a `boundary_call_violations` finding naming the written callee, the matched pattern, and the zone.
+
+**Matching semantics:**
+
+- **Segment-aware, not substring or glob**: `fetch` matches only `fetch` (never `myfetch`), a trailing `object.*` matches any member (`child_process.*` matches `child_process.exec`), and a leading `*.member` matches any object (`*.innerHTML` matches `el.innerHTML`).
+- **Import provenance**: patterns match through imports, so `child_process.*` covers `import { execSync } from "node:child_process"`, the bare `child_process` specifier, namespace imports, and default imports alike.
+- **Direct callee paths only**, optional chaining included (`cp?.exec()` matches like `cp.exec()`). Aliased or re-bound callees (`const run = cp.exec; run()`), computed members, and injected dependencies (`this.client.exec()`) are not followed.
+- **Zoned files only**: rules apply only to files classified into a zone; unzoned files are unrestricted. Combine with `coverage.requireAllFiles` to force zoning first.
+- **One finding per unique callee path per file**: when several rules could match, the first applicable rule in config order wins. Fixing the first call site surfaces the next occurrence of the same callee on a rerun.
+- Inert patterns such as a bare `*` are rejected at config load, and a rule pointing at a zone that matches no files warns at analysis time.
+
+**Severity and suppression:** forbidden-call findings inherit the `boundary-violation` rule (default `error`) and suppression token; the rule-id-shaped `boundary-call-violation` and `boundary-call-violations` tokens are accepted as aliases. Any of these tokens suppresses the whole boundary family on that line or file.
+
+<Tip>
+For a staged rollout, start with `"rules": { "boundary-violation": "warn" }` while you triage existing forbidden calls, then switch back to `"error"` to enforce. Note this also softens import-direction violations, since the boundary family shares one rule.
+</Tip>
 
 ## Inspecting boundaries
 
