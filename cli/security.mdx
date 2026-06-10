@@ -171,6 +171,10 @@ All catalogue findings carry `kind: "tainted-sink"` plus a `category` (the catal
 
 Sink-shaped nodes whose callee cannot be resolved to a static path (dynamic dispatch, computed members, aliased bindings) are counted in the output as `unresolved_callee_sites`. When emitted, `unresolved_callee_diagnostics` adds bounded sample locations, top files, and reason counts for follow-up review. As with `client-server-leak`, a clean finding list with a non-zero count is not a clean bill.
 
+### Sanitizer-aware suppression
+
+Trusted local sanitizer flows do not report. The detector recognizes syntax-proven local HTML escape helpers, renderer helpers whose dynamic HTML fragments are fully sanitizer-backed, and SQL identifier quoting helpers used in identifier positions. Mixed HTML or SQL templates with unsanitized dynamic fragments still report as candidates, and SQL identifier quoting is not treated as value parameterization.
+
 ### Enabling categories
 
 `tainted-sink`, `hardcoded-secret`, and `client-server-leak` default to `off` and are surfaced only by `fallow security` (never under bare `fallow` or the `audit` gate). Scope which catalogue categories run with `security.categories` in config:
@@ -334,7 +338,7 @@ Every finding also carries a `candidate` record, an optional `taint_flow` triple
 The `candidate` record has three slots:
 
 - `source_kind`: the kind of untrusted input that reaches the sink, as a stable catalogue source id such as `"http-request-input"`, `"process-env"`, `"process-argv"`, `"message-event-data"`, or `"location-input"`. Absent when no untrusted source matched (always absent for `client-server-leak`). Treat an unknown id as an untrusted source of unknown kind; never drop a candidate on that basis.
-- `sink`: a self-contained description of the sink site (`path`, `line`, `col`, `category`, `cwe`, and the captured `callee`), so you can act on `candidate.sink` without reading the rest of the finding.
+- `sink`: a self-contained description of the sink site (`path`, `line`, `col`, `category`, `cwe`, and the captured `callee`), so you can act on `candidate.sink` without reading the rest of the finding. URL-category sinks (SSRF, open redirect) may add `url_shape` when it is statically visible: `"fixed-origin-dynamic-path"` (fixed origin with dynamic path or query, the lower-alarm shape) or `"dynamic-origin"` (the origin itself is dynamic).
 - `boundary`: whether the flow crosses a `client_server` boundary (a `"use client"` file in the trace) or a `cross_module` boundary (the source reaches the sink across one or more import hops), plus an `architecture_zone` (`from`/`to`) when the anchor also participates in a declared architecture-boundary violation.
 
 There is no `impact` field. Deciding exploitability is the verifying agent's job, not fallow's; fallow flags candidates with structural evidence and a severity-based review-priority tier.
