@@ -1,0 +1,95 @@
+---
+title: "fallow schema"
+description: "CLI reference for fallow schema. Dump fallow's complete capability manifest (commands, issue types, MCP tools, plugins, environment variables) as machine-readable JSON for agent introspection."
+keywords: ["fallow schema", "capability manifest", "introspection", "AI agents", "issue types", "MCP tools", "CLI"]
+icon: "terminal"
+---
+
+Dump fallow's complete capability manifest as machine-readable JSON. This is the single source of truth an AI agent (or doc generator) can read to learn everything fallow can do: every command and flag, every issue type, every MCP tool, the built-in framework plugins, and the user-facing environment variables.
+
+```bash
+fallow schema
+```
+
+<Note>
+The output is always JSON, regardless of `--format`.
+</Note>
+
+## Top-level blocks
+
+| Block | Contents |
+|:------|:---------|
+| `manifest_version` | Manifest shape discriminator (currently `"1"`). Gate on it when generating docs from the output. |
+| `version` | The fallow CLI version that produced the manifest. |
+| `commands`, `global_flags` | Every CLI command and flag with type, default, and description, derived live from the CLI definition. |
+| `issue_types` | One row per reportable issue type across all analyses (see below). |
+| `mcp_tools` | Every MCP server tool with a `kind` grouping (`analysis`, `trace`, `fix`, `introspection`, `runtime-coverage`, `composition`), a one-line description, `key_params` (a curated subset; the live MCP `list_tools` schemas are authoritative), `license` plus `license_note`, and `read_only`. |
+| `plugins` | Built-in framework plugin count and names, derived live from the plugin registry. |
+| `environment_variables` | Every user-facing `FALLOW_*` variable with a one-line description. |
+| `output_formats`, `exit_codes`, `severity_levels`, `suppression_comments` | Output and exit-code contract reference. |
+
+## Issue type rows
+
+Each `issue_types` entry describes one reportable issue type:
+
+| Field | Meaning |
+|:------|:--------|
+| `id` | Bare issue-type identifier (e.g. `unused-file`, `high-crap-score`). |
+| `rule_id` | The SARIF rule id (e.g. `fallow/unused-file`, `security/sql-injection`). |
+| `command` | The subcommand that reports it (`dead-code`, `health`, `dupes`, `flags`, `security`). |
+| `category` | Coarse grouping (Dead code, Dependencies, Architecture, Health, Duplication, Security, ...). |
+| `filter_flag` | CLI flag that scopes output to this issue type, or `null` when none exists. |
+| `fixable` | Whether `fallow fix` can auto-fix it. |
+| `suppressible` / `suppress_comment` | Whether an inline suppression comment applies, and the exact copy-pasteable comment. The token is verified to round-trip through fallow's suppression parser, so a copied comment never silently no-ops. |
+| `note` | Caveats (production-mode-only types, shared filter flags, config prerequisites). |
+| `license` / `license_note` | `free` or `freemium`; runtime-coverage rows carry the nuance that a single local capture is free while continuous monitoring requires a license. |
+| `docs_url` | Deep link into these docs. |
+
+Nullable fields are always present (`null` when not applicable), never absent.
+
+## Examples
+
+<CodeGroup>
+```bash Quick counts
+fallow schema | jq '{
+  issue_types: (.issue_types | length),
+  mcp_tools: (.mcp_tools.tools | length),
+  plugins: .plugins.count
+}'
+```
+
+```bash Suppression comment lookup
+# What comment suppresses a finding type?
+fallow schema | jq -r '.issue_types[]
+  | select(.id == "unused-export")
+  | .suppress_comment'
+```
+
+```bash Fixable issue types
+fallow schema | jq -r '.issue_types[]
+  | select(.fixable) | .id'
+```
+
+```bash MCP tool selection
+# Read-only analysis tools an agent can call safely
+fallow schema | jq -r '.mcp_tools.tools[]
+  | select(.read_only and .kind == "analysis") | .name'
+```
+</CodeGroup>
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="fallow explain" icon="terminal" href="/cli/explain">
+    Rationale, examples, and fix guidance for one issue type.
+  </Card>
+  <Card title="MCP server" icon="robot" href="/integrations/mcp">
+    The MCP tools the manifest describes, with full input schemas.
+  </Card>
+  <Card title="Environment variables" icon="gear" href="/configuration/environment">
+    Prose reference for the variables in the manifest.
+  </Card>
+  <Card title="fallow list" icon="terminal" href="/cli/list">
+    Project-specific introspection: discovered files, entry points, active plugins.
+  </Card>
+</CardGroup>
