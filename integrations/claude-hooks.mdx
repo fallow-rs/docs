@@ -46,7 +46,7 @@ Project-level installs override the global one when both are present, so you can
 
 ## Gate semantics
 
-The hook runs `fallow audit --format json --quiet --explain --gate-marker agent` and blocks the agent's `git commit` or `git push` only when the audit returns `verdict: "fail"`. The `--gate-marker agent` flag lets local Impact tracking (`fallow impact`) record blocked-then-cleared containment events when it is enabled. Audit defaults to `gate=new-only`: inherited findings on touched files are reported in `attribution` and annotated with `introduced: false` on individual issues, but they do not affect the verdict. Only findings the changeset *introduces* fail the gate.
+The hook runs `fallow audit --format json --quiet --explain --gate-marker agent` and blocks the agent's `git commit` or `git push` only when the audit returns `verdict: "fail"`. The `--gate-marker agent` flag lets local [Impact tracking](/cli/impact) record blocked-then-cleared containment events when it is enabled. Audit defaults to `gate=new-only`: inherited findings on touched files are reported in `attribution` and annotated with `introduced: false` on individual issues, but they do not affect the verdict. Only findings the changeset *introduces* fail the gate.
 
 This is the adoption-friendly default for legacy codebases: an agent editing a 10-year-old file is not punished for the existing dead exports already there, only for any new ones it adds.
 
@@ -83,6 +83,26 @@ export FALLOW_GATE_MIN_VERSION=
 ```
 
 Every block logs the binary path and version that fired it, e.g. `fallow-gate: blocked by fallow 2.48.1 at /usr/local/bin/fallow`, so "which binary ran this?" is answered without re-diagnosis. The header of the installed script also stamps `# Installer version: X.Y.Z` for forensics when the gate disagrees with your current `fallow --version`.
+
+## Inspect hook state
+
+`fallow hooks status` shows what is installed on all three surfaces without touching anything: the Git pre-commit hook, the Claude Code gate, and the Codex `AGENTS.md` managed block. Agents and scripts use the JSON form before proposing setup changes:
+
+```bash
+fallow hooks status --format json
+```
+
+```json
+{
+  "hooks": {
+    "git":    { "installed": true,  "managed_block_present": true,  "user_edited": false, "path": ".git/hooks/pre-commit",        "script_version": null,     "min_version_floor": null },
+    "claude": { "installed": true,  "managed_block_present": true,  "user_edited": false, "path": ".claude/hooks/fallow-gate.sh", "script_version": "2.93.0", "min_version_floor": "2.85.0" },
+    "codex":  { "installed": false, "managed_block_present": false, "user_edited": false, "path": "AGENTS.md",                    "script_version": null,     "min_version_floor": null }
+  }
+}
+```
+
+`user_edited` flags a hook file that exists but no longer carries fallow's generator marker (or a torn managed block), so an agent knows not to overwrite it without asking. `script_version` and `min_version_floor` expose the gate script's installer stamp and version floor, which lets tooling detect a stale gate.
 
 ## Remove it
 
