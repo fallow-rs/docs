@@ -338,6 +338,42 @@ The `rules."policy-violation"` master defaults to `warn` so a new pack never har
 
 Run `fallow rule-pack-schema` to print the pack JSON Schema for editor autocomplete. See the [`rulePacks` config key](/configuration/overview#config-fields) for the pack file format.
 
+### Invalid client exports {#invalid-client-exports}
+
+A file carrying the `"use client"` directive that also exports a Next.js server-only or route-segment-config name. Next.js rejects these at build time: a client module cannot export `metadata`, `generateMetadata`, `viewport`, `generateViewport`, `generateStaticParams`, `dynamic`, `dynamicParams`, `revalidate`, `fetchCache`, `runtime`, `preferredRegion`, `maxDuration`, the Pages Router data functions (`getServerSideProps`, `getStaticProps`, `getStaticPaths`), or a route HTTP method handler (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`). fallow catches it statically, before a build, in the same pass as the rest of dead-code analysis. The component's `default` export is never flagged.
+
+| Severity | Default |
+|:---------|:--------|
+| Warning | Yes |
+
+The rule only runs when `next` is a declared dependency, so it cannot false-positive on non-Next projects. There is no auto-fix, because removing a legitimate client export would break the component.
+
+**When to act:** Move the offending export out of the `"use client"` file into a server module (or a shared module without the directive). Suppress with `// fallow-ignore-next-line invalid-client-export` if the export is intentional and you handle the boundary another way.
+
+### Mixed client/server barrels {#mixed-client-server-barrels}
+
+A barrel file (one with at least one `export ... from` re-export) that re-exports both a `"use client"` module and a server-only module. Importing any single name from such a barrel can drag the other origin's directive context across the React Server Components boundary, a common Next.js App Router footgun that surfaces as confusing build or hydration errors far from the barrel.
+
+| Severity | Default |
+|:---------|:--------|
+| Warning | Yes |
+
+A module counts as server-only when it carries a `"use server"` directive, imports the `server-only` package, `next/server`, `node:fs`, or `node:child_process` (the `node:` and bare forms both count), or imports a server-only `next/headers` API (`cookies`, `headers`, `draftMode`). The check classifies only direct re-export origins (it does not walk transitive chains), skips type-only re-exports (which carry no runtime directive context), and never flags a barrel that mixes a client module with an ordinary utility, so it stays false-positive-safe. It runs only when `next` is a declared dependency.
+
+**When to act:** Split the barrel so client and server-only modules are re-exported from separate entry points. There is no auto-fix (splitting a barrel is a design decision); suppress with `// fallow-ignore-next-line mixed-client-server-barrel` if the grouping is intentional.
+
+### Misplaced directives {#misplaced-directives}
+
+A `"use client"` or `"use server"` directive written as a bare string-literal statement below an import (or any other statement) instead of at the very top of the file. A directive is only honored in the file's leading prologue; once any statement precedes it, the parser treats the string as an ordinary expression and the bundler silently ignores it, so a file you intended as a client component is treated as a server module. Nothing errors, which is what makes it dangerous.
+
+| Severity | Default |
+|:---------|:--------|
+| Warning | Yes |
+
+The fix is always the same: move the directive above every `import`. The rule runs only when `next` is a declared dependency. There is no auto-fix (fallow does not reorder your source); the finding points at the misplaced directive so you can move it by hand.
+
+**When to act:** Move the `"use client"` / `"use server"` line to the top of the file, before all imports. Suppress with `// fallow-ignore-next-line misplaced-directive` only if the bare string is intentional and not meant as a directive (rare).
+
 ### Type-only dependencies
 
 Production dependencies (`dependencies`) that are only ever imported via `import type`. Since type imports are erased at compile time, these packages are never loaded at runtime and should be moved to `devDependencies`.
