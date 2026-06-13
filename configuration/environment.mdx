@@ -22,6 +22,7 @@ Fallow reads a small set of environment variables to override default behavior. 
 | `FALLOW_CACHE_DIR` | Override the extraction cache directory | Any valid path |
 | `FALLOW_AUDIT_BASE` | Pin the `fallow audit` comparison base when `--base` / `--changed-since` is unset (escape hatch for the agent gate and forks) | Any git ref (e.g. `origin/main`, `upstream/main`) |
 | `FALLOW_AUDIT_CACHE_MAX_AGE_DAYS` | Max age of persistent reusable `fallow audit` base-snapshot worktree caches | Whole days (default `30`; `0` disables) |
+| `FALLOW_IMPACT_STORE_MAX_AGE_DAYS` | Reclaim per-project [`fallow impact`](/cli/impact) stores older than this; a recorded run sweeps stale stores (e.g. from deleted repos) | Whole days (unset / `0` keeps every store forever) |
 | `FALLOW_MAX_FILE_SIZE` | Skip source files larger than this many megabytes at discovery and skip large one-line minified JS assets while the guard is enabled (mirrors `--max-file-size`; `.d.ts` always analyzed) | Whole megabytes (default `5`; `0` disables) |
 | `FALLOW_UPDATE_CHECK` | Disable the local human-TTY upgrade nudge and background latest-version check | `off`, `0`, `false`, `disabled`, `no` |
 | `FALLOW_SUGGESTIONS` | Suppress the `next_steps[]` array of read-only follow-up commands in JSON output and the human `Next:` line | `off`, `0`, `false`, `no`, `disabled` (default on) |
@@ -131,6 +132,17 @@ fallow audit --base origin/main   # caches older than 7 days are reclaimed
 Defaults to `30` days when not set. Setting the value to `0` disables the GC entirely (escape hatch for CI runners that prune `/tmp` out-of-band). Invalid values (non-integer, negative) silently fall back to the config field / default; a typo in a runner env var does not fail audits.
 
 The sweep runs once per `fallow audit` invocation, walks git-registered worktrees only (not raw `/tmp` content), and never removes a cache entry that another in-flight `fallow audit` is using (per-entry kernel `flock(2)` guard). On reclaim, fallow writes a single `fallow: reclaimed N stale base-snapshot caches` line to stderr (unless `--quiet` is set) so the disk-space recovery is observable.
+
+## FALLOW_IMPACT_STORE_MAX_AGE_DAYS
+
+Reclaim per-project [`fallow impact`](/cli/impact) stores that have not been touched in this many whole days. Impact keeps one small history file per project in your user config directory; over time, projects you delete from disk leave their stores behind. Set this so a recorded run prunes them.
+
+```bash
+export FALLOW_IMPACT_STORE_MAX_AGE_DAYS=90
+fallow audit --base origin/main   # impact stores untouched for 90+ days are reclaimed
+```
+
+Unset (the default) keeps every store forever; `0` and invalid values are treated the same way (no sweep), so a typo never deletes history. Age is the store file's modification time, and any recorded run rewrites the file, so an actively-tracked project never ages out. The sweep never touches the project you just recorded, never deletes the advisory `.lock` sidecars, and never the global `impact.json` opt-in toggle. Because impact only records on developer machines (never in CI), this is purely local housekeeping.
 
 ## FALLOW_UPDATE_CHECK
 
