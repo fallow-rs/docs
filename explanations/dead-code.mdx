@@ -484,7 +484,9 @@ A Vue `<script setup>` `defineProps` declared prop that is referenced by no code
 
 Prop names are harvested from the inline TS form (`defineProps<{ foo: T }>()`), the runtime object form (`defineProps({ foo: {...} })`), and `withDefaults(...)`; usage is credited from both script (the destructured binding or `props.foo`) and template (`{{ foo }}`, `:x="foo"`, `props.foo`, `$props.foo`). It stays false-positive-safe by abstaining on the whole component when it cannot see all consumption: a `v-bind="$attrs"` / `v-bind="props"` fallthrough, a whole-object props use (`toRefs(props)`, `{...props}`), a `defineExpose` or `defineModel` call, or a prop type from an imported alias (`defineProps<ImportedProps>()`, names not statically resolvable). The rule runs only when `vue` / `@vue/runtime-core` / `nuxt` is a declared dependency and is Vue `<script setup>` only (Options-API `props:`, non-setup `<script>`, and Svelte `$props` are not covered yet).
 
-**When to act:** Wire the prop where it is meant to be used, or remove it from `defineProps`. There is no auto-fix. Suppress with `// fallow-ignore-next-line unused-component-prop`, or set the rule to `off`.
+A **React / Preact arm** shares this rule key and emits the same finding for a prop that is destructured from a component's first parameter and read nowhere in the component body. It is dep-gated on `react` / `react-dom` / `next` / `preact`, covers inline-destructured literal props, and stays false-positive-safe by abstaining on rest spread (`{...rest}`), props forwarded by spread, props passed wholesale to a hook, a `forwardRef` / `memo` component whose props come from an imported interface (not statically resolvable), and exported public-API component props.
+
+**When to act:** Wire the prop where it is meant to be used, or remove it from `defineProps` (Vue) / the destructure (React). There is no auto-fix. Suppress with `// fallow-ignore-next-line unused-component-prop`, or set the rule to `off`.
 
 ### Unused component emits {#unused-component-emits}
 
@@ -497,6 +499,18 @@ A Vue `<script setup>` `defineEmits` declared event that is emitted by no code i
 Event names are harvested from the array form (`defineEmits(['save', 'close'])`), the type / object form (`defineEmits<{ save: [] }>()`), and the bound form (`const emit = defineEmits(...)`, tracking the actual local binding name so a renamed `const notify = defineEmits(...)` is still credited); usage is credited from both the script call walk and the template (`@click="$emit('save')"`). It stays false-positive-safe by abstaining on the whole component when it cannot see all emission: a dynamic `emit(eventName)` whose event name is not a literal, the emit function passed or returned or spread elsewhere, a `defineModel` call (which generates implicit `update:x` emits), or an emit type from an imported alias (`defineEmits<ImportedEmits>()`, names not statically resolvable). The rule runs only when `vue` / `@vue/runtime-core` / `nuxt` is a declared dependency and is Vue `<script setup>` only (Options-API `emits:` and Svelte event dispatchers are not covered yet).
 
 **When to act:** Emit the event where it is meant to fire, or remove it from `defineEmits`. There is no auto-fix (removing an emit can break a deliberately-stable public component API). Suppress with `// fallow-ignore-next-line unused-component-emit`, or set the rule to `off`.
+
+### Prop drilling {#prop-drilling}
+
+A React / Preact prop that is forwarded unused through two or more intermediate components before a component finally consumes it. "Forwarded unused" means a receiving component reads the prop's identifier only as the root of a child-JSX attribute value (so `<Child userName={user.name} />` counts: the `user` prop is projected straight through), never substantively. This is a cross-file graph signal that per-file linters (eslint-plugin-react) structurally cannot see.
+
+| Severity | Default |
+|:---------|:--------|
+| Off (opt-in) | Yes |
+
+This rule is off by default; enable it with `prop-drilling: "warn"` (or `"error"`) under `rules`. When enabled it reports one located chain per drilled prop, with the source component that owns the value, each pass-through hop, and the consumer, each with file, line, and component name, so you or an agent can act. It stays false-positive-safe by abstaining on the whole chain whenever it cannot prove a clean pass-through: any `{...props}` / `{...rest}` spread, a `cloneElement` call, a component passed as a prop or render prop or function-as-children, a matching context `*.Provider` in the subtree (where drilling may be a deliberate choice), or any dynamic or unresolvable hop. The rule runs only when `react` / `react-dom` / `next` / `preact` is a declared dependency. When enabled it also contributes a small, capped penalty to the health score (one point per chain, capped at five); with the rule off the health score is unchanged.
+
+**When to act:** Colocate the consumer with the data, lift the value to a React context / provider at a mid-chain hop, or compose the components so the intermediates no longer thread the prop. There is no auto-fix (the right refactor is a design choice). Suppress an individual chain with `// fallow-ignore-next-line prop-drilling`, or set the rule to `off`.
 
 ### Unused load data keys {#unused-load-data-keys}
 
