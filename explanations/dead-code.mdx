@@ -14,7 +14,7 @@ Pass `--explain` to any command with `--format json` to include issue type defin
 
 ## Issue types
 
-Fallow detects 16 types of dead code. Each type has a default severity that determines whether it causes a non-zero exit code with `--fail-on-issues`.
+Fallow reports multiple dead-code issue types. Each type has a default severity that determines whether it causes a non-zero exit code with `--fail-on-issues`.
 
 ### Unused files
 
@@ -482,7 +482,7 @@ A Vue `<script setup>` `defineProps` declared prop that is referenced by no code
 |:---------|:--------|
 | Warning | Yes |
 
-Prop names are harvested from the inline TS form (`defineProps<{ foo: T }>()`), the runtime object form (`defineProps({ foo: {...} })`), and `withDefaults(...)`; usage is credited from both script (the destructured binding or `props.foo`) and template (`{{ foo }}`, `:x="foo"`, `props.foo`, `$props.foo`). It stays false-positive-safe by abstaining on the whole component when it cannot see all consumption: a `v-bind="$attrs"` / `v-bind="props"` fallthrough, a whole-object props use (`toRefs(props)`, `{...props}`), a `defineExpose` or `defineModel` call, or a prop type from an imported alias (`defineProps<ImportedProps>()`, names not statically resolvable). The rule runs only when `vue` / `@vue/runtime-core` / `nuxt` is a declared dependency and is Vue `<script setup>` only (Options-API `props:`, non-setup `<script>`, and Svelte `$props` are not covered yet).
+Prop names are harvested from the inline TS form (`defineProps<{ foo: T }>()`), the runtime object form (`defineProps({ foo: {...} })`), and `withDefaults(...)`; usage is credited from both script (the destructured binding or `props.foo`) and template (`{{ foo }}`, `:x="foo"`, `props.foo`, `$props.foo`). It stays false-positive-safe by abstaining on the whole component when it cannot see all consumption: a `v-bind="$attrs"` / `v-bind="props"` fallthrough, a whole-object props use (`toRefs(props)`, `{...props}`), a `defineExpose` or `defineModel` call, or a prop type from an imported alias (`defineProps<ImportedProps>()`, names not statically resolvable). The rule runs only when `vue` / `@vue/runtime-core` / `nuxt` is a declared dependency and covers Vue `<script setup>` and Options API props.
 
 A **React / Preact arm** shares this rule key and emits the same finding for a prop that is destructured from a component's first parameter and read nowhere in the component body. It is dep-gated on `react` / `react-dom` / `next` / `preact`, covers inline-destructured literal props, and stays false-positive-safe by abstaining on rest spread (`{...rest}`), props forwarded by spread, props passed wholesale to a hook, a `forwardRef` / `memo` component whose props come from an imported interface (not statically resolvable), and exported public-API component props.
 
@@ -496,9 +496,21 @@ A Vue `<script setup>` `defineEmits` declared event that is emitted by no code i
 |:---------|:--------|
 | Warning | Yes |
 
-Event names are harvested from the array form (`defineEmits(['save', 'close'])`), the type / object form (`defineEmits<{ save: [] }>()`), and the bound form (`const emit = defineEmits(...)`, tracking the actual local binding name so a renamed `const notify = defineEmits(...)` is still credited); usage is credited from both the script call walk and the template (`@click="$emit('save')"`). It stays false-positive-safe by abstaining on the whole component when it cannot see all emission: a dynamic `emit(eventName)` whose event name is not a literal, the emit function passed or returned or spread elsewhere, a `defineModel` call (which generates implicit `update:x` emits), or an emit type from an imported alias (`defineEmits<ImportedEmits>()`, names not statically resolvable). The rule runs only when `vue` / `@vue/runtime-core` / `nuxt` is a declared dependency and is Vue `<script setup>` only (Options-API `emits:` and Svelte event dispatchers are not covered yet).
+Event names are harvested from the array form (`defineEmits(['save', 'close'])`), the type / object form (`defineEmits<{ save: [] }>()`), and the bound form (`const emit = defineEmits(...)`, tracking the actual local binding name so a renamed `const notify = defineEmits(...)` is still credited); usage is credited from both the script call walk and the template (`@click="$emit('save')"`). It stays false-positive-safe by abstaining on the whole component when it cannot see all emission: a dynamic `emit(eventName)` whose event name is not a literal, the emit function passed or returned or spread elsewhere, a `defineModel` call (which generates implicit `update:x` emits), or an emit type from an imported alias (`defineEmits<ImportedEmits>()`, names not statically resolvable). The rule runs only when `vue` / `@vue/runtime-core` / `nuxt` is a declared dependency and covers Vue `<script setup>` and Options API emits.
 
 **When to act:** Emit the event where it is meant to fire, or remove it from `defineEmits`. There is no auto-fix (removing an emit can break a deliberately-stable public component API). Suppress with `// fallow-ignore-next-line unused-component-emit`, or set the rule to `off`.
+
+### Unused Svelte events {#unused-svelte-events}
+
+A Svelte component dispatches a custom event through `createEventDispatcher`, but no reachable Svelte consumer listens for that event name.
+
+| Severity | Default |
+|:---------|:--------|
+| Warning | Yes |
+
+Event names are harvested from literal dispatcher calls such as `dispatch('save')` after tracking the local binding returned by `createEventDispatcher()`. Listeners are credited from Svelte component usage with `on:event` syntax and forwarded listener attributes. The rule stays false-positive-safe by abstaining from dynamic event names, dispatcher values that escape the component, and projects without a declared Svelte dependency.
+
+**When to act:** Add the intended listener, forward the event intentionally, or remove the dispatch. There is no auto-fix. Suppress with `// fallow-ignore-next-line unused-svelte-event`, or set the rule to `off`.
 
 ### Unused component inputs {#unused-component-inputs}
 
