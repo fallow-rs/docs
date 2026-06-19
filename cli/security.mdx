@@ -351,6 +351,49 @@ There is no `impact` field. Deciding exploitability is the verifying agent's job
 
 `finding_id` is a stable correlation id, identical across runs for the same rule, path, and line, and identical to the finding's SARIF `partialFingerprints` value. Use it to track a candidate across runs (for example after a rebase) and to join JSON and SARIF output.
 
+## Subcommands
+
+Two read-only subcommands support the agent-verification loop. They never re-run analysis assumptions into the candidate output: `survivors` joins existing candidates with an external verifier's verdicts, and `blind-spots` reshapes the unresolved-callee diagnostics fallow already produces. See [Security agent verification](/cli/security-agent-verification) for the end-to-end recipe and the `fallow-security-verdict/v1` verdict schema.
+
+### survivors
+
+Join raw `fallow security --format json` candidate output with a verifier's verdict file and render only the candidates the verifier retained as survivors, without rewriting the original candidate fields.
+
+```bash
+fallow security --format json --quiet > candidates.json
+# (run your verifier, writing verdicts.json keyed by finding_id)
+fallow security survivors --candidates candidates.json --verdicts verdicts.json
+```
+
+| Flag | Description |
+|:-----|:------------|
+| `--candidates <PATH>` | Raw `fallow security --format json` candidate output (required) |
+| `--verdicts <PATH>` | Verifier verdict JSON file, one `fallow-security-verdict/v1` entry per `finding_id` (required) |
+| `--require-verdict-for-each-candidate` | Fail with a structured exit 2 when any candidate has no matching verdict, for CI that must review every candidate |
+| `-f, --format <FORMAT>` | Output format: `human` (default) or `json` |
+| `-o, --output-file <PATH>` | Write the report to a file instead of stdout |
+
+The output reports `summary.unverdicted` so consumers can distinguish reviewed from unreviewed candidates, and the human renderer separates verifier dispositions from candidates that still need review. Without `--require-verdict-for-each-candidate`, an incomplete verdict file is surfaced (via `summary.unverdicted`) rather than failing.
+
+### blind-spots
+
+Group the unresolved security callees fallow could not resolve (dynamic dispatch, unmodeled framework entry points) into actionable blind-spot output, so a verifier knows where the structural trace stops. `--file` is accepted both before and after the subcommand.
+
+```bash
+fallow security blind-spots --format json --quiet
+```
+
+| Flag | Description |
+|:-----|:------------|
+| `-f, --format <FORMAT>` | Output format: `human` (default) or `json` |
+| `--file <PATH>` | Scope diagnostics to selected files (repeatable; accepted before or after the subcommand) |
+| `--changed-since <REF>` | Scope to files changed since this git ref |
+| `--diff-file <PATH>` / `--diff-stdin` | Unified diff for line-level scoping |
+| `-w, --workspace <WORKSPACE>` / `--changed-workspaces <REF>` | Scope output to selected or recently touched workspaces |
+| `-r, --root <ROOT>` / `-c, --config <CONFIG>` | Project root and config path |
+| `-q, --quiet` / `--no-cache` / `--threads <N>` | Standard analysis controls |
+| `-o, --output-file <PATH>` | Write the report to a file instead of stdout |
+
 ## Examples
 
 <CodeGroup>
