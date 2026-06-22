@@ -407,9 +407,11 @@ The walkthrough guide turns the brief into a strict agent contract. The verifier
 fallow review --base main --walkthrough-guide --format json
 ```
 
-Returns `digest` (brief + decision surface), `direction`, `graph_snapshot_hash`, `agent_schema`, `injection_note`, and `emitted_signal_ids`. The digest is built from the graph only (PR prose is never folded in, so it is injection-resistant), and the snapshot hash is pinned into the digest.
+Returns `digest` (brief + decision surface), `direction`, `graph_snapshot_hash`, `agent_schema`, `injection_note`, `emitted_signal_ids`, and `change_anchors`. The digest is built from the graph only (PR prose is never folded in, so it is injection-resistant), and the snapshot hash is pinned into the digest.
 
-**2. The agent returns judgment JSON.** Every `signal_id` must be one fallow emitted; echo the hash.
+`change_anchors` is a per-hunk anchor set: one stable, content-addressed `chg:` id per changed region, derived from the same diff source the run used. Its id is content-addressed (file path + normalized added text, line numbers excluded) so it survives an edit above the hunk and a whitespace-only change, and it is rename-durable via `previous_change_anchor`. It lets an agent anchor a judgment about a changed REGION that has no graph finding (a trade-off with no `signal_id`), so the broader trade-off can still be post-validated rather than hallucinated.
+
+**2. The agent returns judgment JSON.** Each judgment cites a `signal_id` fallow emitted OR a `change_anchor` fallow emitted; echo the hash.
 
 ```json
 {
@@ -417,6 +419,7 @@ Returns `digest` (brief + decision surface), `direction`, `graph_snapshot_hash`,
   "judgments": [
     {
       "signal_id": "<one fallow emitted>",
+      "change_anchor": "<or one fallow emitted chg: id, for a changed region with no finding>",
       "framing": "<reasoning>",
       "concern": "<optional>"
     }
@@ -434,8 +437,10 @@ Each judgment is sorted into one of three outcomes:
 
 | Outcome | Condition | Shape |
 |:--------|:----------|:------|
-| `accepted` | The `signal_id` is anchored and the snapshot still matches. | The judgment is returned with its framing fenced `deterministic: false`. |
+| `accepted` (signal) | The `signal_id` is anchored and the snapshot still matches. | Framing fenced `deterministic: false`; `anchor_kind: "signal"` (the strong anchor, a graph finding). |
+| `accepted` (change) | No `signal_id`, but the `change_anchor` is one fallow emitted and the snapshot still matches. | Framing fenced `deterministic: false`; `anchor_kind: "change"` (the weaker anchor, a changed region only). |
 | `rejected` (unanchored) | The `signal_id` is not one fallow emitted (a hallucinated id). | `reason: "unanchored-signal-id"`. |
+| `rejected` (unknown change anchor) | The `change_anchor` is not one fallow emitted (a hallucinated region). | `reason: "unknown-change-anchor"`. |
 | `rejected` (stale) | The echoed graph-snapshot hash no longer matches (the tree moved). | `reason: "stale-snapshot"`, `stale: true`. Re-fetch the guide. |
 
 Both `--walkthrough-guide` and `--walkthrough-file` imply the brief and always exit 0.
