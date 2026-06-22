@@ -74,6 +74,16 @@ Run `fallow audit --base main --gate new-only --performance` to see whether the 
 | `-q, --quiet` | Suppress progress and status output on stderr |
 | `--explain` | Add metric explanations in JSON output (`_meta` objects with docs links) |
 
+### Review brief
+
+| Flag | Description |
+|:-----|:------------|
+| `--brief` | Render the deterministic review brief instead of the gating audit report. Answers "where do I look?" rather than "will CI block this?", runs the same analysis, and always exits 0. Orthogonal to `--format`. Implied by `fallow review`. See [Review brief and decision surface](#review-brief-and-decision-surface). |
+| `--max-decisions <N>` | Cap on the number of consequential structural decisions surfaced in the brief's decision surface (the working-memory limit). Default 4; clamped to a 3 to 5 band. Only consulted on the brief path. |
+| `--walkthrough-guide` | Emit the agent-contract walkthrough guide: the current digest (brief + decision surface), the review direction, the JSON schema the agent must return, and a deterministic graph-snapshot hash pinned into the digest. The digest is built from the graph only (PR prose is never folded in, so it is injection-resistant). Implies the brief; always exits 0. See [Agent walkthrough loop](#agent-walkthrough-loop). |
+| `--walkthrough-file <PATH>` | Ingest an agent's judgment JSON and post-validate it against the live graph. Rejects any judgment whose `signal_id` fallow did not emit (anti-hallucination); refuses the whole payload as stale when the echoed graph-snapshot hash no longer matches (the tree moved). The verifier is the graph, not a second model. The agent's free-text framing is fenced as non-deterministic and never gates. Implies the brief; always exits 0. |
+| `--show-deprioritized` | Expand the de-prioritized units in the brief's weighted focus map ("show me what you de-prioritized"). The `deprioritized` escape-hatch list is always present in `--format json` regardless; this flag only re-expands the collapse-by-default human focus render. Only consulted on the brief path. |
+
 ### Scoping
 
 | Flag | Description |
@@ -238,7 +248,7 @@ Audit scope: 12 changed files vs main (d4a2f91..HEAD)
   src/components/Button.tsx (2)
     :42 OldButton
     :67 deprecatedHelper
-  Exported symbols not imported by any reachable file — https://docs.fallow.tools/explanations/dead-code#unused-exports
+  Exported symbols not imported by any reachable file: https://docs.fallow.tools/explanations/dead-code#unused-exports
 
 ── Duplication ────────────────────────────────────
 
@@ -254,7 +264,7 @@ Audit scope: 12 changed files vs main (d4a2f91..HEAD)
   src/parser.ts
     :45 parseExpression
          28 cyclomatic  32 cognitive  80 lines
-  Functions exceeding thresholds — https://docs.fallow.tools/explanations/health#complexity-metrics
+  Functions exceeding thresholds: https://docs.fallow.tools/explanations/health#complexity-metrics
 
 ✗ dead code: 2 issues · complexity: 1 finding · duplication: 1 clone group · 12 changed files (2.14s)
 ```
@@ -353,6 +363,80 @@ When `base` is not specified, the base is the `git merge-base` against the branc
 `audit` creates a temporary git worktree to compare against the base ref. When the current checkout has `node_modules`, audit links it into the base worktree so tsconfig `extends` chains into installed packages and path aliases resolve like the working tree. The worktree is removed on normal exit. If the process is force-killed, run `git worktree prune` to clean up stale `.git/worktrees/fallow-audit-base-*` entries.
 
 See [MCP integration](/integrations/mcp) for setup instructions.
+
+## Review brief and decision surface
+
+`fallow review` is an alias for `fallow audit --brief`. It produces a deterministic, graph-derived review brief and **always exits 0**: the verdict is carried informationally, unlike `fallow audit`, which gates (exits non-zero on a fail verdict). `--format` is orthogonal to `--brief`, so the brief renders in `human` or `json` like any other audit output.
+
+The brief answers "where do I look?" rather than "will CI block this?". It runs the same analysis as the gating audit and organizes it around four jobs:
+
+| Job | What it does |
+|:----|:-------------|
+| **subtract** | Dead code, complexity, and duplication for the changed files are reported but kept **out** of the judgment loop, so the reviewer is not asked to weigh in on mechanical findings. |
+| **focus** | Changed-file units are ranked by a composite attention score, labeled `review-here` or `not-prioritized`, plus a full `deprioritized` list (re-expand the human render with [`--show-deprioritized`](#options)). |
+| **structure** | The decision surface: the few consequential structural decisions the change embeds. |
+| **direct** | The walkthrough guide for an agent (see [Agent walkthrough loop](#agent-walkthrough-loop)). |
+
+### Decision surface
+
+The decision surface has exactly three shippable categories:
+
+| Category | Meaning |
+|:---------|:--------|
+| `coupling-boundary` | A new cross-zone dependency edge. |
+| `public-api-contract` | A new exported public-API surface, or a changed contract consumed by modules outside this diff. |
+| `dependency` | A new third-party dependency. |
+
+Each decision is a framed judgment question anchored to a `signal_id` fallow deterministically derived from the graph, ranked by consequence (blast radius x reversibility), capped to [`--max-decisions`](#options) (default 4, clamped to a 3 to 5 band), and paired with the routed expert (who to ask). A decision may carry `previous_signal_id`: the `signal_id` it would have had before a rename of its anchor file, so a review surface can re-attach a prior reviewer comment across a `git mv`.
+
+The same decision surface is available to agents through the [`decision_surface` MCP tool](/integrations/mcp#available-mcp-tools).
+
+### JSON envelope
+
+`fallow review --format json` carries `decisions`, `focus`, `deltas`, `impact_closure`, `partition`, and `graph_facts`. The `deprioritized` escape-hatch list inside `focus` is always present in JSON regardless of `--show-deprioritized`; that flag only re-expands the collapse-by-default human focus render.
+
+### Agent walkthrough loop
+
+The walkthrough guide turns the brief into a strict agent contract. The verifier is the graph, not a second model: every judgment an agent returns is post-validated against the live graph, and the agent's free-text framing is fenced as non-deterministic and never gates.
+
+**1. Fetch the guide.**
+
+```bash
+fallow review --base main --walkthrough-guide --format json
+```
+
+Returns `digest` (brief + decision surface), `direction`, `graph_snapshot_hash`, `agent_schema`, `injection_note`, and `emitted_signal_ids`. The digest is built from the graph only (PR prose is never folded in, so it is injection-resistant), and the snapshot hash is pinned into the digest.
+
+**2. The agent returns judgment JSON.** Every `signal_id` must be one fallow emitted; echo the hash.
+
+```json
+{
+  "graph_snapshot_hash": "<echoed>",
+  "judgments": [
+    {
+      "signal_id": "<one fallow emitted>",
+      "framing": "<reasoning>",
+      "concern": "<optional>"
+    }
+  ]
+}
+```
+
+**3. Post-validate the judgment against the live graph.**
+
+```bash
+fallow review --base main --walkthrough-file judgment.json --format json
+```
+
+Each judgment is sorted into one of three outcomes:
+
+| Outcome | Condition | Shape |
+|:--------|:----------|:------|
+| `accepted` | The `signal_id` is anchored and the snapshot still matches. | The judgment is returned with its framing fenced `deterministic: false`. |
+| `rejected` (unanchored) | The `signal_id` is not one fallow emitted (a hallucinated id). | `reason: "unanchored-signal-id"`. |
+| `rejected` (stale) | The echoed graph-snapshot hash no longer matches (the tree moved). | `reason: "stale-snapshot"`, `stale: true`. Re-fetch the guide. |
+
+Both `--walkthrough-guide` and `--walkthrough-file` imply the brief and always exit 0.
 
 ## See also
 
