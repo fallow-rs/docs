@@ -1,0 +1,245 @@
+---
+title: "fallow decision-surface"
+description: "CLI reference for fallow decision-surface. Surface only the few consequential structural decisions a change embeds, each as a judgment question with the routed expert to ask. The apex of the review brief, separable and cheap, and always exits 0."
+keywords: ["fallow decision-surface", "decision surface", "structural decisions", "code review", "AI code review", "judgment call", "tradeoff", "coupling boundary", "public API", "dependency", "CLI"]
+icon: "scale-balanced"
+---
+
+Surface only the consequential structural **decisions** a change embeds: a new cross-zone dependency edge, a new exported public-API surface, a new third-party dependency. Each one is framed as a judgment question, anchored to a deterministic graph-derived `signal_id`, paired with the routed expert to ask, and carries the named trade-off it makes. `decision-surface` is the apex of the [review brief](/cli/audit#review-brief-and-decision-surface), emitted on its own: separable, cheap, and advisory.
+
+```bash
+fallow decision-surface --base main
+fallow decision-surface --base main --format json --quiet
+fallow decision-surface --base main --max-decisions 5
+```
+
+<Note>
+  `fallow decision-surface` **always exits 0**. It is advisory, never a gate: the verdict is carried informationally, unlike [`fallow audit`](/cli/audit), which exits non-zero on a fail verdict. It answers "which one or two things here deserve a human judgment call?", not "will CI block this?".
+</Note>
+
+## When to reach for it
+
+Three commands look at changed code; they answer different questions. Pick by the question you have.
+
+| You want to know | Command | Gates? |
+|:-----------------|:--------|:-------|
+| Will CI block this PR? | [`fallow audit`](/cli/audit) | Yes (exits non-zero on a fail verdict) |
+| Where do I look, across the whole change? | [`fallow review`](/cli/audit#review-brief-and-decision-surface) (the full brief: subtract, focus, structure, direct) | No (always exits 0) |
+| Which few decisions deserve a human judgment call? | `fallow decision-surface` (just the structure job) | No (always exits 0) |
+
+`fallow review` produces the complete brief: it subtracts mechanical findings out of the judgment loop, ranks every changed unit into a focus map, surfaces the decision surface, and emits the agent walkthrough contract. `fallow decision-surface` runs the **same changed-code analysis** but emits **only** the decisions, then discards the rest of the brief (the subtract list and the weighted focus map). Reach for it when you do not need the focus map or the walkthrough scaffolding, just the handful of structural choices the diff bakes in. It is the cheapest way to get the apex of the brief.
+
+<Tip>
+  In a PR loop, run `fallow audit` for the pass/warn/fail gate and `fallow decision-surface` for the "ask a human about these" list. They are complementary: the gate catches mechanical regressions, the decision surface catches the consequential choices the gate is silent on.
+</Tip>
+
+## What a decision is
+
+A change can touch hundreds of lines and still embed only one or two choices that are expensive to walk back. The decision surface isolates those. Every entry is a **framed judgment question** with the context an agent or reviewer needs to answer it, not a recommendation. fallow never tells you which way to choose.
+
+The surface has exactly three shippable categories:
+
+| Category | Meaning |
+|:---------|:--------|
+| `coupling-boundary` | A new cross-zone dependency edge. |
+| `public-api-contract` | A new exported public-API surface, or a changed contract consumed by modules outside this diff. |
+| `dependency` | A new third-party dependency. |
+
+The set is **ranked by consequence** (blast radius x reversibility) and **capped** to a small, working-memory-sized list: 3 to 5 decisions, default 4, via [`--max-decisions`](#options). The cap is the point: a reviewer can hold a handful of structural questions in their head, not a flat wall of findings.
+
+### What each decision carries
+
+| Field | What it is |
+|:------|:-----------|
+| The question | The judgment framed as a question, the thing a human should weigh in on. |
+| `routed_expert` | Who to ask. The decision points at the person or role whose judgment the category calls for, so the question reaches the right reviewer. |
+| `signal_id` | The deterministic, graph-derived anchor for this decision. Stable across runs against the same tree, and the join key for re-attaching review comments. |
+| `tradeoff` | The named structural sacrifice, stated as a fact (never a recommendation). For example: `"Couples app to infra; 4 in-repo modules already depend on this anchor"`. |
+| `internal_consumer_count` | The honest count of in-repo modules **outside the diff** that already depend on the anchor. This is your reversibility signal: the higher the count, the more expensive it is to walk this back. It is the display number, distinct from the ranking-only blast figure. |
+| `previous_signal_id` | Optional. The `signal_id` the anchor had before a rename of its anchor file, so a review surface can re-attach a prior comment across a `git mv`. |
+
+<Info>
+  `internal_consumer_count` is the number you read reversibility from, and it is distinct from the internal `blast` figure used only to rank the list. The human view shows the question and the trade-off; you infer the reversibility yourself from the count. fallow never labels a decision as reversible or irreversible for you.
+</Info>
+
+Every decision is suppressible with an inline `// fallow-ignore` comment, the same way findings are suppressed elsewhere in fallow. Place the comment at the decision's anchor to drop it from the surface. Suppression removes a decision from the output; it does not change the verdict, because `decision-surface` never gates.
+
+## How an agent consumes it
+
+The decision surface is built for agents. The recommended shape is: get the JSON, walk `decisions[]`, and for each one decide whether it needs a human, using `internal_consumer_count` as the reversibility signal and the `tradeoff` clause as the stated cost.
+
+```bash
+fallow decision-surface --base main --format json --quiet
+```
+
+A typical agent flow:
+
+1. Read `decisions[]`. It is already ranked and capped, so the first entry is the most consequential.
+2. For each decision, surface the **question** and the `routed_expert` to the human, not the raw diff.
+3. Use `internal_consumer_count` to decide how loudly to flag it: `0` is a cheap, reversible choice; a high count is a load-bearing anchor that is expensive to undo.
+4. Quote the `tradeoff` clause verbatim. It is a fact, so an agent can relay it without editorializing.
+5. Anchor any comment to `signal_id`. If the run reports a `previous_signal_id`, re-attach a prior comment across the rename instead of posting a duplicate.
+
+<Tip>
+  The digest the decision surface is built from comes from the graph only; PR prose is never folded into it. An agent can trust that the surfaced decisions reflect the actual structural change, not a description of it.
+</Tip>
+
+## Picking the comparison point
+
+`decision-surface` scopes to changed code exactly like [`fallow audit`](/cli/audit#options). Use `--base` (or its `--changed-since` alias) to pick what "changed" means. When omitted, the base is the `git merge-base` against the branch's upstream or the remote default (`origin/main`); set [`FALLOW_AUDIT_BASE`](/configuration/environment#fallow_audit_base) to pin it without a flag.
+
+```bash
+# Against the merge-base with the default branch (auto-detected)
+fallow decision-surface
+
+# Explicit base ref
+fallow decision-surface --base main
+
+# Decisions embedded in the last 5 commits
+fallow decision-surface --base HEAD~5
+```
+
+## Options
+
+| Flag | Description |
+|:-----|:------------|
+| `--base <REF>` | Git ref to compare against (e.g. `main`, `HEAD~5`, a commit SHA). Alias for `--changed-since`. When omitted, the base is the `git merge-base` against the branch's upstream or the remote default (`origin/main`); set [`FALLOW_AUDIT_BASE`](/configuration/environment#fallow_audit_base) to pin it without a flag. |
+| `--changed-since <REF>` | Alias for `--base`. Scope the comparison to changes since this git ref. |
+| `--max-decisions <N>` | Cap on the number of consequential structural decisions surfaced (the working-memory limit). Default 4; clamped to a 3 to 5 band. Values outside the band are clamped, not rejected. |
+| `-f, --format <FORMAT>` | Output format: `human` (default) or `json`. |
+| `-r, --root <PATH>` | Project root directory. |
+| `-c, --config <PATH>` | Path to a fallow config file. |
+| `-w, --workspace <NAME>` | Scope to a single workspace package. |
+| `-q, --quiet` | Suppress progress and status output on stderr. |
+
+See [global flags](/cli/global-flags) for the full list.
+
+## Examples
+
+<CodeGroup>
+```bash Basic usage
+# Auto-detect base; render the decisions for a human
+fallow decision-surface
+
+# Explicit base ref
+fallow decision-surface --base main
+
+# Widen to the full 3 to 5 band
+fallow decision-surface --base main --max-decisions 5
+```
+
+```bash Agent / CI
+# JSON for an agent to walk decisions[]
+fallow decision-surface --base main --format json --quiet
+
+# Environment variables work too
+FALLOW_FORMAT=json FALLOW_QUIET=1 fallow decision-surface --base main
+
+# Scope to one workspace package
+fallow decision-surface --base main --workspace @app/api --format json
+```
+</CodeGroup>
+
+## Example output
+
+```bash title="$ fallow decision-surface --base main"
+Decision surface: 3 decisions vs main (d4a2f91..HEAD)
+
+● coupling-boundary  (ask: architecture owner)
+  src/app/checkout.ts → src/infra/queue.ts
+  Should the app zone depend directly on infra here?
+  trade-off: Couples app to infra; 4 in-repo modules already depend on this anchor.
+  internal consumers: 4
+
+● public-api-contract  (ask: API owner)
+  src/lib/client.ts:createClient
+  This export is now public surface consumed outside the diff. Is the contract right?
+  trade-off: Locks the createClient signature for external callers.
+  internal consumers: 2
+
+● dependency  (ask: platform owner)
+  package.json → fast-xml-parser
+  A new third-party dependency enters the graph. Is it warranted?
+  trade-off: Adds a third-party maintenance and supply-chain surface.
+  internal consumers: 0
+```
+
+The human view shows the question and the trade-off; you read reversibility from `internal_consumer_count` directly.
+
+## JSON output
+
+`fallow decision-surface --format json` carries a ranked, capped `decisions[]` array. Each entry is the framed judgment question with its anchor, routed expert, trade-off, and consumer count. This is the same decision surface [`fallow review --format json`](/cli/audit#json-envelope) carries under its `decisions` key.
+
+```json title="$ fallow decision-surface --base main --format json"
+{
+  "command": "decision-surface",
+  "base_ref": "main",
+  "head_sha": "d4a2f91",
+  "decisions": [
+    {
+      "signal_id": "coupling:app/checkout->infra/queue",
+      "category": "coupling-boundary",
+      "question": "Should the app zone depend directly on infra here?",
+      "routed_expert": "architecture owner",
+      "tradeoff": "Couples app to infra; 4 in-repo modules already depend on this anchor",
+      "internal_consumer_count": 4
+    },
+    {
+      "signal_id": "public-api:lib/client:createClient",
+      "category": "public-api-contract",
+      "question": "This export is now public surface consumed outside the diff. Is the contract right?",
+      "routed_expert": "API owner",
+      "tradeoff": "Locks the createClient signature for external callers",
+      "internal_consumer_count": 2,
+      "previous_signal_id": "public-api:lib/old-client:createClient"
+    }
+  ]
+}
+```
+
+### Key fields
+
+| Field | Type | Description |
+|:------|:-----|:------------|
+| `decisions[].signal_id` | string | Deterministic, graph-derived anchor for the decision. Stable across runs against the same tree; the join key for re-attaching comments. |
+| `decisions[].category` | `"coupling-boundary"` \| `"public-api-contract"` \| `"dependency"` | The kind of structural choice. |
+| `decisions[].question` | string | The judgment framed as a question. |
+| `decisions[].routed_expert` | string | Who to ask: the reviewer whose judgment the category calls for. |
+| `decisions[].tradeoff` | string | The named structural sacrifice, stated as a fact. |
+| `decisions[].internal_consumer_count` | integer | In-repo modules outside the diff that already depend on the anchor. The reversibility signal. |
+| `decisions[].previous_signal_id` | string \| null | Present when the anchor was renamed: the prior `signal_id`, for re-attaching a comment across a `git mv`. |
+
+<Note>
+  Decisions are ordered by consequence, so the first entry is the most worth a human's time. The list is capped to `--max-decisions`; there is no pagination, by design. The point is the short list.
+</Note>
+
+## MCP tool
+
+The decision surface is also exposed as the [`decision_surface` MCP tool](/integrations/mcp#available-mcp-tools), so an agent gets the same ranked, capped, `signal_id`-anchored decisions through structured tool calling:
+
+```json title="Example request"
+{
+  "tool": "decision_surface",
+  "arguments": {
+    "base": "main",
+    "max_decisions": 4
+  }
+}
+```
+
+Set `base` to specify the comparison ref and `max_decisions` to cap the surfaced decisions (default 4, clamped to a 3 to 5 band). Like the CLI, the brief always exits 0 and the verdict is carried informationally; it never gates. See [MCP integration](/integrations/mcp) for the full tool list and setup.
+
+## See also
+
+<CardGroup cols={3}>
+  <Card title="Audit and review brief" icon="terminal" href="/cli/audit">
+    The gating audit, plus the full review brief that the decision surface is the apex of.
+  </Card>
+  <Card title="Trace a call chain" icon="route" href="/cli/trace">
+    Walk the callers and callees of one exported symbol before you change it.
+  </Card>
+  <Card title="MCP integration" icon="robot" href="/integrations/mcp">
+    Use the `decision_surface` tool from AI coding agents.
+  </Card>
+</CardGroup>
+
