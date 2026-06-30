@@ -202,6 +202,45 @@ Plain CSS `@import` statements create edges in the module graph. Both relative p
 
 Fallow resolves `./reset.css` and `./typography.css` as local file imports, and `@fontsource/inter` as a package dependency. Remote URLs (`https://...`) and data URIs are correctly ignored.
 
+## Styling health grade
+
+On top of the raw `css_analytics`, `fallow health --css` derives a **styling health** grade: a descriptive A-F letter (and a 0-100 score) for the quality of the CSS itself, scored **separately** from the JavaScript/TypeScript code health score. It appears as `styling_health` in JSON and a `Styling health:` line under `CSS health` in human output.
+
+```json
+"styling_health": {
+  "formula_version": 3,
+  "score": 96.0,
+  "grade": "A",
+  "penalties": { "duplication": 0.0, "dead_surface": 0.0, "broken_references": 0.0, "token_erosion": 4.0, "structural": 0.0 },
+  "confidence": "high",
+  "confidence_reason": null
+}
+```
+
+The score starts at 100 and subtracts five capped penalties:
+
+| Penalty | What it measures |
+|:--------|:-----------------|
+| `duplication` | Removable declarations from copy-paste declaration blocks. Down-weighted to a soft hint (exact CSS duplication is the least-harmful pattern: it gzips away and CSS has no native abstraction). |
+| `dead_surface` | Unused `@theme` tokens (as a share of all defined tokens) plus unreferenced classes, unused `@property`/`@layer` at-rules, and dead `@font-face` families. |
+| `broken_references` | Markup classes one edit from a defined class, plus animations referencing a `@keyframes` defined nowhere (likely typos or stale renames). |
+| `token_erosion` | Design-token erosion: mixed `font-size` units, Tailwind arbitrary-value bypasses, and **hardcoded value drift** (the count of distinct hardcoded `box-shadow` / `border-radius` / `line-height` values above a healthy per-property palette). |
+| `structural` | `!important` density above a healthy floor, plus deep style-rule nesting. |
+
+### Value drift over exact repetition
+
+The grade weights design-token **drift** (inconsistency) more than byte-identical repetition, because divergent values are what design tokens exist to fix. The `token_erosion` value-drift signal counts only **hardcoded** literals: a system that references its scale through custom properties (`box-shadow: var(--shadow-md)`) scores **zero** drift no matter how many tokens it defines, because `var(--*)` references and `@theme` definitions are never counted as distinct hardcoded values. A system that hardcodes many ad-hoc shadows/radii/line-heights accrues a small, gently-growing penalty: a nudge toward tokenizing, never a cliff.
+
+### Confidence and scope
+
+A grade computed from a thin CSS surface (few authored declarations, or predominantly compile-time-atomic CSS-in-JS like StyleX/Panda) is marked `confidence: "low"` with a stated reason, so a sparse-surface grade is not presented with the same authority as one from a full design system. Confidence is metadata only: it never changes the score.
+
+Styling health is **descriptive-only**. It never gates an exit code, a badge, or CI, and it never affects the JavaScript/TypeScript `health_score`. Treat it as a design-system credibility signal, not a pass/fail gate.
+
+<Note>
+  `formula_version` increments whenever the styling-health rubric is recalibrated (independently of the code-health formula version), so you can tell a score shift caused by a weight change apart from one caused by an actual change to your CSS. If you diff `styling_health.score` / `grade` over time (snapshot CIs, trend dashboards), gate on `formula_version` and re-baseline when it bumps.
+</Note>
+
 ## Common patterns that just work
 
 | Pattern | Example | How fallow handles it |
