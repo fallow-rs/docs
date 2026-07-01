@@ -82,6 +82,9 @@ Run `fallow audit --base main --gate new-only --performance` to see whether the 
 | `--max-decisions <N>` | Cap on the number of consequential structural decisions surfaced in the brief's decision surface (the working-memory limit). Default 4; clamped to a 3 to 5 band. Only consulted on the brief path. |
 | `--walkthrough-guide` | Emit the agent-contract walkthrough guide: the current digest (brief + decision surface), the review direction, the JSON schema the agent must return, and a deterministic graph-snapshot hash pinned into the digest. The digest is built from the graph only (PR prose is never folded in, so it is injection-resistant). Implies the brief; always exits 0. See [Agent walkthrough loop](#agent-walkthrough-loop). |
 | `--walkthrough-file <PATH>` | Ingest an agent's judgment JSON and post-validate it against the live graph. Rejects any judgment whose `signal_id` fallow did not emit (anti-hallucination); refuses the whole payload as stale when the echoed graph-snapshot hash no longer matches (the tree moved). The verifier is the graph, not a second model. The agent's free-text framing is fenced as non-deterministic and never gates. Implies the brief; always exits 0. |
+| `--walkthrough` | Render the walkthrough guide as a staged human terminal tour (Stage 1 load-bearing, Stage 2 mechanical), or a paste-into-PR artifact with `--format markdown`. `--format json --walkthrough` emits the same agent-contract JSON as `--walkthrough-guide`. Implies the brief; always exits 0. |
+| `--mark-viewed <FILE>` | Record one or more changed files as viewed in the local walkthrough viewed-state ledger, then render the tour. Files already viewed (and still current) collapse into the Cleared panel. Repeatable. Stale marks (the tree moved) are ignored on render but never deleted. Only consulted on the `--walkthrough` path. |
+| `--show-cleared` | Expand the Cleared panel in the human/markdown walkthrough tour: list each de-prioritized and already-viewed file instead of the collapsed one-line summary. Only consulted on the `--walkthrough` path. |
 | `--show-deprioritized` | Expand the de-prioritized units in the brief's weighted focus map ("show me what you de-prioritized"). The `deprioritized` escape-hatch list is always present in `--format json` regardless; this flag only re-expands the collapse-by-default human focus render. Only consulted on the brief path. |
 
 ### Scoping
@@ -93,6 +96,7 @@ Run `fallow audit --base main --gate new-only --performance` to see whether the 
 | `--production-dead-code` | Production mode for dead-code only. See [global flags](/cli/global-flags#per-analysis-production-mode). |
 | `--production-health` | Production mode for health only. |
 | `--production-dupes` | Production mode for duplication only. |
+| `--css-deep` | Include the opt-in structural CSS and CSS-in-JS analysis in audit. The audit still reports changed-file results, but this pass can read project stylesheets to classify token drift, duplicate declaration blocks, styling hot spots, and other styling findings with repository context. JSON adds `complexity.css_analytics` and first-class `complexity.styling_findings`; verdict severity follows the configured styling rules. |
 
 ### Thresholds
 
@@ -282,7 +286,7 @@ Audit scope: 12 changed files vs main (d4a2f91..HEAD)
 ```json title="$ fallow audit --format json"
 {
   "schema_version": 3,
-  "version": "2.103.0",
+  "version": "2.104.0",
   "command": "audit",
   "verdict": "fail",
   "changed_files_count": 12,
@@ -337,8 +341,10 @@ Audit scope: 12 changed files vs main (d4a2f91..HEAD)
 | `attribution.*_introduced` | integer | Findings whose structural key did not exist at the base ref. With `gate=all`, these stay `0` because audit skips the base-snapshot attribution pass. |
 | `attribution.*_inherited` | integer | Findings already present at the base ref. With `gate=all`, these stay `0` because audit skips the base-snapshot attribution pass. |
 | `dead_code.*[].introduced` | boolean | Present in audit JSON sub-results when base attribution is available. `true` means the finding is new relative to the base ref. |
+| `complexity.styling_findings[]` | array | Present when CSS analysis is active, including `--css-deep`. Contains first-class styling issues with rule severity, actions, and introduced attribution when the base comparison is available. |
+| `complexity.css_analytics` | object | Descriptive CSS analytics emitted with CSS analysis: specificity, token usage, duplicate declaration context, and cleanup candidates. Use it as evidence around `styling_findings`, not as a gate by itself. |
 
-The `dead_code`, `complexity`, and `duplication` sub-objects contain full results in the same format as [`fallow dead-code`](/cli/dead-code#json-output), [`fallow health`](/cli/health#json-output), and [`fallow dupes`](/cli/dupes#json-output) respectively. These are omitted when no files changed. When `--runtime-coverage` is supplied, the `complexity` sub-object can also include the health report's `runtime_coverage` and additive `coverage_intelligence` blocks. In audit output, individual findings and clone groups include an optional `introduced` boolean when the base ref comparison is available.
+The `dead_code`, `complexity`, and `duplication` sub-objects contain full results in the same format as [`fallow dead-code`](/cli/dead-code#json-output), [`fallow health`](/cli/health#json-output), and [`fallow dupes`](/cli/dupes#json-output) respectively. These are omitted when no files changed. When `--css-deep` is supplied, the `complexity` sub-object can also include the health report's `css_analytics` and `styling_findings` blocks. When `--runtime-coverage` is supplied, it can also include `runtime_coverage` and additive `coverage_intelligence` blocks. In audit output, individual findings and clone groups include an optional `introduced` boolean when the base ref comparison is available.
 
 <Note>
   On exit code 2 (runtime error), JSON format emits `{"error": true, "message": "...", "exit_code": 2}` to stdout instead of the audit envelope.
@@ -353,12 +359,13 @@ The `audit` MCP tool wraps `fallow audit --format json --quiet --explain`:
   "tool": "audit",
   "arguments": {
     "base": "main",
-    "gate": "new-only"
+    "gate": "new-only",
+    "css_deep": true
   }
 }
 ```
 
-When `base` is not specified, the base is the `git merge-base` against the branch's upstream or the remote default (`origin/main`); set `FALLOW_AUDIT_BASE` in the server env to pin it. Set `gate` to `all` for strict mode. The response always includes `_meta` explanatory metadata (the MCP wrapper enables `--explain` by default). Returns the same JSON envelope as the CLI.
+When `base` is not specified, the base is the `git merge-base` against the branch's upstream or the remote default (`origin/main`); set `FALLOW_AUDIT_BASE` in the server env to pin it. Set `gate` to `all` for strict mode. Set `css_deep` to `true` to pass `--css-deep` and include styling findings in the health sub-result. The response always includes `_meta` explanatory metadata (the MCP wrapper enables `--explain` by default). Returns the same JSON envelope as the CLI.
 
 `audit` creates a temporary git worktree to compare against the base ref. When the current checkout has `node_modules`, audit links it into the base worktree so tsconfig `extends` chains into installed packages and path aliases resolve like the working tree. The worktree is removed on normal exit. If the process is force-killed, run `git worktree prune` to clean up stale `.git/worktrees/fallow-audit-base-*` entries.
 
