@@ -1,11 +1,11 @@
 ---
 title: "fallow audit"
-description: "CLI reference for fallow audit. Combined dead code, complexity, and duplication analysis scoped to changed files, with a pass/warn/fail verdict for PR quality gates and AI-generated code review."
+description: "CLI reference for fallow audit. Combined dead code, complexity, duplication, and styling analysis scoped to changed files, with a pass/warn/fail verdict for PR quality gates and AI-generated code review."
 keywords: ["fallow audit", "code review", "AI code review", "quality gate", "verdict", "changed files", "PR review", "CLI"]
 icon: "terminal"
 ---
 
-Audit changed files for dead code, complexity, and duplication. Returns a **pass**, **warn**, or **fail** verdict based on the severity of issues found. Scoping to changed files keeps signal-to-noise high: by default only issues introduced by the current PR or commit fail the gate; inherited findings in touched files are shown as context.
+Audit changed files for dead code, complexity, duplication, and styling. Returns a **pass**, **warn**, or **fail** verdict based on the severity of issues found. Scoping to changed files keeps signal-to-noise high: by default only issues introduced by the current PR or commit fail the gate; inherited findings in touched files are shown as context.
 
 <Note>
   `fallow audit` is the PR-time gate. For the initial full-repo cleanup on an existing codebase, start with [Adopt Fallow in an existing repo](/adoption), which walks through `fallow`, `fallow dead-code`, `fallow dupes`, and `fallow health`, and hands the actual cleanup to an AI agent before turning `audit` on in CI.
@@ -96,7 +96,9 @@ Run `fallow audit --base main --gate new-only --performance` to see whether the 
 | `--production-dead-code` | Production mode for dead-code only. See [global flags](/cli/global-flags#per-analysis-production-mode). |
 | `--production-health` | Production mode for health only. |
 | `--production-dupes` | Production mode for duplication only. |
-| `--css-deep` | Include the opt-in structural CSS and CSS-in-JS analysis in audit. The audit still reports changed-file results, but this pass can read project stylesheets to classify token drift, duplicate declaration blocks, styling hot spots, and other styling findings with repository context. JSON adds `complexity.css_analytics` and first-class `complexity.styling_findings`; verdict severity follows the configured styling rules. |
+| `--no-css` | Disable audit styling analytics entirely. |
+| `--css-deep` | Force deep styling analytics on when config disables it. Deep CSS is on by default in audit: project-wide styling reachability is narrowed back to changed anchors, and JSON can include `complexity.css_analytics` plus first-class `complexity.styling_findings`. |
+| `--no-css-deep` | Keep local styling analytics on, but skip project-wide styling reachability. |
 
 ### Thresholds
 
@@ -341,10 +343,10 @@ Audit scope: 12 changed files vs main (d4a2f91..HEAD)
 | `attribution.*_introduced` | integer | Findings whose structural key did not exist at the base ref. With `gate=all`, these stay `0` because audit skips the base-snapshot attribution pass. |
 | `attribution.*_inherited` | integer | Findings already present at the base ref. With `gate=all`, these stay `0` because audit skips the base-snapshot attribution pass. |
 | `dead_code.*[].introduced` | boolean | Present in audit JSON sub-results when base attribution is available. `true` means the finding is new relative to the base ref. |
-| `complexity.styling_findings[]` | array | Present when CSS analysis is active, including `--css-deep`. Contains first-class styling issues with rule severity, actions, and introduced attribution when the base comparison is available. |
+| `complexity.styling_findings[]` | array | Present when CSS analysis is active. Contains first-class styling issues with rule severity, actions, and introduced attribution when the base comparison is available. |
 | `complexity.css_analytics` | object | Descriptive CSS analytics emitted with CSS analysis: specificity, token usage, duplicate declaration context, and cleanup candidates. Use it as evidence around `styling_findings`, not as a gate by itself. |
 
-The `dead_code`, `complexity`, and `duplication` sub-objects contain full results in the same format as [`fallow dead-code`](/cli/dead-code#json-output), [`fallow health`](/cli/health#json-output), and [`fallow dupes`](/cli/dupes#json-output) respectively. These are omitted when no files changed. When `--css-deep` is supplied, the `complexity` sub-object can also include the health report's `css_analytics` and `styling_findings` blocks. When `--runtime-coverage` is supplied, it can also include `runtime_coverage` and additive `coverage_intelligence` blocks. In audit output, individual findings and clone groups include an optional `introduced` boolean when the base ref comparison is available.
+The `dead_code`, `complexity`, and `duplication` sub-objects contain full results in the same format as [`fallow dead-code`](/cli/dead-code#json-output), [`fallow health`](/cli/health#json-output), and [`fallow dupes`](/cli/dupes#json-output) respectively. These are omitted when no files changed. By default, the `complexity` sub-object can also include the health report's `css_analytics` and `styling_findings` blocks. Use `--no-css` to suppress styling entirely, or `--no-css-deep` to keep local styling checks while skipping project-wide styling reachability. When `--runtime-coverage` is supplied, it can also include `runtime_coverage` and additive `coverage_intelligence` blocks. In audit output, individual findings and clone groups include an optional `introduced` boolean when the base ref comparison is available.
 
 <Note>
   On exit code 2 (runtime error), JSON format emits `{"error": true, "message": "...", "exit_code": 2}` to stdout instead of the audit envelope.
@@ -365,7 +367,7 @@ The `audit` MCP tool wraps `fallow audit --format json --quiet --explain`:
 }
 ```
 
-When `base` is not specified, the base is the `git merge-base` against the branch's upstream or the remote default (`origin/main`); set `FALLOW_AUDIT_BASE` in the server env to pin it. Set `gate` to `all` for strict mode. Set `css_deep` to `true` to pass `--css-deep` and include styling findings in the health sub-result. The response always includes `_meta` explanatory metadata (the MCP wrapper enables `--explain` by default). Returns the same JSON envelope as the CLI.
+When `base` is not specified, the base is the `git merge-base` against the branch's upstream or the remote default (`origin/main`); set `FALLOW_AUDIT_BASE` in the server env to pin it. Set `gate` to `all` for strict mode. Styling findings are included by default; set `css_deep` to `false` to skip project-wide styling reachability, or `true` to force it back on when config disables it. The response always includes `_meta` explanatory metadata (the MCP wrapper enables `--explain` by default). Returns the same JSON envelope as the CLI.
 
 `audit` creates a temporary git worktree to compare against the base ref. When the current checkout has `node_modules`, audit links it into the base worktree so tsconfig `extends` chains into installed packages and path aliases resolve like the working tree. The worktree is removed on normal exit. If the process is force-killed, run `git worktree prune` to clean up stale `.git/worktrees/fallow-audit-base-*` entries.
 
