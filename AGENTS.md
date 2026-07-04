@@ -2,7 +2,7 @@
 
 ## What this is
 
-Mintlify documentation site for [fallow](https://github.com/fallow-rs/fallow), deterministic codebase intelligence for TypeScript, JavaScript, and styling. Built in Rust. Three audiences: AI agents, human developers, CI pipelines.
+Mintlify documentation site for [fallow](https://github.com/fallow-rs/fallow), deterministic codebase intelligence for TypeScript and JavaScript. Three audiences: AI agents, human developers, CI pipelines.
 
 ## Dev server
 
