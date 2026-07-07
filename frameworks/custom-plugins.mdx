@@ -54,6 +54,7 @@ Start with JSONC format for `$schema` support and IDE autocomplete.
     | `detection` | object | Rich activation logic (see below) |
     | `usedExports` | object[] | Exports always considered used |
     | `usedClassMembers` | (string \| object)[] | Class method/property names the framework invokes at runtime; scoped objects `{ extends?, implements?, members }` match only classes with matching heritage |
+    | `manifestEntries` | object[] | Entry points derived from framework manifest files (see [Manifest-derived entries](#manifest-derived-entries)) |
   </Step>
   <Step title="Verify the plugin">
     Confirm fallow picks up your plugin:
@@ -152,6 +153,47 @@ This is the right tool for libraries that call methods on consumer classes refle
 The allowlist only applies to class methods and properties. Enum members with the same names are still checked.
 
 For project-wide allowlists that apply regardless of which packages are installed, use the top-level `usedClassMembers` field in your fallow config instead. See [Configuration overview](/configuration/overview).
+
+## Manifest-derived entries
+
+Some frameworks declare their entry points inside per-package manifest files rather than in `package.json` `main`/`exports` or a single app entry. A large monorepo can have hundreds of these, and the entry file for each is conditional on the manifest's own fields. Static `entryPoints` globs cannot read those fields, so `manifestEntries` lets a plugin derive entries from the manifests themselves.
+
+Each rule finds manifest files by a recursive glob, parses them (JSON or JSONC), and for every manifest that passes the rule's `when` gate, resolves each `entries[].path` **relative to that manifest's directory** into an entry point (using the plugin's `entryPointRole`).
+
+```jsonc
+// fallow-plugin-kibana.jsonc
+{
+  "name": "kibana",
+  "detection": { "type": "fileExists", "pattern": "**/kibana.jsonc" },
+  "entryPointRole": "runtime",
+  "manifestEntries": [
+    {
+      "manifests": "**/kibana.jsonc",   // recursive glob selecting manifests
+      "when": { "type": "plugin" },      // only manifests whose `type` is "plugin"
+      "entries": [
+        { "path": "public/index.{ts,tsx}", "when": { "plugin.browser": true } },
+        { "path": "server/index.{ts,tsx}", "when": { "plugin.server": true } },
+        { "path": "${plugin.extraPublicDirs}/index.{ts,tsx}" }
+      ]
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|:------|:-----|:------------|
+| `manifests` | string | Recursive glob selecting the manifest files to read |
+| `format` | `"jsonc"` \| `"json"` | Manifest format. Defaults to `jsonc`, which also parses plain JSON |
+| `when` | object | Manifest-level gate: a map of dotted field path to an expected value. ALL must match by strict equality for the manifest to be processed. Empty matches every manifest |
+| `entries` | object[] | The entries to seed per matching manifest (each `{ path, when? }`) |
+
+**`entries[].path`** is a glob relative to the manifest's directory. It must encode its own extension (`public/index.{ts,tsx}`), because entry-point globs are matched literally against discovered files (there is no source-extension probing). It may contain **`${dotted.field}` interpolation** that fans out over the named manifest field: a string field yields one entry, an array field yields one entry per element, and a missing or empty field yields none. Each entry may carry its own `when` gate.
+
+`when` matching is **strict equality**: `{ "plugin.browser": true }` matches a manifest whose `plugin.browser` is literally `true`, and a manifest with `plugin.browser: false` is skipped for that entry.
+
+<Note>
+  Manifest discovery respects `.gitignore` and skips `node_modules`, so manifests under ignored directories are not seen (their entries would not be analyzed anyway). Fallow emits a warning when a `manifests` glob matches nothing, when a `when` gate excludes every manifest, or when a field path resolves in none of the matched manifests (a likely typo). Run `fallow list --entry-points` to see which entries a plugin seeded.
+</Note>
 
 ## Discovery order
 
