@@ -174,6 +174,8 @@ CI catches changed-code risk, cleanup opportunities, duplication, and complexity
         | `FALLOW_CODEQUALITY` | `true` | Generate Code Quality report (inline MR annotations) |
         | `FALLOW_VERSION` | -- | Fallow version to use. Empty auto-detects the project `package.json` `fallow` dependency and falls back to `latest`; set explicitly to override the local pin. |
         | `FALLOW_SCRIPTS_REF` | -- | Pin CI scripts to a specific git ref (tag, branch, or SHA) for reproducible builds. Empty prefers vendored scripts, then derives from an exact installed fallow version when possible. |
+        | `FALLOW_SKIP_INSTALL` | `""` | Set to `"true"` to skip `npm install -g fallow` and use the `fallow` already resolvable on the job shell's `PATH` (fails fast if none is found). See the setup gotchas step below. |
+        | `FALLOW_DIFF_FILTER` | `added` | Filter line-level findings to added diff hunks; use `diff_context`, `file`, or `nofilter` to widen review scope. |
         | `FALLOW_WORKSPACE` | -- | Scope output to one or more workspaces (exact names, globs, `!` negation; comma-separated) |
         | `FALLOW_CHANGED_WORKSPACES` | -- | Git-derived monorepo scoping: scope to workspaces containing any file changed since `REF`. Requires full git history. Mutually exclusive with `FALLOW_WORKSPACE`. Missing ref is a hard error. |
         | `FALLOW_DUPES_MODE` | `mild` | Detection mode for dupes (`strict`, `mild`, `weak`, `semantic`) |
@@ -262,6 +264,26 @@ CI catches changed-code risk, cleanup opportunities, duplication, and complexity
         ```
 
         The vendored template prefers the local scripts and skips the remote fetch path entirely. Pass `--force` to overwrite files that have diverged from the bundled template.
+      </Step>
+      <Step title="Setup gotchas">
+        - The template sets `GIT_STRATEGY: "fetch"` so shared templates that set `GIT_STRATEGY=none` do not leave fallow without a working tree.
+        - The template sets `GIT_DEPTH: "0"` so `--changed-since` can diff against the MR base SHA without shallow-clone ambiguity.
+        - For private GitLab npm registries, create `.npmrc` during the job with `${CI_PROJECT_ID}` and `${CI_JOB_TOKEN}` rather than committing tokens.
+        - For pnpm projects with `minimumReleaseAge`, add `fallow` and `@fallow-cli/*` to `minimumReleaseAgeExclude` when you need to consume a just-published fallow release immediately.
+
+        To run the template against a fallow you install yourself (for example a pnpm-catalog pin), set `FALLOW_SKIP_INSTALL: "true"`, override `image:` to your base image, and make sure your install step leaves `fallow` resolvable on the job shell's `PATH`. A bare `pnpm install` / `npm install` only writes `node_modules/.bin/fallow`, which GitLab does **not** add to `PATH` automatically, so prepend it yourself. A job that `extends: .fallow` and defines its own `before_script` **replaces** the template's `before_script` (GitLab does not merge them), so compose with `!reference` to keep the template's install and script-prep block:
+
+        ```yaml
+        fallow:
+          extends: .fallow
+          before_script:
+            - export PATH="$CI_PROJECT_DIR/node_modules/.bin:$PATH"
+            - !reference [.fallow, before_script]
+          variables:
+            FALLOW_SKIP_INSTALL: "true"
+        ```
+
+        The job then skips `npm install -g fallow` and runs your exact binary, so CI matches your local lint gate. If you also enable `FALLOW_COMMENT` / `FALLOW_REVIEW` and your binary is a dev build whose `--version` is not an exact release (for example `2.3.0-dev`), pin `FALLOW_SCRIPTS_REF` to a real tag or vendor `ci/scripts/` so the MR-integration scripts can still be fetched.
       </Step>
     </Steps>
 
