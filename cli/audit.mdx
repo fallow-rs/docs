@@ -288,7 +288,7 @@ Audit scope: 12 changed files vs main (d4a2f91..HEAD)
 ```json title="$ fallow audit --format json"
 {
   "schema_version": 3,
-  "version": "3.5.1",
+  "version": "3.6.0",
   "command": "audit",
   "verdict": "fail",
   "changed_files_count": 12,
@@ -370,6 +370,15 @@ The `audit` MCP tool wraps `fallow audit --format json --quiet --explain`:
 When `base` is not specified, the base is the `git merge-base` against the branch's upstream or the remote default (`origin/main`); set `FALLOW_AUDIT_BASE` in the server env to pin it. Set `gate` to `all` for strict mode. Styling findings are included by default; set `css_deep` to `false` to skip project-wide styling reachability, or `true` to force it back on when config disables it. The response always includes `_meta` explanatory metadata (the MCP wrapper enables `--explain` by default). Returns the same JSON envelope as the CLI.
 
 `audit` creates a temporary base snapshot (a git worktree checkout) to compare against the base ref. When the current checkout has `node_modules`, audit links it into the snapshot so tsconfig `extends` chains into installed packages and path aliases resolve like the working tree. Snapshots are unregistered from git immediately after materialization, so they never appear in `git worktree list`, IDE repo views, or `.git/worktrees/`, even if the process is force-killed. Cached base snapshots are reused across runs and swept automatically after 30 days of disuse. Entries registered by earlier fallow versions are deregistered automatically on the next audit, with their warm caches preserved.
+
+Each project root keeps one root-owned base-snapshot cache, rebuilt in place when the resolved base SHA changes, and the reuse lock is held for the whole audit so cleanup can never remove files under a running audit. To reclaim a project's caches on demand, use `fallow audit-cache remove --root <PATH>`:
+
+```bash
+fallow audit-cache remove --root ./my-project --dry-run   # preview what would be removed
+fallow audit-cache remove --root ./my-project --yes        # remove (required in non-interactive shells)
+```
+
+`--dry-run` reports what would be removed without touching the filesystem, and non-interactive removal requires `--yes`. Lock-contended entries (an audit is mid-rebuild) are left in place and reported, and the command exits 2. Automatic age-based GC still runs on every audit; the `FALLOW_AUDIT_CACHE_MAX_AGE_DAYS` env var (or the `audit.cacheMaxAgeDays` config field) tunes the 30-day default, and `0` disables the sweep.
 
 See [MCP integration](/integrations/mcp) for setup instructions.
 
