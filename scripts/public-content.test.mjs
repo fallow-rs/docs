@@ -140,6 +140,19 @@ test("public content rejects private documentation markers", async () => {
   );
 });
 
+test("public content rejects a backtick-wrapped plain private root", async () => {
+  const root = await createFixture();
+  await writeFile(
+    join(root, "analysis", "health.mdx"),
+    "Read `internal/runbook.md`\n",
+  );
+
+  await assert.rejects(
+    buildManifest(root),
+    /Found plain private documentation root/u,
+  );
+});
+
 test("public content rejects private repository links", async () => {
   const root = await createFixture();
   await writeFile(
