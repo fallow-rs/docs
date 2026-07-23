@@ -32,6 +32,7 @@ const PUBLIC_ROOT_FILES = new Set([
 const CONTENT_DIRECTORIES = new Set([
   "analysis",
   "cli",
+  "cloud",
   "configuration",
   "explanations",
   "frameworks",
