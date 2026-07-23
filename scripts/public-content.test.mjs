@@ -153,6 +153,19 @@ test("public content rejects private repository links", async () => {
   );
 });
 
+test("public content rejects links to non-public Fallow decisions", async () => {
+  const root = await createFixture();
+  await writeFile(
+    join(root, "analysis", "health.mdx"),
+    "See https://github.com/fallow-rs/fallow/blob/main/decisions/private.md\n",
+  );
+
+  await assert.rejects(
+    buildManifest(root),
+    /Found non-public Fallow decision link/u,
+  );
+});
+
 test("public content rejects private repository clone URLs", async () => {
   const urls = [
     "https://www.github.com/fallow-rs/fallow-cloud.git",

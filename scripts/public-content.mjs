@@ -79,6 +79,11 @@ const LEAK_MARKERS = [
       /(?:^|[^A-Za-z0-9-])github\.com\.?(?::\d+)?(?::|\/)+fallow-rs\/fallow-cloud(?:\.git)?(?=$|[^A-Za-z0-9._-])/iu,
   },
   {
+    label: "non-public Fallow decision link",
+    pattern:
+      /https?:\/\/github\.com\/fallow-rs\/fallow\/(?:blob|tree)\/[^/\s]+\/decisions\//iu,
+  },
+  {
     label: "machine-local macOS path",
     pattern: /\/Users\/[^/\s]+\/[^/\s]+/u,
   },
