@@ -12,11 +12,15 @@
 ## Development
 
 ```bash
-npm i -g mint
-mint dev
+npm ci
+npm run docs:dev
 ```
 
 Preview at `http://localhost:3000`.
+
+This repository is the canonical source for fallow's public user
+documentation. See [PUBLICATION.md](PUBLICATION.md) for the public-only boundary,
+artifact provenance, and synchronization contract.
 
 ## Structure
 
@@ -34,4 +38,5 @@ snippets/       - Reusable MDX components
 
 Edit any `.mdx` file and push to `main`. Mintlify deploys automatically.
 
-Run `mint broken-links` and `mint validate` before pushing.
+Run `npm run content:manifest` after changing public content, then run
+`npm run check` before pushing.
