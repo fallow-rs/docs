@@ -36,14 +36,21 @@ runbooks, roadmap details, or content copied from a private repository. See
 - Add `keywords` to page frontmatter for SEO
 - End pages with a "See also" section linking to related pages
 
-## File structure
+## Content placement
 
 | Directory | Content |
 |:----------|:--------|
+| Root `.mdx` pages | Landing, installation, quickstart, and adoption |
 | `analysis/` | Dead code, duplication, auto-fix, debugging |
 | `cli/` | CLI command reference |
+| `cloud/` | Public cloud and beacon workflows |
 | `configuration/` | Config files, rules, workspaces |
+| `explanations/` | Concepts, tradeoffs, telemetry, and mental models |
 | `frameworks/` | Built-in and custom plugins |
 | `integrations/` | CI, VS Code, MCP server |
 | `migration/` | From knip and jscpd |
 | `snippets/` | Reusable MDX components |
+| `images/`, `logo/` | Public visual assets |
+
+Add every user-facing page to `docs.json`. That file is the source of truth for
+navigation order, while this table defines where new content belongs.

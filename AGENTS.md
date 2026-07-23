@@ -22,6 +22,7 @@ npm run docs:dev
 - `snippets/`: reusable MDX fragments.
 - `logo/`, `images/`: static assets.
 - `custom.css`: theme overrides.
+- `CONTRIBUTING.md`: canonical content placement map.
 
 ## Key files
 
@@ -44,13 +45,14 @@ npm run docs:dev
 - "cleanup opportunities" for the product pillar, "dead code" only for the specific analysis family, `unused-exports` (hyphenated) for rule names.
 - "duplication" not "code clones". "plugins" not "presets".
 
-### Numbers to keep accurate
-- 15 issue types (unused files, exports, types, dependencies, devDependencies, optionalDependencies, enum members, class members, unresolved imports, unlisted deps, duplicate exports, circular dependencies, boundary violations, type-only dependencies, test-only dependencies).
-- 123 built-in plugins.
-- Benchmarks must match the fallow repo README.
+### Volatile facts
+- Do not hardcode plugin or issue-type totals. Describe coverage by capability.
+- Benchmarks must match the fallow repository README.
+- Prefer generated CLI output or public source contracts for current values.
 
 ### Narrative structure
-Three tracks run through the docs: agents, humans, CI. Most pages address all three. Tabs split track-specific content. This is the central organizing principle.
+Agents, human developers, and CI users are recurring audiences. Use
+track-specific tabs only when their instructions materially differ.
 
 ### Page structure
 - YAML frontmatter: `title`, `description`, `keywords`, `icon`.
@@ -76,4 +78,4 @@ Tabs, Steps, Cards, CardGroup, Accordion, Info, Tip, Warning, Note, CodeGroup.
 3. Check the changed page with `npm run docs:dev`.
 4. Confirm frontmatter has all four required fields.
 5. If you added a page, add it to the correct group in `docs.json`.
-6. Verify counts still match: 123 plugins, 15 issue types, 141 knip plugins.
+6. Check that the change does not introduce volatile totals or duplicate facts.

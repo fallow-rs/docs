@@ -24,15 +24,9 @@ artifact provenance, and synchronization contract.
 
 ## Structure
 
-```
-analysis/       - Codebase health, cleanup, duplication, auto-fix, debugging
-cli/            - CLI command reference
-configuration/  - Config files, rules, workspaces
-frameworks/     - Built-in and custom plugins
-integrations/   - CI, VS Code, MCP server
-migration/      - From knip and jscpd
-snippets/       - Reusable MDX components
-```
+Public pages are grouped by user task. See the complete placement map in
+[CONTRIBUTING.md](CONTRIBUTING.md#content-placement). `docs.json` is the source
+of truth for navigation order.
 
 ## Contributing
 
