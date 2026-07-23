@@ -74,9 +74,13 @@ const LEAK_MARKERS = [
     pattern: /(?:^|[^\w-])\.internal\//u,
   },
   {
+    label: "plain private documentation root",
+    pattern: /(?:^|[\s([{"'=`])internal\//u,
+  },
+  {
     label: "private cloud repository link",
     pattern:
-      /(?:^|[^A-Za-z0-9-])github\.com\.?(?::\d+)?(?::|\/)+fallow-rs\/fallow-cloud(?:\.git)?(?=$|[^A-Za-z0-9._-])/iu,
+      /(?:^|[^A-Za-z0-9-])github\.com\.?(?::\d+)?(?::|\/)+fallow-rs\/fallow-cloud(?:\.git)?(?=$|[/?#:\s`),.])/iu,
   },
   {
     label: "non-public Fallow decision link",
