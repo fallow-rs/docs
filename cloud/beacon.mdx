@@ -1,0 +1,101 @@
+---
+title: "Cloud beacon setup"
+description: "Connect a browser or Node service to Fallow Cloud, verify the first ingest, and diagnose a setup that stays empty."
+keywords: ["fallow beacon", "runtime coverage", "browser coverage", "node coverage", "cloud ingest"]
+icon: "tower-broadcast"
+---
+
+The beacon sends function-level execution counts to Fallow Cloud. HTTP mode needs three values before it can send anything: an API key, a project id, and the Fallow Cloud endpoint.
+
+## Browser setup
+
+Install the beacon and an Istanbul-compatible build instrumenter:
+
+```bash
+npm install @fallow-cli/beacon
+npm install --save-dev oxc-coverage-instrument
+```
+
+Configure `oxc-coverage-instrument` in the production build so it populates `window.__coverage__`. Then start the browser beacon from the application entrypoint:
+
+```ts
+import { createBrowserBeacon } from "@fallow-cli/beacon/browser";
+
+const beacon = createBrowserBeacon({
+  apiKey: import.meta.env.VITE_BEACON_API_KEY,
+  endpoint: "https://api.fallow.cloud",
+  projectId: "your-org/your-repo",
+  commitSha: import.meta.env.VITE_GIT_SHA,
+  coverageOrigin: "production",
+});
+
+beacon.start();
+```
+
+Use an ingest-only key with prefix `fallow_pub_k1_` in browser code. It can only call `POST /v1/ingest`. Never embed a full `fallow_live_k1_` key in a browser bundle.
+
+The first browser snapshot can contain only startup code. The beacon intentionally skips that incomplete snapshot. Navigate through at least one real workflow, wait for the 30-second flush, or hide the page to trigger a flush.
+
+## Node setup
+
+Node can read V8 coverage when `NODE_V8_COVERAGE` is present before process startup. The beacon cannot enable V8 coverage after the process has started.
+
+```bash
+NODE_V8_COVERAGE=./coverage node dist/index.js
+```
+
+Start the beacon from server code after boot:
+
+```ts
+import { createNodeBeacon } from "@fallow-cli/beacon";
+
+const beacon = createNodeBeacon({
+  apiKey: process.env.BEACON_API_KEY,
+  endpoint: "https://api.fallow.cloud",
+  projectId: "your-org/your-repo",
+  commitSha: process.env.GIT_SHA,
+  coverageOrigin: "production",
+});
+
+beacon.start();
+```
+
+Use a full `fallow_live_k1_` key and keep it server-side. Bun and Deno need build-time Istanbul instrumentation because their V8 capture path is unavailable or incomplete.
+
+## Verify the first ingest
+
+The beacon is quiet on successful uploads. Verify one of these observable signals:
+
+1. `POST https://api.fallow.cloud/v1/ingest` returns `202 Accepted` in the browser network panel or server proxy logs.
+2. The onboarding card at [fallow.cloud](https://fallow.cloud) changes to a repository row after aggregation.
+3. The key's `last used` value updates under Settings, API keys.
+
+An accepted ingest is asynchronous. A short delay between the `202` response and the repository row is expected.
+
+## If the dashboard stays empty
+
+Check these in order:
+
+1. `endpoint` is exactly `https://api.fallow.cloud`.
+2. Browser code uses an ingest-only key. Server code uses a full key.
+3. The configured environment variable exists in the production build or process.
+4. `projectId` is stable and different for each repository or service.
+5. Browser builds contain Istanbul counters, or Node started with `NODE_V8_COVERAGE`.
+6. The app exercised real routes or jobs after the beacon started.
+7. The first `/v1/ingest` response is `202`, not `401`, `403`, `402`, `413`, or `429`.
+
+When no coverage source is available, the beacon emits one actionable `onRuntimeMismatch` error and stops. Fix that message before waiting for another batch.
+
+## Add static inventory
+
+Runtime capture tells Fallow what V8 or Istanbul observed. Upload the static inventory in CI to make functions that were never tracked visible as `untracked`:
+
+```bash
+fallow coverage upload-inventory --api-key "$FALLOW_KEY"
+```
+
+For bundled or minified code, also upload source maps from CI. See [`fallow coverage`](/cli/coverage) for the inventory and source-map commands.
+
+## Privacy
+
+The beacon sends function paths, names, positions, hit counts, project metadata, and delivery reports. It does not send arguments, request bodies, environment variables, or source code. See the [network activity disclosure](https://fallow.cloud/coverage/network-activity) for the complete contract.

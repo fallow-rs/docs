@@ -1,0 +1,56 @@
+name: Documentation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate public documentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check canonical public content
+        run: npm run content:check
+
+      - name: Test publication tooling
+        run: npm test
+
+      - name: Check links
+        run: npm run docs:broken-links
+
+      - name: Validate Mintlify site
+        run: npm run docs:validate
+
+      - name: Build public documentation archive
+        if: github.event_name == 'push'
+        run: npm run content:archive -- --source-commit "$GITHUB_SHA"
+
+      - name: Upload public documentation archive
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fallow-public-docs-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30

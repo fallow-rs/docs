@@ -4,10 +4,15 @@
 
 Mintlify documentation site for [fallow](https://github.com/fallow-rs/fallow), deterministic codebase intelligence for TypeScript and JavaScript. Three audiences: AI agents, human developers, CI pipelines.
 
+This repository is the canonical source for public user documentation. Read
+`PUBLICATION.md` before changing publication tooling or moving content between
+repositories.
+
 ## Dev server
 
 ```bash
-npx mintlify dev
+npm ci
+npm run docs:dev
 ```
 
 ## File structure
@@ -59,11 +64,16 @@ Tabs, Steps, Cards, CardGroup, Accordion, Info, Tip, Warning, Note, CodeGroup.
 
 - Document the public CLI, configuration, and integrations only.
 - Do not document Rust internals.
+- Never copy private repository content into this repository automatically.
+- Private insights require a public rewrite and normal review in this repository.
+- Keep `scripts/public-content.mjs` allowlisted. Do not package arbitrary
+  directories or follow symlinks.
 
 ## Verifying changes
 
-1. Run `npx mintlify dev` and check the page renders.
-2. Check all links resolve (no broken hrefs).
-3. Confirm frontmatter has all four required fields.
-4. If you added a page, add it to the correct group in `docs.json`.
-5. Verify counts still match: 123 plugins, 15 issue types, 141 knip plugins.
+1. Run `npm run content:manifest` after changing public content.
+2. Run `npm run check`.
+3. Check the changed page with `npm run docs:dev`.
+4. Confirm frontmatter has all four required fields.
+5. If you added a page, add it to the correct group in `docs.json`.
+6. Verify counts still match: 123 plugins, 15 issue types, 141 knip plugins.

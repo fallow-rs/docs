@@ -9,8 +9,8 @@ Every page on [docs.fallow.tools](https://docs.fallow.tools) has "Suggest edits"
 ```bash
 git clone https://github.com/fallow-rs/docs
 cd docs
-npm i -g mint
-mint dev
+npm ci
+npm run docs:dev
 ```
 
 Preview at `http://localhost:3000`.
@@ -18,9 +18,14 @@ Preview at `http://localhost:3000`.
 ## Before submitting
 
 ```bash
-mint broken-links    # Check for broken links
-mint validate        # Validate the build
+npm run content:manifest
+npm run check
 ```
+
+Review the manifest diff before submitting. It is the exact public content set.
+Do not add private implementation notes, operations material, security
+runbooks, roadmap details, or content copied from a private repository. See
+[PUBLICATION.md](PUBLICATION.md) for ownership and synchronization rules.
 
 ## Writing guidelines
 
