@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +19,26 @@ const createFixture = async () => {
   await writeFile(join(root, "index.mdx"), "# Fallow\n");
   await writeFile(join(root, "analysis", "health.mdx"), "# Health\n");
   return root;
+};
+
+const commitFixture = (root) => {
+  execFileSync("git", ["-C", root, "init", "--quiet"]);
+  execFileSync("git", ["-C", root, "add", "."]);
+  execFileSync("git", [
+    "-C",
+    root,
+    "-c",
+    "user.name=Public Docs Test",
+    "-c",
+    "user.email=public-docs@example.invalid",
+    "commit",
+    "--quiet",
+    "-m",
+    "test fixture",
+  ]);
+  return execFileSync("git", ["-C", root, "rev-parse", "HEAD"], {
+    encoding: "utf8",
+  }).trim();
 };
 
 test("manifest order and digest do not depend on file timestamps", async () => {
@@ -40,19 +61,35 @@ test("manifest order and digest do not depend on file timestamps", async () => {
 test("archive output is reproducible for the same content and commit", async () => {
   const root = await createFixture();
   await writeManifest(root);
+  const sourceCommit = commitFixture(root);
   const first = await createArchive({
     root,
     outputDirectory: "first",
-    sourceCommit: "0123456789abcdef",
+    sourceCommit,
   });
   const second = await createArchive({
     root,
     outputDirectory: "second",
-    sourceCommit: "0123456789abcdef",
+    sourceCommit,
   });
 
   assert.equal(first.artifact.sha256, second.artifact.sha256);
   assert.equal(first.source.content_sha256, second.source.content_sha256);
+});
+
+test("archive rejects provenance that differs from checkout HEAD", async () => {
+  const root = await createFixture();
+  await writeManifest(root);
+  commitFixture(root);
+
+  await assert.rejects(
+    createArchive({
+      root,
+      outputDirectory: "archive",
+      sourceCommit: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+    }),
+    /does not match checkout HEAD/u,
+  );
 });
 
 test("check mode rejects content drift", async () => {
@@ -107,13 +144,35 @@ test("public content rejects private repository links", async () => {
   const root = await createFixture();
   await writeFile(
     join(root, "analysis", "health.mdx"),
-    "See https://github.com/fallow-rs/fallow-cloud/tree/main/internal\n",
+    "See [private repository](https://github.com/fallow-rs/fallow-cloud)\n",
   );
 
   await assert.rejects(
     buildManifest(root),
     /Found private cloud repository link/u,
   );
+});
+
+test("public content rejects private repository clone URLs", async () => {
+  const urls = [
+    "https://www.github.com/fallow-rs/fallow-cloud.git",
+    "https://token@github.com/fallow-rs/fallow-cloud.git",
+    "//github.com/fallow-rs/fallow-cloud",
+    "ssh://git@github.com/fallow-rs/fallow-cloud.git",
+    "git@github.com:fallow-rs/fallow-cloud.git",
+    "git://github.com/fallow-rs/fallow-cloud.git",
+    "https://github.com:443/fallow-rs/fallow-cloud.git",
+    "ssh://git@github.com:22/fallow-rs/fallow-cloud.git",
+    "https://github.com./fallow-rs/fallow-cloud.git",
+  ];
+  for (const url of urls) {
+    const root = await createFixture();
+    await writeFile(join(root, "analysis", "health.mdx"), `Clone ${url}\n`);
+    await assert.rejects(
+      buildManifest(root),
+      /Found private cloud repository link/u,
+    );
+  }
 });
 
 test("public content rejects high-confidence credentials", async () => {

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   lstat,
@@ -74,7 +75,8 @@ const LEAK_MARKERS = [
   },
   {
     label: "private cloud repository link",
-    pattern: /https?:\/\/github\.com\/fallow-rs\/fallow-cloud(?:[/?#]|$)/iu,
+    pattern:
+      /(?:^|[^A-Za-z0-9-])github\.com\.?(?::\d+)?(?::|\/)+fallow-rs\/fallow-cloud(?:\.git)?(?=$|[^A-Za-z0-9._-])/iu,
   },
   {
     label: "machine-local macOS path",
@@ -375,13 +377,28 @@ export const createArchive = async ({
   outputDirectory,
   sourceCommit,
 }) => {
-  if (!/^[0-9a-f]{7,64}$/u.test(sourceCommit ?? "")) {
+  if (!/^[0-9a-f]{40}$/u.test(sourceCommit ?? "")) {
     throw new Error(
-      "Archive creation requires --source-commit with a hexadecimal commit SHA.",
+      "Archive creation requires --source-commit with a full commit SHA.",
     );
   }
 
   const manifest = await checkManifest(root);
+  const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], {
+    encoding: "utf8",
+  }).trim();
+  if (head !== sourceCommit) {
+    throw new Error(`Archive source commit ${sourceCommit} does not match checkout HEAD ${head}.`);
+  }
+  const publicationPaths = [MANIFEST_NAME, ...manifest.content.files.map((file) => file.path)];
+  const dirtyPublicationPaths = execFileSync(
+    "git",
+    ["-C", root, "status", "--porcelain", "--untracked-files=all", "--", ...publicationPaths],
+    { encoding: "utf8" },
+  ).trim();
+  if (dirtyPublicationPaths !== "") {
+    throw new Error("Archive publication inputs must be tracked and clean.");
+  }
   const sourceProvenance = {
     schema_version: 1,
     source: {
