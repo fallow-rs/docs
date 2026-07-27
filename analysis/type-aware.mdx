@@ -1,0 +1,125 @@
+---
+title: "Type-aware TypeScript analysis"
+description: "Add exact TypeScript checker evidence to fallow for symbol usage, API leaks, affected tests, and public-signature coupling."
+keywords: ["type-aware", "TypeScript", "symbol impact", "private type leaks", "type coupling", "typescript-go"]
+icon: "code"
+---
+
+Fallow's default analysis is Rust-native, syntactic, and independent of Node.js
+or the TypeScript compiler. Add `--type-aware` when a cleanup or refactor
+depends on exact TypeScript symbol identity across aliases, re-exports,
+packages, or tests.
+
+The optional companion adds five project-wide capabilities:
+
+- exact symbol-use confirmation for existing dead-code candidates
+- symbol traces with namespaces, aliases, and re-export hops
+- package API surfaces and cross-file private type leaks
+- exact consumers, affected files, and targeted tests
+- advisory public-signature type coupling
+
+Use this pass when an actual cleanup or refactor decision depends on TypeScript
+identity. Keep the normal syntactic run for fast everyday feedback.
+
+```bash
+fallow type-aware status --format json --quiet
+fallow dead-code --unused-class-members --type-aware --format json --quiet
+fallow fix --type-aware --dry-run --format json --quiet
+fallow dead-code --type-aware --symbol-impact src/api.ts:Client --format json --quiet
+fallow health --type-aware --type-coupling --format json --quiet
+```
+
+## What this does not replace
+
+Keep `tsc --noEmit` responsible for compiler correctness. Keep Oxlint
+responsible for local lint rules. Fallow does not emit TypeScript diagnostics
+or duplicate local typed lint findings.
+
+Type-aware fallow answers project-wide questions those tools do not:
+
+- Is this exact declaration used through an alias or re-export?
+- Which production files and tests depend on this exported symbol?
+- Does a public signature expose a package-private type?
+- Which public types couple packages or modules together?
+
+## Conservative results
+
+Every semantic result reports `complete`, `partial`, or `unavailable`.
+Fallow removes a dead-code candidate only when the checker resolves its exact
+declaration identity. Partial or unavailable analysis keeps the original
+finding and reports a stable omission reason.
+
+`fallow fix --type-aware` offers a class-member removal only after every owning
+project returns complete negative evidence and the declaration guard still
+matches. Always preview with `--dry-run`.
+
+<Warning>
+  Checker-visible evidence is not proof that a published API has no external
+  consumers. Keep package exports, `publicPackages`, visibility tags, and
+  explicitly selected consumer projects authoritative for library boundaries.
+</Warning>
+
+Use `--type-aware-require complete` in CI when incomplete semantic evidence
+must fail the job:
+
+```bash
+fallow dead-code --type-aware --type-aware-require complete \
+  --format json --quiet
+```
+
+Use repeatable `--type-aware-project` flags when automatic project selection
+does not include every consumer:
+
+```bash
+fallow dead-code --type-aware \
+  --type-aware-project tsconfig.json \
+  --type-aware-project packages/web/tsconfig.json \
+  --format json --quiet
+```
+
+## Persistent configuration
+
+Keep the feature opt-in per repository:
+
+```jsonc
+{
+  "typeAware": {
+    "enabled": true,
+    "projects": ["tsconfig.json"],
+    "require": "best-effort"
+  }
+}
+```
+
+Start with `best-effort`. Use `complete` only when partial or unavailable
+semantic evidence must fail the run.
+
+## Performance
+
+Type-aware analysis constructs an additional TypeScript Program and scans
+checker symbols. On the current public release corpus, marginal overhead is
+about 92 ms at the median and 2.3 seconds at P95. Large projects can take
+longer. Editor sessions reuse the loaded Program, while one-shot CLI and CI
+runs pay the cold setup cost.
+
+## Installation
+
+The `fallow` npm package installs a version-matched optional
+`fallow-type-aware` companion. If optional dependencies are disabled, install
+the exact same version manually. `fallow type-aware status` verifies discovery,
+package version, protocol version, and backend version without analyzing the
+project.
+
+## See also
+
+<CardGroup cols={3}>
+  <Card title="Dead code CLI" icon="terminal" href="/cli/dead-code">
+    Refine cleanup findings and run exact symbol queries.
+  </Card>
+  <Card title="Health CLI" icon="heart-pulse" href="/cli/health">
+    Inspect advisory public-signature type coupling.
+  </Card>
+  <Card title="Known limitations" icon="triangle-exclamation" href="/analysis/limitations">
+    Understand the boundary between default syntactic and optional semantic analysis.
+  </Card>
+</CardGroup>
