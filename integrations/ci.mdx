@@ -72,12 +72,13 @@ CI catches changed-code risk, cleanup opportunities, duplication, and complexity
         | `auto-changed-since` | `true` | Automatically scope to changed files in PR context using base SHA. Ignored when `changed-since` is set. |
         | `baseline` | -- | Path to baseline file for comparison. Rejected with exit 2 when `command: audit`; use `dead-code-baseline` / `health-baseline` / `dupes-baseline` instead. |
         | `save-baseline` | -- | Save current results as a baseline file. Rejected with exit 2 when `command: audit` (audit runs three analyses with incompatible baseline formats). |
-        | `version` | -- | Fallow version override. When omitted, the action uses the project `package.json` `fallow` dependency spec if present, otherwise `latest`. |
+        | `version` | -- | Fallow version override. When omitted, the action uses the project `package.json` `fallow` dependency spec if present, otherwise `latest`. The Action ref and the fallow CLI version are independent: `uses: fallow-rs/fallow@v3` selects the Action wrapper code only, while the installed CLI resolves from this input, then the project `package.json` `fallow` dependency, then `latest`. |
         | `workspace` | -- | Scope output to one or more workspaces (exact names, globs, `!` negation; comma-separated) |
         | `changed-workspaces` | -- | Git-derived monorepo scoping: scope to workspaces containing any file changed since `REF` (e.g. `origin/main`). Requires `fetch-depth: 0`. Mutually exclusive with `workspace`. A missing ref is a hard error (exit 2) rather than silent full-scope fallback. |
         | `comment` | `false` | Post results as a PR comment |
         | `review-comments` | `false` | Post inline PR review comments with typed `review-github` output and reconcile resolved threads on later runs |
         | `review-guidance` | `false` | Add collapsed "What to do" guidance blocks to inline PR review comments. Requires `review-comments: true` |
+        | `review-id` | -- | Stable identifier (1-64 characters, `A-Za-z0-9._-`) that isolates inline review comments when multiple fallow review jobs target the same pull request. See [Isolating parallel review jobs](#isolating-parallel-review-jobs). |
         | `annotations` | `true` | Emit findings as inline PR annotations via workflow commands (no Advanced Security required). On fallow >= 3.4.2 the action renders these natively via `fallow report --format github-annotations`; older binaries fall back to the bundled jq renderers, and `version: latest` users flip to the native path silently. The step log line `fallow: annotations rendered via native github-annotations` (or `via jq fallback`) tells you which renderer ran. The job summary follows the same rule with `github-summary`. |
         | `max-annotations` | `50` | Maximum number of inline annotations to emit. On the native path the cap is applied to the rendered stream (GitHub itself displays at most 10 annotations per type per step). |
         | `github-token` | `${{ github.token }}` | GitHub token for PR comments and SARIF upload |
@@ -201,6 +202,7 @@ CI catches changed-code risk, cleanup opportunities, duplication, and complexity
         | `FALLOW_COMMENT` | `false` | Post a rich MR summary comment with collapsible sections for each analysis |
         | `FALLOW_REVIEW` | `false` | Post inline MR discussions on changed lines with suggestion blocks for auto-fixable issues |
         | `FALLOW_REVIEW_GUIDANCE` | `false` | Add collapsed "What to do" guidance blocks to inline MR discussions |
+        | `FALLOW_REVIEW_ID` | -- | Stable identifier (1-64 characters, `A-Za-z0-9._-`) that isolates inline review discussions when multiple fallow review jobs target the same MR. See [Isolating parallel review jobs](#isolating-parallel-review-jobs). |
         | `FALLOW_SUMMARY_SCOPE` | `all` | Sticky MR summary scope. Use `diff` to apply the diff filter to project-level dependency/catalog/override findings too. Inline review discussions are unaffected |
         | `FALLOW_PR_COMMENT_LAYOUT` | `default` | Sticky MR comment layout: `default`, `compact`, `gate-only`, or `details`. Use `gate-only` when Code Quality is the primary MR surface |
         | `FALLOW_MAX_COMMENTS` | `50` | Maximum number of inline review comments to post (applies to `FALLOW_REVIEW`) |
@@ -588,6 +590,23 @@ CI catches changed-code risk, cleanup opportunities, duplication, and complexity
 <Tip>
 Both the GitHub Action and GitLab CI template automatically scope analysis to changed files in PR/MR context. No extra configuration needed.
 </Tip>
+
+### Isolating parallel review jobs
+
+When multiple fallow review jobs target the same pull request or merge request (for example, one job per workspace in a CI matrix), give each job a stable review id: the `review-id` Action input on GitHub, or the `FALLOW_REVIEW_ID` variable on GitLab. The id must be 1-64 characters from `A-Za-z0-9._-`.
+
+Reconciliation is exact-scope: a run only deduplicates against, and resolves, comments that carry the same review id. Unscoped runs only see unscoped comments, so adding an id to a new job never touches an existing job's threads.
+
+```yaml
+# GitHub Actions matrix: one review scope per workspace
+- uses: fallow-rs/fallow@v3
+  with:
+    review-comments: true
+    workspace: ${{ matrix.workspace }}
+    review-id: ${{ matrix.workspace }}
+```
+
+Without distinct ids, parallel jobs share one scope: each job would deduplicate against the other jobs' comments and resolve their threads as stale.
 
 ### Binary verification
 
