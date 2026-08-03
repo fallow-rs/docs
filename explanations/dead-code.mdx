@@ -608,6 +608,40 @@ Production dependencies (`dependencies`) that are only ever imported by test fil
 
 **When to act:** Move to `devDependencies`. This reduces the production install size and makes it clear the package is only needed for testing.
 
+### Dev dependencies in production {#dev-dependencies-in-production}
+
+A package in `devDependencies` that is imported by production source code via a runtime (value) import. This is the promote-side mirror of `type-only-dependencies` and `test-only-dependencies`: where those rules demote a production dependency that only tests or types need, this rule catches the opposite drift. A production-only install (`npm install --omit=dev`, `pnpm install --prod`, `yarn workspaces focus --production`) omits `devDependencies`, so the import breaks at runtime; the package belongs in `dependencies`.
+
+| Severity | Default |
+|:---------|:--------|
+| Warning | Yes |
+
+**What counts as a production import.** An import is production evidence only when all of the following hold:
+
+- The importing file is reachable from a runtime entry point. Repo tooling that is not part of the shipped artifact (`scripts/`, benchmarks, playgrounds, files reachable only through a config-file chain such as a Rollup config importing helpers) does not count.
+- The importing file is not a test, story, or fixture file (patterns like `*.test.*`, `*.spec.*`, `*.e2e.*`, `*.bench.*`, `*.stories.*`, `__tests__/`, `__mocks__/`, `test/`, `tests/`, the same exclusion set `--production` mode uses) and not a config file.
+- The import is a runtime (value) import. A production file that imports the package only via `import type` does not trigger the rule, because type imports are erased at build time; this mirrors the import-kind analysis behind `type-only-dependencies`.
+
+**What is never flagged.** A `devDependency` is skipped when another manifest section already provides it at runtime (it is also listed in `dependencies`, `peerDependencies`, or `optionalDependencies`), when it is a workspace package, when it is known dev tooling (`@types/*`, `typescript`, and similar), or when it is listed in `ignoreDependencies`. The rule currently checks the root `package.json` against the project-wide import graph; imports from files owned by a workspace package are skipped because the workspace's own manifest governs their runtime resolution (per-workspace detection is a shared follow-up with the sibling dependency rules).
+
+**Interaction with `--production` mode.** Unlike `test-only-dependencies`, which needs test files in the graph to answer its question, this rule stays on in `--production` mode. Production mode only makes the signal cleaner: every discovered file is production code, and a production CI run is exactly where a prod-only install breakage matters.
+
+**Known limitation.** A file referenced from a `package.json` `scripts` command counts as a runtime entry point, so a dev-only helper script that value-imports a `devDependency` can still be flagged. Suppress such a package via `ignoreDependencies`.
+
+**Configuration and suppression.** The config key is `dev-dependencies-in-production` under `rules`; set it to `"error"`, `"warn"` (the default), or `"off"`:
+
+```json fallow.json
+{
+  "rules": {
+    "dev-dependencies-in-production": "off"
+  }
+}
+```
+
+There is no inline suppression comment for this rule (`suppressible: false` in the capability manifest). That is intentional: the finding anchors on the package's line in `package.json`, and JSON cannot carry comments. To silence a specific package, add it to `ignoreDependencies`; to silence the rule entirely, set it to `off`.
+
+**When to act:** Move the package from `devDependencies` to `dependencies`. If the flagged import is genuinely dev-only tooling (the script-entry limitation above), add the package to `ignoreDependencies` instead.
+
 ### Unused pnpm catalog entries {#unused-catalog-entries}
 
 Packages declared in `pnpm-workspace.yaml` under `catalog:` or `catalogs.<name>:` that no workspace `package.json` references with the `catalog:` protocol.
