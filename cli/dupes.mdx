@@ -22,6 +22,7 @@ fallow dupes
 | Flag | Description |
 |:-----|:------------|
 | `--mode <MODE>` | Detection mode: `strict`, `mild` (default), `weak`, `semantic` |
+| `--near` | Include function-scoped near-miss clones with small structural edits. Uses semantic normalization and reports groups with at least 80% all-pairs similarity. |
 | `--min-tokens <N>` | Minimum tokens per clone (default: 50) |
 | `--min-lines <N>` | Minimum lines per clone (default: 5) |
 | `--min-occurrences <N>` | Minimum number of occurrences before a clone group is reported (default: 2, must be ≥ 2). Raise to skip pair-only clones and focus on widespread copy-paste worth refactoring. |
@@ -35,7 +36,7 @@ fallow dupes
 | Flag | Description |
 |:-----|:------------|
 | `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab` |
-| `--top <N>` | Show only the N most-duplicated clone groups. Groups are sorted by instance count descending (tiebreak: line count descending, then deterministic path/line). Summary stats reflect the full project, not just the shown groups. |
+| `--top <N>` | Show only the N highest-ranked clone groups. Ranking multiplies clone size by occurrence count, then applies a capped spread boost. `stats.clone_groups` and `stats.clone_instances` reflect the shown groups, while corpus totals and `stats.duplication_percentage` remain scoped to the full analysis. |
 | `--quiet` | Suppress progress output |
 | `--threshold <N>` | Fail if duplication exceeds N% |
 | `--group-by <MODE>` | Partition the report into per-group sections. `MODE`: `owner` (CODEOWNERS), `directory` (first path component), `package` (workspace), or `section` (GitLab `[Section]` headers). Each clone group is attributed to its largest owner (most instances; alphabetical tiebreak), so a group split 2 src / 1 lib appears under `src`. JSON adds `grouped_by` plus a `groups` array of per-bucket dedup-aware `stats`, attributed `clone_groups` (each carrying `primary_owner` and per-instance `owner`), and `clone_families`. SARIF results carry `properties.group` and CodeClimate issues carry a top-level `group` field. Compact and markdown fall back to ungrouped output with a stderr note. |
@@ -76,6 +77,20 @@ If your duplication percentage drops after upgrading, fallow is now excluding ge
 
 Set `ignoreDefaults` to `false` to opt out and use only your `duplicates.ignore` list.
 
+#### Reviewed clone groups
+
+Add an intentional clone group to `duplicates.ignoredClones` without hiding other duplication findings:
+
+```jsonc
+{
+  "duplicates": {
+    "ignoredClones": ["dup:6f12ab34:2"]
+  }
+}
+```
+
+The key is `<fingerprint>:<instance_count>`. Copy the fingerprint from the human listing or `clone_groups[].fingerprint` in JSON. Token changes and new occurrences make the group reportable again, while formatting-only edits keep the same fingerprint.
+
 ### Monorepo scoping
 
 Both flags retain only clone groups where at least one instance is under a selected workspace root. The full cross-workspace index is still built; reported groups and the `duplication_percentage` stat are recomputed from the scoped slice.
@@ -107,6 +122,17 @@ Both flags retain only clone groups where at least one instance is under a selec
   As you move from `strict` to `semantic`, you'll find more clones but also more potential false positives. Start with `mild` and increase sensitivity as needed.
 </Accordion>
 
+## Ranking and JSON fields
+
+The default report and `--top` multiply duplicated token count by occurrence count, then apply a spread boost. `spread` is the maximum directory-tree distance between instances. Same-file groups count one spread step per 250 lines of separation. The boost is capped at 15%.
+
+Each JSON `clone_groups[]` entry includes:
+
+- `spread`: maximum directory or same-file line distance
+- `similarity`: lowest all-pairs similarity for near-miss groups, omitted for exact groups
+
+The `stats` object can also include `clone_groups_ignored` when `duplicates.ignoredClones` hides groups, and `near_candidates_skipped` when bounded-work limits skip near-miss comparisons. Zero values are omitted.
+
 ## Examples
 
 <CodeGroup>
@@ -126,6 +152,9 @@ fallow dupes --top 5 --mode semantic --skip-local
 ```bash Advanced detection
 # Catch renamed-variable clones
 fallow dupes --mode semantic
+
+# Include function-scoped clones with small structural edits
+fallow dupes --near
 
 # Only cross-directory duplicates
 fallow dupes --skip-local
