@@ -30,7 +30,7 @@ fallow health
 | `--max-crap <N>` | Maximum [CRAP](/explanations/health#crap-score) score before reporting (default: 30.0). Functions meeting or exceeding this score appear alongside complexity findings. Pair with [`--coverage`](#coverage-istanbul) for accurate per-function CRAP; without it fallow estimates coverage from the module graph. |
 | `--effort <LEVEL>` | Filter refactoring targets by effort level: `low`, `medium`, or `high`. Only targets at or below the specified effort are shown. Implies `--targets`. |
 
-Use `health.thresholdOverrides[]` in config for documented local ceilings on known legacy functions. Overrides match `files` globs and optional exact `functions`, can set `maxCyclomatic`, `maxCognitive`, and `maxCrap`, and can include a `reason`. They keep exceptions visible in output instead of hiding them with suppression comments.
+Use `health.thresholdOverrides[]` in config for documented local ceilings on known legacy functions. Overrides match `files` globs and optional exact `functions`, can set `maxCyclomatic`, `maxCognitive`, `maxCrap`, and `maxUnitSize`, and can include a `reason`. They keep exceptions visible in output instead of hiding them with suppression comments.
 
 ### Output
 
@@ -717,7 +717,7 @@ fallow health --coverage-gaps --file-scores
 
 ```json title="$ fallow health --format json --top 2"
 {
-  "schema_version": 3,
+  "schema_version": 10,
   "version": "3.15.0",
   "elapsed_ms": 140,
   "summary": {
@@ -742,9 +742,60 @@ fallow health --coverage-gaps --file-scores
 }
 ```
 
-When configured threshold overrides affect a run, JSON includes `threshold_overrides[]` with `active`, `stale`, or `no_match` status. Complexity findings evaluated with local ceilings include `effective_thresholds` and `threshold_source: "override"`.
+Complexity findings evaluated with local ceilings include `effective_thresholds` and `threshold_source: "override"`. When configured threshold overrides affect a run, JSON also includes a top-level `threshold_overrides[]` array; see [Threshold overrides](#threshold-overrides) below.
 
 When `--css` is active, JSON also includes `css_analytics` for descriptive CSS evidence and `styling_findings` for first-class styling issues. Each styling finding has `code`, `sub_kind`, `effective_severity`, location, evidence value, and read-only actions, and can be configured through the styling rules.
+
+### Threshold overrides
+
+When configured `health.thresholdOverrides[]` entries affect a run, JSON includes a `threshold_overrides[]` array with one row per threshold dimension each entry participates in: `complexity` covers the `maxCyclomatic`, `maxCognitive`, and `maxUnitSize` ceilings, and `crap` covers `maxCrap` alone. An entry that configures both a structural ceiling and `maxCrap` therefore produces two rows sharing one `override_index`; group on `override_index` to count configured entries rather than rows.
+
+| Field | Description |
+|:------|:------------|
+| `status` | `active` (the override matches a finding that still needs the raised ceiling), `stale` (the override is not what keeps the matched unit quiet: it passes the global thresholds on its own, or an inline suppression already covers it), `insufficient` (the override raises a ceiling the matched code still exceeds, so the finding survives), or `no_match` (the entry matches no analyzed file or function). |
+| `override_index` | Position of the entry in the configured `thresholdOverrides` array. Shared by every row the entry produces. |
+| `dimension` | Threshold dimension this row describes: `complexity` or `crap`. |
+| `outstanding` | Dimensions the matched unit still breaches despite the override, whether or not the entry configures their ceilings. Omitted when empty. |
+| `path`, `function` | Matched file, and matched function for function-scoped entries. |
+| `line`, `col` | 1-based line and 0-based column of the matched unit. Absent on `no_match` rows. Several units in one file can share a name; the position keeps their rows distinct. |
+| `configured_thresholds` | Ceilings the entry itself configures. |
+| `effective_thresholds` | Ceilings in effect for the matched unit after applying every matching entry on top of the defaults. |
+| `metrics` | Current `cyclomatic` and `cognitive` of the matched code, plus `crap` when coverage data exists. Absent on `no_match` rows. |
+| `reason` | The entry's configured `reason`, when set. |
+
+```json title="threshold_overrides[] row (crap dimension)"
+{
+  "status": "insufficient",
+  "override_index": 0,
+  "dimension": "crap",
+  "outstanding": [
+    "complexity",
+    "crap"
+  ],
+  "path": "src/legacy.ts",
+  "function": "legacyFlow",
+  "line": 1,
+  "col": 7,
+  "configured_thresholds": {
+    "max_cyclomatic": 5,
+    "max_crap": 40.0
+  },
+  "effective_thresholds": {
+    "max_cyclomatic": 5,
+    "max_cognitive": 3,
+    "max_crap": 40.0,
+    "max_unit_size": 60
+  },
+  "metrics": {
+    "cyclomatic": 7,
+    "cognitive": 6,
+    "crap": 56.0
+  },
+  "reason": "raised but still exceeded"
+}
+```
+
+This row reads: the first configured entry raised the CRAP ceiling to 40, but `legacyFlow` scores 56, so the CRAP finding survives the override; `outstanding` shows the unit also still breaches the complexity dimension. An `insufficient` row means the override applied but did not settle the finding, so either raise the ceiling further or fix the function.
 
 ### With file scores
 
@@ -752,7 +803,7 @@ When `--file-scores` is used, the JSON output includes additional fields:
 
 ```json title="$ fallow health --file-scores --format json --top 2"
 {
-  "schema_version": 3,
+  "schema_version": 10,
   "version": "3.15.0",
   "elapsed_ms": 320,
   "summary": {
@@ -806,7 +857,7 @@ When `--hotspots` is used, the JSON output includes a `hotspots` array and `hots
 
 ```json title="$ fallow health --hotspots --format json --top 2"
 {
-  "schema_version": 3,
+  "schema_version": 10,
   "version": "3.15.0",
   "elapsed_ms": 480,
   "summary": {
@@ -872,7 +923,7 @@ When `--targets` is used, the JSON output includes a `targets` array:
 
 ```json title="$ fallow health --targets --format json --top 2"
 {
-  "schema_version": 3,
+  "schema_version": 10,
   "version": "3.15.0",
   "elapsed_ms": 520,
   "summary": {
@@ -954,7 +1005,7 @@ When file-scores are enabled (via `--file-scores` or implicitly via `--save-snap
 
 ```json title="$ fallow health --file-scores --format json (vital_signs excerpt)"
 {
-  "schema_version": 3,
+  "schema_version": 10,
   "version": "3.15.0",
   "vital_signs": {
     "dead_file_pct": 4.2,
@@ -1180,7 +1231,7 @@ coverage-gaps = "warn"
 
 ```json title="$ fallow health --coverage-gaps --format json"
 {
-  "schema_version": 3,
+  "schema_version": 10,
   "version": "3.15.0",
   "elapsed_ms": 280,
   "coverage_gaps": {
