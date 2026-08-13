@@ -66,13 +66,28 @@ Under `--gate new-only`, audit normally runs every analysis twice: once on the c
 
 Run `fallow audit --base main --gate new-only --performance` to see whether the fast path fired: the JSON output includes `base_snapshot_skipped: true|false` and the human output prints the same on stderr. The optimization activates automatically whenever every entry in the diff qualifies; there is no flag to opt in or out.
 
+#### New-only duplication demotion
+
+Clone-group attribution carries one carve-out under `--gate new-only`: an introduced clone group none of whose instances overlap an added line from the run's diff is demoted to inherited. This covers changes that remove duplication elsewhere and thereby re-shape a surviving clone group into a new structural key: the group is new to the report, but no duplicated line was written by this change, so it does not fail the gate.
+
+Every demotion is observable. The gate-excluded note on stderr gains a sub-line naming the demoted count and the diff that decided it:
+
+```text
+audit gate excluded 3 inherited findings (run with --gate all to enforce)
+  of which 1 clone group was reclassified as pre-existing: no duplicated line was added by this change (diff source: merge-base worktree diff vs main)
+```
+
+With `--explain`, the duplication section adds one line per demoted group, capped like the clone listing: the group's `dup:<fingerprint>` id (matching the listing and `fallow dupes --trace`), its instance locations, and the deciding rule, plus a closing line naming the diff source. In JSON, each demoted entry in `duplication.clone_groups[]` carries a `demotion_reason` field and the `attribution` block counts demotions in `duplication_demoted`; see [Key fields](#key-fields).
+
+The decision uses the same diff precedence as [diff scoping](#diff-scoping): a diff supplied via `--diff-file`, `--diff-stdin`, or `FALLOW_DIFF_FILE` wins over the merge-base worktree diff. A supplied diff computed against a narrower base than the merge base (for example a last-commit-only diff on a multi-commit branch) can demote duplication the branch genuinely introduced, so derive supplied diffs from the same base the audit compares against. When no diff is available at all, the check is skipped and every introduced clone group keeps gating.
+
 ### Output
 
 | Flag | Description |
 |:-----|:------------|
 | `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab` |
 | `-q, --quiet` | Suppress progress and status output on stderr |
-| `--explain` | Add metric explanations in JSON output (`_meta` objects with docs links) |
+| `--explain` | Add metric explanations in JSON output (`_meta` objects with docs links). In human output, also lists each clone group the new-only gate demoted, with the deciding diff source. See [New-only duplication demotion](#new-only-duplication-demotion). |
 
 ### Review brief
 
@@ -311,7 +326,8 @@ Audit scope: 12 changed files vs main (d4a2f91..HEAD)
     "duplication_introduced": 0,
     "duplication_inherited": 0,
     "styling_introduced": 0,
-    "styling_inherited": 0
+    "styling_inherited": 0,
+    "duplication_demoted": 0
   },
   "dead_code": {
     "schema_version": 3,
@@ -344,7 +360,9 @@ Audit scope: 12 changed files vs main (d4a2f91..HEAD)
 | `summary.duplication_clone_groups` | integer | Clone groups involving changed files |
 | `attribution.*_introduced` | integer | Findings whose structural key did not exist at the base ref. With `gate=all`, these stay `0` because audit skips the base-snapshot attribution pass. |
 | `attribution.*_inherited` | integer | Findings already present at the base ref. With `gate=all`, these stay `0` because audit skips the base-snapshot attribution pass. |
+| `attribution.duplication_demoted` | integer | Clone groups the `new-only` gate demoted from introduced to inherited because no instance overlaps an added line. Always present in audit-family JSON (audit, review brief, MCP `audit`). Demoted groups stay counted in `duplication_inherited`, so this never exceeds it. |
 | `dead_code.*[].introduced` | boolean | Present in audit JSON sub-results when base attribution is available. `true` means the finding is new relative to the base ref. |
+| `duplication.clone_groups[].demotion_reason` | string | Present only on demoted groups. Kebab-case reason for the demotion, currently `no-added-lines`; further values may be added, so treat an unknown value as "some demotion reason". Never emitted by `fallow dupes --format json`. |
 | `complexity.styling_findings[]` | array | Present when CSS analysis is active. Contains first-class styling issues with rule severity and actions. Each item carries optional `introduced` attribution when the base comparison is available. |
 | `complexity.css_analytics` | object | Descriptive CSS analytics emitted with CSS analysis: specificity, token usage, duplicate declaration context, and cleanup candidates. Use it as evidence around `styling_findings`, not as a gate by itself. |
 
@@ -373,16 +391,89 @@ When `base` is not specified, the base is the `git merge-base` against the branc
 
 `audit` creates a temporary base snapshot (a git worktree checkout) to compare against the base ref. When the current checkout has `node_modules`, audit links it into the snapshot so tsconfig `extends` chains into installed packages and path aliases resolve like the working tree. Snapshots are unregistered from git immediately after materialization, so they never appear in `git worktree list`, IDE repo views, or `.git/worktrees/`, even if the process is force-killed. Cached base snapshots are reused across runs and swept automatically after 30 days of disuse. Entries registered by earlier fallow versions are deregistered automatically on the next audit, with their warm caches preserved.
 
-Each project root keeps one root-owned base-snapshot cache, rebuilt in place when the resolved base SHA changes, and the reuse lock is held for the whole audit so cleanup can never remove files under a running audit. To reclaim a project's caches on demand, use `fallow audit-cache remove --root <PATH>`:
+To inspect or reclaim these caches on demand, see [Audit cache maintenance](#audit-cache-maintenance).
+
+See [MCP integration](/integrations/mcp) for setup instructions.
+
+## Audit cache maintenance
+
+Each project root keeps one root-owned base-snapshot cache, rebuilt in place when the resolved base SHA changes, and the reuse lock is held for the whole audit so cleanup can never remove files under a running audit. Automatic age-based GC runs on every audit: the [`FALLOW_AUDIT_CACHE_MAX_AGE_DAYS`](/configuration/environment#fallow_audit_cache_max_age_days) env var (or the `audit.cacheMaxAgeDays` config field) tunes the 30-day default, and `0` disables the age-based sweep. Two subcommands maintain the caches on demand.
+
+### `audit-cache remove`
+
+To reclaim one project's caches unconditionally (warm or not), use `fallow audit-cache remove --root <PATH>`:
 
 ```bash
 fallow audit-cache remove --root ./my-project --dry-run   # preview what would be removed
 fallow audit-cache remove --root ./my-project --yes        # remove (required in non-interactive shells)
 ```
 
-`--dry-run` reports what would be removed without touching the filesystem, and non-interactive removal requires `--yes`. Lock-contended entries (an audit is mid-rebuild) are left in place and reported, and the command exits 2. Automatic age-based GC still runs on every audit; the `FALLOW_AUDIT_CACHE_MAX_AGE_DAYS` env var (or the `audit.cacheMaxAgeDays` config field) tunes the 30-day default, and `0` disables the sweep.
+`--dry-run` reports what would be removed without touching the filesystem, and non-interactive removal requires `--yes`. Lock-contended entries (an audit is mid-rebuild) are left in place and reported, and the command exits 2.
 
-See [MCP integration](/integrations/mcp) for setup instructions.
+### `audit-cache prune`
+
+`fallow audit-cache prune` applies the same GC policy every `fallow audit` run applies silently (orphaned-sidecar cleanup, age-based reclaim under the resolved threshold, and reclaim of abandoned entries whose recorded owner root no longer exists) and reports every cache entry it considered, with sizes and ages. Entries owned by other live projects are never touched. Reach for it when audit caches from deleted checkouts or long-gone branches are holding disk space and you want the cleanup now, with a visible decision per entry, instead of waiting for the next audit's silent sweep.
+
+```bash
+fallow audit-cache prune --dry-run          # preview every decision without touching the filesystem
+fallow audit-cache prune                    # apply the GC policy now
+fallow audit-cache prune --max-age-days 7   # tighter age threshold for this run
+```
+
+| Flag | Description |
+|:-----|:------------|
+| `--dry-run` | Preview decisions without touching the filesystem: nothing is removed and no lock or age-tracking sidecars are created. |
+| `--max-age-days <N>` | Age threshold in days for this invocation. Precedence: this flag, then [`FALLOW_AUDIT_CACHE_MAX_AGE_DAYS`](/configuration/environment#fallow_audit_cache_max_age_days), then `audit.cacheMaxAgeDays`, then the 30-day default; the JSON output reports which source won. `0` disables age-based reclaim but still reclaims orphaned entries and entries whose recorded owner root is gone. |
+
+`--root` is optional for `prune` and defaults to the current directory. Reported sizes come from a full recursive walk of each cache entry, which can take a few seconds on large caches.
+
+Human output prints one row per considered entry, sorted by path, with the decision, reason, size, and age. Entries kept because another live project owns them come with a hint naming `audit-cache remove` as the way to clear that project's own cache, and the closing line totals the reclaimed bytes.
+
+Unlike `remove`, `prune` exits 0 whenever it ran, including runs with lock-contention skips (an audit is mid-rebuild) or per-entry failures; on a shared runner, entries owned by other users are reported as kept rather than failing the invocation. Exit code 2 is reserved for validation errors and an unreadable scan root. Machine consumers gate on the `complete` field of the JSON envelope, not the exit code.
+
+With `--format json`, prune emits its own maintenance envelope, separate from the audit envelope and a sibling of the `audit-cache-remove` envelope:
+
+```json title="$ fallow audit-cache prune --format json"
+{
+  "kind": "audit-cache-prune",
+  "schema_version": 1,
+  "command": "audit-cache prune",
+  "root": "/work/my-project",
+  "scan_root": "/tmp",
+  "dry_run": false,
+  "max_age_days": 30,
+  "max_age_source": "default",
+  "entries": [
+    {
+      "path": "/tmp/fallow-audit-base-cache-1a2b3c4d",
+      "pass": "foreign",
+      "disposition": "removed",
+      "reason": "aged-out",
+      "age_days": 41,
+      "size_bytes": 187563008,
+      "owner_root": "/work/deleted-checkout"
+    }
+  ],
+  "found": 1,
+  "removed": 1,
+  "kept": 0,
+  "skipped": 0,
+  "failed": 0,
+  "complete": true,
+  "reclaimed_bytes": 187563008
+}
+```
+
+| Field | Type | Description |
+|:------|:-----|:------------|
+| `dry_run` | boolean | `true` when the run only previewed decisions. |
+| `max_age_days`, `max_age_source` | integer, string | The resolved age threshold and which precedence level supplied it (`flag`, `env`, `config`, or `default`) |
+| `entries[]` | array | One item per considered cache entry: `path`, `pass` (`owned`, `legacy`, or `foreign`), `disposition` (`removed`, `kept`, `skipped`, or `failed`), a short kebab-case `reason` (e.g. `aged-out`, `fresh`, `owner-live`), `age_days`, `size_bytes`, and `owner_root` (each of the last three is `null` when not measurable). |
+| `found`, `removed`, `kept`, `skipped`, `failed` | integer | Aggregate counts; `removed + kept + skipped + failed` always equals `found` |
+| `complete` | boolean | `true` when nothing was skipped or failed. The field to gate on in scripts; the exit code stays 0 either way. |
+| `reclaimed_bytes` | integer | Bytes removed from disk by this run. On a dry run, the bytes the run would have removed. |
+
+To see the same per-entry decisions during a normal audit run (where the GC is silent), set `RUST_LOG=fallow=debug`: both `fallow audit` and `audit-cache prune` then log one diagnostic line per considered entry with its decision, reason, age, and threshold. With `RUST_LOG` unset, audit output is unchanged.
 
 ## Review brief and decision surface
 
