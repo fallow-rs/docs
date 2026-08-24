@@ -94,7 +94,7 @@ fallow dead-code --changed-since main --format json
 
 For agents that support <Tooltip tip="An open standard that lets AI agents call external tools through structured, typed interfaces">[MCP (Model Context Protocol)](https://modelcontextprotocol.io)</Tooltip>, `fallow-mcp` exposes analysis as structured tools. Agents get typed inputs and outputs instead of parsing CLI text.
 
-The MCP server uses <Tooltip tip="Communication via standard input/output streams between parent and child processes">stdio transport</Tooltip> and wraps the `fallow` CLI binary. Set the `FALLOW_BIN` environment variable to point to the fallow binary (defaults to `fallow` in `PATH`).
+The MCP server uses <Tooltip tip="Communication via standard input/output streams between parent and child processes">stdio transport</Tooltip> and a hybrid adapter. Supported requests run through the typed `fallow-api` in process, while command-owned options use a managed `fallow` CLI subprocess. Set `FALLOW_BIN` only when CLI-backed calls need a specific binary (defaults to `fallow` in `PATH`).
 
 <Tabs>
   <Tab title="Claude Code">
@@ -218,6 +218,7 @@ The MCP server uses <Tooltip tip="Communication via standard input/output stream
 | `find_dupes` | Code duplication detection (`fallow dupes --format json`). Each clone group carries a stable `fingerprint` and numeric `spread`; near-miss groups also carry `similarity`. Pass `near: true` to include function-scoped near-miss clones. Use the fingerprint with `trace_clone` to inspect a group. Import declarations are excluded by default; pass `ignore_imports: false` to count them again. `stats.clone_groups_ignored` reports config-filtered groups, while `stats.near_candidates_skipped` signals bounded near-miss comparisons that were skipped. |
 | `fix_preview` | Dry-run auto-fix preview (`fallow fix --dry-run --format json`) |
 | `fix_apply` | Apply auto-fixes (`fallow fix --yes --format json`) |
+| `guard` | Report the architecture rules that apply to given files before editing them: boundary zone, allowed import zones, forbidden calls, and rule-pack policies. |
 | `check_health` | Complexity metrics, file health scores, hotspots, and refactoring targets (`fallow health --format json`). Set `file_scores: true` for maintainability index, `hotspots: true` for churn analysis, `targets: true` for ranked recommendations sorted by efficiency, `trend: true` for per-metric deltas against the most recent snapshot. Set `complexity_breakdown: true` to add a per-decision-point `contributions[]` array to each complexity finding (each `else-if`, nested `if`, boolean operator, loop, `case`, etc. with its source line and cyclomatic/cognitive weight) so you can explain WHY a function scored high and pinpoint which lines to refactor. Set `css: true` to add a `css_analytics` section: structural CSS slop that per-rule linters do not aggregate (specificity hotspots, `!important` density, deep nesting, design-token sprawl) plus cleanup candidates (unreferenced custom properties / `@keyframes`, dead Vue `<style scoped>` classes, unused `@property` / `@layer`, Tailwind arbitrary-value bypasses, Tailwind v4 `@theme` `unused_theme_tokens`, duplicate declaration blocks) and undefined-reference candidates, each with a read-only verification step in its `actions[]`. It also adds `token_consumers`, a reverse index of where each design token is consumed (per token a `consumer_count` plus a located `consumers[]` sample) so an agent can read a token's blast radius before changing it; it covers Tailwind v4 `@theme` tokens (`kind` `theme-var` / `css-var` / `utility` / `apply`) and CSS-in-JS token definitions: StyleX `defineVars`, vanilla-extract `createTheme`-family definitions, and PandaCSS `defineTokens` (`token` is binding-qualified; `kind` is `js-member` for member access and `js-call` for Panda `token(...)` calls). `consumer_count` is a static lower bound (a computed class name like `bg-${c}`, dynamic import strings, unresolved aliases, generated package state, or computed token access can still be invisible) and the field is descriptive context, not a finding (no `actions[]`). Opt-in because it reads project stylesheets and cross-checks source files. Standard CSS and Vue/Svelte/Astro standard `<style>` blocks are parsed structurally; Sass/Less sources are scanned only where fallow can stay conservative without expanding preprocessor semantics. Set `churn_file` to a `fallow-churn/v1` JSON path to drive hotspots/ownership/targets from imported VCS history instead of git, for projects with no git repository (Yandex Arc, Mercurial, Perforce); the file is authoritative for the window, so `since` then only labels output. Set `runtime_coverage` to merge a V8 or Istanbul coverage dump; tune it with `min_invocations_hot` (default 100), `min_observation_volume` (default 5000), and `low_traffic_threshold` (default 0.001). Set `group_by` to `owner`, `directory`, `package`, or `section` to partition results: each group gets its own `vital_signs`, `health_score`, and optional `coverage_source_consistency` recomputed from the group's files (top-level metrics stay project-wide), SARIF results gain `properties.group`, CodeClimate issues gain a top-level `group` field. Findings include a bucketed `coverage_tier` (`none`/`partial`/`high`) and `coverage_source` for CRAP-triggered entries; `summary.coverage_source_consistency` reports whether those sources are uniform or mixed. Actions pick `add-tests` / `increase-coverage` when coverage can still clear CRAP, or `refactor-function` when cyclomatic >= maxCrap, see "Structured actions" below. |
 | `check_runtime_coverage` | Merge runtime-coverage data into the health report. Required `coverage` param accepts a V8 coverage directory, a single V8 coverage JSON, or an Istanbul `coverage-final.json`. A single local capture is free and runs without a license; continuous or multi-capture runtime monitoring (a V8 directory containing multiple JSON files) requires an active license JWT. Tunable via `min_invocations_hot` (default 100), `min_observation_volume` (default 5000), `low_traffic_threshold` (default 0.001), `max_crap` (default 30.0), `top`, and `group_by`. Protocol-0.3+ sidecars emit a `summary.capture_quality` block flagging short-window captures. Cloud runtime rows can expose `resolutionStatus` / `mappingQuality` on function-list JSON and `resolution_status` / `mapping_quality` in runtime-context JSON. Use the confidence table below before acting on file-level runtime signals. Can exceed the default 120s timeout on large dumps; raise `FALLOW_TIMEOUT_SECS` accordingly. Pick this over `check_health` when you have a coverage dump. |
 | `get_hot_paths` | Runtime-context slice over the same local runtime coverage pipeline. Same input schema and free-vs-paid contract as `check_runtime_coverage`; read `runtime_coverage.hot_paths` for production hot paths sorted by percentile and invocation count. |
@@ -234,7 +235,7 @@ The MCP server uses <Tooltip tip="Communication via standard input/output stream
 | `list_suppressions` | List active fallow-ignore suppression markers grouped per file with line, kind, level, reason, and a stale cross-reference ([`fallow suppressions --format json`](/cli/suppressions)). A read-only governance inventory for seeing what a clean verdict is hiding, not a gate: always exits 0 even when suppressions exist. Scope with `workspace`, `changed_since` (the natural pull-request review scope), or repeated `file` entries. Runs a full analysis, so raise `FALLOW_TIMEOUT_SECS` on large repos. |
 | `list_boundaries` | Architecture boundary zones and access rules (`fallow list --boundaries --format json`). Returns zone definitions, access rules, per-zone file counts, and `logical_groups[]` (pre-expansion `autoDiscover` parents with verbatim paths, discovered children, a `status` enum (`ok` / `empty` / `invalid_path`), summed `file_count`, optional `authored_rule`, optional `fallback_zone` cross-reference for the Bulletproof case, optional `merged_from` for duplicate parent declarations, optional `original_zone_root` echo for monorepo subtree scopes, and optional `child_source_indices` attribution for multi-path autoDiscover). Returns `{"configured": false}` if no boundaries are configured. |
 | `trace_export` | Trace why an export is used or unused (`fallow dead-code --trace FILE:EXPORT_NAME --format json`). Required `file` and `export_name` params. Returns file reachability, entry-point status, direct references, re-export chains, and a reason string. If `export_name` is a class / enum / store MEMBER rather than a top-level export, returns a member trace instead (`member_name`, `member_kind`, `owner_export`, `owner_is_used`) reporting the owning declaration's reachability and usage plus a pointer to the matching `--unused-<kind>-members` command; branch on field presence (`export_name` vs `member_name`). Use before deleting a supposedly-unused export or debugging an unused-class-member finding. |
-| `symbol_trace` | Trace exact TypeScript symbol references, namespaces, aliases, and re-export hops (`fallow dead-code --type-aware --trace FILE:EXPORT --format json --quiet`). Required `file` and `export_name`; optional `type_aware_projects` and `type_aware_require` (`best-effort` or `complete`). This adds semantic proof to Fallow's project-wide usage evidence without returning TypeScript compiler diagnostics or lint findings. |
+| `trace_symbol` | Trace exact TypeScript symbol references, namespaces, aliases, and re-export hops (`fallow dead-code --type-aware --trace FILE:EXPORT --format json --quiet`). Required `file` and `export_name`; optional `type_aware_projects` and `type_aware_require` (`best-effort` or `complete`). This adds semantic proof to Fallow's project-wide usage evidence without returning TypeScript compiler diagnostics or lint findings. |
 | `symbol_impact` | Return exact-symbol consumers, transitive affected files, and targeted tests for a TypeScript export (`fallow dead-code --type-aware --symbol-impact FILE:EXPORT --format json --quiet`). Required `file` and `export_name`; optional `type_aware_projects` and `type_aware_require` (`best-effort` or `complete`). Use it to plan a rename, deletion, or API change. It is advisory change-impact evidence, not a substitute for `tsc` or Oxlint. |
 | `trace_file` | Trace all graph edges for a file (`fallow dead-code --trace-file PATH --format json`). Required `file` param. Returns reachability, entry-point status, exports, imports-from, imported-by, and re-exports. Use to decide whether a file is isolated, barrel-only, or imported by live entry points. |
 | `trace_dependency` | Trace where a dependency is imported (`fallow dead-code --trace-dependency PACKAGE --format json`). Required `package_name` param. Returns importing files, type-only importers, total import count, `used_in_scripts` (true when invoked from `package.json` scripts or CI configs like `.github/workflows/*.yml` / `.gitlab-ci.yml`), and `is_used` (combined import + script signal, mirrors the unused-deps detector so build tools like `microbundle` or `vitest` invoked only via scripts are correctly classified as used). Use before removing a dependency or moving it between `dependencies` and `devDependencies`. |
@@ -287,7 +288,7 @@ Cloud runtime tools can include source-map confidence metadata when the response
 </CodeGroup>
 
 <Tip>
-The MCP server wraps the CLI, so all fallow features are available: production mode, baselines, and incremental analysis.
+The typed API handles supported requests directly, while the CLI fallback handles command-owned options. Together they expose the full feature set, including production mode, baselines, and incremental analysis.
 </Tip>
 
 ### Notable tool parameters
@@ -371,30 +372,33 @@ This is the most efficient way for agents to get a full picture of the codebase 
 
 | Variable | Description |
 |:---------|:------------|
-| `FALLOW_BIN` | Path to the fallow CLI binary. The MCP server checks, in order: this env var, a sibling binary next to `fallow-mcp`, then `fallow` in `PATH`. |
-| `FALLOW_TIMEOUT_SECS` | Subprocess timeout in seconds (default: `120`). If the CLI does not exit within this window, the MCP server kills the process and returns a structured error. Increase for very large codebases. |
+| `FALLOW_BIN` | Path to the fallow CLI binary for CLI-backed calls. The MCP server checks, in order: this env var, a sibling binary next to `fallow-mcp`, then `fallow` in `PATH`. It does not affect typed in-process calls. |
+| `FALLOW_TIMEOUT_SECS` | Deadline in seconds (default: `120`) for both typed and CLI-backed calls. A timed-out typed call returns `FALLOW_MCP_API_TIMEOUT`; a timed-out CLI call kills the process tree and returns `FALLOW_MCP_SUBPROCESS_TIMEOUT`. Increase for very large codebases. |
 
 ## Error handling
 
-The MCP server returns structured JSON errors when the underlying CLI fails:
+The MCP server returns structured JSON errors from both adapter paths:
 
-- **Exit code 1**: treated as success (issues found, not an error). The full JSON output is returned.
-- **Exit code 2+**: the server passes through the CLI's structured JSON error from stdout when available. If no JSON is available, it constructs `{"error": true, "message": "...", "exit_code": N}` from stderr.
-- **Subprocess timeout**: if the CLI does not exit within `FALLOW_TIMEOUT_SECS` (default 120s), the server kills the process and returns a timeout error.
+- **Typed API timeout**: returns the `FALLOW_MCP_API_TIMEOUT` code. The response is bounded, although in-process work may finish in the background.
+- **CLI exit code 1**: treated as success (issues found, not an error). The full JSON output is returned.
+- **CLI exit code 2+**: passes through the CLI's structured JSON error from stdout when available. If no JSON is available, the server constructs `{"error": true, "message": "...", "exit_code": N}` from stderr.
+- **CLI timeout**: kills the process tree and returns the `FALLOW_MCP_SUBPROCESS_TIMEOUT` code.
 
 ## Architecture
 
-The MCP server is a thin subprocess wrapper. All analysis logic stays in the CLI binary. The MCP crate only handles protocol framing and argument mapping, built with `rmcp` (Rust MCP SDK).
+The MCP server uses a hybrid adapter built with `rmcp` (Rust MCP SDK). Stable typed routes call `fallow-api` in process. CLI-backed routes and fallbacks use a managed subprocess for command-owned behavior.
 
 ```mermaid
 flowchart TB
-  A["AI Agent<br/>Claude Code, Cursor, Windsurf"] -->|"typed tool calls<br/>via stdio"| B["MCP Server<br/>fallow-mcp<br/>protocol framing only"]
-  B -->|spawns| C["CLI Binary<br/>fallow<br/>all analysis logic"]
-  C --> D["Results<br/>JSON output"]
+  A["AI Agent<br/>Claude Code, Cursor, Windsurf"] -->|"typed tool calls<br/>via stdio"| B["MCP Server<br/>fallow-mcp"]
+  B -->|"typed routes"| C["Rust API<br/>fallow-api<br/>in process"]
+  B -->|"CLI-backed routes<br/>and fallbacks"| D["CLI Binary<br/>fallow<br/>managed subprocess"]
+  C --> E["Results<br/>JSON output"]
+  D --> E
 ```
 
-- CLI and MCP always produce identical results
-- Any fallow CLI update automatically improves MCP
+- Shared output contracts and parity tests keep CLI-backed and API-backed routes aligned.
+- CLI-only changes do not automatically update typed MCP routes, so both adapters must remain covered when behavior or config resolution changes.
 - Install with `cargo install fallow-mcp` or grab a binary from [GitHub Releases](https://github.com/fallow-rs/fallow/releases)
 
 ## See also
