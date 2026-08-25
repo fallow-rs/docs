@@ -1,11 +1,11 @@
 ---
 title: "Node.js bindings"
-description: "Call fallow analyses directly from Node.js via NAPI bindings. No CLI subprocess, no JSON parsing, same JSON envelopes the CLI emits."
+description: "Call fallow analyses directly from Node.js via NAPI bindings. No CLI subprocess or JSON parsing, with the same JSON envelopes the CLI emits."
 keywords: ["Node.js", "napi", "bindings", "programmatic API", "JavaScript", "TypeScript", "embed fallow", "library"]
 icon: "node-js"
 ---
 
-The `@fallow-cli/fallow-node` package exposes the main fallow analyses as async Node.js functions. No subprocess, no JSON parsing, no binary lookup: the bindings reuse the CLI orchestration layer and return the same JSON report envelopes the CLI emits for `--format json`.
+The `@fallow-cli/fallow-node` package exposes the main fallow analyses as async Node.js functions. The bindings avoid CLI subprocesses and JSON parsing, reuse the shared analysis layer, and return the same JSON report envelopes the CLI emits for `--format json`. The optional `detectSimilarCode` function verifies and launches its exact local model companion.
 
 Use them when you want to embed fallow inside another tool, a Node.js server, an editor extension, or a custom script that otherwise would shell out to the CLI.
 
@@ -25,6 +25,7 @@ Node 18 or newer is required.
 import {
   detectDeadCode,
   detectDuplication,
+  detectSimilarCode,
   computeHealth,
 } from '@fallow-cli/fallow-node';
 
@@ -35,13 +36,21 @@ const deadCode = await detectDeadCode({
 
 console.log(deadCode.summary.total_issues);
 console.log(deadCode.unused_exports);
+
+const similar = await detectSimilarCode({
+  root: process.cwd(),
+  threshold: 0.8,
+  top: 20,
+});
+
+console.log(similar.candidates);
 ```
 
 Every function returns a promise resolving to the same JSON envelope the CLI emits when called with `--format json`: a top-level `kind` discriminator on typed roots, `schema_version`, `summary`, relative paths, injected `actions` arrays, and (when `explain: true`) a `_meta` block with docs links.
 
 ## API
 
-All seven functions are async and accept an optional options object. Unknown fields are ignored. Enum-like fields take lowercase CLI-style literals (`"mild"`, `"cyclomatic"`, `"handle"`, `"low"`).
+All eight functions are async and accept an optional options object. Unknown fields are ignored. Enum-like fields take lowercase CLI-style literals (`"mild"`, `"cyclomatic"`, `"handle"`, `"low"`).
 
 | Function | CLI equivalent | Returns |
 |:---------|:---------------|:--------|
@@ -49,6 +58,7 @@ All seven functions are async and accept an optional options object. Unknown fie
 | `detectCircularDependencies(options?)` | `fallow dead-code --circular-deps` | `DeadCodeReport` filtered to the `circular_dependencies` category |
 | `detectBoundaryViolations(options?)` | `fallow dead-code --boundary-violations` | `DeadCodeReport` filtered to the `boundary_violations` category |
 | `detectDuplication(options?)` | `fallow dupes --format json` | `DuplicationReport` |
+| `detectSimilarCode(options?)` | `fallow similar-code --format json` | `SimilarCodeReport` with unverified candidates |
 | `detectFeatureFlags(options?)` | `fallow flags --format json` | `FeatureFlagsReport` |
 | `computeComplexity(options?)` | `fallow health --format json` | `HealthReport` |
 | `computeHealth(options?)` | `fallow health --format json` | Alias for `computeComplexity` with a product-oriented name |
@@ -100,6 +110,25 @@ Every options object extends `AnalysisOptions`:
 | `top` | `number` | unset |
 
 Each returned clone group includes `spread`. Near-miss groups also include `similarity`. Duplication stats can include `clone_groups_ignored` and `near_candidates_skipped`; zero values are omitted.
+
+### Similar-code options
+
+`SimilarCodeOptions` adds model-backed discovery fields on top of
+`AnalysisOptions`:
+
+| Field | Type | Default |
+|:------|:-----|:--------|
+| `threshold` | `number` from 0 to 1 | config or `0.8` |
+| `minLines` | positive `number` | config or `3` |
+| `top` | positive `number` | unset |
+| `files` | `string[]` | unset |
+
+The loader resolves the exact-version `fallow-similar-code` package and
+verifies its native binary before source is read. `detectSimilarCode` never
+downloads the model. After explicit user approval, run
+`fallow similar-code setup --local` once through the CLI. Results remain
+unverified. Read [Semantic similar code](/analysis/similar-code) before using a
+score to plan a refactor.
 
 ### Feature flag options
 
@@ -161,6 +190,7 @@ Both paths run the same analysis engine and return the same data. The bindings a
 ## Limitations
 
 - The bindings wrap the **one-shot** analyses. Commands that write to the filesystem (`fix`, `init`, `hooks install`, `hooks uninstall`, `audit --save-baseline`, `license activate`, `coverage setup`) are not exposed.
+- `detectSimilarCode` is read-only and never performs its first model download. Use the CLI after explicit approval: `fallow similar-code setup --local`.
 - No baseline or regression support yet. Use the CLI's `--baseline` / `--save-baseline` flags for those workflows.
 - No watch mode. If you want incremental analysis, re-invoke the relevant function; fallow's per-file cache makes repeat runs fast.
 - The API surface is young; breaking changes between minor versions are possible until it stabilizes.
