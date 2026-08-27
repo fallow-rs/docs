@@ -498,21 +498,21 @@ The decision surface has exactly three shippable categories:
 | `public-api-contract` | A new exported public-API surface, or a changed contract consumed by modules outside this diff. |
 | `dependency` | A new third-party dependency, or a declared one moved across a major version (or a `0.x` minor). One batched decision per manifest per kind, weighted by the graph's in-repo importers of the affected packages. |
 
-Minor and patch bumps and non-numeric ranges (workspace, file, git, tags) are never dependency candidates.
+Minor and patch bumps and non-numeric ranges (workspace, file, git, tags) are never dependency candidates. The importer count is a union over the batched packages (a module importing two bumped packages counts once). Entries outside `dependencies` are tagged in the question (`dev`, `optional`, `peer`); a package listed in several sections keeps its `dependencies` range and anchor line. A `dependency` decision anchors on `package.json`, which cannot carry a comment, so it has no `suppress` action; `ask-expert` still applies. Only `coupling-boundary` and `public-api-contract` decisions are suppressible.
 
 Each decision is a framed judgment question anchored to a `signal_id` fallow deterministically derived from the graph, ranked by consequence (blast radius x reversibility), capped to [`--max-decisions`](#options) (default 4, clamped to a 3 to 5 band), and paired with the routed expert (who to ask). A decision may carry `previous_signal_id`: the `signal_id` it would have had before a rename of its anchor file, so a review surface can re-attach a prior reviewer comment across a `git mv`.
 
 Alongside the question, each decision carries a `tradeoff` clause (the named structural sacrifice stated as a fact, never a recommendation, e.g. "Couples app to infra; 4 in-repo modules already depend on this anchor") and `internal_consumer_count` (the honest count of in-repo modules outside the diff that already depend on the anchor). The human view shows the question and the trade-off; you read reversibility from the count itself, fallow never labels the decision a one-way or two-way door or tells you which way to choose.
 
-The same decision surface is available to agents through the [`decision_surface` MCP tool](/integrations/mcp#available-mcp-tools).
+The same decision surface is available to agents through the [`decision_surface` MCP tool](/integrations/mcp#available-mcp-tools), dependency decisions included: both routes share the manifest diff.
 
 ### JSON envelope
 
 `fallow review --format json` carries `decisions`, `focus`, `deltas`, `impact_closure`, `partition`, and `graph_facts`. The `deprioritized` escape-hatch list inside `focus` is always present in JSON regardless of `--show-deprioritized`; that flag only re-expands the collapse-by-default human focus render.
 
-`deltas` also carries the dependency keys the decision surface reads: `dependency_added` (`<manifest>::<name>`) and `dependency_major_bumped` (`<manifest>::<name>@<from>-><to>`), so the envelope names what changed even when the cap collapses the decision.
+`deltas` also carries the dependency keys the decision surface reads: `dependency_added` (`<manifest>::<name>`) and `dependency_major_bumped` (`<manifest>::<name>@<from>-><to>`), so the envelope names what changed even when the cap collapses the decision. Both are always present, as empty arrays when nothing changed.
 
-`partition` carries `independent_slices`: the connected components of the inter-unit dependency graph, each a sorted list of module directories. Two or more slices mean the change splits along a graph-proven seam into pieces that can be reviewed and merged on their own. An orientation fact, never a demand to split.
+`partition` carries `independent_slices` only when there are two or more of them: the connected components of the inter-unit dependency graph, each a sorted list of module directories. Two or more slices mean the change splits along a graph-proven seam into pieces that can be reviewed and merged on their own; a single slice would only repeat `order`, so the field is absent. An orientation fact, never a demand to split.
 
 ### Agent walkthrough loop
 
@@ -565,7 +565,7 @@ Each judgment is sorted into one of these outcomes:
 | `accepted` (change) | No `signal_id`, but the `change_anchor` is one fallow emitted and the snapshot still matches. | Framing fenced `deterministic: false`; `anchor_kind: "change"` (the weaker anchor, a changed region only). |
 | `rejected` (unanchored) | The `signal_id` is not one fallow emitted (a hallucinated id). | `reason: "unanchored-signal-id"`. |
 | `rejected` (unknown change anchor) | The `change_anchor` is not one fallow emitted (a hallucinated region). | `reason: "unknown-change-anchor"`. |
-| `rejected` (invalid action) | The `action` is outside the closed vocabulary. The judgment is refused before anchoring; fix the label. | `reason: "invalid-action"`. |
+| `rejected` (invalid action) | The anchor resolved but the `action` is outside the closed vocabulary. A judgment with a hallucinated anchor and a bad label is rejected for the anchor, never as `invalid-action`. | `reason: "invalid-action"`, `invalid_value: "<the offending label>"` so the agent can fix it in one round trip. |
 | `rejected` (stale) | The echoed graph-snapshot hash no longer matches (the tree moved). | `reason: "stale-snapshot"`, `stale: true`. Re-fetch the guide. |
 
 An accepted judgment echoes `action` next to `agent_framing` when the agent set one.
