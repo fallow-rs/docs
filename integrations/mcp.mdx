@@ -108,7 +108,7 @@ The MCP server uses <Tooltip tip="Communication via standard input/output stream
     claude mcp add fallow --scope project fallow-mcp
     ```
 
-    `--scope project` creates `.mcp.json` in the repository root. You can write that file by hand instead:
+    `--scope project` creates `.mcp.json` in the repository root. [`fallow agent install`](/cli/agent) writes the same entry for every detected harness, probing for a working launcher first. You can also write the file by hand:
 
     ```json
     {
@@ -271,7 +271,7 @@ Cloud runtime tools can include source-map confidence metadata when the response
 ```json Example response
 {
   "schema_version": 9,
-  "version": "3.17.0",
+  "version": "3.19.0",
   "elapsed_ms": 42,
   "total_issues": 1,
   "unused_exports": [
@@ -354,6 +354,21 @@ The array is deduplicated, priority-ordered, capped at three, and omitted when e
 ```
 
 The `value_schema` URL is a JSON Pointer fragment into fallow's published `schema.json`. Agents that want to validate `value` before writing it into a user's config (for example, to reject a malformed `{ file, exports }` rule object on the `ignoreExports` action) can fetch the linked schema and apply it locally. The field is strictly additive: actions that did not have a schema before continue to work without one, and agents that ignore the field keep working unchanged.
+
+## Resources
+
+Besides tools, the server exposes read-only reference material as MCP resources: no subprocess, no analysis run, cacheable by URI (your client reads them through its own resource tool, for example `ReadMcpResourceTool` in Claude Code). Every payload is plain JSON; the server version travels in each content item's `_meta.fallow_version`, so a cached copy is self-describing and the schema resources stay valid strict JSON Schema. The catalogue is fixed at build time (no subscriptions, no list-changed notifications).
+
+| Resource | Content |
+|:---------|:--------|
+| `fallow://tools` | The tool manifest: name, one-line description, nearest CLI fallback, key parameters, license, and read-only flag for every tool |
+| `fallow://issue-types` | Every issue type with its command, category, config key, zero-config default severity, opt-in and fixable flags, docs URL, and explain URI |
+| `fallow://explain` | Index of every explainable issue type with a one-line summary and its `fallow://explain/{issue_type}` URI |
+| `fallow://explain/{issue_type}` | The explain document for one issue type, the same payload as `fallow explain <issue-type> --format json` |
+| `fallow://task-matrix` | The task-to-command matrix that also drives `AGENTS.md` and `fallow --help`: which read-only command to run before deleting, refactoring, committing, or scoping work |
+| `fallow://schema/config`, `fallow://schema/plugin`, `fallow://schema/rule-pack` | The JSON Schemas printed by `fallow config-schema`, `fallow plugin-schema`, and `fallow rule-pack-schema` |
+
+`{issue_type}` accepts the bare id (`unused-export`), the namespaced id (`fallow/unused-export`), or the CLI filter spelling. Unknown URIs return a structured error whose `data` lists the known URIs; an unknown issue type lists the nearest matches. The numeric code is `-32002` for clients on protocol versions before 2026-07-28 and `-32602` from then on, so key on `data` rather than the code. The same catalogue is published as `mcp_resources` in [`fallow schema`](/cli/schema).
 
 ## Combined output from bare `fallow`
 
