@@ -1,0 +1,72 @@
+---
+title: "fallow agent"
+description: "CLI reference for fallow agent. Wire fallow into Claude Code, Codex, and Cursor in one pass: AGENTS.md task map, skill, MCP server registration, and the commit/push gate, with status and uninstall."
+keywords: ["fallow agent", "agent install", "Claude Code", "Codex", "Cursor", "MCP", "AGENTS.md", "skill", "onboarding", "CLI"]
+icon: "terminal"
+---
+
+Wire fallow into the coding-agent harnesses a project uses, in one command. `fallow agent install` detects Claude Code, Codex, and Cursor, then writes what each one reads: an `AGENTS.md` task map, the fallow skill, the MCP server registration, and the commit/push gate. `fallow agent status` shows what is installed, and `fallow agent uninstall` removes exactly what fallow wrote.
+
+```bash
+fallow agent install --dry-run   # show the plan first
+fallow agent install             # wire every detected harness
+```
+
+<Info>
+  `fallow init --agents`, `fallow hooks install --target agent`, and the hand-written MCP snippet keep working. `agent install` composes them; it does not replace them.
+</Info>
+
+## Detection
+
+Without `--harness`, a harness is selected when any of its signals is present. Nothing is fabricated when no signal exists: a Cursor-only repository never gets a `.claude/` directory.
+
+| Harness | Project | Home | Session |
+|:--------|:--------|:-----|:--------|
+| Claude Code | `.claude/`, `CLAUDE.md`, `.mcp.json` | `~/.claude/` | `CLAUDECODE` |
+| Codex | `.codex/` | `~/.codex/` | `CODEX_THREAD_ID` |
+| Cursor | `.cursor/` | `~/.cursor/` | `CURSOR_AGENT` |
+
+When nothing is detected, only the harness-neutral files are written (`AGENTS.md` and `.agents/skills/fallow`) and the output names the `--harness` values you can pass. `AGENTS.md` itself is not a detection signal, because every harness and fallow write it.
+
+## What each step writes
+
+| Step | Claude Code | Codex | Cursor |
+|:-----|:------------|:------|:-------|
+| `guide` | `AGENTS.md` task map; `CLAUDE.md` gains an `@AGENTS.md` import (created when absent, appended as a marked block otherwise) | `AGENTS.md` task map | `AGENTS.md` task map (Cursor reads it) |
+| `skill` | `.claude/skills/fallow/` | `.agents/skills/fallow/` | `.agents/skills/fallow/` |
+| `mcp` | `mcpServers.fallow` in `.mcp.json` | `[mcp_servers.fallow]` in `.codex/config.toml` | `mcpServers.fallow` in `.cursor/mcp.json` |
+| `hooks` | PreToolUse gate in `.claude/settings.json` plus `.claude/hooks/fallow-gate.sh` | marked gate block in `AGENTS.md` | skipped (`unsupported_harness`) |
+
+**Skill.** When the project has `node_modules/fallow/skills/fallow`, the installed skill is a small pointer to that copy, so it never drifts from the fallow version the project pins. Without it, the version-matched skill embedded in the binary is written. A skill named `fallow` that fallow did not write is refused (`skill_name_taken`) unless you pass `--force`.
+
+**MCP.** The command is probed before anything is written: `npx --no fallow-mcp` for an npm-installed project, `fallow-mcp` from `PATH`, or the running binary when it is the npm multicall build. When none exists the step is skipped with `mcp_entry_unavailable` instead of writing a registration that cannot start. A project-level `.codex/config.toml` only applies once Codex trusts the project, so the output leads with the `codex mcp add fallow -- ...` command that works immediately.
+
+**Approval.** Claude Code asks before starting a project-scoped MCP server. `--approve` records that approval for you by listing `fallow` in `.claude/settings.local.json`; it is opt-in and refused when that file is tracked by git.
+
+## Markers, idempotency, and uninstall
+
+Every file or block carries a `<!-- fallow:agent-install v1 ... -->` marker. Re-running is byte-stable and reports every step as `unchanged`. Files fallow did not write are never overwritten without `--force`; a `fallow` MCP entry counts as fallow's only when its command is one fallow writes, so a hand-written entry is refused (`mcp_entry_foreign`) and kept. `--force` on an unparsable config file saves the old bytes as `<file>.fallow-bak` first. `uninstall` removes managed blocks and entries, deletes a config file it emptied, and deletes `AGENTS.md` or `CLAUDE.md` only while the file still matches what fallow authored.
+
+## Options
+
+| Flag | Applies to | Description |
+|:-----|:-----------|:------------|
+| `--harness <auto\|claude\|codex\|cursor>` | `install`, `uninstall` | Repeatable; default `auto` |
+| `--without <guide\|skill\|mcp\|hooks>` | `install` | Skip a step; repeatable |
+| `--dry-run` | `install`, `uninstall` | Print the plan without touching the filesystem |
+| `--force` | `install`, `uninstall` | Replace or remove skills, hook scripts, or config files fallow did not write |
+| `--approve` | `install` | Pre-approve the project MCP server for yourself in `.claude/settings.local.json` |
+| `--user` | `install`, `uninstall` | Skill and MCP config under `$HOME` instead of the project; the guide step is skipped, and Claude Code prints the `claude mcp add --scope user` command instead of editing `~/.claude.json` |
+| `--gitignore-claude` | `install` | Append `.claude/` to `.gitignore` |
+
+The root is the git toplevel of the current directory unless `--root` is passed explicitly, so a run from a monorepo package still writes where the harnesses read. The chosen root is the first line of output.
+
+## Output
+
+Human output groups paths under "Shared with your team (commit these)" and "Local to you". With `--format json` the envelope carries `kind` (`agent-install`, `agent-uninstall`, `agent-status`), `schema_version`, and `fallow_version`, and every step carries `harness`, `step`, `status` (`written`, `removed`, `unchanged`, `skipped`, `refused`, `failed`), `scope`, `path`, and a `reason` when it was skipped or refused, followed by `next_actions` (each flagged `mutating` when running it would write harness config, unlike the read-only `next_steps` of the analysis commands). The exit code is 2 when any step is `refused` or `failed`; every other step still runs.
+
+```bash
+fallow agent install --format json --quiet
+fallow agent status --format json
+fallow agent uninstall --dry-run
+```
