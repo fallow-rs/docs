@@ -496,17 +496,23 @@ The decision surface has exactly three shippable categories:
 |:---------|:--------|
 | `coupling-boundary` | A new cross-zone dependency edge. |
 | `public-api-contract` | A new exported public-API surface, or a changed contract consumed by modules outside this diff. |
-| `dependency` | A new third-party dependency. |
+| `dependency` | A new third-party dependency, or a declared one moved across a major version (or a `0.x` minor). One batched decision per manifest per kind, weighted by the graph's in-repo importers of the affected packages. |
+
+Minor and patch bumps and non-numeric ranges (workspace, file, git, tags) are never dependency candidates. The importer count is a union over the batched packages (a module importing two bumped packages counts once). Entries outside `dependencies` are tagged in the question (`dev`, `optional`, `peer`); a package listed in several sections keeps its `dependencies` range and anchor line. A `dependency` decision anchors on `package.json`, which cannot carry a comment, so it has no `suppress` action; `ask-expert` still applies. Only `coupling-boundary` and `public-api-contract` decisions are suppressible.
 
 Each decision is a framed judgment question anchored to a `signal_id` fallow deterministically derived from the graph, ranked by consequence (blast radius x reversibility), capped to [`--max-decisions`](#options) (default 4, clamped to a 3 to 5 band), and paired with the routed expert (who to ask). A decision may carry `previous_signal_id`: the `signal_id` it would have had before a rename of its anchor file, so a review surface can re-attach a prior reviewer comment across a `git mv`.
 
 Alongside the question, each decision carries a `tradeoff` clause (the named structural sacrifice stated as a fact, never a recommendation, e.g. "Couples app to infra; 4 in-repo modules already depend on this anchor") and `internal_consumer_count` (the honest count of in-repo modules outside the diff that already depend on the anchor). The human view shows the question and the trade-off; you read reversibility from the count itself, fallow never labels the decision a one-way or two-way door or tells you which way to choose.
 
-The same decision surface is available to agents through the [`decision_surface` MCP tool](/integrations/mcp#available-mcp-tools).
+The same decision surface is available to agents through the [`decision_surface` MCP tool](/integrations/mcp#available-mcp-tools), dependency decisions included: both routes share the manifest diff.
 
 ### JSON envelope
 
 `fallow review --format json` carries `decisions`, `focus`, `deltas`, `impact_closure`, `partition`, and `graph_facts`. The `deprioritized` escape-hatch list inside `focus` is always present in JSON regardless of `--show-deprioritized`; that flag only re-expands the collapse-by-default human focus render.
+
+`deltas` also carries the dependency keys the decision surface reads: `dependency_added` (`<manifest>::<name>`) and `dependency_major_bumped` (`<manifest>::<name>@<from>-><to>`), so the envelope names what changed even when the cap collapses the decision. Both are always present, as empty arrays when nothing changed.
+
+`partition` carries `independent_slices` only when there are two or more of them: the connected components of the inter-unit dependency graph, each a sorted list of module directories. Two or more slices mean the change splits along a graph-proven seam into pieces that can be reviewed and merged on their own; a single slice would only repeat `order`, so the field is absent. An orientation fact, never a demand to split.
 
 ### Agent walkthrough loop
 
@@ -520,6 +526,10 @@ fallow review --base main --walkthrough-guide --format json
 
 Returns `digest` (brief + decision surface), `direction`, `graph_snapshot_hash`, `agent_schema`, `injection_note`, `emitted_signal_ids`, and `change_anchors`. The digest is built from the graph only (PR prose is never folded in, so it is injection-resistant), and the snapshot hash is pinned into the digest.
 
+Each `direction.units[]` entry carries `test_adjacency`: `none` (no test file imports the changed unit directly), `untouched` (a test imports it and none of those tests is in the diff), or `changed` (at least one importing test moved with the change). It is absent when the graph was not retained or the unit is itself a test file. A graph fact about direct importers, not a coverage claim.
+
+`agent_schema` publishes `action_vocabulary` (`block`, `address`, `consider`, `fyi`), the closed set a judgment's `action` may use, and a recommended `concern_vocabulary` (the thirteen trade-off lenses: `abstraction`, `coupling`, `data-model`, `error-handling`, `control-flow`, `performance`, `dependencies`, `api-ergonomics`, `compatibility`, `state-ownership`, `extensibility`, `testability`, `trust-boundary`). `concern` stays free text on the wire; a value from the list lets a review surface group judgments by lens.
+
 `change_anchors` is a per-hunk anchor set: one stable, content-addressed `chg:` id per changed region, derived from the same diff source the run used. Its id is content-addressed (file path + normalized added text, line numbers excluded) so it survives an edit above the hunk and a whitespace-only change, and it is rename-durable via `previous_change_anchor`. It lets an agent anchor a judgment about a changed REGION that has no graph finding (a trade-off with no `signal_id`), so the broader trade-off can still be post-validated rather than hallucinated.
 
 **2. The agent returns judgment JSON.** Each judgment cites a `signal_id` fallow emitted OR a `change_anchor` fallow emitted; echo the hash.
@@ -532,11 +542,14 @@ Returns `digest` (brief + decision surface), `direction`, `graph_snapshot_hash`,
       "signal_id": "<one fallow emitted>",
       "change_anchor": "<or one fallow emitted chg: id, for a changed region with no finding>",
       "framing": "<reasoning>",
-      "concern": "<optional>"
+      "concern": "<optional>",
+      "action": "<optional: block | address | consider | fyi>"
     }
   ]
 }
 ```
+
+`action` tells the receiving author what to do with the judgment: `block` and `address` are required actions, `consider` is optional, `fyi` needs nothing. It is the reviewer's instruction, fenced with the framing, never a gate.
 
 **3. Post-validate the judgment against the live graph.**
 
@@ -544,7 +557,7 @@ Returns `digest` (brief + decision surface), `direction`, `graph_snapshot_hash`,
 fallow review --base main --walkthrough-file judgment.json --format json
 ```
 
-Each judgment is sorted into one of three outcomes:
+Each judgment is sorted into one of these outcomes:
 
 | Outcome | Condition | Shape |
 |:--------|:----------|:------|
@@ -552,7 +565,10 @@ Each judgment is sorted into one of three outcomes:
 | `accepted` (change) | No `signal_id`, but the `change_anchor` is one fallow emitted and the snapshot still matches. | Framing fenced `deterministic: false`; `anchor_kind: "change"` (the weaker anchor, a changed region only). |
 | `rejected` (unanchored) | The `signal_id` is not one fallow emitted (a hallucinated id). | `reason: "unanchored-signal-id"`. |
 | `rejected` (unknown change anchor) | The `change_anchor` is not one fallow emitted (a hallucinated region). | `reason: "unknown-change-anchor"`. |
+| `rejected` (invalid action) | The anchor resolved but the `action` is outside the closed vocabulary. A judgment with a hallucinated anchor and a bad label is rejected for the anchor, never as `invalid-action`. | `reason: "invalid-action"`, `invalid_value: "<the offending label>"` so the agent can fix it in one round trip. |
 | `rejected` (stale) | The echoed graph-snapshot hash no longer matches (the tree moved). | `reason: "stale-snapshot"`, `stale: true`. Re-fetch the guide. |
+
+An accepted judgment echoes `action` next to `agent_framing` when the agent set one.
 
 Both `--walkthrough-guide` and `--walkthrough-file` imply the brief and always exit 0.
 
