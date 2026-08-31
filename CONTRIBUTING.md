@@ -10,6 +10,7 @@ Every page on [docs.fallow.tools](https://docs.fallow.tools) has "Suggest edits"
 git clone https://github.com/fallow-rs/docs
 cd docs
 npm ci
+git config core.hooksPath .githooks    # refreshes the content manifest on commit
 npm run docs:dev
 ```
 
@@ -18,9 +19,14 @@ Preview at `http://localhost:3000`.
 ## Before submitting
 
 ```bash
-npm run content:manifest
 npm run check
 ```
+
+With the hook enabled, `public-content-manifest.json` is refreshed and staged
+for you whenever a commit changes public content, so `npm run content:manifest`
+is only needed if you skipped the hook setup above. The manifest is fully
+derived from the content, so the hook can never make an editorial decision on
+your behalf.
 
 Review the manifest diff before submitting. It is the exact public content set.
 Do not add private implementation notes, operations material, security
