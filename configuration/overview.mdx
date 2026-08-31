@@ -179,6 +179,31 @@ Glob patterns for files to exclude from analysis entirely.
 ```
 </Accordion>
 
+<Accordion title="ignoreFindings">
+Glob patterns for files whose dead-code findings should not be reported. Matching files are still discovered, parsed, and kept in the module graph, so anything they import stays reachable. Use `ignorePatterns` when you want the files out of analysis entirely.
+
+```jsonc
+{
+  "ignoreFindings": [
+    "vitest.config.ts",
+    "src/generated/**",
+    // a leading ! keeps matching paths reportable
+    "!src/generated/keep.ts"
+  ]
+}
+```
+
+Patterns are project-root-relative and use `/` on every platform, including Windows. Matching is case sensitive, and `*` and `?` cross `/`, so `src/*` covers the whole `src` subtree. Absolute paths, `..` segments, and a bare `"!"` are rejected at load time.
+
+Order does not matter: a negation wins over any positive match wherever it sits in the array. An array of negations alone hides every path except the ones a negation matches.
+
+Findings are hidden before rules, severities, and `--fail-on-issues` are applied, so a hidden finding cannot fail a run or reach any output format. A finding with several owning files (circular dependency, re-export cycle, duplicate export, prop drilling chain, and an unlisted dependency, owned by its import sites) is hidden only when every owner matches.
+
+Dependency findings owned by a manifest (unused, dev, optional, type-only, test-only, catalog, override), architecture boundary and policy violations, stale suppressions, framework correctness findings such as client/server directives and route collisions, and security candidates stay visible even when their path matches.
+
+Human output prints a stderr note naming patterns that matched no finding, which catches typos; `--quiet` and the machine formats leave it out.
+</Accordion>
+
 <Accordion title="ignoreDependencies">
 Package names that should always be considered used and always considered available.
 Listed dependencies are excluded from both unused dependency and unlisted dependency detection.
@@ -189,6 +214,79 @@ Useful for runtime-provided packages like `bun:sqlite` or implicitly available d
   "ignoreDependencies": ["autoprefixer", "@types/node", "bun:sqlite"]
 }
 ```
+</Accordion>
+
+<Accordion title="ignoreCatalogReferences">
+Rules that suppress `unresolved-catalog-reference` findings: a `catalog:` dependency pointing at a catalog that does not declare the package. These findings sit in `package.json` rather than source files, and JSON has no comment syntax, so `// fallow-ignore-next-line` never reaches them and a config entry is the only suppression.
+
+```jsonc
+{
+  "ignoreCatalogReferences": [
+    // Placeholder package; the `upcoming` catalog lands in a later change.
+    {
+      "package": "future-dep",
+      "catalog": "upcoming",
+      "consumer": "packages/placeholder/package.json"
+    },
+    // Staged migration: any catalog, every workspace package.
+    { "package": "old-react", "consumer": "packages/**/package.json" }
+  ]
+}
+```
+
+`package` is required and matched by exact, case-sensitive string equality against the dependency key, so `"@scope/*"` matches nothing. `catalog` and `consumer` are optional; omitting one matches any value.
+
+`catalog` is matched against the normalized catalog name: `"react": "catalog:"` and `"react": "catalog:default"` are both `default`, and `"catalog:react17"` is `react17`. `consumer` is a project-root-relative glob over the consuming `package.json` path, with `/` on every platform (`package.json` for the root manifest, `packages/app/package.json` for a workspace member); matching is anchored to the whole path, and `*` and `?` cross `/`. Every field of one entry must match, and any matching entry in the array suppresses the finding.
+
+Every `unresolved-catalog-reference` finding in `fallow dead-code --format json` output carries an `add-to-config` action with `package`, `catalog`, and `consumer` already filled in.
+
+Only `unresolved-catalog-reference` is affected; `unused-catalog-entries` and `empty-catalog-groups` are untouched. To turn the rule off for a path, use `overrides` with `"unresolved-catalog-references": "off"`; to turn it off everywhere, set `rules.unresolved-catalog-references` to `"off"`. `ignoreFindings` does not apply here: manifest-owned findings stay visible even when their path matches. A `consumer` value with invalid glob syntax, an absolute path, or a `..` segment fails config load.
+</Accordion>
+
+<Accordion title="ignoreDependencyOverrides">
+Package-manager override entries that should not be reported. Suppresses `unused-dependency-override` and `misconfigured-dependency-override` for matching entries in `overrides` (`pnpm-workspace.yaml`), `pnpm.overrides`, npm `overrides`, and bun `resolutions`. These findings sit in manifests rather than source files, so `// fallow-ignore-next-line` never reaches them and a config entry is the only suppression (a CVE pin that must stay, for example).
+
+```jsonc
+{
+  "ignoreDependencyOverrides": [
+    // overrides: { "lodash": "^4.17.21" } in pnpm-workspace.yaml
+    // No source filter, so the entry matches in either file
+    { "package": "lodash" },
+    // pnpm.overrides: { "@scope/legacy-pkg": "^1.0.0" } in package.json
+    { "package": "@scope/legacy-pkg", "source": "package.json" },
+    // resolutions: { "**/trim-newlines": "^3.0.1" } in a bun package.json
+    { "package": "trim-newlines", "source": "package.json" }
+  ]
+}
+```
+
+`package` is an exact, case-sensitive string match against the override's target package, not a glob and not the raw key: write `react-dom` for `"react>react-dom"` and `@types/react` for `"@types/react@<18"`. Bun `resolutions` keys drop their `**` path segments, so `"**/trim-newlines"` is matched as `trim-newlines`; a `**/` prefix in an `overrides` key is not stripped. A key fallow cannot parse is matched verbatim instead, so `"react>"` needs `{ "package": "react>" }`.
+
+`source` is the declaring file's label, `"pnpm-workspace.yaml"` or `"package.json"`, not a path; omit it to match both. Any other value loads without complaint and never matches. `pnpm.overrides`, npm `overrides`, and bun `resolutions` all report `"package.json"`, so `source` cannot separate them. A bun project's `resolutions` are read only when the root manifest declares no `overrides` key; alongside `overrides` they are shadowed and never reported, so an entry for them matches nothing. Both fields must match, and any matching entry in the array suppresses the finding.
+
+Both findings carry an `add-to-config` action in JSON output, with `package` and `source` already filled in. An entry that matches nothing produces no warning. To drop either finding entirely, set `rules.unused-dependency-overrides` or `rules.misconfigured-dependency-overrides` to `"off"`. `ignoreFindings` does not apply here: manifest-owned findings stay visible even when their path matches.
+</Accordion>
+
+<Accordion title="ignoreUnresolvedImports">
+Glob patterns matched against the raw import specifier text, not against a file path. A matching specifier is never reported as `unresolved-import`. Useful for imports fallow cannot resolve on disk: code generated later in the build, a package whose `exports` map points at build artifacts that are not in the checkout, or a bundler alias fallow does not model.
+
+```jsonc
+{
+  "ignoreUnresolvedImports": [
+    "@example/icons",     // the bare specifier
+    "@example/icons/**",  // its subpaths, not the bare name
+    "../generated/**"     // parent-relative codegen output
+  ]
+}
+```
+
+Matching is case-sensitive and anchored to the whole specifier. `*` and `?` cross `/`, but a trailing `/**` requires the separator, so list the bare package name alongside the subpath pattern when you want both. A leading `./` is stripped from each pattern, and every specifier is tried with and without its own, so `"./generated/x.js"` and `"generated/x.js"` cover the same imports.
+
+A `..` segment is allowed here, unlike in the file-path glob fields, because these are specifiers rather than paths. There is no negation syntax and no ordering: a specifier is silenced if any pattern matches. A pattern with invalid glob syntax fails config load, with a message naming the field and the offending pattern.
+
+The field covers static imports, dynamic imports, and re-export sources, for both value and type-only imports. Resolution and the module graph still run as before, and dependency usage accounting is untouched, so `unlisted-dependency` is unaffected (that is `ignoreDependencies`, which matches package names by exact string).
+
+Every `unresolved-import` finding in JSON output carries an `add-to-config` action pointing at this field with the reported specifier. When moving an import here from an inline `// fallow-ignore-next-line unresolved-import` comment, delete the comment: the config check runs first, so the comment is then reported as `stale-suppression`.
 </Accordion>
 
 <Accordion title="ignoreExports">
