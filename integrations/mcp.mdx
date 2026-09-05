@@ -59,38 +59,13 @@ fallow list --format json
   Consuming fallow's JSON output from TypeScript? `import type { CheckOutput, HealthOutput, DupesOutput, AuditOutput } from "fallow/types"` exposes the full output contract, generated from the same schema fallow uses internally. `SchemaVersion` is pinned to a literal at codegen time so major schema bumps fail to compile at your call sites instead of silently drifting.
 </Tip>
 
-### Agent workflow examples
-
-**After generating code:**
-```bash
-# Agent generates a new feature, commits, then checks its own work
-fallow dead-code --changed-since main --format json
-# → finds that the old utility file is now unused
-# → agent removes it
-```
-
-**Codebase cleanup:**
-```bash
-# Agent is asked to clean up dead code
-fallow dead-code --format json
-# → returns 401 issues: unused files, exports, dependencies
-fallow fix --yes --format json
-# → auto-removes unused exports and dependencies
-# Agent then deletes unused files from the JSON output
-```
-
-**Before a PR:**
-```bash
-# Agent verifies its changes don't introduce dead code
-fallow dead-code --changed-since main --format json
-# → clean: no new issues introduced
-```
-
 ## MCP: structured tool calling
 
 For agents that support <Tooltip tip="An open standard that lets AI agents call external tools through structured, typed interfaces">[MCP (Model Context Protocol)](https://modelcontextprotocol.io)</Tooltip>, `fallow-mcp` exposes analysis as structured tools. Agents get typed inputs and outputs instead of parsing CLI text.
 
-The MCP server uses <Tooltip tip="Communication via standard input/output streams between parent and child processes">stdio transport</Tooltip> and a hybrid adapter. Supported requests run through the typed `fallow-api` in process, while command-owned options use a managed `fallow` CLI subprocess. Set `FALLOW_BIN` only when CLI-backed calls need a specific binary (defaults to `fallow` in `PATH`).
+The MCP server uses <Tooltip tip="Communication via standard input/output streams between parent and child processes">stdio transport</Tooltip> and a hybrid adapter. Supported requests run in process, while command-owned options use a managed `fallow` CLI subprocess. Set `FALLOW_BIN` only when CLI-backed calls need a specific binary (defaults to `fallow` in `PATH`).
+
+Install with `cargo install fallow-mcp` or grab a binary from [GitHub Releases](https://github.com/fallow-rs/fallow/releases).
 
 <Tabs>
   <Tab title="Claude Code">
@@ -372,15 +347,6 @@ fallow --format json
 
 This is the most efficient way for agents to get a full picture of the codebase in a single call. The combined output includes all issue types from dead code, duplication findings, and health metrics.
 
-## CLI vs MCP: when to use which
-
-| | CLI | MCP |
-|:--|:---|:----|
-| **Works with** | Any agent that can run shell commands | Agents with MCP support |
-| **Setup** | None (just install fallow) | MCP server configuration needed |
-| **Output** | Any format (JSON, SARIF, human, compact, markdown) | JSON only (structured) |
-| **Best for** | Universal compatibility, CI-like workflows | Typed tool calling, agent frameworks |
-
 ## Environment variables
 
 | Variable | Description |
@@ -396,21 +362,6 @@ The MCP server returns structured JSON errors from both adapter paths:
 - **CLI exit code 1**: treated as success (issues found, not an error). The full JSON output is returned.
 - **CLI exit code 2+**: passes through the CLI's structured JSON error from stdout when available. If no JSON is available, the server constructs `{"error": true, "message": "...", "exit_code": N}` from stderr.
 - **CLI timeout**: kills the process tree and returns the `FALLOW_MCP_SUBPROCESS_TIMEOUT` code.
-
-## Architecture
-
-The MCP server uses a hybrid adapter built with `rmcp` (Rust MCP SDK). Stable typed routes call `fallow-api` in process. CLI-backed routes and fallbacks use a managed subprocess for command-owned behavior.
-
-```mermaid
-flowchart TB
-  A["AI Agent<br/>Claude Code, Cursor, Windsurf"] -->|"typed tool calls<br/>via stdio"| B["MCP Server<br/>fallow-mcp"]
-  B -->|"typed routes"| C["Rust API<br/>fallow-api<br/>in process"]
-  B -->|"CLI-backed routes<br/>and fallbacks"| D["CLI Binary<br/>fallow<br/>managed subprocess"]
-  C --> E["Results<br/>JSON output"]
-  D --> E
-```
-
-Install with `cargo install fallow-mcp` or grab a binary from [GitHub Releases](https://github.com/fallow-rs/fallow/releases).
 
 ## See also
 
