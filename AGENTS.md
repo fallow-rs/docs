@@ -19,7 +19,6 @@ npm run docs:dev
 
 - `docs.json`: navigation, tabs, theme, redirects. Edit this to add/reorder pages.
 - `*.mdx` files: content pages. YAML frontmatter (`title`, `description`, `keywords`, `icon`) required on every page.
-- `snippets/`: reusable MDX fragments.
 - `logo/`, `images/`: static assets.
 - `custom.css`: theme overrides.
 - `CONTRIBUTING.md`: canonical content placement map.

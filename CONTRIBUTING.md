@@ -35,12 +35,8 @@ runbooks, roadmap details, or content copied from a private repository. See
 
 ## Writing guidelines
 
-- Sentence case for headings
-- Active voice, second person ("you")
-- All code blocks need language tags
-- Use Mintlify components (Tabs, Steps, Accordion, CodeGroup, callouts)
-- Add `keywords` to page frontmatter for SEO
-- End pages with a "See also" section linking to related pages
+Follow the writing conventions in [AGENTS.md](AGENTS.md#writing-conventions):
+tone, terminology, volatile facts, page structure, and Mintlify components.
 
 ## Content placement
 
@@ -55,7 +51,6 @@ runbooks, roadmap details, or content copied from a private repository. See
 | `frameworks/` | Built-in and custom plugins |
 | `integrations/` | CI, VS Code, MCP server |
 | `migration/` | From knip and jscpd |
-| `snippets/` | Reusable MDX components |
 | `images/`, `logo/` | Public visual assets |
 
 Add every user-facing page to `docs.json`. That file is the source of truth for

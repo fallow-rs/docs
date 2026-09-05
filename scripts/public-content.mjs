@@ -255,7 +255,7 @@ export const collectPublicFiles = async (root = DEFAULT_ROOT) => {
     );
   }
 
-  return [...new Set(files)].sort();
+  return files.sort();
 };
 
 export const buildManifest = async (root = DEFAULT_ROOT) => {
