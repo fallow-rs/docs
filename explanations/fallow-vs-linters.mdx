@@ -11,8 +11,6 @@ Linters check files. TypeScript checks types. Fallow checks the codebase.
 - **Linter**: "Does this file follow the rules?"
 - **Fallow**: "Is this codebase structurally sound?"
 
-A secondary framing we still use: linters enforce style, formatters enforce consistency, fallow enforces relevance.
-
 What fallow provides is graph-level codebase intelligence: static by default, with an optional runtime intelligence layer (see [static vs runtime](/explanations/static-vs-runtime)) for teams that want to ground dead code decisions in production evidence.
 
 This page explains the conceptual difference, what each tool category finds, and how to combine them in CI.
@@ -64,13 +62,7 @@ The key distinction: **linters read files**. Fallow **builds the import graph** 
 
 ### Unused exports
 
-`eslint-plugin-import/no-unused-modules` finds exported symbols that no other file imports. It works, but with three practical problems:
-
-**Performance.** The rule rebuilds the full module graph from scratch on each lint run. On a 20-30K LOC project, this adds ~320 seconds to total lint time ([#1487](https://github.com/import-js/eslint-plugin-import/issues/1487)). Most teams that enable it disable it within weeks.
-
-**Correctness.** The rule produces incorrect results with `import { name as alias }` ([#1339](https://github.com/import-js/eslint-plugin-import/issues/1339)). The aliased import is not recognized as a usage of the original export, so the export is reported as unused even when it has consumers.
-
-**Re-export chains.** `no-unused-modules` does not follow <Tooltip tip="Index files (typically index.ts) that re-export symbols from other modules for cleaner imports">barrel file</Tooltip> re-exports. If `components/index.ts` re-exports from `components/Button.ts`, and an outside file imports from `components/index.ts`, the export in `Button.ts` may still be flagged as unused.
+`eslint-plugin-import/no-unused-modules` finds exported symbols that no other file imports, with the performance, aliasing, and barrel-file problems noted under the table above.
 
 Fallow builds a persistent module graph, resolves re-export chains iteratively, and handles TypeScript path aliases. The full unused export analysis runs in under a second.
 
@@ -105,21 +97,7 @@ src/auth.ts → src/user.ts → src/permissions.ts → src/auth.ts
 
 Not all cycles are bugs. Dependency injection frameworks (NestJS, InversifyJS) create intentional cycles. Use `// fallow-ignore-next-line circular-dep` to suppress them, the same way you'd use an ESLint disable comment. No tool automatically distinguishes intentional from accidental cycles.
 
-Both `eslint-plugin-import/no-cycle` and Biome v2's `noImportCycles` detect circular imports. The difference is performance and search depth, not detection.
-
-`no-cycle` rebuilds the module graph on every run. On larger projects it takes 45-305 seconds and has caused out-of-memory failures ([#2348](https://github.com/import-js/eslint-plugin-import/issues/2348)). Teams commonly set `maxDepth: 1` to keep lint times tolerable, which means cycles longer than two hops go undetected. The rule only covers ES `import` statements, not `require()`.
-
-Biome v2's `noImportCycles` is Rust-based and faster, but Biome's own documentation flags it as computationally expensive. oxlint has `no-cycle` in Rust, faster than the JS version but with less coverage of edge cases.
-
-Fallow builds the module graph once (cached across runs), checks for cycles without a depth cap, and covers both `import` and `require()`. On projects where `no-cycle` takes minutes, fallow completes in under a second.
-
 ### Architecture boundary violations
-
-Two ESLint plugins enforce import boundaries: `eslint-plugin-boundaries` and `eslint-plugin-import/no-restricted-paths`.
-
-`eslint-plugin-boundaries` defines element types for your codebase (`feature`, `shared`, `core`) and enforces rules between them. It supports capture groups and templates. The limitation: it enforces per file with no understanding of re-export chains. A boundary rule saying "features cannot import from other features" can be satisfied on paper while violated in practice through a barrel file re-exporting across the boundary.
-
-`no-restricted-paths` enforces directory-level restrictions. It requires enumerating every forbidden path pair, has no glob support, and does not scale to large modular architectures.
 
 Fallow tracks re-export chains when evaluating boundaries. If `shared/index.ts` re-exports a symbol from `core/`, an import of that symbol is attributed to `core/`, not `shared/`, when checking boundary rules. [Zone presets](/configuration/boundaries) (`bulletproof`, `layered`, `hexagonal`, `feature-sliced`) cover common architecture patterns. Zones use glob patterns, and rules are expressed as allowlists ("this zone can only import from these zones") rather than enumerating forbidden paths.
 
