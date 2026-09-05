@@ -39,6 +39,7 @@ const CONTENT_DIRECTORIES = new Set([
   "frameworks",
   "integrations",
   "migration",
+  "snippets",
 ]);
 const ASSET_DIRECTORIES = new Set(["images", "logo"]);
 const REPOSITORY_ONLY_DIRECTORIES = new Set([
@@ -254,7 +255,7 @@ export const collectPublicFiles = async (root = DEFAULT_ROOT) => {
     );
   }
 
-  return files.sort();
+  return [...new Set(files)].sort();
 };
 
 export const buildManifest = async (root = DEFAULT_ROOT) => {

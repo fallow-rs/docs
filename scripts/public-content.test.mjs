@@ -189,6 +189,21 @@ test("public content rejects private repository links", async () => {
   }
 });
 
+// Pins the `)` terminator of the private-repo marker: a markdown link is the most
+// likely way the URL enters an MDX page.
+test("public content rejects a private repository link in markdown link syntax", async () => {
+  const root = await createFixture();
+  await writeFile(
+    join(root, "analysis", "health.mdx"),
+    "See [private repository](https://github.com/fallow-rs/fallow-cloud)\n",
+  );
+
+  await assert.rejects(
+    buildManifest(root),
+    /Found private cloud repository link/u,
+  );
+});
+
 test("public content rejects high-confidence credentials", async () => {
   const root = await createFixture();
   await writeFile(
