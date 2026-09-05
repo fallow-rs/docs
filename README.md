@@ -9,15 +9,6 @@
   <a href="https://github.com/fallow-rs/fallow"><img src="https://img.shields.io/badge/fallow-GitHub-orange" alt="fallow"></a>
 </p>
 
-## Development
-
-```bash
-npm ci
-npm run docs:dev
-```
-
-Preview at `http://localhost:3000`.
-
 This repository is the canonical source for fallow's public user
 documentation. See [PUBLICATION.md](PUBLICATION.md) for the public-only boundary,
 artifact provenance, and synchronization contract.
@@ -30,7 +21,6 @@ of truth for navigation order.
 
 ## Contributing
 
-Edit any `.mdx` file and push to `main`. Mintlify deploys automatically.
-
-Run `npm run content:manifest` after changing public content, then run
-`npm run check` before pushing.
+Edit any `.mdx` file and push to `main`. Mintlify deploys automatically. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for local development and the checks to run
+before pushing.

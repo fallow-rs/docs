@@ -25,8 +25,8 @@ npm run docs:dev
 
 ## Key files
 
-- `index.mdx`: landing page. Codebase intelligence positioning, speed benchmarks, feature overview, "three tracks" narrative.
-- `quickstart.mdx`: getting started for all three tracks (agents, humans, CI).
+- `index.mdx`: landing page. Static and runtime intelligence positioning, feature overview.
+- `quickstart.mdx`: first run and reading the output, then links into VS Code, CI, MCP, and runtime intelligence.
 - `integrations/mcp.mdx`: agent integration via CLI and MCP. Core page for agent audience.
 
 ## Writing conventions
@@ -48,10 +48,6 @@ npm run docs:dev
 - Do not hardcode plugin or issue-type totals. Describe coverage by capability.
 - Benchmarks must match the fallow repository README.
 - Prefer generated CLI output or public source contracts for current values.
-
-### Narrative structure
-Agents, human developers, and CI users are recurring audiences. Use
-track-specific tabs only when their instructions materially differ.
 
 ### Page structure
 - YAML frontmatter: `title`, `description`, `keywords`, `icon`.
