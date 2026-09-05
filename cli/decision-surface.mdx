@@ -5,7 +5,7 @@ keywords: ["fallow decision-surface", "decision surface", "structural decisions"
 icon: "scale-balanced"
 ---
 
-Surface only the consequential structural **decisions** a change embeds: a new cross-zone dependency edge, a new exported public-API surface, a new or major-bumped third-party dependency. Each one is framed as a judgment question, anchored to a deterministic graph-derived `signal_id`, paired with the routed expert to ask, and carries the named trade-off it makes. `decision-surface` is the apex of the [review brief](/cli/audit#review-brief-and-decision-surface), emitted on its own: separable, cheap, and advisory.
+Surface only the consequential structural **decisions** a change embeds. Each one is framed as a judgment question, anchored to a deterministic graph-derived `signal_id`, paired with the routed expert to ask, and carries the named trade-off it makes. `decision-surface` is the apex of the [review brief](/cli/audit#review-brief-and-decision-surface), emitted on its own.
 
 ```bash
 fallow decision-surface --base main
@@ -27,7 +27,7 @@ Three commands look at changed code; they answer different questions. Pick by th
 | Where do I look, across the whole change? | [`fallow review`](/cli/audit#review-brief-and-decision-surface) (the full brief: subtract, focus, structure, direct) | No (always exits 0) |
 | Which few decisions deserve a human judgment call? | `fallow decision-surface` (just the structure job) | No (always exits 0) |
 
-`fallow review` produces the complete brief: it subtracts mechanical findings out of the judgment loop, ranks every changed unit into a focus map, surfaces the decision surface, and emits the agent walkthrough contract. `fallow decision-surface` runs the **same changed-code analysis** but emits **only** the decisions, then discards the rest of the brief (the subtract list and the weighted focus map). Reach for it when you do not need the focus map or the walkthrough scaffolding, just the handful of structural choices the diff bakes in. It is the cheapest way to get the apex of the brief.
+`fallow decision-surface` runs the **same changed-code analysis** as `fallow review` but emits **only** the decisions and discards the rest of the brief (the subtract list, the weighted focus map, the walkthrough contract). Reach for it when you want just the handful of structural choices the diff bakes in.
 
 ## What a decision is
 
@@ -43,7 +43,7 @@ The surface has exactly three shippable categories:
 
 Minor and patch bumps and non-numeric ranges (workspace, file, git, tags) are never dependency candidates. The importer count is a union over the batched packages (a module importing two bumped packages counts once). Entries outside `dependencies` are tagged in the question (`dev`, `optional`, `peer`); a package listed in several sections keeps its `dependencies` range and anchor line.
 
-The set is **ranked by consequence** (blast radius x reversibility) and **capped** to a small, working-memory-sized list: 3 to 5 decisions, default 4, via [`--max-decisions`](#options). The cap is the point: a reviewer can hold a handful of structural questions in their head, not a flat wall of findings.
+The set is **ranked by consequence** (blast radius x reversibility) and **capped** to a small, working-memory-sized list: 3 to 5 decisions, default 4, via [`--max-decisions`](#options), with no pagination. The cap is the point: a reviewer can hold a handful of structural questions in their head, not a flat wall of findings.
 
 ### What each decision carries
 
@@ -57,13 +57,13 @@ The set is **ranked by consequence** (blast radius x reversibility) and **capped
 | `internal_consumer_count` | integer | The honest count of in-repo modules **outside the diff** that already depend on the anchor. This is your reversibility signal: the higher the count, the more expensive it is to walk this back. It is the display number, distinct from the ranking-only blast figure. |
 | `previous_signal_id` | string \| null | Present when the anchor file was renamed: the `signal_id` it had before, so a review surface can re-attach a prior comment across a `git mv`. |
 
-The human view shows the question and the trade-off; you read reversibility from the count itself. fallow never labels a decision a one-way or two-way door or tells you which way to choose.
+The human view shows the question and the trade-off; you read reversibility from the count itself. fallow never labels a decision a one-way or two-way door.
 
-`coupling-boundary` and `public-api-contract` decisions are suppressible with an inline `// fallow-ignore` comment at the decision's anchor, the same way findings are suppressed elsewhere in fallow. A `dependency` decision anchors on `package.json`, which cannot carry a comment, so it has no `suppress` action; `ask-expert` still applies. Suppression removes a decision from the output; it does not change the verdict, because `decision-surface` never gates.
+`coupling-boundary` and `public-api-contract` decisions are suppressible with an inline `// fallow-ignore` comment at the decision's anchor, the same way findings are suppressed elsewhere in fallow. A `dependency` decision anchors on `package.json`, which cannot carry a comment, so it has no `suppress` action; `ask-expert` still applies. Suppression removes a decision from the output; it does not change the verdict.
 
 ## How an agent consumes it
 
-The decision surface is built for agents. The recommended shape is: get the JSON, walk `decisions[]`, and for each one decide whether it needs a human, using `internal_consumer_count` as the reversibility signal and the `tradeoff` clause as the stated cost.
+The decision surface is built for agents.
 
 ```bash
 fallow decision-surface --base main --format json --quiet
@@ -71,7 +71,7 @@ fallow decision-surface --base main --format json --quiet
 
 A typical agent flow:
 
-1. Read `decisions[]`. It is already ranked and capped, so the first entry is the most consequential.
+1. Read `decisions[]` in order.
 2. For each decision, surface the **question** and the `routed_expert` to the human, not the raw diff.
 3. Use `internal_consumer_count` to decide how loudly to flag it: `0` is a cheap, reversible choice; a high count is a load-bearing anchor that is expensive to undo.
 4. Quote the `tradeoff` clause verbatim. It is a fact, so an agent can relay it without editorializing.
@@ -163,7 +163,7 @@ Decision surface: 3 decisions vs main (d4a2f91..HEAD)
 
 ## JSON output
 
-`fallow decision-surface --format json` carries a ranked, capped `decisions[]` array; each entry carries the fields listed under [What each decision carries](#what-each-decision-carries). This is the same decision surface [`fallow review --format json`](/cli/audit#json-envelope) carries under its `decisions` key.
+`fallow decision-surface --format json` carries the `decisions[]` array; each entry carries the fields listed under [What each decision carries](#what-each-decision-carries). This is the same decision surface [`fallow review --format json`](/cli/audit#json-envelope) carries under its `decisions` key.
 
 ```json title="$ fallow decision-surface --base main --format json"
 {
@@ -192,13 +192,9 @@ Decision surface: 3 decisions vs main (d4a2f91..HEAD)
 }
 ```
 
-<Note>
-  Decisions are ordered by consequence, so the first entry is the most worth a human's time. The list is capped to `--max-decisions`; there is no pagination, by design.
-</Note>
-
 ## MCP tool
 
-The decision surface is also exposed as the [`decision_surface` MCP tool](/integrations/mcp#available-mcp-tools), so an agent gets the same ranked, capped, `signal_id`-anchored decisions through structured tool calling:
+The decision surface is also exposed as the [`decision_surface` MCP tool](/integrations/mcp#available-mcp-tools), so an agent gets the same decisions through structured tool calling:
 
 ```json title="Example request"
 {

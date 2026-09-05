@@ -11,10 +11,6 @@ Automatically remove unused exports and dependencies from your codebase. Fallow 
   Always commit your changes before running `fallow fix`. This gives you a clean rollback point if anything unexpected happens.
 </Warning>
 
-<Tip>
-  Use `--dry-run` first to preview exactly what will be removed before applying any changes.
-</Tip>
-
 ```bash
 fallow fix
 ```
@@ -50,13 +46,13 @@ Entries whose `hardcoded_consumers` is non-empty (a workspace package still pins
 
 When `fallow fix` finds duplicate-export issues and no fallow config exists, it creates `.fallowrc.json` automatically, scaffolded the same way as `fallow init` (framework and test-runner detection, `$schema`, `entry`, `ignorePatterns`) with the `ignoreExports` rules layered on top, so the post-fix `fallow dead-code` does not start surfacing new findings. The created file is reported on stderr:
 
-```
+```text
 Created .fallowrc.json with 2 ignoreExports rule(s). Add it to git.
 ```
 
 In monorepo subpackages (one of `pnpm-workspace.yaml`, `package.json#workspaces`, `turbo.json`, `lerna.json`, `rush.json` above the invocation directory), the create-fallback refuses to avoid fragmenting one config file across N sub-packages. Instead it emits a directive pointing at the workspace root:
 
-```
+```text
 Skipped duplicate-export config fix: no fallow config file at packages/ui and the
 directory is inside a monorepo (workspace root: /repo). Run `fallow init` at the
 workspace root, or invoke `fallow fix` from /repo instead of from a subpackage.
@@ -76,9 +72,9 @@ The duplicate-export config-add path is skipped with an explanatory message; sou
 
 ## On-disk drift protection
 
-`fallow fix` re-runs analysis in-process and then writes each per-file rewrite. If a parallel editor save, CI rebase, or other tool mutates a target file between the analysis read and the write, the line offsets computed during analysis no longer line up with what is currently on disk. fallow captures every parsed source file's xxh3 content hash during analysis (the same hash the extract cache uses), recomputes it at fix time, and skips files whose content drifted. The diagnostic surfaces on stderr (`Skipping <path>: file content changed since fallow dead-code ran. Re-run fallow fix to refresh the analysis first.`) and in the JSON output (`{"type": "skipped", "path": "...", "skipped": true, "skip_reason": "content_changed"}`). A run with any content-changed skip exits with code 2 so CI does not treat the partial run as a clean no-op. The JSON envelope's top-level `skipped_content_changed: number` (always present) carries the count separately from `skipped` (which still tallies catalog / YAML guard skips only).
+If a parallel editor save, CI rebase, or other tool changes a source file between analysis and the write, `fallow fix` skips that file instead of applying stale line offsets. The skip is reported on stderr (`Skipping <path>: file content changed since fallow dead-code ran. Re-run fallow fix to refresh the analysis first.`) and in the JSON output (`{"type": "skipped", "path": "...", "skipped": true, "skip_reason": "content_changed"}`). A run with any content-changed skip exits with code 2 so CI does not treat the partial run as a clean no-op. The JSON envelope's top-level `skipped_content_changed: number` (always present) carries the count separately from `skipped` (which tallies catalog / YAML guard skips only).
 
-`fallow fix` also batches its writes: each per-file rewrite is staged into a sibling temp file, and the orchestrator promotes every stage to its final path only after every stage has succeeded. A stage failure (read-only directory, full disk) leaves every target file at its original content. A rename failure mid-batch (rare; the per-file rename is atomic but POSIX has no atomic multi-rename primitive) reports per-path so the user can re-run with confidence. Hash precondition covers source files (TS, JS, Vue, Svelte, Astro, MDX); `package.json` and `pnpm-workspace.yaml` are not in the captured hash map because the extract layer does not parse them, but the dep and catalog fixers re-parse those files at fix time as the natural safety net (a key-lookup miss is a no-op, not a corruption).
+Writes are all-or-nothing: a failure on one file (read-only directory, full disk) leaves every target file at its original content. `package.json` and `pnpm-workspace.yaml` are re-read at fix time instead, so a dependency or catalog entry that has already disappeared is a no-op.
 
 ## Low-confidence export removals
 
