@@ -31,7 +31,7 @@ fallow audit
 
 | Flag | Description |
 |:-----|:------------|
-| `--diff-file <PATH>` | Path to a pre-computed unified diff (e.g. `git diff --unified=0 main...HEAD > /tmp/pr.diff`). Narrows source-anchored findings to lines inside an added hunk: point findings drop when their source line is off-diff, range findings (complexity hotspots, clone families) drop when their span does not overlap the diff. Project-level findings (unused deps, catalog entries, dependency overrides) bypass the analysis filter. Sticky PR/MR summaries can set `FALLOW_SUMMARY_SCOPE=diff` to filter those project-level findings too. Also drives line-level scoping of the runtime-coverage `hot-path-touched` verdict. Pass `-` for stdin (`gh pr diff \| fallow audit --diff-file -`) or use the `--diff-stdin` alias. Falls back to the `FALLOW_DIFF_FILE` env var. The bundled GitHub Action and GitLab CI template pre-compute the diff and pass it automatically; you only need this flag for non-PR pipelines or local invocations. |
+| `--diff-file <PATH>` | Path to a pre-computed unified diff (e.g. `git diff --unified=0 main...HEAD > /tmp/pr.diff`) that narrows source-anchored findings to lines inside an added hunk. Pass `-` for stdin (`gh pr diff \| fallow audit --diff-file -`) or use the `--diff-stdin` alias. The bundled GitHub Action and GitLab CI template pre-compute the diff and pass it automatically; you only need this flag for non-PR pipelines or local invocations. The filtering rules and the `FALLOW_DIFF_FILE` fallback are documented under [global flags](/cli/global-flags#reference). |
 
 ### Gate
 
@@ -95,8 +95,8 @@ The decision uses the same diff precedence as [diff scoping](#diff-scoping): a d
 |:-----|:------------|
 | `--brief` | Render the deterministic review brief instead of the gating audit report. Answers "where do I look?" rather than "will CI block this?", runs the same analysis, and always exits 0. Orthogonal to `--format`. Implied by `fallow review`. See [Review brief and decision surface](#review-brief-and-decision-surface). |
 | `--max-decisions <N>` | Cap on the number of consequential structural decisions surfaced in the brief's decision surface (the working-memory limit). Default 4; clamped to a 3 to 5 band. Only consulted on the brief path. |
-| `--walkthrough-guide` | Emit the agent-contract walkthrough guide: the current digest (brief + decision surface), the review direction, the JSON schema the agent must return, and a deterministic graph-snapshot hash pinned into the digest. The digest is built from the graph only (PR prose is never folded in, so it is injection-resistant). Implies the brief; always exits 0. See [Agent walkthrough loop](#agent-walkthrough-loop). |
-| `--walkthrough-file <PATH>` | Ingest an agent's judgment JSON and post-validate it against the live graph. Rejects any judgment whose `signal_id` fallow did not emit (anti-hallucination); refuses the whole payload as stale when the echoed graph-snapshot hash no longer matches (the tree moved). The verifier is the graph, not a second model. The agent's free-text framing is fenced as non-deterministic and never gates. Implies the brief; always exits 0. |
+| `--walkthrough-guide` | Emit the agent-contract walkthrough guide: the current digest (brief + decision surface), the review direction, the JSON schema the agent must return, and a deterministic graph-snapshot hash pinned into the digest. Implies the brief; always exits 0. See [Agent walkthrough loop](#agent-walkthrough-loop). |
+| `--walkthrough-file <PATH>` | Ingest an agent's judgment JSON and post-validate it against the live graph; see [Agent walkthrough loop](#agent-walkthrough-loop) for the accepted and rejected outcomes. Implies the brief; always exits 0. |
 | `--walkthrough` | Render the walkthrough guide as a staged human terminal tour (Stage 1 load-bearing, Stage 2 mechanical), or a paste-into-PR artifact with `--format markdown`. `--format json --walkthrough` emits the same agent-contract JSON as `--walkthrough-guide`. Implies the brief; always exits 0. |
 | `--mark-viewed <FILE>` | Record one or more changed files as viewed in the local walkthrough viewed-state ledger, then render the tour. Files already viewed (and still current) collapse into the Cleared panel. Repeatable. Stale marks (the tree moved) are ignored on render but never deleted. Only consulted on the `--walkthrough` path. |
 | `--show-cleared` | Expand the Cleared panel in the human/markdown walkthrough tour: list each de-prioritized and already-viewed file instead of the collapsed one-line summary. Only consulted on the `--walkthrough` path. |
@@ -359,7 +359,7 @@ Audit scope: 12 changed files vs main (d4a2f91..HEAD)
 | `summary.max_cyclomatic` | integer \| null | Highest cyclomatic complexity found (null if none) |
 | `summary.duplication_clone_groups` | integer | Clone groups involving changed files |
 | `attribution.*_introduced` | integer | Findings whose structural key did not exist at the base ref. With `gate=all`, these stay `0` because audit skips the base-snapshot attribution pass. |
-| `attribution.*_inherited` | integer | Findings already present at the base ref. With `gate=all`, these stay `0` because audit skips the base-snapshot attribution pass. |
+| `attribution.*_inherited` | integer | Findings already present at the base ref. Also `0` under `gate=all`. |
 | `attribution.duplication_demoted` | integer | Clone groups the `new-only` gate demoted from introduced to inherited because no instance overlaps an added line. Always present in audit-family JSON (audit, review brief, MCP `audit`). Demoted groups stay counted in `duplication_inherited`, so this never exceeds it. |
 | `dead_code.*[].introduced` | boolean | Present in audit JSON sub-results when base attribution is available. `true` means the finding is new relative to the base ref. |
 | `duplication.clone_groups[].demotion_reason` | string | Present only on demoted groups. Kebab-case reason for the demotion, currently `no-added-lines`; further values may be added, so treat an unknown value as "some demotion reason". Never emitted by `fallow dupes --format json`. |
@@ -367,10 +367,6 @@ Audit scope: 12 changed files vs main (d4a2f91..HEAD)
 | `complexity.css_analytics` | object | Descriptive CSS analytics emitted with CSS analysis: specificity, token usage, duplicate declaration context, and cleanup candidates. Use it as evidence around `styling_findings`, not as a gate by itself. |
 
 The `dead_code`, `complexity`, and `duplication` sub-objects contain full results in the same format as [`fallow dead-code`](/cli/dead-code#json-output), [`fallow health`](/cli/health#json-output), and [`fallow dupes`](/cli/dupes#json-output) respectively. These are omitted when no files changed. By default, the `complexity` sub-object can also include the health report's `css_analytics` and `styling_findings` blocks. Use `--no-css` to suppress styling entirely, or `--no-css-deep` to keep local styling checks while skipping project-wide styling reachability. When `--runtime-coverage` is supplied, it can also include `runtime_coverage` and additive `coverage_intelligence` blocks. In audit output, individual findings and clone groups include an optional `introduced` boolean when the base ref comparison is available.
-
-<Note>
-  On exit code 2 (runtime error), JSON format emits `{"error": true, "message": "...", "exit_code": 2}` to stdout instead of the audit envelope.
-</Note>
 
 ## MCP tool
 
@@ -387,15 +383,13 @@ The `audit` MCP tool wraps `fallow audit --format json --quiet --explain`:
 }
 ```
 
-When `base` is not specified, the base is the `git merge-base` against the branch's upstream or the remote default (`origin/main`); set `FALLOW_AUDIT_BASE` in the server env to pin it. Set `gate` to `all` for strict mode. Styling findings are included by default; set `css_deep` to `false` to skip project-wide styling reachability, or `true` to force it back on when config disables it. The response always includes `_meta` explanatory metadata (the MCP wrapper enables `--explain` by default). Returns the same JSON envelope as the CLI.
-
-`audit` creates a temporary base snapshot (a git worktree checkout) to compare against the base ref. When the current checkout has `node_modules`, audit links it into the snapshot so tsconfig `extends` chains into installed packages and path aliases resolve like the working tree. Snapshots are unregistered from git immediately after materialization, so they never appear in `git worktree list`, IDE repo views, or `.git/worktrees/`, even if the process is force-killed. Cached base snapshots are reused across runs and swept automatically after 30 days of disuse. Entries registered by earlier fallow versions are deregistered automatically on the next audit, with their warm caches preserved.
-
-To inspect or reclaim these caches on demand, see [Audit cache maintenance](#audit-cache-maintenance).
+When `base` is omitted it resolves as described under [How it works](#how-it-works); set `FALLOW_AUDIT_BASE` in the server env to pin it. Set `gate` to `all` for strict mode. Styling findings are included by default; set `css_deep` to `false` to skip project-wide styling reachability, or `true` to force it back on when config disables it. The response always includes `_meta` explanatory metadata (the MCP wrapper enables `--explain` by default). Returns the same JSON envelope as the CLI.
 
 See [MCP integration](/integrations/mcp) for setup instructions.
 
 ## Audit cache maintenance
+
+Under `--gate new-only`, `audit` creates a temporary base snapshot (a git worktree checkout) to compare against the base ref. When the current checkout has `node_modules`, audit links it into the snapshot so tsconfig `extends` chains into installed packages and path aliases resolve like the working tree. Snapshots are unregistered from git immediately after materialization, so they never appear in `git worktree list`, IDE repo views, or `.git/worktrees/`, even if the process is force-killed. Cached base snapshots are reused across runs and swept automatically after 30 days of disuse. Entries registered by earlier fallow versions are deregistered automatically on the next audit, with their warm caches preserved.
 
 Each project root keeps one root-owned base-snapshot cache, rebuilt in place when the resolved base SHA changes, and the reuse lock is held for the whole audit so cleanup can never remove files under a running audit. Automatic age-based GC runs on every audit: the [`FALLOW_AUDIT_CACHE_MAX_AGE_DAYS`](/configuration/environment#fallow_audit_cache_max_age_days) env var (or the `audit.cacheMaxAgeDays` config field) tunes the 30-day default, and `0` disables the age-based sweep. Two subcommands maintain the caches on demand.
 
@@ -490,25 +484,11 @@ The brief answers "where do I look?" rather than "will CI block this?". It runs 
 
 ### Decision surface
 
-The decision surface has exactly three shippable categories:
-
-| Category | Meaning |
-|:---------|:--------|
-| `coupling-boundary` | A new cross-zone dependency edge. |
-| `public-api-contract` | A new exported public-API surface, or a changed contract consumed by modules outside this diff. |
-| `dependency` | A new third-party dependency, or a declared one moved across a major version (or a `0.x` minor). One batched decision per manifest per kind, weighted by the graph's in-repo importers of the affected packages. |
-
-Minor and patch bumps and non-numeric ranges (workspace, file, git, tags) are never dependency candidates. The importer count is a union over the batched packages (a module importing two bumped packages counts once). Entries outside `dependencies` are tagged in the question (`dev`, `optional`, `peer`); a package listed in several sections keeps its `dependencies` range and anchor line. A `dependency` decision anchors on `package.json`, which cannot carry a comment, so it has no `suppress` action; `ask-expert` still applies. Only `coupling-boundary` and `public-api-contract` decisions are suppressible.
-
-Each decision is a framed judgment question anchored to a `signal_id` fallow deterministically derived from the graph, ranked by consequence (blast radius x reversibility), capped to [`--max-decisions`](#options) (default 4, clamped to a 3 to 5 band), and paired with the routed expert (who to ask). A decision may carry `previous_signal_id`: the `signal_id` it would have had before a rename of its anchor file, so a review surface can re-attach a prior reviewer comment across a `git mv`.
-
-Alongside the question, each decision carries a `tradeoff` clause (the named structural sacrifice stated as a fact, never a recommendation, e.g. "Couples app to infra; 4 in-repo modules already depend on this anchor") and `internal_consumer_count` (the honest count of in-repo modules outside the diff that already depend on the anchor). The human view shows the question and the trade-off; you read reversibility from the count itself, fallow never labels the decision a one-way or two-way door or tells you which way to choose.
-
-The same decision surface is available to agents through the [`decision_surface` MCP tool](/integrations/mcp#available-mcp-tools), dependency decisions included: both routes share the manifest diff.
+The decision surface is the ranked, capped ([`--max-decisions`](#options)) set of `coupling-boundary`, `public-api-contract`, and `dependency` decisions the change embeds, each a framed judgment question anchored to a `signal_id`. [`fallow decision-surface`](/cli/decision-surface) emits it on its own and documents the categories, the fields each decision carries, and suppression.
 
 ### JSON envelope
 
-`fallow review --format json` carries `decisions`, `focus`, `deltas`, `impact_closure`, `partition`, and `graph_facts`. The `deprioritized` escape-hatch list inside `focus` is always present in JSON regardless of `--show-deprioritized`; that flag only re-expands the collapse-by-default human focus render.
+`fallow review --format json` carries `decisions`, `focus`, `deltas`, `impact_closure`, `partition`, and `graph_facts`.
 
 `deltas` also carries the dependency keys the decision surface reads: `dependency_added` (`<manifest>::<name>`) and `dependency_major_bumped` (`<manifest>::<name>@<from>-><to>`), so the envelope names what changed even when the cap collapses the decision. Both are always present, as empty arrays when nothing changed.
 
@@ -569,8 +549,6 @@ Each judgment is sorted into one of these outcomes:
 | `rejected` (stale) | The echoed graph-snapshot hash no longer matches (the tree moved). | `reason: "stale-snapshot"`, `stale: true`. Re-fetch the guide. |
 
 An accepted judgment echoes `action` next to `agent_framing` when the agent set one.
-
-Both `--walkthrough-guide` and `--walkthrough-file` imply the brief and always exit 0.
 
 ## See also
 

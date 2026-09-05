@@ -5,7 +5,7 @@ keywords: ["fallow security", "client-server-leak", "process.env", "use client",
 icon: "shield"
 ---
 
-Surface local security candidates for verification. Two rule families ship: the graph-structural `client-server-leak` (a `"use client"` file that directly reads, or transitively imports a module that reads, a non-public `process.env` secret), and the data-driven `tainted-sink` catalogue (syntactic dangerous-sink candidates across a catalogue of CWE categories). Both default to `off` and run only under `fallow security`.
+Surface local security candidates for verification. Two rule families ship: the graph-structural `client-server-leak` (a `"use client"` file that directly reads, or transitively imports a module that reads, a non-public `process.env` secret), and the data-driven `tainted-sink` catalogue (syntactic dangerous-sink candidates across a catalogue of CWE categories). Both default to `off` and run only under `fallow security`, never under bare `fallow` or the `audit` gate.
 
 <Note>
   Findings are candidates, not confirmed vulnerabilities. Fallow reports a structural trace so an agent or human can verify whether the value can actually reach client-bundled code.
@@ -56,27 +56,22 @@ fallow security
 | `--gate new` | Fail (exit code **8**) only when the change introduces a NEW security-sink candidate in the changed lines, not on the whole candidate backlog. Requires a diff source (`--changed-since`, `--diff-file`, or `--diff-stdin`). |
 | `--gate newly-reachable` | Fail (exit code **8**) when a security candidate that already exists in source becomes reachable from project entry points compared with the base ref. Requires `--changed-since <ref>` because it analyzes the base tree, not only a line diff. |
 
-The gate is the first-line-of-defence form of `fallow security`: a refactor that merely
-touches a file already containing a sink passes, while a change that adds a new sink (or
-wires a new untrusted source into an existing sink) on a changed line fails. Findings stay
-**unverified candidates**: the human output says `REVIEW REQUIRED` (not `FAIL`), SARIF keeps
-every result at `level: note` with the verdict in `run.properties.fallowGate`, and
-`--format json` carries an additive `gate` block (`mode` / `verdict` / `new_count`).
+Wiring a new untrusted source into an existing sink on a changed line counts as a new
+candidate. Gated findings stay unverified: the human output says `REVIEW REQUIRED` (not
+`FAIL`), SARIF keeps every result at `level: note` with the verdict in
+`run.properties.fallowGate`, and `--format json` carries an additive `gate` block
+(`mode` / `verdict` / `new_count`). `newly-reachable` ignores unreachable candidates in both
+trees; diff-only inputs (`--diff-file` / `--diff-stdin`) exit 2 for this mode.
 
-Use `--gate newly-reachable` for refactors that connect existing sink files to live entry
-points. It ignores unreachable candidates in both trees and reports only reachable candidate
-keys that are new in the head tree. Diff-only inputs (`--diff-file` / `--diff-stdin`) exit 2
-for this mode because there is no base tree to analyze.
-
-Exit codes: **8** = a new candidate was introduced in the changed lines; **0** = clean (or a
-docs-only / empty diff); **2** = the gate could not compute the diff (an unfetched ref on a
-shallow clone, a bad ref, not a git repo). Exit 8 is dedicated and stable, so a pipeline can
-soft-gate it without allow-listing real errors (GitLab `allow_failure: exit_codes: [8]`).
+Exit codes: **8** = a new candidate was introduced; **0** = clean (or a docs-only / empty
+diff); **2** = the gate could not compute the diff (an unfetched ref on a shallow clone, a bad
+ref, not a git repo), loud rather than a silent pass. Exit 8 is dedicated and stable, so a
+pipeline can soft-gate it without allow-listing real errors (GitLab
+`allow_failure: exit_codes: [8]`).
 
 <Note>
 On a shallow clone the merge-base may not be fetched. In GitHub Actions set
-`fetch-depth: 0` on `actions/checkout`; in GitLab CI set `GIT_DEPTH: 0`. The gate exits 2
-(loud) rather than passing silently when it cannot compute the diff.
+`fetch-depth: 0` on `actions/checkout`; in GitLab CI set `GIT_DEPTH: 0`.
 </Note>
 
 ```bash CI gate on changed lines
@@ -167,9 +162,7 @@ All catalogue findings carry `kind: "tainted-sink"` plus a `category` (the catal
 | `jquery-html` | 79 | jQuery `.html(value)` (enabler-gated) |
 | `route-send-file` | 22 | Express / Fastify / Hono route `sendFile` (enabler-gated) |
 
-<Note>
-  These are deliberately conservative candidates: a non-literal argument is a signal to verify, not proof of a vulnerability. Fallow does not prove the value is attacker-controlled or reaches the sink unsanitized. Verification is the agent's job.
-</Note>
+A non-literal argument is a signal to verify: fallow does not prove the value is attacker-controlled or reaches the sink unsanitized.
 
 Sink-shaped nodes whose callee cannot be resolved to a static path (dynamic dispatch, computed members, aliased bindings) are counted in the output as `unresolved_callee_sites`. When emitted, `unresolved_callee_diagnostics` adds bounded sample locations, top files, and reason counts for follow-up review. As with `client-server-leak`, a clean finding list with a non-zero count is not a clean bill.
 
@@ -179,7 +172,7 @@ Trusted local sanitizer flows do not report. The detector recognizes syntax-prov
 
 ### Enabling categories
 
-`tainted-sink`, `hardcoded-secret`, and `client-server-leak` default to `off` and are surfaced only by `fallow security` (never under bare `fallow` or the `audit` gate). Scope which catalogue categories run with `security.categories` in config:
+Scope which catalogue categories run with `security.categories` in config:
 
 ```json
 {
@@ -281,7 +274,7 @@ One `security-sink` token covers every catalogue category. Use suppression only 
 
 `attack_surface` is present only when you pass `--surface`. Use it when an agent verifier needs source-to-sink path context and defensive-boundary prompts.
 
-Each finding includes `kind`, `path`, `line`, `col`, `evidence`, `trace`, `actions`, `severity`, and optional `reachability`. `severity` is a review-priority tier (`high`, `medium`, or `low`) derived from reachability, boundary, source-backed, and runtime-hot signals. It is not a verified vulnerability verdict and does not change gate or exit semantics. SARIF maps high and medium candidates to `warning`, and low candidates to `note`. `tainted-sink` findings additionally carry `category` (the catalogue id, for example `"dangerous-html"`) and `cwe` (the category's CWE number); `client-server-leak` findings omit both. `tainted-sink` findings can also include `reachability.untrusted_source_trace` when a module with a known untrusted source imports the sink module. It is ranking and triage context only, not proof that a specific value reaches the sink.
+Each finding includes `kind`, `path`, `line`, `col`, `evidence`, `trace`, `actions`, `severity`, and optional `reachability`. `severity` is a review-priority tier (`high`, `medium`, or `low`) derived from reachability, boundary, source-backed, and runtime-hot signals; it does not change gate or exit semantics. SARIF maps high and medium candidates to `warning`, and low candidates to `note`. `tainted-sink` findings additionally carry `category` (the catalogue id, for example `"dangerous-html"`) and `cwe` (the category's CWE number); `client-server-leak` findings omit both. `tainted-sink` findings can also include `reachability.untrusted_source_trace` when a module with a known untrusted source imports the sink module.
 
 When `reachability.reachable_from_untrusted_source` is set, `reachability.taint_confidence` tiers the association: `"arg-level"` means the sink argument traces back to a source read in the same module, directly or through up to three chained local bindings (the stronger candidate), and `"module-level"` means the sink only lives in a module reachable from a source over the import graph (the weaker candidate). Tier candidates from this field rather than parsing the `evidence` text. For arg-level findings the trace's first hop points at the line of the actual source read; module-level source hops use the role `"module-source"` and never imply a proven value path.
 
@@ -326,7 +319,7 @@ The `candidate` record has three slots:
 - `sink`: a self-contained description of the sink site (`path`, `line`, `col`, `category`, `cwe`, and the captured `callee`), so you can act on `candidate.sink` without reading the rest of the finding. URL-category sinks (SSRF, open redirect) may add `url_shape` when it is statically visible: `"fixed-origin-dynamic-path"` (fixed origin with dynamic path or query, the lower-alarm shape) or `"dynamic-origin"` (the origin itself is dynamic).
 - `boundary`: whether the flow crosses a `client_server` boundary (a `"use client"` file in the trace) or a `cross_module` boundary (the source reaches the sink across one or more import hops), plus an `architecture_zone` (`from`/`to`) when the anchor also participates in a declared architecture-boundary violation.
 
-There is no `impact` field. Deciding exploitability is the verifying agent's job, not fallow's; fallow flags candidates with structural evidence and a severity-based review-priority tier.
+There is no `impact` field; `severity` is the only ranking fallow assigns.
 
 `taint_flow` is present only when an untrusted source is import-reachable to the sink. It is the `{ source, sink, path }` shape agent SAST tooling expects. `path` is a compact summary (`intra_module` and `cross_module_hops`); the full ordered hop list lives in `reachability.untrusted_source_trace` and is not duplicated.
 
@@ -396,3 +389,17 @@ fallow security --ci --sarif-file fallow-security.sarif
 git diff --unified=0 origin/main...HEAD | fallow security --diff-file -
 ```
 </CodeGroup>
+
+## See also
+
+<CardGroup cols={3}>
+  <Card title="Security agent verification" icon="shield-check" href="/cli/security-agent-verification">
+    Hand candidates to a verifier and render the survivors.
+  </Card>
+  <Card title="Global flags" icon="sliders" href="/cli/global-flags">
+    Scoping, output, and performance flags shared by every command.
+  </Card>
+  <Card title="MCP integration" icon="robot" href="/integrations/mcp">
+    Use fallow tools from AI coding agents.
+  </Card>
+</CardGroup>

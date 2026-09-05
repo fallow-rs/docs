@@ -1,11 +1,11 @@
 ---
 title: "fallow decision-surface"
-description: "CLI reference for fallow decision-surface. Surface only the few consequential structural decisions a change embeds, each as a judgment question with the routed expert to ask. The apex of the review brief, separable and cheap, and always exits 0."
+description: "CLI reference for fallow decision-surface. Surface only the few consequential structural decisions a change embeds, each as a judgment question with the routed expert to ask. The apex of the review brief, emitted on its own."
 keywords: ["fallow decision-surface", "decision surface", "structural decisions", "code review", "AI code review", "judgment call", "tradeoff", "coupling boundary", "public API", "dependency", "CLI"]
 icon: "scale-balanced"
 ---
 
-Surface only the consequential structural **decisions** a change embeds: a new cross-zone dependency edge, a new exported public-API surface, a new third-party dependency. Each one is framed as a judgment question, anchored to a deterministic graph-derived `signal_id`, paired with the routed expert to ask, and carries the named trade-off it makes. `decision-surface` is the apex of the [review brief](/cli/audit#review-brief-and-decision-surface), emitted on its own: separable, cheap, and advisory.
+Surface only the consequential structural **decisions** a change embeds: a new cross-zone dependency edge, a new exported public-API surface, a new or major-bumped third-party dependency. Each one is framed as a judgment question, anchored to a deterministic graph-derived `signal_id`, paired with the routed expert to ask, and carries the named trade-off it makes. `decision-surface` is the apex of the [review brief](/cli/audit#review-brief-and-decision-surface), emitted on its own: separable, cheap, and advisory.
 
 ```bash
 fallow decision-surface --base main
@@ -39,22 +39,27 @@ The surface has exactly three shippable categories:
 |:---------|:--------|
 | `coupling-boundary` | A new cross-zone dependency edge. |
 | `public-api-contract` | A new exported public-API surface, or a changed contract consumed by modules outside this diff. |
-| `dependency` | A new third-party dependency. |
+| `dependency` | A new third-party dependency, or a declared one moved across a major version (or a `0.x` minor). One batched decision per manifest per kind, weighted by the graph's in-repo importers of the affected packages. |
+
+Minor and patch bumps and non-numeric ranges (workspace, file, git, tags) are never dependency candidates. The importer count is a union over the batched packages (a module importing two bumped packages counts once). Entries outside `dependencies` are tagged in the question (`dev`, `optional`, `peer`); a package listed in several sections keeps its `dependencies` range and anchor line.
 
 The set is **ranked by consequence** (blast radius x reversibility) and **capped** to a small, working-memory-sized list: 3 to 5 decisions, default 4, via [`--max-decisions`](#options). The cap is the point: a reviewer can hold a handful of structural questions in their head, not a flat wall of findings.
 
 ### What each decision carries
 
-| Field | What it is |
-|:------|:-----------|
-| The question | The judgment framed as a question, the thing a human should weigh in on. |
-| `routed_expert` | Who to ask. The decision points at the person or role whose judgment the category calls for, so the question reaches the right reviewer. |
-| `signal_id` | The deterministic, graph-derived anchor for this decision. Stable across runs against the same tree, and the join key for re-attaching review comments. |
-| `tradeoff` | The named structural sacrifice, stated as a fact (never a recommendation). For example: `"Couples app to infra; 4 in-repo modules already depend on this anchor"`. |
-| `internal_consumer_count` | The honest count of in-repo modules **outside the diff** that already depend on the anchor. This is your reversibility signal: the higher the count, the more expensive it is to walk this back. It is the display number, distinct from the ranking-only blast figure. |
-| `previous_signal_id` | Optional. The `signal_id` the anchor had before a rename of its anchor file, so a review surface can re-attach a prior comment across a `git mv`. |
+| Field | Type | What it is |
+|:------|:-----|:-----------|
+| `question` | string | The judgment framed as a question, the thing a human should weigh in on. |
+| `category` | `"coupling-boundary"` \| `"public-api-contract"` \| `"dependency"` | The kind of structural choice. |
+| `routed_expert` | string | Who to ask. The decision points at the person or role whose judgment the category calls for, so the question reaches the right reviewer. |
+| `signal_id` | string | The deterministic, graph-derived anchor for this decision. Stable across runs against the same tree, and the join key for re-attaching review comments. |
+| `tradeoff` | string | The named structural sacrifice, stated as a fact (never a recommendation). For example: `"Couples app to infra; 4 in-repo modules already depend on this anchor"`. |
+| `internal_consumer_count` | integer | The honest count of in-repo modules **outside the diff** that already depend on the anchor. This is your reversibility signal: the higher the count, the more expensive it is to walk this back. It is the display number, distinct from the ranking-only blast figure. |
+| `previous_signal_id` | string \| null | Present when the anchor file was renamed: the `signal_id` it had before, so a review surface can re-attach a prior comment across a `git mv`. |
 
-Every decision is suppressible with an inline `// fallow-ignore` comment, the same way findings are suppressed elsewhere in fallow. Place the comment at the decision's anchor to drop it from the surface. Suppression removes a decision from the output; it does not change the verdict, because `decision-surface` never gates.
+The human view shows the question and the trade-off; you read reversibility from the count itself. fallow never labels a decision a one-way or two-way door or tells you which way to choose.
+
+`coupling-boundary` and `public-api-contract` decisions are suppressible with an inline `// fallow-ignore` comment at the decision's anchor, the same way findings are suppressed elsewhere in fallow. A `dependency` decision anchors on `package.json`, which cannot carry a comment, so it has no `suppress` action; `ask-expert` still applies. Suppression removes a decision from the output; it does not change the verdict, because `decision-surface` never gates.
 
 ## How an agent consumes it
 
@@ -116,7 +121,7 @@ fallow decision-surface
 # Explicit base ref
 fallow decision-surface --base main
 
-# Widen to the full 3 to 5 band
+# Raise the cap
 fallow decision-surface --base main --max-decisions 5
 ```
 
@@ -158,7 +163,7 @@ Decision surface: 3 decisions vs main (d4a2f91..HEAD)
 
 ## JSON output
 
-`fallow decision-surface --format json` carries a ranked, capped `decisions[]` array. Each entry is the framed judgment question with its anchor, routed expert, trade-off, and consumer count. This is the same decision surface [`fallow review --format json`](/cli/audit#json-envelope) carries under its `decisions` key.
+`fallow decision-surface --format json` carries a ranked, capped `decisions[]` array; each entry carries the fields listed under [What each decision carries](#what-each-decision-carries). This is the same decision surface [`fallow review --format json`](/cli/audit#json-envelope) carries under its `decisions` key.
 
 ```json title="$ fallow decision-surface --base main --format json"
 {
@@ -187,20 +192,8 @@ Decision surface: 3 decisions vs main (d4a2f91..HEAD)
 }
 ```
 
-### Key fields
-
-| Field | Type | Description |
-|:------|:-----|:------------|
-| `decisions[].signal_id` | string | Deterministic, graph-derived anchor for the decision. Stable across runs against the same tree; the join key for re-attaching comments. |
-| `decisions[].category` | `"coupling-boundary"` \| `"public-api-contract"` \| `"dependency"` | The kind of structural choice. |
-| `decisions[].question` | string | The judgment framed as a question. |
-| `decisions[].routed_expert` | string | Who to ask: the reviewer whose judgment the category calls for. |
-| `decisions[].tradeoff` | string | The named structural sacrifice, stated as a fact. |
-| `decisions[].internal_consumer_count` | integer | In-repo modules outside the diff that already depend on the anchor. The reversibility signal. |
-| `decisions[].previous_signal_id` | string \| null | Present when the anchor was renamed: the prior `signal_id`, for re-attaching a comment across a `git mv`. |
-
 <Note>
-  Decisions are ordered by consequence, so the first entry is the most worth a human's time. The list is capped to `--max-decisions`; there is no pagination, by design. The point is the short list.
+  Decisions are ordered by consequence, so the first entry is the most worth a human's time. The list is capped to `--max-decisions`; there is no pagination, by design.
 </Note>
 
 ## MCP tool
@@ -217,7 +210,7 @@ The decision surface is also exposed as the [`decision_surface` MCP tool](/integ
 }
 ```
 
-Set `base` to specify the comparison ref and `max_decisions` to cap the surfaced decisions (default 4, clamped to a 3 to 5 band). Like the CLI, the brief always exits 0 and the verdict is carried informationally; it never gates. See [MCP integration](/integrations/mcp) for the full tool list and setup.
+`base` and `max_decisions` map to the CLI flags of the same name. Dependency decisions are included; both routes share the manifest diff. See [MCP integration](/integrations/mcp) for the full tool list and setup.
 
 ## See also
 

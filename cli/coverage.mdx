@@ -1,7 +1,7 @@
 ---
 title: "fallow coverage"
 description: "CLI reference for fallow coverage. Run the resumable setup flow, analyze local or cloud runtime coverage, upload source maps, and push static inventory so the dashboard can surface untracked code."
-keywords: ["fallow coverage", "coverage setup", "upload-inventory", "upload-source-maps", "source maps", "fallow-cov", "runtime coverage", "runtime coverage", "CLI"]
+keywords: ["fallow coverage", "coverage setup", "upload-inventory", "upload-source-maps", "source maps", "fallow-cov", "runtime coverage", "CLI"]
 icon: "wand-magic-sparkles"
 ---
 
@@ -37,7 +37,7 @@ fallow coverage setup --yes --json --explain
 |:-----|:------------|
 | `-y, --yes` | Accept prompts automatically. Useful for local setup when you want fallow to continue without confirmation prompts. |
 | `--non-interactive` | Print instructions instead of prompting. Useful in CI, remote shells, or agent workflows. |
-| `--json` | Emit deterministic agent-readable setup instructions as JSON. Implies `--non-interactive` and does not prompt, write files, install packages, activate a license, or make network calls. Workspace projects emit a `members[]` array with one entry per runtime-bearing workspace (each with its own `framework_detected`, `runtime_targets`, `files_to_edit`, `snippets`, `dockerfile_snippet`); the top-level fields mirror the first emitted runtime member. |
+| `--json` | Emit deterministic agent-readable setup instructions as JSON. Implies `--non-interactive` and does not prompt, write files, install packages, activate a license, or make network calls. See [Agent-readable JSON](#agent-readable-json). |
 | `--explain` | With `--json`, include a `_meta` block with field definitions, enum values, warning semantics, and this docs URL. |
 
 ## What setup detects automatically
@@ -98,7 +98,7 @@ On a workspace monorepo (Elysia API at root + two Vite browser apps in `dashboar
 }
 ```
 
-`framework_detected` uses canonical ids (`nextjs`, `nestjs`, `nuxt`, `sveltekit`, `astro`, `remix`, `vite`, `plain_node`, `unknown`). Top-level fields mirror the first emitted runtime member (the root when the root itself is a runtime app, otherwise the first runtime workspace), so on a browser-rooted monorepo with a Node child agents should read each member's `dockerfile_snippet` rather than the top-level one. Single-app projects emit a `members` array of length 1 (path `"."`), so consumers can treat `members[]` uniformly.
+`framework_detected` uses canonical ids (`nextjs`, `nestjs`, `nuxt`, `sveltekit`, `astro`, `remix`, `vite`, `plain_node`, `unknown`). Workspace projects emit one `members[]` entry per runtime-bearing workspace, each with its own `framework_detected`, `runtime_targets`, `files_to_edit`, `snippets`, and `dockerfile_snippet`. Top-level fields mirror the first emitted runtime member (the root when the root itself is a runtime app, otherwise the first runtime workspace), so on a browser-rooted monorepo with a Node child agents should read each member's `dockerfile_snippet` rather than the top-level one. Single-app projects emit a `members` array of length 1 (path `"."`), so consumers can treat `members[]` uniformly.
 
 Aggregator-only repos (workspaces whose only runtime indicator is a Turbo/Nx-style `dev` script delegating to children, plus build-only library packages) are not runtime-bearing and emit an empty payload: `framework_detected: "unknown"`, `runtime_targets: []`, `members: []`, plus a `warnings` entry of `"No runtime workspace members were detected; emitted install commands only."`. Agents can branch on `members.length === 0` (or `framework_detected === "unknown"`) to detect this case and skip the snippet-application step.
 
@@ -122,14 +122,9 @@ Framework-aware script selection means fallow prefers existing `build`, `start`,
 fallow license activate --trial --email you@company.com
 fallow coverage setup
 
-# Follow docs/collect-coverage.md, then:
+# Follow docs/collect-coverage.md, then run setup again.
+# With coverage present it hands off to `fallow health --runtime-coverage ./coverage`.
 fallow coverage setup
-```
-
-On the second run, if coverage is present, setup runs the actual analysis for you:
-
-```bash
-fallow health --runtime-coverage ./coverage
 ```
 
 ## `analyze`
@@ -187,11 +182,7 @@ You can also bypass auto-discovery by setting either explicit-override env var t
 
 ### Sidecar signature verification
 
-Every sidecar spawn runs an Ed25519 signature check against the compiled-in public key. The sidecar binary must ship with an adjacent `<binary>.sig` file. A missing, wrong-length, or invalid signature fails hard with exit code 4 rather than executing an unverified binary. There is no warn-and-run mode and no opt-out env var. If verification fails, install the signed distribution:
-
-```bash
-pnpm add -D @fallow-cli/fallow-cov
-```
+Every sidecar spawn runs an Ed25519 signature check against the compiled-in public key. The sidecar binary must ship with an adjacent `<binary>.sig` file. A missing, wrong-length, or invalid signature fails hard with exit code 4 rather than executing an unverified binary. There is no warn-and-run mode and no opt-out env var. If verification fails, reinstall the signed distribution with the install command above.
 
 ## `upload-inventory`
 
@@ -298,7 +289,7 @@ first 5 of 14,280 entries:
   ... and 14,275 more
 ```
 
-## `coverage upload-source-maps`
+## `upload-source-maps`
 
 `fallow coverage upload-source-maps` scans a build output directory for source maps and POSTs each map to fallow cloud under the current repo and git SHA. The production beacon reports coverage against deployed bundles; uploaded source maps let the cloud resolver remap those bundle positions back to original source files.
 

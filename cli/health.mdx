@@ -7,9 +7,7 @@ icon: "terminal"
 
 Analyze function complexity and file-level health across your codebase. By default, fallow reports all standard health sections: health score, complexity findings, file health scores, hotspot analysis, and refactoring targets. Coverage layers are opt-in: static reachability via `--coverage-gaps`, exact CRAP scoring via `--coverage`, and runtime production evidence via `--runtime-coverage`.
 
-Angular templates are scanned alongside JavaScript and TypeScript functions: external `.html` files referenced via `templateUrl` and inline `@Component({ template: \`...\` })` literals both contribute synthetic `&lt;template&gt;` findings when the template uses control-flow blocks (`@if`, `@for`, `@switch`, `@case`, `@defer (when ...)`, `@let`), legacy structural directives (`*ngIf`, `*ngFor`), or expression-bound attributes (`[x]`, `(x)`). Inline-template findings anchor at the `@Component` decorator line and are suppressible with `// fallow-ignore-next-line complexity` directly above the decorator; external-template findings carry an HTML comment action and are suppressible with `&lt;!-- fallow-ignore-file complexity --&gt;` at the top of the template.
-
-Angular components whose class AND template both contribute complexity also emit a synthetic `&lt;component&gt;` rollup finding. The rollup's cyclomatic and cognitive totals are `worst_class_method + template`, so a component whose class scores moderately (3/4) and whose template scores moderately (6/9) surfaces as one heavy finding (cyc 9, cog 13) rather than two scattered medium findings. The JSON `component_rollup` payload carries the pre-summation breakdown (`class_worst_function`, `class_cyclomatic`/`class_cognitive`, `template_path`, `template_cyclomatic`/`template_cognitive`, plus a `component` identifier derived from the `.ts` owner's file stem). The rollup is strictly additive: per-function and per-`&lt;template&gt;` entries stay where they are, so existing suppression sites continue to work. The rollup is anchored at the worst class method's line, so a `// fallow-ignore-next-line complexity` placed above that method hides both the function finding and the rollup. Ranking and `--targets` use the rolled-up numbers so a template-heavy component wins selection over scattered same-magnitude function findings.
+Angular templates are scanned alongside JavaScript and TypeScript functions. External `templateUrl` files and inline `@Component({ template })` literals contribute synthetic `&lt;template&gt;` findings, and a component whose class and template both score emits a `&lt;component&gt;` rollup whose totals drive ranking and `--targets`. Inline-template findings and the rollup are suppressible with `// fallow-ignore-next-line complexity` above the decorator or the worst class method; external-template findings with `&lt;!-- fallow-ignore-file complexity --&gt;` at the top of the template. See [Complexity metrics](/explanations/health#complexity-metrics) for what each shape counts and how to act on it.
 
 ```bash
 fallow health
@@ -50,7 +48,7 @@ By default, all standard sections are included. Use these flags to select indivi
 | `--file-scores` | Show only per-file health scores. Requires the full analysis pipeline (graph + dead code detection). File scores are sorted by risk-aware triage concern: lower maintainability index and higher CRAP risk first. `--sort` and `--baseline` apply to complexity findings only, not file scores. |
 | `--hotspots` | Show only hotspot analysis: files that are both complex and frequently changing. Combines git churn history with complexity data. Uses git history; outside a git repository the section degrades to empty (with a stderr note) and exits 0 instead of erroring, so combined-mode `--format json` always emits a single document. |
 | `--targets` | Show only refactoring targets: ranked recommendations with priority scores, effort estimates, contributing factors, and evidence for AI agents. Each target's JSON can include `direct_callers[]` (direct importers with the symbols they import) and `clone_siblings[]` (duplicate-code siblings with stable `dup:<8hex>` fingerprints, ready for `fallow dupes --trace`); both arrays are omitted when empty. Human output adds `importers:` and `clones:` lines only when that evidence is present. |
-| `--score` | Show only the project health score (0-100) with letter grade (A/B/C/D/F). The score is included by default when no section flags are set. As of v2.55.0, plain `--score` skips the churn-backed hotspot penalty so the score doesn't run a `git log` shell-out per invocation. Pass `--hotspots` (or `--targets` with `--score`) to include the hotspot penalty; snapshot (`--save-snapshot`) and trend (`--trend`) flows still trigger hotspot vital signs so saved data stays complete. |
+| `--score` | Show only the project health score (0-100) with letter grade (A/B/C/D/F). The score is included by default when no section flags are set. Plain `--score` skips the churn-backed hotspot penalty so the score doesn't run a `git log` shell-out per invocation. Pass `--hotspots` (or `--targets` with `--score`) to include the hotspot penalty; snapshot (`--save-snapshot`) and trend (`--trend`) flows still trigger hotspot vital signs so saved data stays complete. |
 | `--coverage-gaps` | Show runtime files and exports that no test dependency path reaches. Mock-aware: a test that replaces a module with `vi.mock` / `jest.mock` and a statically closed factory (one that provably never loads the original, no `vi.importActual` / `jest.requireActual`, no outer imports of the mocked module) does not count as reaching that module, so a module only ever imported behind such a mock can surface as a coverage gap. Anything fallow cannot prove keeps coverage credit: automock (`vi.mock` / `jest.mock` without a factory) never removes credit because the runner may still evaluate the original module, and `vi.doMock` / `jest.doMock` never remove credit because they are unhoisted and order-sensitive. `doMock` additionally credits its target and, for path-shaped static specifiers like `./services/api`, the `__mocks__` sibling, so a manual mock referenced only through `doMock` stays covered; bare package specifiers (`vi.doMock('axios')`) credit the package but not a root `__mocks__` file, and templated specifiers credit nothing. Opt-in (default off). Configure severity via the `coverage-gaps` rule. |
 | `--coverage <PATH>` | Path to Istanbul-format coverage data (`coverage-final.json`) for accurate per-function CRAP scores. Produced by Jest, Vitest, c8, nyc. When provided, uses the canonical formula `CC^2 * (1-cov/100)^3 + CC` instead of the static binary model. Relative paths resolve against `--root`. Falls back to `FALLOW_COVERAGE`, then `health.coverage`, then auto-detection; [`fallow audit`](/cli/audit) uses the same chain. |
 | `--coverage-root <PATH>` | Absolute prefix to strip from file paths in coverage data before prepending the project root. Use when coverage was generated in a different environment (CI runner, Docker), for example `/home/runner/work/myapp`. Falls back to `FALLOW_COVERAGE_ROOT`, then `health.coverageRoot`; `fallow audit` uses the same chain. |
@@ -134,26 +132,11 @@ The default `fallow health` (no gate flag) is advisory-by-default for plain visi
 
 `--report-only` cannot be combined with `--min-score` or `--min-severity` (exit code 2). The runtime-coverage gate (`--runtime-coverage`) and coverage-gap gate remain independent explicit opt-ins and are not demoted by `--min-score`. For a gate on newly-introduced complexity only, use [`fallow audit --gate new-only`](/cli/audit).
 
-## Maintainability index formula
+## File score metrics
 
-File scores are ordered by risk-aware triage concern: the larger of low-MI concern and CRAP risk. This keeps files with very high untested complexity near the top even when their Maintainability Index is not the lowest.
+File scores are ordered by risk-aware triage concern: the larger of low-MI concern and CRAP risk. This keeps files with very high untested complexity near the top even when their Maintainability Index is not the lowest. The formula and its components are documented under [File health scores](/explanations/health#file-health-scores).
 
-The per-file maintainability index is a weighted composite score:
-
-```
-fan_out_penalty = min(ln(fan_out + 1) × 4, 15)
-MI = 100 - (complexity_density × 30) - (dead_code_ratio × 20) - fan_out_penalty
-```
-
-Clamped to 0–100. Higher is better. Files with zero functions (barrel/re-export files) are excluded by default.
-
-| Component | Description | Weight |
-|:----------|:------------|:-------|
-| `complexity_density` | Total cyclomatic complexity / lines of code | ×30 |
-| `dead_code_ratio` | Fraction of **value** exports with zero references (0.0–1.0). Type-only exports (interfaces, type aliases) are excluded. | ×20 |
-| `fan_out_penalty` | Logarithmic scaling of import count, capped at 15 points. Each additional import adds less penalty than the last. | max 15 |
-
-Additional metrics reported per file (informational, not in the formula):
+Each file score reports these metrics (informational, not in the formula):
 
 | Metric | Description |
 |:-------|:------------|
@@ -165,22 +148,9 @@ Additional metrics reported per file (informational, not in the formula):
 | `crap_max` | Highest CRAP score among the file's functions. Combines cyclomatic complexity with test coverage to estimate untested risk. See [CRAP metric](/explanations/health#crap-metric) for details. |
 | `crap_above_threshold` | Number of functions in the file with a CRAP score at or above the threshold (default: 30). |
 
-## Hotspot score formula
+## Hotspot metrics
 
-The hotspot score identifies files that are both complex and frequently changed. These files are the most likely to harbor bugs and slow down development. The score combines git churn with complexity density:
-
-```
-normalized_churn = weighted_commits / max_weighted_commits (0..1)
-normalized_complexity = complexity_density / max_density (0..1)
-score = normalized_churn × normalized_complexity × 100
-```
-
-Clamped to 0–100. Higher means higher risk. Scores are normalized within the project, so the highest-risk file always scores close to 100.
-
-| Component | Description |
-|:----------|:------------|
-| `weighted_commits` | Recency-weighted commit count using exponential decay with a 90-day half-life. Recent changes contribute more than old ones. |
-| `complexity_density` | Cyclomatic complexity / lines of code. Measures how densely complex the code is. |
+The hotspot score identifies files that are both complex and frequently changed; the formula, the recency weighting, and the trend rules are documented under [Hotspot metrics](/explanations/health#hotspot-metrics).
 
 ### Per-file hotspot metrics
 
@@ -208,11 +178,7 @@ The hotspot summary (included in JSON output) provides context about the analysi
 | `min_commits` | Minimum commit threshold used |
 | `files_analyzed` | Files meeting the `min_commits` threshold |
 | `files_excluded` | Files below the `min_commits` threshold |
-| `shallow_clone` | Detection flag. Warns if a shallow clone was detected. |
-
-<Note>
-  Shallow clones may produce incomplete results. Fallow detects this and warns you. For best results, ensure a full clone with `git fetch --unshallow`.
-</Note>
+| `shallow_clone` | Whether a shallow clone was detected. Shallow history produces incomplete results; run `git fetch --unshallow` for a full clone. |
 
 ## Ownership analysis
 
@@ -355,7 +321,7 @@ Two more notes:
 
 ### Reference wrapper (Mercurial)
 
-The wrapper translates your VCS log into the contract. This Mercurial example pulls the last six months, excludes merges, and emits one event per file per commit:
+This Mercurial example pulls the last six months, excludes merges, and emits one event per file per commit:
 
 ```bash
 # hg-churn.sh: emit fallow-churn/v1 for the last 6 months (no merges).
@@ -494,7 +460,7 @@ Use `--save-snapshot` to capture a point-in-time record of your codebase's vital
 fallow health
 ```
 
-```bash Top hotspots
+```bash Top functions
 # Show the 10 most complex functions
 fallow health --top 10
 
@@ -610,9 +576,6 @@ fallow health --format compact
 
 # Markdown for PR comments
 fallow health --file-scores --format markdown
-
-# Markdown piped to a PR comment
-fallow health --file-scores --format markdown | gh pr comment --body-file -
 ```
 
 ```bash Snapshots & trends
@@ -698,6 +661,8 @@ fallow health --coverage-gaps --file-scores
 ```
 
 ## JSON output
+
+Each section's fields appear only when that section is enabled; a disabled section is absent from the envelope, not empty.
 
 ### Complexity findings
 
@@ -834,7 +799,7 @@ When `--file-scores` is used, the JSON output includes additional fields:
 ```
 
 <Note>
-  Without `--file-scores`, the `file_scores` array and `summary.files_scored` / `summary.average_maintainability` / `summary.coverage_model` fields are omitted entirely from the JSON output. The `coverage_model` field indicates how CRAP coverage was determined: `static_estimated` (default, per-function estimation from export references: 85% direct, 40% indirect, 0% untested) or `istanbul` (real per-function statement coverage from `--coverage` flag or auto-detected `coverage-final.json`). CRAP findings carry `coverage_source`; when such findings are emitted, `summary.coverage_source_consistency` reports `uniform` or `mixed` even if `summary.coverage_model` is omitted.
+  `--file-scores` adds the `file_scores` array and the `summary.files_scored` / `summary.average_maintainability` / `summary.coverage_model` fields. The `coverage_model` field indicates how CRAP coverage was determined: `static_estimated` (default, per-function estimation from export references: 85% direct, 40% indirect, 0% untested) or `istanbul` (real per-function statement coverage from `--coverage` flag or auto-detected `coverage-final.json`). CRAP findings carry `coverage_source`; when such findings are emitted, `summary.coverage_source_consistency` reports `uniform` or `mixed` even if `summary.coverage_model` is omitted.
 </Note>
 
 ### With hotspots
@@ -899,9 +864,6 @@ When `--hotspots` is used, the JSON output includes a `hotspots` array and `hots
 }
 ```
 
-<Note>
-  Without `--hotspots`, the `hotspots` array and `hotspot_summary` fields are omitted entirely from the JSON output. Hotspot analysis can be combined with `--file-scores` to include all sections in a single output.
-</Note>
 
 ### With refactoring targets
 
@@ -969,74 +931,15 @@ When `--targets` is used, the JSON output includes a `targets` array:
 
 Targets are sorted by `efficiency` (priority / effort) descending, surfacing quick wins first. Each target includes `efficiency`, `effort` (`low`/`medium`/`high`), `confidence` (`high`/`medium`/`low`, based on data source reliability), and `factors` with raw `value`/`threshold` for programmatic use. The `target_thresholds` object exposes the adaptive percentile-based thresholds used for scoring, so consumers can interpret scores in context. The `evidence` field provides actionable detail for supported categories (`remove_dead_code`, `extract_complex_functions`, `break_circular_dependency`, `add_test_coverage`); omitted for other categories.
 
-### Target categories
+The `category` values and the rule that assigns each one are listed under [Refactoring targets](/explanations/health#refactoring-targets).
 
-| Category | Label | Description |
-|:---------|:------|:------------|
-| `urgent_churn_complexity` | churn+complexity | Actively-changing file with growing complexity |
-| `break_circular_dependency` | circular dependency | File participates in a dependency cycle |
-| `split_high_impact` | high impact | High fan-in with high complexity; changes ripple widely |
-| `remove_dead_code` | dead code | Majority of exports are unused |
-| `extract_complex_functions` | complexity | Contains functions with very high cognitive complexity |
-| `extract_dependencies` | coupling | Excessive imports reduce testability and increase coupling |
-| `add_test_coverage` | untested risk | Multiple complex functions lack test dependency path. Fires when a file has 2+ functions above the CRAP threshold and complexity density > 0.3. The `crap_max` contributing factor appears on these targets. |
-
-<Note>
-  Without `--targets`, the `targets` array and `target_thresholds` are omitted entirely from the JSON output.
-</Note>
 
 ### With vital signs
 
-When file-scores are enabled (via `--file-scores` or implicitly via `--save-snapshot`), the JSON output includes a top-level `vital_signs` object:
-
-```json title="$ fallow health --file-scores --format json (vital_signs excerpt)"
-{
-  "schema_version": 11,
-  "version": "3.22.0",
-  "vital_signs": {
-    "dead_file_pct": 4.2,
-    "dead_export_pct": 12.8,
-    "avg_cyclomatic": 3.1,
-    "critical_complexity_pct": 1.2,
-    "p90_cyclomatic": 11,
-    "duplication_pct": null,
-    "hotspot_count": 5,
-    "hotspot_top_pct_count": 3,
-    "maintainability_avg": 72.4,
-    "maintainability_low_pct": 9.1,
-    "unused_dep_count": 3,
-    "unused_deps_per_k_files": 11.5,
-    "circular_dep_count": 1,
-    "circular_deps_per_k_files": 3.8,
-    "unit_size_profile": {
-      "low_risk": 82.1,
-      "medium_risk": 11.4,
-      "high_risk": 4.3,
-      "very_high_risk": 2.2
-    },
-    "functions_over_60_loc_per_k": 22.0,
-    "unit_interfacing_profile": {
-      "low_risk": 95.6,
-      "medium_risk": 3.8,
-      "high_risk": 0.5,
-      "very_high_risk": 0.1
-    },
-    "p95_fan_in": 8,
-    "coupling_high_pct": 2.3,
-    "counts": {
-      "dead_files": 11,
-      "total_files": 262,
-      "dead_exports": 48,
-      "total_exports": 375,
-      "unused_deps": 3,
-      "circular_deps": 1
-    }
-  }
-}
-```
+When file-scores are enabled (via `--file-scores` or implicitly via `--save-snapshot`), the JSON output includes a top-level `vital_signs` object with the metrics listed under [Vital signs](#vital-signs), plus the nested `counts` object. The [snapshot format](#snapshot-format) shows a complete example.
 
 <Note>
-  Without file-scores enabled, the `vital_signs` object is omitted from the JSON output. The `duplication_pct` field is populated automatically when `--score` is used, or when duplication analysis runs via `fallow dupes`, bare `fallow`, or `fallow dead-code --include-dupes`. It is `null` otherwise.
+  The `duplication_pct` field is populated automatically when `--score` is used, or when duplication analysis runs via `fallow dupes`, bare `fallow`, or `fallow dead-code --include-dupes`. It is `null` otherwise.
 </Note>
 
 ### With health score
@@ -1065,12 +968,10 @@ When `--score` is used, the JSON output includes a `health_score` object with sc
 }
 ```
 
-The score is reproducible from the penalties: `100 - sum(penalties) == score`. `formula_version` identifies the scoring formula; version 2 uses scale-invariant density and tail metrics such as `critical_complexity_pct`, `hotspot_top_pct_count`, and dependency densities per 1,000 files. Penalty fields are `null` (absent from JSON) when the corresponding pipeline didn't run. `--score` computes the score and automatically runs duplication analysis; add `--hotspots` (or combine `--score --targets`) when the score should include the churn-backed hotspot penalty.
-
-**Letter grades:** A (score >= 85), B (70-84), C (55-69), D (40-54), F (below 40).
+The score is reproducible from the penalties: `100 - sum(penalties) == score`. Penalty fields are `null` (absent from JSON) when the corresponding pipeline didn't run. The penalty formulas, `formula_version`, and the letter-grade bands are documented under [Health score](/explanations/health#health-score).
 
 <Note>
-  Without `--score`, the `health_score` object is omitted entirely from the JSON output. `--min-score` implies `--score`.
+  `--min-score` implies `--score`.
 </Note>
 
 ### With trend
@@ -1253,7 +1154,7 @@ coverage-gaps = "warn"
 The `files` array lists runtime files where no export is reached by any test dependency path. The `exports` array lists individual exports in otherwise-covered files that lack test reachability.
 
 <Note>
-  Without `--coverage-gaps`, the `coverage_gaps` object is omitted entirely from the JSON output. The flag is opt-in and the `coverage-gaps` rule defaults to `off`.
+  The `coverage-gaps` rule defaults to `off`; the flag opts in.
 </Note>
 
 ### With runtime coverage
@@ -1336,7 +1237,7 @@ Key points:
 | `watermark` | Present only when trial/license grace rules require visible annotation in the output. |
 | `warnings` | Non-fatal coverage merge diagnostics. |
 
-The `schema_version: 4` envelope was introduced with `fallow-cov-protocol 0.2` and is extended additively as the protocol evolves. Protocol `0.3` added the optional `summary.capture_quality` block. Protocol `0.5` (current) added `HotPath.end_line` so the consumer can do line-range overlap against a `--diff-file`, and split the previous single-verdict surface into a `signals` array alongside `verdict`. Earlier `schema_version: 3` output used a different finding shape (`state` instead of `verdict`, no stable IDs, renamed summary fields); see the [v2.39.0 release notes](https://github.com/fallow-rs/fallow/releases/tag/v2.39.0) for the full migration.
+The `schema_version: 4` envelope is extended additively as the `fallow-cov` protocol evolves: `summary.capture_quality` is optional, and `HotPath.end_line` lets a consumer do line-range overlap against a `--diff-file`. Consumers still on `schema_version: 3` output (`state` instead of `verdict`, no stable IDs, different summary field names) can follow the migration in the [v2.39.0 release notes](https://github.com/fallow-rs/fallow/releases/tag/v2.39.0).
 
 Use [`fallow coverage setup`](/cli/coverage) for first-run capture instructions; start a trial with [`fallow license`](/cli/license) when you need continuous or multi-capture runtime monitoring. For the conceptual model and trade-offs, see [Runtime coverage](/analysis/runtime-coverage).
 
