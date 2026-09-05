@@ -153,19 +153,6 @@ test("public content rejects a backtick-wrapped plain private root", async () =>
   );
 });
 
-test("public content rejects private repository links", async () => {
-  const root = await createFixture();
-  await writeFile(
-    join(root, "analysis", "health.mdx"),
-    "See [private repository](https://github.com/fallow-rs/fallow-cloud)\n",
-  );
-
-  await assert.rejects(
-    buildManifest(root),
-    /Found private cloud repository link/u,
-  );
-});
-
 test("public content rejects links to non-public Fallow decisions", async () => {
   const root = await createFixture();
   await writeFile(
@@ -179,8 +166,9 @@ test("public content rejects links to non-public Fallow decisions", async () => 
   );
 });
 
-test("public content rejects private repository clone URLs", async () => {
+test("public content rejects private repository links", async () => {
   const urls = [
+    "https://github.com/fallow-rs/fallow-cloud",
     "https://www.github.com/fallow-rs/fallow-cloud.git",
     "https://token@github.com/fallow-rs/fallow-cloud.git",
     "//github.com/fallow-rs/fallow-cloud",

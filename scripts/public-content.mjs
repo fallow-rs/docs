@@ -39,7 +39,6 @@ const CONTENT_DIRECTORIES = new Set([
   "frameworks",
   "integrations",
   "migration",
-  "snippets",
 ]);
 const ASSET_DIRECTORIES = new Set(["images", "logo"]);
 const REPOSITORY_ONLY_DIRECTORIES = new Set([
