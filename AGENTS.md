@@ -68,9 +68,5 @@ Tabs, Steps, Cards, CardGroup, Accordion, Info, Tip, Warning, Note, CodeGroup.
 
 ## Verifying changes
 
-1. Run `npm run content:manifest` after changing public content.
-2. Run `npm run check`.
-3. Check the changed page with `npm run docs:dev`.
-4. Confirm frontmatter has all four required fields.
-5. If you added a page, add it to the correct group in `docs.json`.
-6. Check that the change does not introduce volatile totals or duplicate facts.
+Run the checks in [CONTRIBUTING.md](CONTRIBUTING.md#before-submitting), then
+preview the changed page with `npm run docs:dev`.
