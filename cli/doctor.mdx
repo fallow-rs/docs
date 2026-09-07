@@ -1,0 +1,125 @@
+---
+title: "fallow doctor"
+description: "CLI reference for fallow doctor. Read-only readiness checks for the project root, config resolution, workspace discovery, external plugins, and the optional type-aware companion."
+keywords: ["fallow doctor", "readiness", "diagnostics", "CLI", "onboarding", "troubleshooting"]
+icon: "terminal"
+---
+
+Diagnose project readiness without running an analysis. `fallow doctor` checks the things that have to be right before any command produces trustworthy output: whether the root is readable, which config actually resolved, whether workspace discovery found what you expect, whether external plugins load, and whether the optional type-aware companion is present.
+
+Every check is a local read, which makes this safe as the very first command on a repository you have never analyzed, and cheap enough to leave in a CI preflight step.
+
+```bash
+fallow doctor
+fallow doctor --format json
+```
+
+<Info>
+  `doctor` only tells you whether Fallow can see your project properly. Once it reports ready, [`fallow dead-code`](/cli/dead-code) and [`fallow health`](/cli/health) are what actually look at your code.
+</Info>
+
+## Checks
+
+| Check | Category | Required | What it answers |
+|:------|:---------|:---------|:----------------|
+| `root` | `project` | Yes | Is the project root an accessible directory? |
+| `config` | `configuration` | Yes | Which config resolved, or did zero-config defaults apply? |
+| `workspaces` | `workspace` | No | Did workspace discovery complete, and how many packages did it find? |
+| `plugins` | `plugin` | Yes | Do the configured external plugins load? |
+| `type-aware` | `companion` | No | Is the optional type-aware companion enabled and available? |
+
+A check that is not required reports `skipped` when it cannot run, and a skipped check never fails the command. The `type-aware` check is skipped whenever type-aware analysis is off, which is the default.
+
+## Options
+
+| Flag | Default | Description |
+|:-----|:--------|:------------|
+| `--root <ROOT>` | current directory | Project root directory. |
+| `--config <CONFIG>` | discovered | Path to the Fallow config file. |
+| `--format <FORMAT>` | `human` | Output format: `human` or `json`. Alias: `--output`. |
+| `--pretty` | off | Indent JSON output. |
+| `--quiet` | off | Suppress progress output. |
+
+## Exit codes
+
+| Code | Meaning |
+|:-----|:--------|
+| `0` | Every required check passed. Warnings still exit `0`. |
+| `2` | A required check failed, so the project is not ready to analyze. |
+
+There is no exit `1` here. That code means error-severity findings, and `doctor` looks at your setup rather than your code, so it has no findings to report.
+
+## Human output
+
+```text
+Fallow doctor (.)
+[OK] root: Project root is an accessible directory.
+[OK] config: Configuration resolved from .fallowrc.json.
+[OK] workspaces: Workspace discovery completed (30 workspace packages).
+[OK] plugins: No external plugins are configured; built-in detection remains available.
+[-] type-aware: Type-aware analysis is not enabled.
+Status: ready
+```
+
+The trailing status line is `ready`, `ready with warnings`, or `not ready`.
+
+## JSON output
+
+```json
+{
+  "kind": "doctor",
+  "schema_version": 1,
+  "version": "3.23.0",
+  "root": ".",
+  "status": "pass",
+  "summary": {
+    "pass": 4,
+    "warn": 0,
+    "fail": 0,
+    "skipped": 1
+  },
+  "checks": [
+    {
+      "id": "root",
+      "category": "project",
+      "status": "pass",
+      "required": true,
+      "message": "Project root is an accessible directory."
+    },
+    {
+      "id": "config",
+      "category": "configuration",
+      "status": "pass",
+      "required": true,
+      "message": "Configuration resolved from .fallowrc.json."
+    },
+    {
+      "id": "workspaces",
+      "category": "workspace",
+      "status": "pass",
+      "required": false,
+      "message": "Workspace discovery completed (30 workspace packages)."
+    },
+    {
+      "id": "plugins",
+      "category": "plugin",
+      "status": "pass",
+      "required": true,
+      "message": "No external plugins are configured; built-in detection remains available."
+    },
+    {
+      "id": "type-aware",
+      "category": "companion",
+      "status": "skipped",
+      "required": false,
+      "message": "Type-aware analysis is not enabled."
+    }
+  ]
+}
+```
+
+Top-level `status` is `pass`, `warn`, or `fail`; a check's own `status` adds `skipped` to that set.
+
+## For agents
+
+Run `fallow doctor --format json --quiet` before the first analysis on an unfamiliar repository. A clean report and a misconfigured project both come back looking empty, and this is the cheapest way to tell them apart. Branch on the top-level `status`, then read `checks[].message` to report what the user needs to fix.
