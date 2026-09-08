@@ -1,11 +1,11 @@
 ---
 title: "fallow doctor"
-description: "CLI reference for fallow doctor. Read-only readiness checks for the project root, config resolution, workspace discovery, external plugins, the optional type-aware companion, installed dependencies, and persisted cache reuse."
+description: "CLI reference for fallow doctor. Read-only readiness checks for the project root, config resolution, workspace discovery, external plugins, the optional type-aware companion, installed dependencies, and persisted cache compatibility."
 keywords: ["fallow doctor", "readiness", "diagnostics", "CLI", "onboarding", "troubleshooting", "cache"]
 icon: "terminal"
 ---
 
-Diagnose project readiness without running an analysis. `fallow doctor` checks the things that have to be right before any command produces trustworthy output: whether the root is readable, which config actually resolved, whether workspace discovery found what you expect, whether external plugins load, whether the optional type-aware companion is present, whether dependencies are installed, and whether the persisted caches would be reused.
+Diagnose project readiness without running an analysis. `fallow doctor` checks the things that have to be right before any command produces trustworthy output: whether the root is readable, which config actually resolved, whether workspace discovery found what you expect, whether external plugins load, whether the optional type-aware companion is present, whether dependencies are installed, and whether the persisted caches are compatible with the project.
 
 Every check is a local read, which makes this safe as the very first command on a repository you have never analyzed, and cheap enough to leave in a CI preflight step.
 
@@ -28,14 +28,18 @@ fallow doctor --format json
 | `plugins` | `plugin` | Yes | Do the configured external plugins load? |
 | `type-aware` | `companion` | No | Is the optional type-aware companion enabled and available? |
 | `dependencies` | `project` | No | Is a `node_modules` directory present, or does the project run without one? |
-| `cache` | `cache` | No | Would the persisted extraction cache be reused on the next run? |
-| `graph-cache` | `cache` | No | Would the persisted module-graph cache be reused on the next run? |
+| `cache` | `cache` | No | Can the extraction cache be loaded with the current configuration? |
+| `graph-cache` | `cache` | No | Can the module-graph cache be loaded for this project root? |
 
 A check that is not required reports `skipped` when it cannot run, and a skipped check never fails the command. The `type-aware` check is skipped whenever type-aware analysis is off, which is the default.
 
 The last three checks are advisory and cannot fail, so they never change the exit code. `dependencies` warns when the project has no `node_modules` directory and is not a project that runs without one, because package `exports`, plugin activation, and dependency classification all degrade until dependencies are installed. `cache` and `graph-cache` warn when a persisted blob exists but would be discarded, naming the reason and its on-disk size; a project with no cache yet passes, because a first run legitimately has none. A project in one of those states reports the aggregate `warn` and still exits `0`.
 
-The two cache checks are separate because a run reuses the two blobs independently: the extraction cache can be perfectly reusable while the module graph is rebuilt every time. `graph-cache` answers whether the blob loads, not whether a run would reuse it, since the reuse decision also compares resolver options, entry points, and per-file content hashes, and computing those means running the discovery and extraction `doctor` deliberately skips.
+The two cache checks are separate because a run reuses the two blobs independently: the extraction cache can be perfectly reusable while the module graph is rebuilt every time. `graph-cache` checks whether the blob loads and belongs to this project root. A successful check does not establish that a run would reuse it, since the reuse decision also compares resolver options, entry points, and per-file content hashes, and computing those means running the discovery and extraction `doctor` deliberately skips.
+
+The cache location follows `FALLOW_CACHE_DIR` when it is nonempty, ahead of the configured cache directory. Relative paths are resolved against the project root, as they are during analysis.
+
+An absent cache is a normal first-run state. An unreadable cache is reported separately with a path-and-permissions hint. A decoding failure may mean an older cache format or damaged data; it does not establish corruption. Rebuilding the cache restores the current format.
 
 ## Options
 
