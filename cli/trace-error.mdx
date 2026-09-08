@@ -5,7 +5,7 @@ keywords: ["fallow trace-error", "stack trace", "runtime error", "frames", "debu
 icon: "bug"
 ---
 
-Read a runtime stack trace and ask the module graph which definitions its frames name. `trace-error` classifies every frame as in-project, inside an installed dependency, or outside the analyzed corpus, then resolves the in-project ones against the definitions fallow already extracted.
+Read a runtime stack trace and ask the module graph which definitions its frames name. `trace-error` classifies reported frames as in-project, inside an installed dependency, or outside the analyzed corpus, then resolves the in-project ones against the definitions fallow already extracted.
 
 ```bash
 fallow trace-error crash.txt
@@ -23,16 +23,20 @@ The trace comes from a file argument, from `-`, or from stdin when no argument i
 
 The command reports what it could not answer instead of guessing.
 
-- A frame matching several definitions reports `ambiguous` and lists all of them rather than picking one.
+- A frame matching several definitions reports `ambiguous`. It lists bounded candidates and records additional matches in `candidates_omitted`.
 - A frame matching nothing reports `not_found` rather than disappearing from the output.
 - A frame the graph was never asked about reports `not_attempted`, with the reason.
-- Every frame read stays in `frames[]` in input order, and `counts` publishes the per-outcome totals, so you can see what went unanswered.
+- Reported frames stay in `frames[]` in input order. `counts` publishes their per-outcome totals, while `frames_omitted` records frames beyond the report limit.
+
+Exact project-relative or absolute file paths take priority over abbreviated suffix matches. If an abbreviated path matches multiple modules, the result preserves that ambiguity.
 
 No source maps are read. A frame inside generated build output is reported as such, because a stale map rebinds silently to the wrong line and a wrong line is worse than no line.
 
 ## Options
 
 `trace-error` takes the project, output, and performance [global flags](/cli/global-flags): `--root`, `--config`, `--format` with `human` or `json`, `--pretty`, `--quiet`, `--no-cache`, and `--threads`.
+
+Input is limited to 1 MiB. The report includes up to 256 frames and up to 10 candidate definitions per frame; omitted counts remain explicit. Oversized input exits with code `2`.
 
 ## Human output
 
@@ -117,11 +121,11 @@ Each frame prints its origin and resolution as a `[origin/resolution]` pair, wit
 | `counts.unparsed_lines` | integer | Input lines that did not parse as a frame. |
 | `counts.frames_omitted` | integer | Frames withheld from the array by a cap. |
 
-`counts` is the honest total. Both `resolved + ambiguous + not_found + not_attempted` and `in_project + node_modules + out_of_corpus` equal `frames` on every run, so a consumer can verify nothing was dropped without walking the array. A trace that is entirely unrecognised reports zero frames and a non-zero `unparsed_lines`, rather than looking like an empty trace.
+`counts.frames` is the number of reported frames. Both `resolved + ambiguous + not_found + not_attempted` and `in_project + node_modules + out_of_corpus` equal that number. Add `counts.frames_omitted` to recover the total number of recognized input frames. A trace that is entirely unrecognised reports zero frames and a non-zero `unparsed_lines`, rather than looking like an empty trace.
 
 ## For agents
 
-The `trace_error` MCP tool wraps this command. Feed it the stack trace from a failing test or a production error, then read `frames[].candidates[]` for the files worth opening. Treat `not_found` on an in-project frame as a signal that the name is module-local rather than exported, not as a missing file.
+The `trace_error` MCP tool wraps this command. Feed it the stack trace from a failing test or a production error, then read `frames[].candidates[]` for the files worth opening. A `not_found` result on an in-project frame means the graph could not match its name. The function may be module-local, or the runtime name may differ from the extracted definition.
 
 ## See also
 
