@@ -1,0 +1,138 @@
+---
+title: "fallow trace-error"
+description: "CLI reference for fallow trace-error. Resolve the frames of a runtime stack trace to the definitions they name, without reading source maps."
+keywords: ["fallow trace-error", "stack trace", "runtime error", "frames", "debugging", "CLI"]
+icon: "bug"
+---
+
+Read a runtime stack trace and ask the module graph which definitions its frames name. `trace-error` classifies every frame as in-project, inside an installed dependency, or outside the analyzed corpus, then resolves the in-project ones against the definitions fallow already extracted.
+
+```bash
+fallow trace-error crash.txt
+cat crash.txt | fallow trace-error
+fallow trace-error - --format json --quiet
+```
+
+The trace comes from a file argument, from `-`, or from stdin when no argument is given. A relative path is resolved against the project root, matching `--diff-file`. V8 and Node traces are supported, as are SpiderMonkey and JavaScriptCore traces.
+
+<Note>
+  `trace-error` is a standalone, best-effort surface. It is not folded into the ranked [review brief](/cli/audit#review-brief-and-decision-surface) and is never an input to the focus map or its ranking.
+</Note>
+
+## What it refuses to do
+
+The command reports what it could not answer instead of guessing.
+
+- A frame matching several definitions reports `ambiguous` and lists all of them rather than picking one.
+- A frame matching nothing reports `not_found` rather than disappearing from the output.
+- A frame the graph was never asked about reports `not_attempted`, with the reason.
+- Every frame read stays in `frames[]` in input order, and `counts` publishes the per-outcome totals, so you can see what went unanswered.
+
+No source maps are read. A frame inside generated build output is reported as such, because a stale map rebinds silently to the wrong line and a wrong line is worse than no line.
+
+## Options
+
+`trace-error` takes the project, output, and performance [global flags](/cli/global-flags): `--root`, `--config`, `--format` with `human` or `json`, `--pretty`, `--quiet`, `--no-cache`, and `--threads`.
+
+## Human output
+
+```text title="$ fallow trace-error crash.txt"
+Stack-trace frames (syntactic; OFF the ranked path)
+
+  source: crash.txt
+  error:  TypeError: Cannot read properties of undefined (reading 'title')
+
+  [0] Box components/Box.tsx:12 [in-project/not-found]
+        no definition named 'Box' is exported from the module this frame points at; a module-local function is not in the graph's definition set
+  [1] renderWithHooks node_modules/react-dom/cjs/react-dom.development.js:14985 [node-modules/not-attempted]
+        frame is in an installed dependency, not in project source
+  [2] Object.<anonymous> /opt/build/generated/chunk-4f2a.js:1 [out-of-corpus/not-attempted]
+        '/opt/build/generated/chunk-4f2a.js' is generated build output; resolving it back to source needs a source map, which this command does not read
+
+  frames 3 | resolved 0 | ambiguous 0 | not found 1 | not attempted 2
+```
+
+Each frame prints its origin and resolution as a `[origin/resolution]` pair, with the reason on the indented line below.
+
+## JSON output
+
+```json title="$ fallow trace-error crash.txt --format json"
+{
+  "kind": "trace-error",
+  "schema_version": "1",
+  "source": "crash.txt",
+  "header": "TypeError: boom",
+  "frames": [
+    {
+      "index": 0,
+      "raw": "at transformCard (lib/card.transform.ts:22:9)",
+      "function": "transformCard",
+      "file": "lib/card.transform.ts",
+      "line": 22,
+      "column": 9,
+      "origin": "in_project",
+      "resolution": "resolved",
+      "candidates": [
+        {
+          "file": "lib/card.transform.ts",
+          "symbol": "transformCard",
+          "kind": "export",
+          "line": 20
+        }
+      ],
+      "candidates_omitted": 0,
+      "reason": "'transformCard' names lib/card.transform.ts:transformCard (export)"
+    }
+  ],
+  "counts": {
+    "frames": 1,
+    "frames_omitted": 0,
+    "in_project": 1,
+    "node_modules": 0,
+    "out_of_corpus": 0,
+    "resolved": 1,
+    "ambiguous": 0,
+    "not_found": 0,
+    "not_attempted": 0,
+    "unparsed_lines": 0
+  },
+  "reason": "1 frame: 1 resolved, 0 ambiguous, 0 not found, 0 not attempted"
+}
+```
+
+### Key fields
+
+| Field | Type | Description |
+|:------|:-----|:------------|
+| `source` | string | `stdin`, or the path exactly as you wrote it. |
+| `header` | string | The first non-blank line before any frame, verbatim and unparsed. Omitted when the input began with a frame. |
+| `frames[].index` | integer | Position in the input trace. Frames keep input order. |
+| `frames[].raw` | string | The frame line as it was read. |
+| `frames[].origin` | `"in_project"` \| `"node_modules"` \| `"out_of_corpus"` | Where the frame's file sits relative to the analyzed corpus. |
+| `frames[].resolution` | `"resolved"` \| `"ambiguous"` \| `"not_found"` \| `"not_attempted"` | What the graph could say about the frame. |
+| `frames[].candidates[]` | array | Definitions the frame may name, each with `file`, `symbol`, `kind`, and an optional `line` and `member`. Empty unless the resolution is `resolved` or `ambiguous`. |
+| `frames[].candidates_omitted` | integer | Candidates withheld from the array by a cap. `0` when nothing was withheld. |
+| `frames[].line_mismatch` | boolean | Set on a `resolved` frame whose line sits far from the declaration it matched, so the runtime may have run a same-named definition elsewhere. Omitted when false. |
+| `frames[].reason` | string | Why this frame has the resolution it has. |
+| `counts.unparsed_lines` | integer | Input lines that did not parse as a frame. |
+| `counts.frames_omitted` | integer | Frames withheld from the array by a cap. |
+
+`counts` is the honest total. Both `resolved + ambiguous + not_found + not_attempted` and `in_project + node_modules + out_of_corpus` equal `frames` on every run, so a consumer can verify nothing was dropped without walking the array. A trace that is entirely unrecognised reports zero frames and a non-zero `unparsed_lines`, rather than looking like an empty trace.
+
+## For agents
+
+The `trace_error` MCP tool wraps this command. Feed it the stack trace from a failing test or a production error, then read `frames[].candidates[]` for the files worth opening. Treat `not_found` on an in-project frame as a signal that the name is module-local rather than exported, not as a missing file.
+
+## See also
+
+<CardGroup cols={3}>
+  <Card title="fallow trace" icon="route" href="/cli/trace">
+    Walk a symbol's call chain, or find the shortest import path between two modules.
+  </Card>
+  <Card title="Inspect a target" icon="search-code" href="/cli/inspect">
+    Compose one evidence bundle for a file or exported symbol.
+  </Card>
+  <Card title="MCP integration" icon="robot" href="/integrations/mcp">
+    Use fallow tools from AI coding agents.
+  </Card>
+</CardGroup>

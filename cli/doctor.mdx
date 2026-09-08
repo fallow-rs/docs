@@ -1,11 +1,11 @@
 ---
 title: "fallow doctor"
-description: "CLI reference for fallow doctor. Read-only readiness checks for the project root, config resolution, workspace discovery, external plugins, and the optional type-aware companion."
-keywords: ["fallow doctor", "readiness", "diagnostics", "CLI", "onboarding", "troubleshooting"]
+description: "CLI reference for fallow doctor. Read-only readiness checks for the project root, config resolution, workspace discovery, external plugins, the optional type-aware companion, installed dependencies, and persisted cache reuse."
+keywords: ["fallow doctor", "readiness", "diagnostics", "CLI", "onboarding", "troubleshooting", "cache"]
 icon: "terminal"
 ---
 
-Diagnose project readiness without running an analysis. `fallow doctor` checks the things that have to be right before any command produces trustworthy output: whether the root is readable, which config actually resolved, whether workspace discovery found what you expect, whether external plugins load, and whether the optional type-aware companion is present.
+Diagnose project readiness without running an analysis. `fallow doctor` checks the things that have to be right before any command produces trustworthy output: whether the root is readable, which config actually resolved, whether workspace discovery found what you expect, whether external plugins load, whether the optional type-aware companion is present, whether dependencies are installed, and whether the persisted caches would be reused.
 
 Every check is a local read, which makes this safe as the very first command on a repository you have never analyzed, and cheap enough to leave in a CI preflight step.
 
@@ -27,8 +27,15 @@ fallow doctor --format json
 | `workspaces` | `workspace` | No | Did workspace discovery complete, and how many packages did it find? |
 | `plugins` | `plugin` | Yes | Do the configured external plugins load? |
 | `type-aware` | `companion` | No | Is the optional type-aware companion enabled and available? |
+| `dependencies` | `project` | No | Is a `node_modules` directory present, or does the project run without one? |
+| `cache` | `cache` | No | Would the persisted extraction cache be reused on the next run? |
+| `graph-cache` | `cache` | No | Would the persisted module-graph cache be reused on the next run? |
 
 A check that is not required reports `skipped` when it cannot run, and a skipped check never fails the command. The `type-aware` check is skipped whenever type-aware analysis is off, which is the default.
+
+The last three checks are advisory and cannot fail, so they never change the exit code. `dependencies` warns when the project has no `node_modules` directory and is not a project that runs without one, because package `exports`, plugin activation, and dependency classification all degrade until dependencies are installed. `cache` and `graph-cache` warn when a persisted blob exists but would be discarded, naming the reason and its on-disk size; a project with no cache yet passes, because a first run legitimately has none. A project in one of those states reports the aggregate `warn` and still exits `0`.
+
+The two cache checks are separate because a run reuses the two blobs independently: the extraction cache can be perfectly reusable while the module graph is rebuilt every time. `graph-cache` answers whether the blob loads, not whether a run would reuse it, since the reuse decision also compares resolver options, entry points, and per-file content hashes, and computing those means running the discovery and extraction `doctor` deliberately skips.
 
 ## Options
 
@@ -39,6 +46,8 @@ A check that is not required reports `skipped` when it cannot run, and a skipped
 | `--format <FORMAT>` | `human` | Output format: `human` or `json`. Alias: `--output`. |
 | `--pretty` | off | Indent JSON output. |
 | `--quiet` | off | Suppress progress output. |
+
+`doctor` reads and never writes, so `--output-file` is rejected rather than honored: the report goes to stdout, keeping the inputs to a diagnosis immutable. Analysis and gate flags such as `--production` and `--fail-on-issues` are rejected too, instead of being silently ignored on a command that runs no analysis.
 
 ## Exit codes
 
@@ -58,23 +67,27 @@ Fallow doctor (.)
 [OK] workspaces: Workspace discovery completed (30 workspace packages).
 [OK] plugins: No external plugins are configured; built-in detection remains available.
 [-] type-aware: Type-aware analysis is not enabled.
-Status: ready
+[OK] dependencies: Dependencies are installed, or the project runs without a node_modules directory.
+[W] cache: Extraction cache (0.9 MB) would not be reused: cache format version changed. The next run parses every file.
+    Action (from project root): fallow dead-code --quiet
+[OK] graph-cache: Module-graph cache (0.5 MB) loads; a run reuses it when the analysed files and options are unchanged.
+Status: ready with warnings
 ```
 
-The trailing status line is `ready`, `ready with warnings`, or `not ready`.
+The trailing status line is `ready`, `ready with warnings`, or `not ready`. A check that carries a remediation prints it on an indented `Action` line under the message.
 
 ## JSON output
 
 ```json
 {
   "kind": "doctor",
-  "schema_version": 1,
+  "schema_version": 2,
   "version": "3.23.0",
   "root": ".",
-  "status": "pass",
+  "status": "warn",
   "summary": {
-    "pass": 4,
-    "warn": 0,
+    "pass": 6,
+    "warn": 1,
     "fail": 0,
     "skipped": 1
   },
@@ -113,12 +126,40 @@ The trailing status line is `ready`, `ready with warnings`, or `not ready`.
       "status": "skipped",
       "required": false,
       "message": "Type-aware analysis is not enabled."
+    },
+    {
+      "id": "dependencies",
+      "category": "project",
+      "status": "pass",
+      "required": false,
+      "message": "Dependencies are installed, or the project runs without a node_modules directory."
+    },
+    {
+      "id": "cache",
+      "category": "cache",
+      "status": "warn",
+      "required": false,
+      "message": "Extraction cache (0.9 MB) would not be reused: cache format version changed. The next run parses every file.",
+      "remediation": {
+        "command": "fallow dead-code --quiet",
+        "cwd": ".",
+        "mutating": false
+      }
+    },
+    {
+      "id": "graph-cache",
+      "category": "cache",
+      "status": "pass",
+      "required": false,
+      "message": "Module-graph cache (0.5 MB) loads; a run reuses it when the analysed files and options are unchanged."
     }
   ]
 }
 ```
 
 Top-level `status` is `pass`, `warn`, or `fail`; a check's own `status` adds `skipped` to that set.
+
+A check can carry a `remediation` object with `command`, `cwd`, and `mutating`. `cwd` is always the project root, and `mutating` says whether running the command writes anything, so an agent can run the read-only ones without asking. When an explicit `--config` was passed and the path is project-relative and safe to render, the remediation repeats it; for an external or unsafe-to-render config path the command is omitted and the message tells the caller to reuse the same `--config` value.
 
 ## For agents
 

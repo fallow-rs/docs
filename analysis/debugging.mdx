@@ -85,19 +85,33 @@ fallow dupes --performance
 
 ```bash title="$ fallow dead-code --performance"
 ┌─ Pipeline Performance ─────────────────────────────
-│  discover files:       12ms  (847 files)
-│  plugins:               2ms
-│  parse/extract:         8ms  (847 modules, 812 cached, 35 parsed)
-│  cache update:          2ms
-│  entry points:          1ms  (388 entries)
-│  resolve imports:       3ms
-│  build graph:           1ms
-│  analyze:               2ms
-│  (other):               1ms
+│  discover files:       13.2ms  (520 files)
+│  workspaces:            2.1ms  (0 workspaces)
+│  plugin detection:     21.4ms  (+10.5ms plugin globs under entry points)
+│  script analysis:       3.0ms
+│  parse/extract:        17.6ms  (520 modules, 520 cached, 0 parsed)
+│  cache update:          2.0ms
+│  entry points:         12.3ms  (92 entries)
+│    root package         1.5ms
+│    workspaces           0.0ms
+│    plugin globs        10.5ms
+│      compile            9.9ms
+│      match              0.2ms
+│      (other)            0.4ms
+│    infrastructure       0.2ms
+│    dynamic globs        0.0ms
+│    dedup                0.0ms
+│    (other)              0.0ms
+│  resolve imports:       0.0ms
+│  build graph:           5.1ms
+│  analyze:              19.3ms
+│  (other):               0.0ms
 │  ────────────────────────────────────────────────
-│  TOTAL:                31ms
+│  TOTAL:                61.4ms
 └───────────────────────────────────────────────────
 ```
+
+The indented rows under `entry points` partition that stage rather than add to it, so they are not part of the `TOTAL` sum. They appear only when the stage cost at least 5ms, which keeps a fast project's box short. Use them when entry-point discovery is the expensive stage and you want to know whether the cost is plugin glob compilation, workspace traversal, or something else.
 
 The `(other)` row is the time inside `TOTAL` not attributed to a named stage (report assembly and inter-stage glue), so the sequential stages plus `(other)` sum to `TOTAL`. In combined mode (`fallow` with no subcommand) the `duplication` stage runs concurrently with the rest of the pipeline and is marked `(concurrent)`; it is shown for reference but is not part of the `TOTAL` sum, so it can legitimately exceed `TOTAL` when duplication detection runs longer than the dead-code pass.
 
@@ -112,7 +126,7 @@ Use this when:
 `parse/extract` runs across all cores. When the parse work was substantial and genuinely parallel, the line gains a `(parallel: ~Nms CPU)` suffix reporting the summed parse CPU across workers:
 
 ```bash title="$ fallow dead-code --performance (cold cache)"
-│  parse/extract:       382ms  (21033 modules)  (parallel: ~594ms CPU)
+│  parse/extract:       382.4ms  (21033 modules, 0 cached, 21033 parsed)  (parallel: ~594ms CPU)
 ```
 
 Here the stage finished in 382ms of wall-clock but spent ~594ms of CPU across cores. When that figure is much larger than the wall-clock the stage is CPU-bound and benefits from more cores; when it is close to the wall-clock the stage is I/O-bound and extra threads will not help. The suffix is omitted on warm or trivial runs where there is little real parse work to report.
@@ -140,6 +154,17 @@ Use `--no-cache` when:
 - You're benchmarking full parse performance.
 
 The `--performance` flag shows cache statistics, including how many files were cache hits vs. misses. A high hit rate on incremental runs is expected. Only modified files need re-parsing.
+
+### A refused cache says so
+
+A run that had a cache but could not reuse it prints the reason under the stage that paid for it, so a refusal never reads like a first run:
+
+```bash title="$ fallow dead-code --performance"
+│  parse/extract:        16.2ms  (335 modules, 0 cached, 335 parsed)  (parallel: ~98ms CPU)
+│  parse cache not reused: cache format version changed
+```
+
+The module-graph cache reports the same way on its own line, `graph cache not reused`, under `build graph`. Neither line appears when the cache was reused, and neither appears under `--no-cache`, where you asked for the cold path. [`fallow doctor`](/cli/doctor) reports the same two states before you run an analysis.
 
 ## Common false positives
 

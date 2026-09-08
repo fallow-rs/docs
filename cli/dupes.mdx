@@ -32,13 +32,14 @@ fallow dupes
 | Flag | Description |
 |:-----|:------------|
 | `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab` |
-| `--top <N>` | Show only the N highest-ranked clone groups (see [Ranking and JSON fields](#ranking-and-json-fields)). `stats.clone_groups` and `stats.clone_instances` reflect the shown groups, while corpus totals and `stats.duplication_percentage` remain scoped to the full analysis. |
+| `--top <N>` | Show only the N highest-ranked clone groups (see [Ranking and JSON fields](#ranking-and-json-fields)). `clone_families[]` is rebuilt from the groups that survive, so it narrows with them. Every `stats` counter keeps describing the whole scoped corpus; `clone_groups_shown` / `clone_groups_omitted` and `clone_families_shown` / `clone_families_omitted` report the split. Refused with exit code `2` alongside `--group-by`. |
 | `--quiet` | Suppress progress output |
 | `--threshold <N>` | Fail if duplication exceeds N% |
-| `--group-by <MODE>` | Partition the report into per-group sections. `MODE`: `owner` (CODEOWNERS), `directory` (first path component), `package` (workspace), or `section` (GitLab `[Section]` headers). Each clone group is attributed to its largest owner (most instances; alphabetical tiebreak), so a group split 2 src / 1 lib appears under `src`. JSON adds `grouped_by` plus a `groups` array of per-bucket dedup-aware `stats`, attributed `clone_groups` (each carrying `primary_owner` and per-instance `owner`), and `clone_families`. SARIF results carry `properties.group` and CodeClimate issues carry a top-level `group` field. Compact and markdown fall back to ungrouped output with a stderr note. |
+| `--group-by <MODE>` | Partition the report into per-group sections. `MODE`: `owner` (CODEOWNERS), `directory` (first path component), `package` (workspace), or `section` (GitLab `[Section]` headers). Each clone group is attributed to its largest owner (most instances; alphabetical tiebreak), so a group split 2 src / 1 lib appears under `src`. JSON adds `grouped_by` plus a `groups` array of per-bucket dedup-aware `stats`, attributed `clone_groups` (each carrying `primary_owner` and per-instance `owner`), and `clone_families`. SARIF results carry `properties.group` and CodeClimate issues carry a top-level `group` field. Compact and markdown fall back to ungrouped output with a stderr note. Cannot be combined with `--top`: per-bucket stats are computed over every clone group in the bucket, so a global top-N truncation would leave them describing groups the output no longer lists. |
 | `--explain` | Add metric explanations. In human format, prints a `Description:` line under each section header. In JSON format, adds a `_meta` object with metric descriptions and docs links. |
 | `--explain-skipped` | In human/markdown output, show the per-pattern breakdown for files skipped by default duplicates ignores. Machine formats suppress this note. |
 | `--summary` | Print a one-line summary of duplication counts at the end of the run. In JSON format, adds a `summary` counts object. |
+| `--no-fragments` | Omit the verbatim source text from `clone_groups[].instances[].fragment` in `--format json`. Each instance still carries `file`, `start_line`, `end_line`, `start_col`, and `end_col`, which address the same code, and the text is most of the payload on a duplicated codebase. Fingerprints, suggested names, refactoring suggestions, and `actions[]` are computed before serialization, so nothing else changes. |
 
 ### Incremental
 
@@ -126,6 +127,39 @@ Each JSON `clone_groups[]` entry includes:
 
 - `spread`: maximum directory or same-file line distance
 - `similarity`: lowest all-pairs similarity for near-miss groups, omitted for exact groups
+
+### Shown versus measured
+
+`stats` always describes the corpus the run measured. A presentation cap such as `--top` truncates the arrays without touching it, and four envelope-level counters report the split:
+
+| Field | Meaning |
+|:------|:--------|
+| `clone_groups_shown` | Length of `clone_groups[]`. |
+| `clone_groups_omitted` | Groups a presentation cap withheld. `0` on an untruncated run. |
+| `clone_families_shown` | Length of `clone_families[]`. |
+| `clone_families_omitted` | Families a presentation cap withheld. `0` on an untruncated run. |
+
+`clone_groups_shown + clone_groups_omitted` always equals `stats.clone_groups`, and the same identity holds for families against `stats.clone_families`. Read `clone_groups_shown` when you want "how many groups are in this array" and `stats.clone_groups` when you want "how many the project has".
+
+Scope filters are different from presentation caps. `--changed-since`, `--workspace`, and a duplication baseline narrow the corpus itself, so `stats` is recomputed against the narrowed corpus and nothing is reported as omitted.
+
+Human output says the same thing in words. A capped run closes the listing with the counts it withheld:
+
+```text
+  ... and 63 more clone groups
+  ... and 52 more clone families withheld by the same display limit
+```
+
+Under `--summary`, the counts block names the corpus totals beside the shown ones, so the four numbers in it can never read as one scope when they are two:
+
+```text
+       2  Clone families
+       2  Clone groups
+   2,605  Duplicated lines
+    9.5%  Duplication rate
+  ... and 63 more clone groups and 52 more clone families withheld by a display limit
+  Corpus totals: 65 clone groups, 54 clone families; duplicated lines and rate cover all of it
+```
 
 The `stats` object can also include `clone_groups_ignored` when `duplicates.ignoredClones` hides groups, and `near_candidates_skipped` when bounded-work limits skip near-miss comparisons. Zero values are omitted.
 

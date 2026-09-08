@@ -1,7 +1,7 @@
 ---
 title: "fallow trace"
-description: "CLI reference for fallow trace. Walk the callers and callees of one exported symbol through the module graph, bounded by depth. A standalone, best-effort symbol-level surface, separate from the ranked review brief."
-keywords: ["fallow trace", "call chain", "callers", "callees", "symbol trace", "module graph", "CLI"]
+description: "CLI reference for fallow trace. Walk the callers and callees of one exported symbol through the module graph, or find the shortest import path between two modules. A standalone, best-effort surface, separate from the ranked review brief."
+keywords: ["fallow trace", "call chain", "callers", "callees", "symbol trace", "import path", "module graph", "CLI"]
 icon: "route"
 ---
 
@@ -10,7 +10,10 @@ Walk the symbol-level call chain for one exported symbol: callers **up** (module
 ```bash
 fallow trace src/api.ts:fetchUser --format json --quiet
 fallow trace src/api.ts:fetchUser --callers --depth 2
+fallow trace --path src/app.ts src/db.ts
 ```
+
+`--path` answers a different question from the symbol target: which chain of imports carries one module to another. See [Import path between two modules](#import-path-between-two-modules).
 
 <Note>
   `fallow trace` is a standalone, best-effort symbol-level surface. It is **not** folded into the ranked [review brief](/cli/audit#review-brief-and-decision-surface) and is never an input to the focus map or its ranking. Use it when you want to see how a symbol connects, not when you want a prioritized review.
@@ -24,7 +27,7 @@ fallow trace src/api.ts:fetchUser --callers --depth 2
 fallow trace src/api.ts:fetchUser
 ```
 
-`FILE` is a project-relative path and `SYMBOL` is the exported symbol name.
+`FILE` is a project-relative path and `SYMBOL` is the exported symbol name. Omit it when you pass `--path`, which takes two file paths instead.
 
 ## Options
 
@@ -33,6 +36,7 @@ fallow trace src/api.ts:fetchUser
 | `--callers` | Walk only the callers direction. |
 | `--callees` | Walk only the callees direction. |
 | `--depth <N>` | Bound the walk depth in each requested direction. |
+| `--path <FROM> <TO>` | Find the shortest import path between two modules instead of walking a symbol. Mutually exclusive with the `FILE:SYMBOL` target, `--callers`, `--callees`, and `--depth`. |
 
 When neither `--callers` nor `--callees` is set, both directions are walked. `trace` also accepts the project, output, and performance [global flags](/cli/global-flags) (`--root`, `--config`, `--format` with `human` or `json`, `--quiet`, `--no-cache`, `--threads`, `--changed-since`).
 
@@ -66,6 +70,58 @@ others, or replace the star exports with explicit re-exports.
 
 The same best-effort call-chain data is available as opt-in evidence on [`fallow inspect --symbol-chain`](/cli/inspect#evidence-flags) and the `inspect_target` MCP tool's `symbol_chain` option.
 
+## Import path between two modules
+
+`fallow trace --path <FROM> <TO>` reports the shortest chain of imports by which `FROM` reaches `TO`. Both are project-relative file paths. Use it when you want to know how a module ends up depending on another one, rather than how a symbol is called.
+
+```bash title="$ fallow trace --path pages/report.tsx components/Box.tsx"
+Shortest import path (syntactic; OFF the ranked path)
+
+  from: pages/report.tsx
+  to:   components/Box.tsx
+  hops: 3
+
+  [1] pages/report.tsx:20 -> lib/related.transform.ts
+  [2] lib/related.transform.ts:1 -> components/RelatedContent.tsx
+  [3] components/RelatedContent.tsx:3 -> components/Box.tsx
+```
+
+JSON output carries the same walk under `kind: "trace"` with its own `schema_version`:
+
+```json title="$ fallow trace --path pages/report.tsx components/Box.tsx --format json"
+{
+  "kind": "trace",
+  "schema_version": "1",
+  "from": "pages/report.tsx",
+  "to": "components/Box.tsx",
+  "reachable": true,
+  "hops": 3,
+  "path": [
+    {
+      "from": "pages/report.tsx",
+      "to": "lib/related.transform.ts",
+      "type_only": false,
+      "import_line": 20
+    },
+    {
+      "from": "lib/related.transform.ts",
+      "to": "components/RelatedContent.tsx",
+      "type_only": false,
+      "import_line": 1
+    },
+    {
+      "from": "components/RelatedContent.tsx",
+      "to": "components/Box.tsx",
+      "type_only": false,
+      "import_line": 3
+    }
+  ],
+  "reason": "pages/report.tsx reaches components/Box.tsx in 3 hops"
+}
+```
+
+Three behaviors are worth relying on. A type-only hop is reported with `type_only: true` rather than skipped, so a path that exists only in type space is visible instead of silently absent. An unreachable pair is a result, not an error: `reachable` is `false`, `path` is empty, `hops` is `0`, and `reason` says no import path was found. The command still exits `0`. And tracing a module to itself answers `reachable: true` with `hops: 0`, so branch on `reachable` rather than on the hop count, which is `0` in both cases.
+
 ## See also
 
 <CardGroup cols={3}>
@@ -74,6 +130,9 @@ The same best-effort call-chain data is available as opt-in evidence on [`fallow
   </Card>
   <Card title="Audit and review brief" icon="terminal" href="/cli/audit">
     Changed-file verdict plus the graph-derived review brief and decision surface.
+  </Card>
+  <Card title="Resolve a stack trace" icon="bug" href="/cli/trace-error">
+    Map runtime stack-trace frames back to the definitions they name.
   </Card>
   <Card title="MCP integration" icon="robot" href="/integrations/mcp">
     Use fallow tools from AI coding agents.
