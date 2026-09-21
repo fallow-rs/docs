@@ -118,7 +118,8 @@ Supplied diffs (`--diff-file`, `--diff-stdin`, `FALLOW_DIFF_FILE`) get the same 
     "diff-filter": {
       "status": "applied",
       "affects": "scope",
-      "requested": "--diff-file pr.diff"
+      "requested": "--diff-file pr.diff",
+      "scope_size": 18
     }
   }
 }
@@ -129,6 +130,7 @@ Supplied diffs (`--diff-file`, `--diff-stdin`, `FALLOW_DIFF_FILE`) get the same 
 | `status` | `applied` when the run did what it was asked, `not-applied` when it could not and continued anyway. |
 | `affects` | `scope` when the request narrows the report, `artifact` when it writes a file beside the report. Read this before deciding what an unapplied entry cost: on `scope` the report below is complete, valid, and wider than you asked for; on `artifact` a file was not written and the report's own scope is untouched. |
 | `requested` | What you asked for, as you spelled it: the git ref, the diff source label, the `--sarif-file` path. Echoed verbatim, so do not join it to the project root the way you join every other path-shaped field. |
+| `scope_size` | How much the request left in scope, present only when the run applied it and measured that scope. The unit belongs to the request name: `diff-filter` counts added lines, so read the unit off the key the entry sits under, never across names. The count is what the run indexed, capped at one million added lines, so treat a non-zero value as a lower bound. `0` means the narrowing left nothing to analyze, so a report with no findings covered nothing. Absent means not measured, never zero. |
 | `reason` | A kebab-case token, present exactly when `status` is not `applied`. |
 | `message` | One sentence naming what happened and the next step, present exactly when `status` is not `applied`. The same sentence the run writes to stderr. |
 
@@ -140,9 +142,9 @@ Honored requests are listed too, so an absent `request_outcomes` means nothing w
 | `diff-filter` | `--diff-file`, `--diff-stdin`, `FALLOW_DIFF_FILE` | `scope` | `oversize`, `unreadable`, `not-utf8`, `foreign-namespace`, `ambiguous-base` |
 | `sarif-file` | `--sarif-file` | `artifact` | `directory-create-failed`, `write-failed`, `serialize-failed` |
 
-The key set, the `status` values, and the `affects` values are open. Read a name, a status, or a class you do not recognize as "some request" and "some outcome" rather than as an error, and never as `applied` or as `scope`. Select on `affects` instead of on a list of names: a request added later carries its own class. A diff that parsed but names no analyzable file reports `applied`, because the filter was applied over an empty scope.
+The key set, the `status` values, and the `affects` values are open. Read a name, a status, or a class you do not recognize as "some request" and "some outcome" rather than as an error, and never as `applied` or as `scope`. Select on `affects` instead of on a list of names: a request added later carries its own class. A diff that parsed but names no analyzable file reports `applied` with `scope_size: 0`, because the filter was applied over an empty scope.
 
-Every unapplied request also warns on stderr. The entry in the envelope is recorded whether or not `--quiet` is passed, so it is the channel a machine consumer can rely on. [`fallow audit`](/cli/audit) carries no object: it exits 2 rather than widen when its `--base` will not resolve. [`fallow security`](/cli/security) records no `sarif-file` entry, because a failed write there exits 2 instead of continuing.
+Every unapplied request also warns on stderr. The entry in the envelope is recorded whether or not `--quiet` is passed, so it is the channel a machine consumer can rely on. [`fallow audit`](/cli/audit) carries no object: it exits 2 rather than widen when its `--base` will not resolve. [`fallow security`](/cli/security) records `sarif-file` as `applied` with the path it wrote, so you can tell a run that produced the document from one that was never asked for it; a failed write there exits 2 with an error document instead of continuing, so no envelope carries that entry unapplied. [`fallow flags`](/cli/flags) and [`fallow suppressions`](/cli/suppressions) carry the `changed-since` entry and nothing else, because neither applies a diff filter.
 
 Formats other than `json` restate the object as one line:
 
@@ -154,7 +156,9 @@ Formats other than `json` restate the object as one line:
 | `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab` | The same line, joined into the body's status note |
 | `sarif`, `codeclimate`, `badge` | Nothing. Read the JSON envelope, or the job summary rendered from it |
 
-The GitHub Action and the GitLab template also publish the unapplied narrowing requests as a job output and a dotenv variable. See [CI integration](/integrations/ci).
+When a narrowing request applied over an empty scope, the same line adds a clause saying the report is clean because nothing in it was analyzable, and to check the diff or ref the run was given.
+
+The GitHub Action and the GitLab template also publish the unapplied narrowing requests as a job output and a dotenv variable, and both warn on an empty scope. See [CI integration](/integrations/ci).
 
 ## Loaded config disclosure
 

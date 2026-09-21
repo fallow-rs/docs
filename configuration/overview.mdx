@@ -401,19 +401,24 @@ Resolve framework convention auto-imports (Nuxt components) as real module-graph
 
 Edges for these tag references are always synthesized, so a component's default export consumed via a `<Card />` tag is credited under `includeEntryExports`. That synthesis is independent of everything below: a template tag or a composable call still credits its file whatever your `nuxt.config` says. Setting `autoImports: true` additionally drops the Nuxt convention entry patterns so a genuinely-unreferenced convention file is reported as `unused-file` instead of being kept alive as an entry point.
 
-Two surfaces are classified separately, read from `nuxt.config.ts` or `nuxt.config.js`. `components:` gates the component patterns. `imports:` gates the composable, util, `shared/utils` and `shared/types` patterns. A surface drops its patterns when the config leaves the key out, or when the value statically proves nothing is scanned:
+Two surfaces are classified separately, read from `nuxt.config.ts` or `nuxt.config.js`. `components:` gates the component patterns. `imports:` gates the composable, util, `shared/utils` and `shared/types` patterns. A surface drops its patterns when the config leaves the key out, or when the value scans no more than the Nuxt defaults:
 
-- `components: false`, `components: null`, `components: []`, or `components: { dirs: [] }`. Other keys beside an empty `dirs` do not change the verdict.
-- `imports: { scan: false }`, with `imports.dirs` absent or an empty array.
+- `components: false`, `components: null`, `components: []`, `components: true`, or `components: { dirs: [] }`. `components: true` resolves to the same directories as an absent key, and other keys beside an empty `dirs` do not change the verdict.
+- `imports: {}`, `imports: { dirs: [] }`, or `imports: { scan: false }` with `imports.dirs` absent or an empty array. The first two are Nuxt's own defaults: `imports.dirs` starts empty and Nuxt registers the convention directories itself.
 
 Every other shape is read as a custom layout and keeps its entry patterns:
 
-- `components: true`, the array form (`components: [{ path: '~/ui' }]`), and an object that carries no empty `dirs`, so a non-empty `dirs` or a lone `prefix` or `pathPrefix` keeps the patterns. Any value that is not one of the literals above counts as custom too.
-- `imports: {}`, `imports: { scan: true }`, a non-empty `imports.dirs`, and `imports: { scan: false }` next to a non-empty `imports.dirs`, which Nuxt scans either way.
+- `components: {}`, the array form (`components: [{ path: '~/ui' }]`), and an object that carries no empty `dirs`, so a non-empty `dirs` or a lone `prefix` or `pathPrefix` keeps the patterns. Any value that is not one of the literals above counts as custom too.
+- `imports: { scan: true }`, a non-empty `imports.dirs`, and `imports: { scan: false }` next to a non-empty `imports.dirs`, which Nuxt scans either way.
 - `imports: { autoImport: false }` on its own. It switches the injection off, not the scan, and the documented replacement (`import { useThing } from '#imports'`) resolves to no file.
 - A config that declares top-level `extends`, a spread or a repeated key in either object, and a config object fallow cannot resolve statically.
+- A top-level property fallow cannot read statically: a spread such as `{ ...base, devtools: {} }`, a computed key such as `['imports']`, an accessor, or a shorthand method. That property can configure either surface, so both keep their patterns for that root.
 
-The verdict is folded over the project root and each workspace root, so one custom shape anywhere keeps that surface's patterns everywhere. Defaults to `false`. Pinia store auto-imports are tracked separately.
+Each root is classified on its own config, the project root and every workspace root, and a pattern is judged by the config of the root it sits under. One custom `nuxt.config` in a monorepo does not keep another app's patterns.
+
+Component names follow Nuxt. A component directly under `components/global/` or `components/islands/` is named after its own directory, so `components/global/Foo.vue` is `<Foo>` while `components/base/global/Card.vue` stays `<BaseGlobalCard>`, and `.client`, `.server`, `.global` and `.island` suffixes are stripped. A name imported or re-exported by hand from `#components` or `#imports` credits its convention file the way a template tag does; a namespace import and a star re-export name nothing and credit nothing. `#layers/<name>/` resolves into the root `layers/` tree.
+
+Defaults to `false`. Pinia store auto-imports are tracked separately.
 </Accordion>
 
 <Accordion title="ignoreDecorators">
