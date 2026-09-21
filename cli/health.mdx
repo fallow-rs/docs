@@ -121,7 +121,15 @@ partial or unavailable checker evidence must fail CI. See
 | `--baseline` | Compare against a saved baseline and only report new findings. Applies to complexity findings only, not file scores. |
 | `--fail-on-stale-baseline` | Exit 1 when the loaded baseline has any entry that matched no current finding; see [global flags](/cli/global-flags). Stands down on `--report-only`, which is an explicit request never to fail. |
 
+When a quarter or more of the saved entries match no current finding, the run prints a partial-staleness warning on stderr with the re-save command. A run narrowed by `--changed-since`, `--diff-file`, `--workspace`, `--changed-workspaces` or `--production` stays silent, because it cannot judge a whole-project baseline.
+
 On an analysis run, `summary.baseline_staleness` reports how much of the baseline still matches (`fallow report --from` re-renders a saved envelope and carries it only if that envelope already had it): the counts, `moved_entries`, `current_findings`, `change_scoped`, the advisory verdict as `warning`, and `gate_trips`, which is the flag's own rule. Read `change_scoped` before dividing the counts: a narrowed run can report `matched_entries: 0` on a healthy baseline.
+
+`scope_reasons` names what narrowed the run, so you do not have to guess which of your own inputs is responsible. It is present and non-empty exactly when `change_scoped` is true. `health` compares after the flags resolve, so it reports `diff`, `changed-files` for a resolved changed-file set, `workspace` for both `--workspace` and `--changed-workspaces`, and `production`. Each command reports what it can see, so the names differ per command, and treat the set as open.
+
+A run that loaded a non-empty baseline and was narrowed only by a diff or `--changed-since` also gains a `recheck-baseline` entry in `next_steps[]`, carrying the unscoped command. That command re-reads the baseline and reports, and never re-saves it. A run in production mode or scoped to workspaces gets no entry, because those resolve from config and the environment as well as from a flag, so the suggested command would come back just as narrow. Neither does a diff-scoped run while `FALLOW_DIFF_FILE` is exported, for the same reason.
+
+Each command writes its own baseline format. `fallow health --baseline` loads a file saved by another command, or an empty file, as zero entries, so nothing can go unmatched and the gate would stay green on the wrong file. Such a run warns on stderr, with or without `--quiet`, and reports `summary.baseline_staleness.unrecognised_format: true`. The member is present only when true, so read it as absent-means-false, and read it rather than `baseline_entries == 0`: a baseline saved from a project with nothing above threshold is legitimately empty. The check compares the keys in the file against the keys `--save-baseline` writes. Exit codes do not move.
 
 ## Exit codes
 
@@ -668,6 +676,18 @@ fallow health --coverage-gaps --file-scores
 ## JSON output
 
 Each section's fields appear only when that section is enabled; a disabled section is absent from the envelope, not empty.
+
+### Degraded inputs
+
+A health input that failed to load contributes zeros, which reads the same as a clean measurement. To tell "measured zero" from "measured nothing", pair the number with `workspace_diagnostics[]`: a zero next to a diagnostic that carries `degrades_analysis: true` was not measured. A failed scoring pass, a project with no git repository, a shallow clone, an unpinned clock, an unparsable CODEOWNERS file and an unreadable trend snapshot all report that way. `coverage-auto-detected` is the exception: it names the coverage file that fed the CRAP scores, so it reports provenance for an input that did load and leaves `degrades_analysis` unset. Every kind, and which numbers each one hollows out, is in [debugging](/analysis/debugging#a-health-section-reports-nothing).
+
+Select on `degrades_analysis`, not on a list of kinds, so a kind added later reaches your consumer unchanged:
+
+```bash
+fallow health --format json --quiet | jq '.workspace_diagnostics[] | select(.degrades_analysis)'
+```
+
+Every entry is written whether or not `--quiet` is set, so a CI job that drops stderr still sees it.
 
 ### Complexity findings
 
