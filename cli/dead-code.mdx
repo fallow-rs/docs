@@ -85,7 +85,7 @@ contract and the boundary with `tsc` and Oxlint.
 |:-----|:------------|
 | `--changed-since <REF>` | Only check files changed since a git ref |
 | `--baseline <PATH>` | Compare against a previously saved baseline file |
-| `--save-baseline <PATH>` | Save current results as a baseline file |
+| `--save-baseline <PATH>` | Save current results as a baseline file. A save is refused with exit 2 when the destination holds a baseline of another `kind`. A destination that carries no `kind` gains one on the next save. |
 | `--fail-on-stale-baseline` | Exit 1 when the loaded baseline has any entry that matched nothing this run; see [global flags](/cli/global-flags) |
 | `--explain-skipped` | Show which built-in discovery ignore patterns removed source files, with counts |
 | `--production` | Production mode (exclude test/story/dev files) |
@@ -95,9 +95,11 @@ When a quarter or more of the saved baseline entries match no current issue, the
 
 `scope_reasons` names what narrowed the run, so you do not have to guess which of your own inputs is responsible. It is present and non-empty exactly when `change_scoped` is true. `dead-code` reads the flags themselves and reports `diff`, `changed-since`, `workspace`, `changed-workspaces`, `scope`, `file`, `issue-type-filter` (an active `--unused-*` filter, which drops whole baseline categories before the comparison) and `production`. Each command reports what it can see, so the names differ per command, and treat the set as open. Use it to separate narrowing a repeat can drop from narrowing you chose: `production`, `workspace` and `changed-workspaces` are your own statement about what the project is.
 
-A run that loaded a non-empty baseline and was narrowed only by channels a repeat can drop (`diff`, `changed-since`, `scope`, `file`, `issue-type-filter`) also gains a `recheck-baseline` entry in `next_steps[]`, carrying the unscoped command. That command re-reads the baseline and reports, and never re-saves it. A run in production mode or scoped to workspaces gets no entry, because those resolve from config and the environment as well as from a flag, so the suggested command would come back just as narrow. Neither does a diff-scoped run while `FALLOW_DIFF_FILE` is exported, for the same reason.
+A run that loaded a non-empty baseline and was narrowed only by channels a repeat can drop (`diff`, `changed-since`, `scope`, `file`, `issue-type-filter`) also gains a `recheck-baseline` entry in `next_steps[]`, carrying the unscoped command. That command re-reads the baseline and reports, and never re-saves it. A run in production mode or scoped to workspaces gets no entry, because those resolve from config and the environment as well as from a flag, so the suggested command would come back just as narrow. Neither does a diff-scoped run while `FALLOW_DIFF_FILE` is exported, for the same reason. A bare `fallow` run follows the same rule and carries the same entry.
 
-Each command writes its own baseline format. A file saved by another command, or an empty file, does not load here: `fallow dead-code --baseline` fails to parse it and exits 2, because several dead-code baseline fields have no default. `fallow dupes` and `fallow health` load such a file as zero entries and report `baseline_staleness.unrecognised_format: true` instead.
+Each command writes its own baseline format, and a saved baseline names its own. Every file `--save-baseline` writes carries a top-level `kind` of `dead-code`, `dupes` or `health`. A baseline that an earlier release saved carries no `kind` and still loads. For such a file the keys it carries decide the format.
+
+`fallow dead-code --baseline` loads a baseline of another kind as zero entries, so nothing can go unmatched. Such a run warns on stderr, with or without `--quiet`, and names both kinds and the path. It reports `baseline_staleness.unrecognised_format: true` and suppresses nothing. The member is present only when true, so read it as absent-means-false. Read it rather than `baseline_entries == 0`: a baseline saved from a project with nothing to record is legitimately empty. The baseline gate trips on such a file, so `--fail-on-stale-baseline` exits 1 there. A run that armed no gate keeps its exit code. Invalid JSON, and a dead-code baseline that carries only part of itself, still exit 2.
 
 ### Regression detection
 
