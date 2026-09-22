@@ -117,21 +117,21 @@ partial or unavailable checker evidence must fail CI. See
 
 | Flag | Description |
 |:-----|:------------|
-| `--save-baseline` | Save current complexity findings as a baseline for future comparison. A save is refused with exit 2 when the destination holds a baseline of another `kind`. A destination that carries no `kind` gains one on the next save. |
+| `--save-baseline` | Save current complexity findings as a baseline for future comparison. Fallow refuses the save with exit 2 when the destination holds a baseline of another `kind`. A destination with no `kind` gains one on the next save. |
 | `--baseline` | Compare against a saved baseline and only report new findings. Applies to complexity findings only, not file scores. |
 | `--fail-on-stale-baseline` | Exit 1 when the loaded baseline has any entry that matched no current finding; see [global flags](/cli/global-flags). Stands down on `--report-only`, which is an explicit request never to fail. |
 
-When a quarter or more of the saved entries match no current finding, the run prints a partial-staleness warning on stderr with the re-save command. A run narrowed by `--changed-since`, `--diff-file`, `--workspace`, `--changed-workspaces` or `--production` stays silent, because it cannot judge a whole-project baseline.
+When a quarter or more of the saved entries match no current finding, the run warns on stderr and gives the re-save command. A run narrowed by `--changed-since`, `--diff-file`, `--workspace`, `--changed-workspaces` or `--production` stays silent, because it cannot judge a whole-project baseline.
 
 On an analysis run, `summary.baseline_staleness` reports how much of the baseline still matches (`fallow report --from` re-renders a saved envelope and carries it only if that envelope already had it): the counts, `moved_entries`, `current_findings`, `change_scoped`, the advisory verdict as `warning`, and `gate_trips`, which is the flag's own rule. Read `change_scoped` before dividing the counts: a narrowed run can report `matched_entries: 0` on a healthy baseline.
 
-`scope_reasons` names what narrowed the run, so you do not have to guess which of your own inputs is responsible. It is present and non-empty exactly when `change_scoped` is true. `health` compares after the flags resolve, so it reports `diff`, `changed-files` for a resolved changed-file set, `workspace` for both `--workspace` and `--changed-workspaces`, and `production`. Each command reports what it can see, so the names differ per command, and treat the set as open.
+`scope_reasons` names what narrowed the run, so you do not have to guess which of your inputs is responsible. It is present and not empty exactly when `change_scoped` is true. `health` compares after the flags resolve, so it reports `diff`, `changed-files` for a resolved changed-file set, `workspace` for both `--workspace` and `--changed-workspaces`, and `production`. Each command reports what it can see, so the names differ per command. Read the set as open.
 
-A run that loaded a non-empty baseline and was narrowed only by a diff or `--changed-since` also gains a `recheck-baseline` entry in `next_steps[]`, carrying the unscoped command. That command re-reads the baseline and reports, and never re-saves it. A run in production mode or scoped to workspaces gets no entry, because those resolve from config and the environment as well as from a flag, so the suggested command would come back just as narrow. Neither does a diff-scoped run while `FALLOW_DIFF_FILE` is exported, for the same reason.
+A run can load a baseline with entries and use only a diff or `--changed-since`. Such a run also gains a `recheck-baseline` entry in `next_steps[]` with the unscoped command. That command re-reads the baseline and reports. It never re-saves the baseline. A run in production mode, or a run scoped to workspaces, gains no entry. Those channels resolve from config and from the environment as well as from a flag. The command in the entry would then be just as narrow. A diff-scoped run gains no entry while you export `FALLOW_DIFF_FILE`, for the same reason.
 
-Each command writes its own baseline format, and a saved baseline names its own. Every file `--save-baseline` writes carries a top-level `kind` of `dead-code`, `dupes` or `health`. A baseline that an earlier release saved carries no `kind` and still loads. For such a file the keys it carries decide the format.
+Each command writes its own baseline format, and a saved baseline names that format. Every file `--save-baseline` writes carries a top-level `kind` of `dead-code`, `dupes` or `health`. A baseline that an earlier release saved carries no `kind` and still loads. For such a file the keys it carries decide the format.
 
-`fallow health --baseline` loads a baseline of another kind as zero entries, so nothing can go unmatched. Such a run warns on stderr, with or without `--quiet`, and names both kinds and the path. It reports `summary.baseline_staleness.unrecognised_format: true` and suppresses nothing. The member is present only when true, so read it as absent-means-false. Read it rather than `baseline_entries == 0`: a baseline saved from a project with nothing above threshold is legitimately empty. The baseline gate trips on such a file, so `--fail-on-stale-baseline` exits 1 there. A run that armed no gate keeps its exit code.
+`fallow health --baseline` loads a baseline of another kind as zero entries, so no entry stays unmatched. Such a run warns on stderr, with or without `--quiet`, and names both kinds and the path. It reports `summary.baseline_staleness.unrecognised_format: true` and suppresses nothing. The member is present only when it is true, and an absent member means false. Read the member rather than `baseline_entries == 0`, because a baseline from a project with nothing above threshold is correctly empty. The baseline gate trips on such a file, so `--fail-on-stale-baseline` exits 1 there. A run that armed no gate keeps its exit code.
 
 ## Exit codes
 
@@ -681,7 +681,20 @@ Each section's fields appear only when that section is enabled; a disabled secti
 
 ### Degraded inputs
 
-A health input that failed to load contributes zeros, which reads the same as a clean measurement. To tell "measured zero" from "measured nothing", pair the number with `workspace_diagnostics[]`: a zero next to a diagnostic that carries `degrades_analysis: true` was not measured. A failed scoring pass, a project with no git repository, a `--since` window fallow could not read, a `--churn-file` that became unreadable after validation, a shallow clone, an unpinned clock, an unparsable CODEOWNERS file and an unreadable trend snapshot all report that way. The three that stop churn share one kind, `hotspots-skipped`, and its `cause` names which input it was: `not-a-repository`, `invalid-since` or `churn-file-unreadable`. `coverage-auto-detected` is the exception: it names the coverage file that fed the CRAP scores, so it reports provenance for an input that did load and leaves `degrades_analysis` unset. Every kind, and which numbers each one hollows out, is in [debugging](/analysis/debugging#a-health-section-reports-nothing).
+A health input that failed to load contributes zeros, and a zero reads like a clean measurement. To tell a measured zero from a missing measurement, read the number together with `workspace_diagnostics[]`. A diagnostic with `degrades_analysis: true` beside a zero means fallow measured nothing.
+
+These inputs report that way:
+
+- A failed score pass.
+- A project with no git repository.
+- A `--since` window fallow could not read.
+- A `--churn-file` that became unreadable after validation.
+- A shallow clone.
+- An unpinned clock.
+- An unparsable CODEOWNERS file.
+- An unreadable trend snapshot.
+
+The inputs that stop churn share one kind, `hotspots-skipped`, and its `cause` names the input: `not-a-repository`, `invalid-since` or `churn-file-unreadable`. `coverage-auto-detected` is the exception. It names the coverage file that fed the CRAP scores, so it reports provenance for an input that did load, and it leaves `degrades_analysis` unset. [Debugging](/analysis/debugging#a-health-section-reports-nothing) lists every kind, and which numbers each kind leaves at zero.
 
 Select on `degrades_analysis`, not on a list of kinds, so a kind added later reaches your consumer unchanged:
 
@@ -689,7 +702,7 @@ Select on `degrades_analysis`, not on a list of kinds, so a kind added later rea
 fallow health --format json --quiet | jq '.workspace_diagnostics[] | select(.degrades_analysis)'
 ```
 
-Every entry is written whether or not `--quiet` is set, so a CI job that drops stderr still sees it.
+Fallow writes every entry with or without `--quiet`, so a CI job that drops stderr still reads it.
 
 ### Complexity findings
 
