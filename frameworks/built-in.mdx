@@ -66,6 +66,7 @@ Most plugins activate automatically when the relevant package is in your `packag
     | **Tsdown** | `tsdown` |
     | **pkg-utils** | `@sanity/pkg-utils` |
     | **Parcel** | `parcel`, `@parcel/` |
+    | **Module Federation** | `@module-federation/enhanced`, `@module-federation/modern-js`, `@module-federation/nextjs-mf`, `@module-federation/node`, `@module-federation/rsbuild-plugin`, `@module-federation/rspack`, `@module-federation/runtime`, `@module-federation/vite`, `@module-federation/webpack-bundler-runtime`, `@originjs/vite-plugin-federation` |
   </Tab>
   <Tab title="Testing">
     | Plugin | Enabler packages |
@@ -182,16 +183,17 @@ Most plugins activate automatically when the relevant package is in your `packag
   | **tsd** | Declaration test directory from `package.json#tsd.directory` |
   | **Storybook** | Story globs, addon imports from `.storybook/main.ts` |
   | **Tailwind** | Content paths, plugin imports from `tailwind.config.js` |
-  | **Webpack** | Entry points including descriptor/context forms, `resolve.alias` mappings, loader/plugin imports from `webpack.config.js` |
+  | **Webpack** | Entry points including descriptor/context forms, `resolve.alias` mappings, loader/plugin imports from `webpack.config.js`. An `entry` value that names a package instead of a file credits that dependency, with the resource query included (`webpack-hot-middleware/client?reload=true` credits `webpack-hot-middleware`). A glob-shaped value stays an entry pattern |
   | **TypeScript** | Path aliases, project references from `tsconfig.json` |
   | **Babel** | Plugin and preset imports from `babel.config.js` |
   | **Rollup** | Entry points, plugin imports from `rollup.config.js` |
   | **Rolldown** | Entry points, external deps, plugin imports from `rolldown.config.ts` |
   | **PostCSS** | Plugin imports from `postcss.config.js` |
-  | **Nuxt** | Modules, plugins, server routes, `alias`, `imports.dirs`, `components`, `srcDir` from `nuxt.config.ts` |
+  | **Nuxt** | Modules, plugins, server routes, `alias`, `imports.dirs`, `components`, `srcDir` from `nuxt.config.ts`. `#layers/<name>/` resolves into the root `layers/` tree. Fallow reads each root on its own config: the project root and every workspace root. One app's custom `components:` or `imports:` shape decides only that root's [`autoImports`](/configuration/overview#autoimports) verdict |
   | **SvelteKit** | `kit.alias` mappings, param matchers from `svelte.config.js` |
   | **Next.js** | App Router convention exports (`page`, `layout`, `loading`, `error`, `route`), route segment config, Pages Router exports, middleware, proxy, instrumentation, `mdx-components`, `transpilePackages` |
-  | **Rsbuild** | Entry points, plugin imports from `rsbuild.config.ts` |
+  | **Rsbuild** | Entry points, plugin imports from `rsbuild.config.ts`. A `source.entry` value that names a package credits that dependency, with the resource query included. A glob-shaped value stays an entry pattern |
+  | **Rspack** | Entry points, plugin imports from `rspack.config.js`. An `entry` value that names a package credits that dependency, with the resource query included. A glob-shaped value stays an entry pattern |
   | **Remark** | Plugin imports from `.remarkrc.js` |
   | **Angular** | Styles, scripts, main, polyfills from `angular.json` build targets; ng-packagr `ng-package.json` / `ng-package.prod.json` `lib.entryFile` (default `src/public_api.ts`, resolved relative to the config directory) becomes a library public API entry point, with nested secondary-entry-point configs in the package subtree scanned too; `@Component({ templateUrl, styleUrl })` decorator references create graph edges; standalone `.html` templates and inline `template:` literals both contribute synthetic `<template>` complexity findings (`@if`/`@for`/`@switch`/`@defer`, `*ngIf`, bound attributes, interpolations) suppressible via `<!-- fallow-ignore-file complexity -->` (external) or `// fallow-ignore-next-line complexity` above the `@Component` decorator (inline) |
   | **Nx** | Executor references, main entry points, tsconfig paths from `project.json` |
@@ -200,6 +202,7 @@ Most plugins activate automatically when the relevant package is in your `packag
   | **Velite** | `defineCollection` `pattern` globs joined to the top-level `root` (default `content`), generated `.velite` output, a non-default `output.data` dir, and config imports from `velite.config.*` |
   | **UnoCSS** | Preset and transformer imports from `uno.config.ts` |
   | **Wuchale** | Adapter imports from `wuchale.config.js`; static custom JavaScript config files referenced from `@wuchale/vite-plugin` in `vite.config.*` |
+  | **Module Federation** | `exposes` targets and `remotes` aliases from `module-federation.config.*` and from a Federation plugin call in a webpack, rspack, rsbuild, vite or `next.config.*` file. See [Module Federation](#module-federation) |
 </Accordion>
 
 <Tip>
@@ -222,6 +225,41 @@ Active plugins:
 <Info>
 Don't see your framework? [Custom plugins](/frameworks/custom-plugins) support any internal or third-party tool using declarative JSON or TOML.
 </Info>
+
+## Module Federation
+
+Fallow reads `exposes` and `remotes` from `module-federation.config.{ts,js,mjs,cjs,mts,cts}`. It also reads them from a Federation plugin call in a webpack, rspack, rsbuild, vite or `next.config.*` file. The recognised plugin calls are `ModuleFederationPlugin`, `NextFederationPlugin`, `moduleFederationPlugin`, `pluginModuleFederation` and `federation`. Fallow reads such a call wherever it is in the config program. A call counts only when its first argument is an object that declares `exposes` or `remotes`.
+
+- `exposes`: each target becomes a runtime entry point. The exposed module, and everything it reaches, stays out of `unused-file`. Its exports follow [`includeEntryExports`](/configuration/overview#includeentryexports), like the exports of any other entry point. A target that names a bare module request instead of a local path (`"./utils": "shared-utils"`) credits that dependency.
+- `remotes`: fallow treats each alias and its subpaths as provided by the remote container, so it does not report `import("checkout/Button")` as an unlisted dependency. The alias holds only under the directory of the config that declared it. A sibling workspace package that declares no remote still reports the dependency.
+
+Fallow reads a plugin call in these positions:
+
+- A nested plugin array, and a plugin list that a variable holds.
+- A tool-specific key such as `tools.rspack.plugins`.
+- A hook body, such as an rsbuild `appendPlugins` hook or a Next.js `webpack(config)` hook.
+
+Fallow also reads:
+
+- Options that a `const` in the same file holds. The program must hold one binding of that name, and nothing may write to the binding or to one of its members.
+- The array form of `exposes`. A string element is both the public name and the module request. An object element uses the object reader.
+
+Fallow does not read:
+
+- `shared`, and the runtime `registerRemotes` and `loadRemote` calls.
+- The array form of `remotes`. A bundler derives the request scope of an element from the whole container location, so the alias is not a bare specifier.
+- A spread, and a value that is not a static object literal. An array element that holds glob syntax, a nested array, or a value that is not a string.
+
+Fallow reads the config syntactically. It fetches no remote container, and it validates nothing about the remote. The availability of the remote, its exports, its versions and its shared singletons are out of scope.
+
+A declaration that fallow could not read in full reaches the report as a `plugin-config-unreadable` entry in `workspace_diagnostics[]`, and it warns on stderr. The entry names the plugin, the key and the reason, with the config file in `path`. Its `reason` is `not-object-literal`, `array-form`, `spread` or `unreadable-entries`. Read that set as open. The plugin is `module-federation` for a standalone config file. It is `webpack`, `rspack`, `rsbuild`, `vite` or `nextjs` for the options fallow read from that plugin's own config. Two unreadable keys in one file give two entries. The entry carries `degrades_analysis`, so both shipped CI integrations report it under degraded inputs.
+
+```text
+fallow: Plugin 'module-federation': `exposes` in 'module-federation.config.ts' is not a static object literal, so the targets are not registered as entry points. Name the exposed files in `dynamicallyLoaded`.
+fallow: Plugin 'webpack': `remotes` in 'webpack.config.js' uses the array form, which is not read yet, so the aliases are not treated as provided by a remote container. Name the aliases in `ignoreDependencies`, or declare them as the keys of an object literal, whose values may be computed.
+```
+
+Use [`dynamicallyLoaded`](/configuration/overview#dynamicallyloaded) for an exposed file fallow cannot see. [`entry`](/configuration/overview#entry) fits a file that is a project entry point of its own. A remote alias belongs in [`ignoreDependencies`](/configuration/overview#ignoredependencies), which covers more: it also hides unused-dependency findings for that name.
 
 ## See also
 

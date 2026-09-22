@@ -47,10 +47,18 @@ fallow dupes
 |:-----|:------------|
 | `--changed-since <REF>` | Only report duplication in files changed since a git ref |
 | `--baseline <PATH>` | Compare against a previously saved baseline file |
-| `--save-baseline <PATH>` | Save current duplication as a baseline file |
+| `--save-baseline <PATH>` | Save current duplication as a baseline file. Fallow refuses the save with exit 2 when the destination holds a baseline of another `kind`. A destination with no `kind` gains one on the next save. |
 | `--fail-on-stale-baseline` | Exit 1 when the loaded baseline has any entry that matched no current clone group; see [global flags](/cli/global-flags) |
 
-When a quarter or more of the saved entries match no current clone group, the run prints a partial-staleness warning on stderr with the re-save command. The analysis run's JSON output carries `baseline_staleness` whenever a baseline was loaded (`fallow report --from` re-renders a saved envelope and carries it only if that envelope already had it): the counts, `current_findings`, `change_scoped`, the advisory verdict as `warning`, and `gate_trips`, which is this flag's own rule so a CI integration reads one boolean instead of restating it. Read `change_scoped` before dividing the counts: a narrowed run can report `matched_entries: 0` on a healthy baseline.
+When a quarter or more of the saved entries match no current clone group, the run warns on stderr and gives the re-save command. A run narrowed by `--changed-since` or `--production` stays silent, because it cannot judge a whole-project baseline. `--workspace`, `--changed-workspaces`, `--diff-file` and a positional path narrow the rendered report only. The comparison, and a re-save, still cover the whole project. The JSON output of an analysis run carries `baseline_staleness` whenever the run loaded a baseline. It holds the counts, `current_findings`, `change_scoped`, the advisory verdict as `warning`, and `gate_trips`. `gate_trips` is this flag's own rule, so a CI integration reads one boolean instead of the rule. `fallow report --from` re-renders a saved envelope, and it carries the object only when that envelope already had it. Read `change_scoped` before you divide the counts, because a narrowed run can report `matched_entries: 0` on a healthy baseline.
+
+`scope_reasons` names what narrowed the run, so you do not have to guess which of your inputs is responsible. It is present and not empty exactly when `change_scoped` is true. `dupes` compares before the report filters run, so it reports only the channels that narrow the analysis: `changed-files` for a resolved changed-file set, and `production`. Each command reports what it can see, so the names differ per command. Read the set as open.
+
+A run can load a baseline with entries and use only `--changed-since`. Such a run also gains a `recheck-baseline` entry in `next_steps[]` with the unscoped command. That command re-reads the baseline and reports. It never re-saves the baseline. A run in production mode gains no entry. Production mode resolves from config and from the environment as well as from a flag. The command in the entry would then be just as narrow.
+
+Each command writes its own baseline format, and a saved baseline names that format. Every file `--save-baseline` writes carries a top-level `kind` of `dead-code`, `dupes` or `health`. A baseline that an earlier release saved carries no `kind` and still loads. For such a file the keys it carries decide the format.
+
+`fallow dupes --baseline` loads a baseline of another kind as zero clone groups, so no entry stays unmatched. Such a run warns on stderr, with or without `--quiet`, and names both kinds and the path. It reports `baseline_staleness.unrecognised_format: true` and suppresses nothing. The member is present only when it is true, and an absent member means false. Read the member rather than `baseline_entries == 0`, because a baseline from a project with no duplication is correctly empty. The baseline gate trips on such a file, so `--fail-on-stale-baseline` exits 1 there. A run that armed no gate keeps its exit code.
 
 #### Token cache
 

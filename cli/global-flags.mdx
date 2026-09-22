@@ -27,7 +27,7 @@ The `--dupes-*` flags apply to combined mode, fall back to the config value when
 | `--churn-file <PATH>` | Import change history from a `fallow-churn/v1` JSON file instead of `git log`, for projects with no git repository. Affects the churn-backed health signals only. See [`fallow health` › Importing churn from a non-git VCS](/cli/health#importing-churn-from-a-non-git-vcs). |
 | `--baseline <PATH>` | Compare against a previously saved baseline file |
 | `--save-baseline <PATH>` | Save the current results as a baseline file |
-| `--fail-on-stale-baseline` | Exit 1 when a loaded `--baseline` has any entry that matched nothing this run, on `dead-code` / `check`, the bare run, `dupes` and `health`, in every output format. The verdict is the exit code plus one stderr line naming the stale count, the baseline path and the re-save command. A run that cannot judge the baseline (a narrowed scope, `health --report-only`, `audit`, `decision-surface`) stands down and says so on stderr instead of passing quietly. Report output is unchanged: the verdict is published as `baseline_staleness.gate_trips` whether or not this flag is passed. That member describes the baseline, not the exit code, so a stood-down run still reports it as true. |
+| `--fail-on-stale-baseline` | Exit 1 when a loaded `--baseline` has any entry that matched nothing this run. The flag applies to `dead-code` / `check`, the bare run, `dupes` and `health`, in every output format. It also exits 1 when the loaded file is a baseline of another `kind`, because such a file suppresses nothing. The verdict is the exit code plus one stderr line, which gives the stale count, the baseline path and the re-save command. A run that cannot judge the baseline stands down. It warns on stderr and does not pass quietly. These runs cannot judge the baseline: a narrowed scope, `health --report-only`, `audit` and `decision-surface`. A narrowed scope stands down for the unmatched-entry half only. The scope of the run does not change which command saved the file. The report output is unchanged. The run publishes the verdict as `baseline_staleness.gate_trips` with or without this flag. That member describes the baseline, not the exit code, so a run that stood down still reports it as true. `gate_outcomes["stale-baseline"].status` reports `fail` for both halves of the rule, and stays `skipped` on `audit`. |
 | `--fail-on-regression` | Fail if issue count increased beyond tolerance vs a regression baseline |
 | `--tolerance <N>` | Allowed increase: `"2%"` (percentage) or `"5"` (absolute). Default: `"0"` |
 | `--regression-baseline <PATH>` | Path to regression baseline file (default: `.fallow/regression-baseline.json`) |
@@ -47,7 +47,7 @@ The `--dupes-*` flags apply to combined mode, fall back to the config value when
 | `--sarif-file <PATH>` | Write SARIF output to a file (in addition to the primary `--format` output) |
 | `-o, --output-file <PATH>` | Write the report to a file instead of stdout, for any `--format` (no ANSI codes). Useful on large projects where the terminal scrollback truncates the top. Progress and a `Report written to <path>` confirmation stay on stderr (suppressed by `--quiet`). Valid with `dead-code`, `dupes`, `health`, `security`, and bare invocation; composes with `--sarif-file`. |
 | `--report-path-prefix <PREFIX>` | Override the repository-root offset prepended to every path in the CI-facing formats; an empty string disables rebasing. See [Repository-root paths in CI formats](#repository-root-paths-in-ci-formats). |
-| `--group-by <MODE>` | Group output by CODEOWNERS ownership (`owner`), first directory component (`directory`), workspace package (`package`), or GitLab CODEOWNERS section (`section`). When active, all output formats partition issues into labeled groups. |
+| `--group-by <MODE>` | Group output by CODEOWNERS ownership (`owner`), first directory component (`directory`), workspace package (`package`), or GitLab CODEOWNERS section (`section`). `json`, `human`, `sarif` and `codeclimate` carry the groups. Every other format renders one flat document and warns on stderr. See [Grouped output](#grouped-output). |
 | `--summary` | Print a one-line summary of issue counts at the end of the run. In JSON format, adds a `summary` counts object to the output. |
 | `--only <check,dupes,health>` | Run only specific analyses when no subcommand is given |
 | `--skip <check,dupes,health>` | Skip specific analyses when no subcommand is given |
@@ -99,6 +99,66 @@ that touch scoped files.
 CI platforms resolve file paths against the repository root: GitHub annotations, CodeClimate reports in GitLab, and inline review comments all reject or misplace paths relative to anything else. When `--root` points at a subdirectory of a git repository (a monorepo package like `packages/app/`), the CI-facing formats (`github-annotations`, `github-summary`, `codeclimate`, `review-github`, `review-gitlab`) therefore emit repository-root-relative paths: fallow detects the offset between `--root` and the git toplevel and prepends it automatically. `--report-path-prefix` overrides the detected offset for containerized or vendored checkouts where the git toplevel does not match the CI workspace; an empty string (`--report-path-prefix ''`) disables rebasing entirely and restores `--root`-relative paths.
 
 Supplied diffs (`--diff-file`, `--diff-stdin`, `FALLOW_DIFF_FILE`) get the same treatment in reverse: fallow detects whether the diff's paths are repository-root-relative or `--root`-relative and filters findings accordingly. A diff that parses but touches no analyzable files (deletion-only, binary-only, or empty) filters the report to zero findings; only a diff whose paths cannot be placed at all falls back to the full-scope report, with a warning saying so.
+
+## Request outcomes
+
+`--changed-since`, a supplied diff and `--sarif-file` ask a run to narrow its report, or to write a file beside it. When the run cannot apply one of them, it continues and the exit code stays the same. `--format json` reports what became of every request in a root object, keyed by request name. `gate_outcomes` uses the same shape for what the run concluded:
+
+```json
+{
+  "kind": "dead-code",
+  "request_outcomes": {
+    "changed-since": {
+      "status": "not-applied",
+      "affects": "scope",
+      "requested": "origin/main",
+      "reason": "not-a-repository",
+      "message": "--changed-since 'origin/main' was ignored because not a git repository, so this report covers the whole project instead of the changed files. Run fallow from inside the repository, or drop --changed-since."
+    },
+    "diff-filter": {
+      "status": "applied",
+      "affects": "scope",
+      "requested": "--diff-file pr.diff",
+      "scope_size": 18
+    }
+  }
+}
+```
+
+| Member | Value |
+|:-------|:------|
+| `status` | `applied` when the run did what you asked. `not-applied` when the run could not, and continued. |
+| `affects` | `scope` when the request narrows the report, `artifact` when it writes a file beside the report. Read this member first, to see what an unapplied entry cost. On `scope` the report is valid and wider than you asked for. On `artifact` the run wrote no file, and the scope of the report is unchanged. |
+| `requested` | What you asked for, as you spelled it: the git ref, the diff source label, or the `--sarif-file` path. Fallow echoes it without changes, so do not join it to the project root, the way you join every other path field. |
+| `scope_size` | How much the request left in scope, present only when the run applied it and measured that scope. The unit belongs to the request name. `diff-filter` counts added lines, so read the unit from the key of the entry, never across names. The count is what the run indexed. `diff-filter` indexes one million added lines at most, so read a value above zero as a lower bound. `0` means the request left nothing to analyze, so a report with no findings covered nothing. An absent member means the run did not measure the scope, never zero. |
+| `reason` | A kebab-case token, present exactly when `status` is not `applied`. |
+| `message` | One sentence that gives what happened and the next step, present exactly when `status` is not `applied`. It is the sentence the run writes to stderr. |
+
+The object also lists the requests the run applied. An absent `request_outcomes` means the run received no request, never that nothing failed.
+
+| Request | Asked by | `affects` | `reason` tokens |
+|:--------|:---------|:----------|:----------------|
+| `changed-since` | `--changed-since`, `--base` | `scope` | `git-missing`, `not-a-repository`, `git-failed` |
+| `diff-filter` | `--diff-file`, `--diff-stdin`, `FALLOW_DIFF_FILE` | `scope` | `oversize`, `unreadable`, `not-utf8`, `foreign-namespace`, `ambiguous-base` |
+| `sarif-file` | `--sarif-file` | `artifact` | `directory-create-failed`, `write-failed`, `serialize-failed` |
+
+The key set, the `status` values and the `affects` values are open. Read a name, a status or a class you do not recognize as one more request and one more outcome. Do not read it as an error, and never as `applied` or as `scope`. Select on `affects` rather than on a list of names, because a request added later carries its own class. A diff that parsed but names no analyzable file reports `applied` with `scope_size: 0`, because the run applied the filter over an empty scope.
+
+An unapplied request also warns on stderr. Fallow records the entry in the envelope with or without `--quiet`, so a machine consumer can rely on the envelope. [`fallow audit`](/cli/audit) carries no object. It exits 2 when its `--base` does not resolve, and it never widens the report. [`fallow security`](/cli/security) records `sarif-file` as `applied` with the path it wrote. You can then tell a run that wrote the document from a run that asked for none. A failed write there makes the run exit 2 with an error document, so no envelope carries that entry as unapplied. [`fallow flags`](/cli/flags) and [`fallow suppressions`](/cli/suppressions) carry the `changed-since` entry and nothing else, because neither applies a diff filter.
+
+Formats other than `json` restate the object as one line:
+
+| Format | Request line |
+|:-------|:-------------|
+| `json` | The `request_outcomes` object itself |
+| `github-summary` | One `Request outcomes:` line after the report |
+| `github-annotations` | The same line as a `::notice::`, before the findings |
+| `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab` | The same line, joined into the body's status note |
+| `sarif`, `codeclimate`, `badge` | Nothing. Read the JSON envelope, or the job summary rendered from it |
+
+A request that narrows the report can apply over an empty scope. The same line then adds a clause: the report is clean because nothing in it was analyzable. The clause also tells you to check the diff or the ref you gave the run.
+
+The GitHub Action and the GitLab template publish the requests with `affects: "scope"` that the run could not apply. The Action uses a job output, and the template writes a dotenv variable. Both also warn on an empty scope. See [CI integration](/integrations/ci).
 
 ## Loaded config disclosure
 
@@ -180,7 +240,15 @@ The per-analysis CLI flags are rejected when used with a subcommand other than `
 
 ## Grouped output
 
-The `--group-by` flag partitions all issues into labeled groups. This works with every output format and every subcommand.
+The `--group-by` flag partitions all issues into labeled groups. It works with every subcommand, and with the formats that can carry groups.
+
+| Format | `--group-by` |
+|:-------|:-------------|
+| `json` | A grouped envelope, shown below |
+| `human` | A per-group section |
+| `sarif` | `properties.group` on each result |
+| `codeclimate` | A `group` field on each issue |
+| `compact`, `markdown`, `badge`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`, `github-annotations`, `github-summary` | One flat document, plus a stderr note that names the format you passed. The exit code does not change. The comment and review bodies also carry a clause with the mode you requested, and that clause names `--format json`. |
 
 | Mode | Grouping | Requires |
 |:-----|:---------|:---------|

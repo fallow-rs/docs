@@ -399,9 +399,28 @@ Resolve framework convention auto-imports (Nuxt components) as real module-graph
 }
 ```
 
-Edges for these tag references are always synthesized, so a component's default export consumed via a `<Card />` tag is credited under `includeEntryExports`. Setting `autoImports: true` additionally drops the Nuxt component entry patterns so a genuinely-unreferenced component is reported as `unused-file` instead of being kept alive as an entry point.
+Fallow always synthesizes the edges for these tag references, so `includeEntryExports` credits a default export that a `<Card />` tag uses. That behavior is independent of the rules below. A template tag or a composable call credits its file whatever your `nuxt.config` says. `autoImports: true` also drops the convention entry patterns. Fallow then reports an unreferenced convention file as `unused-file`, and the file is no longer an entry point.
 
-The flag is conservative: if your `nuxt.config` declares a `components:` key (custom `prefix`, `pathPrefix`, or `dirs`), the entry patterns are kept, since those custom layouts are not yet modeled. Defaults to `false`. Composable, util, and Pinia store auto-imports are tracked separately.
+Fallow classifies two surfaces separately, and it reads both from `nuxt.config.ts` or `nuxt.config.js`. `components:` gates the component patterns. `imports:` gates the composable, util, `shared/utils` and `shared/types` patterns. A surface drops its patterns when the config omits the key, or when the value scans no more than the Nuxt defaults:
+
+- `components: false`, `components: null`, `components: []`, `components: true`, or `components: { dirs: [] }`. `components: true` resolves to the same directories as an absent key, and other keys beside an empty `dirs` do not change the verdict.
+- `imports: {}`, `imports: { dirs: [] }`, or `imports: { scan: false }` with `imports.dirs` absent or an empty array. The first two are Nuxt's own defaults: `imports.dirs` starts empty and Nuxt registers the convention directories itself.
+
+Fallow reads every other shape as a custom layout, and that surface keeps its entry patterns:
+
+- `components: {}`, the array form (`components: [{ path: '~/ui' }]`), and an object with no empty `dirs`. A non-empty `dirs`, or a lone `prefix` or `pathPrefix`, keeps the patterns. Any other value counts as custom too.
+- `imports: { scan: true }`, a non-empty `imports.dirs`, and `imports: { scan: false }` next to a non-empty `imports.dirs`, which Nuxt scans either way.
+- `imports: { autoImport: false }` on its own. It disables the injection, not the scan, and the documented replacement (`import { useThing } from '#imports'`) resolves to no file.
+- A config that declares top-level `extends`, a spread or a repeated key in either object, and a config object fallow cannot resolve statically.
+- A top-level property fallow cannot read statically: a spread such as `{ ...base, devtools: {} }`, a computed key such as `['imports']`, an accessor, or a shorthand method. That property can configure either surface, so both keep their patterns for that root.
+
+A surface that fallow reads as custom records a `plugin-effect-not-modeled` entry in `workspace_diagnostics[]`, one entry per config file and surface. The entry carries `plugin`, `key` and `reason`, with the config file in `path`. It does not degrade the analysis, and it warns on no channel. See [Debugging](/analysis/debugging) for the diagnostic kinds.
+
+Fallow classifies each root on its own config: the project root and every workspace root. The config of the root that holds a pattern decides that pattern. One custom `nuxt.config` in a monorepo does not keep another app's patterns.
+
+Component names follow Nuxt. Nuxt names a component directly under `components/global/` or `components/islands/` after its own directory. `components/global/Foo.vue` is then `<Foo>`, and `components/base/global/Card.vue` stays `<BaseGlobalCard>`. Fallow strips the `.client`, `.server`, `.global` and `.island` suffixes. A name that you import or re-export by hand from `#components` or `#imports` credits its convention file, the way a template tag does. A namespace import and a star re-export name nothing and credit nothing. `#layers/<name>/` resolves into the root `layers/` tree.
+
+Defaults to `false`. Fallow tracks Pinia store auto-imports separately.
 </Accordion>
 
 <Accordion title="ignoreDecorators">
