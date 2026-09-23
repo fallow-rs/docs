@@ -48,6 +48,9 @@ npm run docs:dev
 - Do not hardcode plugin or issue-type totals. Describe coverage by capability.
 - Benchmarks must match the fallow repository README.
 - Prefer generated CLI output or public source contracts for current values.
+- Verify facts against fallow `main`, not the latest release tag. Behavior in
+  the "Unreleased" section of the fallow CHANGELOG can go live before the
+  release.
 
 ### Page structure
 - YAML frontmatter: `title`, `description`, `keywords`, `icon`.
