@@ -1,7 +1,7 @@
 ---
 title: "Dead code explained"
-description: "Decide which dead-code findings to fix first and which are safe to keep. Learn what each issue type in fallow dead-code output means, including unused class members with inheritance tracking, circular dependencies with no depth limit, and CSS/SCSS import resolution."
-keywords: ["dead code", "unused exports", "unused files", "unused dependencies", "unused class members", "class member detection", "inheritance", "circular dependencies", "cycle detection", "CSS modules", "SCSS", "module graph", "issue types"]
+description: "Decide which dead-code findings to fix first and which are safe to keep. Learn what each issue type in fallow dead-code output means, including unused class members with inheritance tracking and circular dependencies with no depth limit."
+keywords: ["dead code", "unused exports", "unused files", "unused dependencies", "unused class members", "class member detection", "inheritance", "circular dependencies", "cycle detection", "module graph", "issue types"]
 icon: "skull-crossbones"
 ---
 
@@ -9,7 +9,7 @@ Use this page to decide which `fallow dead-code` findings to fix, in which order
 
 ## Issue types
 
-Each dead-code issue type has a default severity. The severity decides whether the issue causes a non-zero exit code with `--fail-on-issues`.
+Each dead-code issue type has a default severity. An `error` finding makes the run exit with code 1. A `warn` finding shows in the output, but does not fail the run unless you pass `--fail-on-issues`. An `off` rule does not run. To change a severity, use [`rules`](/configuration/rules).
 
 ### Unused files
 
@@ -47,7 +47,7 @@ Type aliases and interfaces that no module references.
 
 | Severity | Default |
 |:---------|:--------|
-| Warning | Yes |
+| Error | Yes |
 
 **When to act:** Remove unused types. They add noise to auto-import suggestions and make the public type API larger.
 
@@ -125,11 +125,11 @@ Same as unused dependencies, but for packages in `devDependencies`.
 
 ### Unused optionalDependencies
 
-Same as unused dependencies, but for packages in `optionalDependencies`. Fallow reports these only when you pass the `--unused-optional-deps` flag.
+Same as unused dependencies, but for packages in `optionalDependencies`. Fallow reports these by default, and the `--unused-deps` filter includes them.
 
 | Severity | Default |
 |:---------|:--------|
-| Warning | No (opt-in) |
+| Warning | Yes |
 
 ### Unused enum members
 
@@ -137,7 +137,7 @@ Enum values that no code references.
 
 | Severity | Default |
 |:---------|:--------|
-| Warning | Yes |
+| Error | Yes |
 
 **When to act:** Remove the unused member. Unused enum members add to serialized values and make it unclear which values are valid.
 
@@ -147,7 +147,7 @@ Class methods and properties that no code outside the class body references.
 
 | Severity | Default |
 |:---------|:--------|
-| Warning | Yes |
+| Error | Yes |
 
 **What it detects:** Public methods and properties that no module other than the class itself accesses. Fallow tracks internal `this.member` accesses in the class body separately. They do not count as external usage.
 
@@ -249,7 +249,7 @@ The same symbol name exported from more than one module. Auto-imports become amb
 
 | Severity | Default |
 |:---------|:--------|
-| Warning | Yes |
+| Error | Yes |
 
 **When to act:** Keep one canonical export. If more than one module must expose the symbol, re-export it from that one location.
 
@@ -259,7 +259,7 @@ Modules that import each other, directly or transitively, and so form a cycle.
 
 | Severity | Default |
 |:---------|:--------|
-| Warning | Yes |
+| Error | Yes |
 
 **Detection during graph construction:** Fallow finds circular dependencies while it builds the module graph, with Tarjan's strongly connected components algorithm (O(V + E)). There is no separate analysis pass, so cycle detection adds almost no cost.
 
@@ -309,8 +309,9 @@ Two or more barrel files that re-export from each other in a loop, or one barrel
 **Human output:**
 
 ```
-Re-Export Cycles (Architecture)
+── Structure ─────────────────────────────────────
 
+● Re-Export Cycles (2)
   src/api/index.ts
     Cycle (2 files):
       - src/api/index.ts
@@ -355,9 +356,14 @@ Imports that cross the architecture zone boundaries that you define. You define 
 - **Shared utilities**: Code in a shared or common zone can need access from more than one zone. Change the boundary rules to allow these imports.
 - **New zones**: When you add boundaries to an existing codebase, expect violations. Start with `warn` severity.
 
+**Related boundary findings:** the `boundary-violation` rule also sets the severity of two other findings:
+
+- `boundary-call-violation`: a file in a zone calls a callee that matches a pattern in `boundaries.calls.forbidden`.
+- `boundary-coverage`: a reachable source file matches no zone, and `boundaries.coverage.requireAllFiles` is `true`. To let some files stay outside every zone, list them in `boundaries.coverage.allowUnmatched`.
+
 ### Policy violations {#policy-violations}
 
-Calls, imports, or catalogue-derived effects that match a `banned-call`, `banned-import`, or `banned-effect` rule from a configured rule pack (the `rulePacks` config key). A rule pack is a standalone JSON or JSONC file with declarative policy data only. Loading a pack never executes project code. Every output format identifies a finding as `<pack>/<rule-id>`.
+Calls, imports, exports, or catalogue-derived effects that match a `banned-call`, `banned-import`, `banned-effect`, or `banned-export` rule from a configured rule pack (the `rulePacks` config key). A rule pack is a standalone JSON or JSONC file with declarative policy data only. Loading a pack never executes project code. Every output format identifies a finding as `<pack>/<rule-id>`.
 
 | Severity | Default |
 |:---------|:--------|
@@ -716,11 +722,23 @@ Workspace `package.json` dependencies that use `catalog:` or `catalog:<name>`, w
 
 ### pnpm dependency overrides {#pnpm-dependency-overrides}
 
+#### Unused dependency overrides {#unused-dependency-overrides}
+
+| Severity | Default |
+|:---------|:--------|
+| Warning | Yes |
+
 `unused-dependency-overrides` reports override entries for a package that no workspace `package.json` declares and that is not in the lockfile (`pnpm-lock.yaml`, `package-lock.json`, `npm-shrinkwrap.json`, or the bun text lockfile `bun.lock`). Fallow treats an override as used when it targets a transitive dependency in the lockfile. This is the common pattern to pin a version for a CVE.
 
 When there is no lockfile, fallow checks only `package.json`. It adds a `hint` to each finding, so you can review transitive pins before you remove them.
 
 Sometimes the only lockfile next to the root `package.json` is the legacy bun binary `bun.lockb`, with no text lockfile that fallow can parse next to it. Fallow never reads a `yarn.lock`. In this case, fallow cannot read the resolved versions, so it skips the check instead of running a weaker one. The `bun-lockb-override-resolution-skipped` workspace diagnostic tells you this. It names the lockfiles that fallow looked for and suggests `bun install --save-text-lockfile` (bun 1.2 or newer), or the removal of a stale `bun.lockb`.
+
+#### Misconfigured dependency overrides {#misconfigured-dependency-overrides}
+
+| Severity | Default |
+|:---------|:--------|
+| Error | Yes |
 
 `misconfigured-dependency-overrides` reports malformed override keys or empty values that pnpm rejects.
 
@@ -773,6 +791,8 @@ In JSON output, the additive `origin.kind_known` field on `stale_suppressions[].
 ```
 
 To show only stale suppression findings, use the `--stale-suppressions` filter flag.
+
+**Required reasons:** the opt-in `require-suppression-reason` rule (default `off`) reports a `missing-suppression-reason` finding for each `fallow-ignore-*` comment or `@expected-unused` tag without a `-- <reason>` suffix. Set it to `"warn"` or `"error"` under `rules` to make every suppression explain itself.
 
 
 ## Prioritizing findings
@@ -835,7 +855,7 @@ fallow dead-code --trace-dependency lodash
 ## Limitations
 
 - **Fully runtime-computed paths**: fallow cannot resolve `import(variable)` or `require(variable)` when the argument has no static structure. Fallow *does* resolve template literals with partial paths (`` import(`./locales/${lang}.json`) ``) and `import.meta.glob`. Only fully opaque variables are a limitation. Add those directories to `entry`.
-- **Syntactic analysis only**: fallow does not run the TypeScript compiler. Conditional types, and dead code behind generic constraints, need type resolution to detect. For details, see [known limitations](/analysis/limitations).
+- **Syntactic analysis by default**: the default analysis does not run the TypeScript compiler. The opt-in `--type-aware` flag adds TypeScript semantic evidence for exact symbol usage. Conditional types, and dead code behind generic constraints, need type resolution to detect. For details, see [known limitations](/analysis/limitations).
 - **Side-effect imports** (`import './polyfill'`): fallow tracks these as file-level edges. It does not flag the imported file as unused, but it still analyzes the individual exports in the file.
 
 <Info>
@@ -851,36 +871,24 @@ When you pass `--explain`, or run through MCP, the JSON output includes a `_meta
 {
   "schema_version": 9,
   "_meta": {
-    "docs": "https://docs.fallow.tools/explanations/dead-code",
-    "issue_types": {
-      "unused_file": {
-        "name": "Unused file",
-        "description": "File not reachable from any entry point",
-        "severity": "error",
-        "action": "Delete the file or add it as an entry point"
+    "docs": "https://docs.fallow.tools/cli/dead-code",
+    "rules": {
+      "unused-file": {
+        "name": "Unused Files",
+        "description": "Source files that are not imported by any other module and are not entry points. Detection uses graph reachability from configured entry points.",
+        "docs": "https://docs.fallow.tools/explanations/dead-code#unused-files"
       },
-      "unused_export": {
-        "name": "Unused export",
-        "description": "Exported symbol never imported by another module",
-        "severity": "error",
-        "action": "Remove the export keyword or delete the symbol"
-      },
-      "circular_dependency": {
-        "name": "Circular dependency",
-        "description": "Modules that import each other directly or transitively",
-        "severity": "warning",
-        "action": "Extract shared code into a separate module"
-      },
-      "boundary_violation": {
-        "name": "Boundary violation",
-        "description": "Import crosses a user-defined architecture zone boundary",
-        "severity": "error",
-        "action": "Restructure the import to respect zone boundaries"
+      "circular-dependency": {
+        "name": "Circular Dependencies",
+        "description": "A cycle in the module import graph.",
+        "docs": "https://docs.fallow.tools/explanations/dead-code#circular-dependencies"
       }
     }
   }
 }
 ```
+
+This is an excerpt. `_meta.rules` has an entry for every issue type, keyed by rule id. `_meta` also has a `field_definitions` block that describes shared output fields.
 
 With `_meta`, AI agents and CI systems can interpret issue types without external documentation.
 

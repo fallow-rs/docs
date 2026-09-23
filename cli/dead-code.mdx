@@ -22,14 +22,14 @@ fallow check      # Hidden alias for fallow dead-code
 
 | Flag | Description |
 |:-----|:------------|
-| `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab` |
+| `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`, `github-annotations`, `github-summary` |
 | `-q, --quiet` | Suppress progress output |
 | `--fail-on-issues` | Exit with code 1 if fallow finds issues |
 | `--sarif-file <PATH>` | Write SARIF output to a file, in addition to `--format` |
 | `--ci` | CI mode: sets the format to SARIF, turns on fail-on-issues, and hides progress. Individual flags can still override these settings. |
 | `--explain` | Add metric explanations. In human format, prints a `Description:` line under each section header. In JSON format, adds a `_meta` object with metric descriptions and docs links. |
 | `--group-by <MODE>` | Group output by `owner` (CODEOWNERS), `directory` (first path component), `package` (workspace package), or `section` (GitLab CODEOWNERS `[Section]` headers, with `owners` metadata). See [global flags](/cli/global-flags#reference). |
-| `--summary` | Print a one-line summary of issue counts at the end of the run. In JSON format, adds a `summary` counts object. |
+| `--summary` | In human output, show only the issue counts per category, without the individual items. JSON output does not change: it always has a `summary` counts object and the individual items. |
 
 ### Filtering
 
@@ -39,11 +39,19 @@ fallow check      # Hidden alias for fallow dead-code
 | `--unused-exports` | Report only unused exports |
 | `--unused-types` | Report only unused types |
 | `--private-type-leaks` | Opt in to private type leak findings (API hygiene) and report only that issue type |
-| `--unused-deps` | Report only unused dependencies |
-| `--unused-optional-deps` | Report only unused optional dependencies |
+| `--unused-deps` | Report only dependency findings: unused dependencies, dev dependencies, and optional dependencies, plus type-only, test-only, and dev-in-production dependencies |
 | `--unused-enum-members` | Report only unused enum members |
 | `--unused-class-members` | Report only unused class members |
 | `--unused-store-members` | Report only unused Pinia store members |
+| `--unprovided-injects` | Report only unprovided injects |
+| `--unrendered-components` | Report only unrendered components |
+| `--unused-component-props` | Report only unused component props |
+| `--unused-component-emits` | Report only unused component emits |
+| `--unused-component-inputs` | Report only unused component inputs |
+| `--unused-component-outputs` | Report only unused component outputs |
+| `--unused-svelte-events` | Report only unused Svelte dispatched events |
+| `--unused-server-actions` | Report only unused server actions |
+| `--unused-load-data-keys` | Report only unused SvelteKit `load()` data keys |
 | `--unresolved-imports` | Report only unresolved imports |
 | `--unlisted-deps` | Report only unlisted dependencies |
 | `--duplicate-exports` | Report only duplicate exports |
@@ -52,7 +60,6 @@ fallow check      # Hidden alias for fallow dead-code
 | `--boundary-violations` | Report only boundary violations |
 | `--policy-violations` | Report only rule-pack policy violations (banned calls and banned imports that you declare in the `rulePacks` config key). See [explanations/dead-code#policy-violations](/explanations/dead-code#policy-violations) |
 | `--stale-suppressions` | Report only stale suppression comments and `@expected-unused` JSDoc tags |
-| `--type-only-deps` | Report only type-only dependencies |
 | `--unused-catalog-entries` | Report only unused pnpm catalog entries |
 | `--empty-catalog-groups` | Report only empty named pnpm catalog groups |
 | `--unresolved-catalog-references` | Report only package references to missing pnpm catalog entries |
@@ -64,6 +71,7 @@ fallow check      # Hidden alias for fallow dead-code
 
 | Flag | Description |
 |:-----|:------------|
+| `[PATH]` | Report only findings in this file or directory. Fallow still builds the full project graph. Default: the whole project. |
 | `--file <PATH>` | Scope output to specific files. Accepts multiple values. Fallow reports only issues in these files, and hides project-wide dependency issues. Warns on paths that do not exist. Use it with lint-staged. |
 | `--include-entry-exports` | Also report unused exports in entry files (package.json `main` and `exports`, framework pages, and others). Without this flag, fallow assumes that external code uses them. See [global flags](/cli/global-flags#reference). |
 
@@ -132,6 +140,7 @@ Each command writes its own baseline format, and a saved baseline names that for
   | `--trace <FILE:EXPORT>` | Show where a specific export is used |
   | `--trace-file <PATH>` | Show all edges for a file |
   | `--trace-dependency <PACKAGE>` | Show where a dependency is used |
+  | `--impact-closure <PATH>` | Show the files that a change to this file affects, through reverse dependencies and re-export chains |
   | `--performance` | Show the time of each pipeline stage |
 
   ```bash
@@ -335,7 +344,7 @@ Each action has these fields:
 | `config_key` | _(optional)_ The config key to modify, e.g. `"ignoreDependencies"` for dependency issues |
 | `value` | _(optional)_ Value to write at `config_key`. Scalar for keys like `ignoreDependencies`; array of `{ file, exports }` rule objects for `ignoreExports` |
 | `value_schema` | _(optional)_ URL of the JSON Schema fragment that describes `value`. An agent can fetch this schema to validate the payload before it writes the payload into the config of a user |
-| `scope` | _(optional)_ Present on `duplicate_exports` suppress actions as `"per-location"`, because these actions cover more than one file |
+| `scope` | _(optional)_ `"per-location"` on suppress actions that apply to one location of a finding, for example on `duplicate_exports` (which span more than one file) and `stale_suppressions` |
 
 <Info>
   Re-export findings include a warning note about the effect on the public API. Dependency issues use an `add-to-config` suppress action (not an inline comment) with the package name and `config_key: "ignoreDependencies"`.
@@ -347,21 +356,23 @@ With `--format json`, the output can include these top-level objects:
 
 ### `entry_points`
 
-Lists all resolved entry point files. The module graph starts from these files:
+Counts the resolved entry point files, in total and per source. The module graph starts from these files:
 
 ```json
 {
-  "entry_points": [
-    "src/index.ts",
-    "src/cli.ts",
-    "src/workers/sync.ts"
-  ]
+  "entry_points": {
+    "total": 3,
+    "sources": {
+      "package.json": 1,
+      "plugin": 2
+    }
+  }
 }
 ```
 
 ### `summary`
 
-With `--summary`, the output includes a `summary` counts object:
+The JSON output always includes a `summary` counts object, with a count for each issue type. This excerpt shows some of the keys:
 
 ```json
 {
@@ -400,19 +411,20 @@ An unused dependency finding can include `used_in_workspaces`. This happens when
 
 In human, markdown, GitHub, and GitLab output, this shows as "imported in" or as an "Imported elsewhere" column. The dependency is in the wrong workspace. Move it to the workspace that imports it, and do not remove it automatically.
 
-### `baseline_deltas`
+### `baseline` {#baseline_deltas}
 
-With `--baseline`, a `baseline_deltas` object shows the changes since the baseline:
+With `--baseline`, a `baseline` object shows how many entries the baseline file has, and how many of them matched a current issue and were filtered out:
 
 ```json
 {
-  "baseline_deltas": {
-    "added": 3,
-    "removed": 5,
-    "unchanged": 14
+  "baseline": {
+    "entries": 19,
+    "matched": 14
   }
 }
 ```
+
+The `baseline_staleness` object has the details. See [Incremental](#incremental).
 
 ## Stale suppression detection
 
@@ -453,8 +465,8 @@ With `--format json`, stale suppressions are in the `stale_suppressions` array:
       "line": 5,
       "col": 0,
       "origin": {
-        "type": "inline_comment",
-        "issue_type": "unused-export",
+        "type": "comment",
+        "issue_kind": "unused-export",
         "is_file_level": false
       }
     },

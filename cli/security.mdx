@@ -13,7 +13,7 @@ icon: "shield"
 Both families default to `off`. They run only under `fallow security`, never under bare `fallow` or the `audit` gate.
 
 <Note>
-  Findings are candidates, not confirmed vulnerabilities. Fallow reports a structural trace, so an agent or a human can verify if the value can actually reach client-bundled code.
+  Findings are candidates, not confirmed vulnerabilities. Fallow reports a structural trace, so an agent or a human can verify if a secret can actually reach client-bundled code, or if untrusted input can actually reach the reported sink.
 </Note>
 
 ```bash
@@ -26,8 +26,9 @@ fallow security
 
 | Flag | Description |
 |:-----|:------------|
-| `-f, --format <FORMAT>` | Output format: `human` (default), `json`, or `sarif` |
+| `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `github-annotations`, or `github-summary`. Other values exit 2 |
 | `-q, --quiet` | Suppress progress output |
+| `--explain` | Include metric definitions and rule descriptions in the output |
 | `--summary` | Show a compact human summary instead of per-finding detail |
 | `--ci` | CI mode: equivalent to `--format sarif --fail-on-issues --quiet` |
 | `--surface` | Add the `attack_surface[]` inventory for agents to the JSON output |
@@ -38,6 +39,7 @@ fallow security
 
 | Flag | Description |
 |:-----|:------------|
+| `[PATH]` | Report only candidates in this file or directory. Fallow still builds the full project graph |
 | `-r, --root <PATH>` | Project root directory (default: current working directory) |
 | `-c, --config <PATH>` | Path to config file (default: auto-detected) |
 | `--changed-since <REF>` (alias: `--base`) | Report only candidates whose client anchor or trace hops touch files changed since a git ref |
@@ -53,6 +55,13 @@ fallow security
 |:-----|:------------|
 | `--no-cache` | Disable incremental caching |
 | `--threads <N>` | Number of parser threads |
+
+### Runtime coverage
+
+| Flag | Description |
+|:-----|:------------|
+| `--runtime-coverage <PATH>` | Add production runtime state to `tainted-sink` candidates and use it as an extra ranking signal. Accepts a V8 coverage directory, a single V8 JSON file, or an Istanbul coverage map JSON file |
+| `--min-invocations-hot <N>` | Threshold for hot-path classification when `--runtime-coverage` is active (default: `100`) |
 
 ### Regression gate
 
@@ -373,7 +382,7 @@ There is no `impact` field. The verifying agent decides exploitability. Fallow f
 
 `candidate.network` is present only on `secret-to-network` candidates. Its `destination` field holds the URL of the network call when the URL is a static string literal. That case is usually intended auth to the credential's own provider. `destination` is absent when the destination is dynamic, which is the stronger exfiltration signal. Use this field to tell exfiltration from intended auth without reading the code again.
 
-`finding_id` is a stable correlation id. It is identical across runs for the same rule, path, and line, and it matches the SARIF `partialFingerprints` value of the finding. Use it to track a candidate across runs (for example after a rebase) and to join JSON and SARIF output.
+`finding_id` is a stable correlation id. It is identical across runs for the same rule, path, and line, and it matches the SARIF `partialFingerprints["fallowSecurity/v1"]` value of the finding. Two candidates of the same rule on the same line share one ID. Use it to track a candidate across runs (for example after a rebase) and to join JSON and SARIF output.
 
 ## Subcommands
 
@@ -403,6 +412,8 @@ fallow security survivors --candidates candidates.json --verdicts verdicts.json
 | `-o, --output-file <PATH>` | Write the report to a file instead of stdout |
 
 The output reports `summary.unverdicted`, so you can tell reviewed candidates from unreviewed ones. The human output separates verifier dispositions from candidates that still need review. Without `--require-verdict-for-each-candidate`, an incomplete verdict file does not fail the run. The gap shows in `summary.unverdicted`.
+
+When two candidates in the candidate file have the same `finding_id`, `survivors` exits 2. This happens when two sinks of the same rule are on one line.
 
 ### blind-spots
 

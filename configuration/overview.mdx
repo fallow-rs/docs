@@ -672,6 +672,9 @@ Configuration for `fallow health`:
 | `maxUnitSize` | `number` | `60` | Maximum function length in lines of code. Fallow reports longer functions as a "large function". Raise it for generated or test files, where a `describe()` block can span hundreds of lines. The complexity checks stay on. |
 | `crapRefactorBand` | `number` | `5` | Band below `maxCyclomatic`. In this band, a CRAP-only finding also gets a secondary `refactor-function` action when the cognitive complexity is at least half of `maxCognitive` |
 | `ignore` | `string[]` | `[]` | Glob patterns for files to exclude from complexity analysis |
+| `coverage` | `string` | none | Path to Istanbul coverage data (`coverage-final.json`) for exact per-function CRAP scores. A relative path resolves against the project root. The `--coverage` flag and [`FALLOW_COVERAGE`](/configuration/environment#fallow_coverage) take precedence |
+| `coverageRoot` | `string` | none | Absolute prefix that fallow removes from the file paths in the coverage data. Use it when CI or Docker generated the coverage in a different checkout root. The `--coverage-root` flag and [`FALLOW_COVERAGE_ROOT`](/configuration/environment#fallow_coverage_root) take precedence |
+| `ownership` | `object` | see description | Settings for `--ownership` output: `botPatterns` (globs for bot and service-account authors, which replace the defaults) and `emailMode` (`raw`, `handle`, or `anonymized`; default `handle`). See [fallow health](/cli/health) |
 | `thresholdOverrides` | `array` | `[]` | Per-file threshold exceptions. Each entry has `files` globs, optional exact `functions`, one or more of `maxCyclomatic`, `maxCognitive`, `maxCrap`, `maxUnitSize`, and an optional `reason`. Leave `functions` empty to relax every function in the matching files, including a `describe()` wrapper and its `it()` blocks. JSON health output shows the override state in `threshold_overrides`. It has one row per threshold dimension (`complexity` for the cyclomatic, cognitive, and unit-size limits; `crap` for `maxCrap`), with the status `active`, `stale`, `insufficient`, or `no_match`. Rows from one entry share `override_index`, so group on it to count configured entries. |
 | `suggestInlineSuppression` | `boolean` | `true` | Add `suppress-line` action hints to health findings in JSON output. Fallow always leaves them out when `--baseline` or `--save-baseline` is active. Set to `false` to turn off inline suppression hints for the whole project, for example when you do not want CI to suggest inline suppressions. |
 
@@ -712,6 +715,10 @@ Configuration for `fallow audit`, the command that reviews changed files:
 | `css` | `boolean` | `true` | Include styling analytics in `fallow audit`. Set to `false` to match `--no-css`. |
 | `cssDeep` | `boolean` | `true` | Include project-wide styling reachability checks in `fallow audit`. Set to `false` to match `--no-css-deep`. Set to `true` to force the same behavior as `--css-deep`. |
 | `cacheMaxAgeDays` | `number` | `30` | Maximum age of a base-snapshot worktree cache that `fallow audit` keeps and reuses, in days since the last reuse or since creation. The next `fallow audit` removes older entries when it starts. `0` turns off the cleanup. The [`FALLOW_AUDIT_CACHE_MAX_AGE_DAYS`](/configuration/environment#fallow_audit_cache_max_age_days) env var overrides it per run and takes precedence when both are set. |
+| `deadCodeBaseline` | `string` | none | Dead-code baseline file (from `fallow dead-code --save-baseline`). Issues in the baseline do not count toward the verdict. The `--dead-code-baseline` flag takes precedence |
+| `healthBaseline` | `string` | none | Health baseline file (from `fallow health --save-baseline`). The `--health-baseline` flag takes precedence |
+| `dupesBaseline` | `string` | none | Duplication baseline file (from `fallow dupes --save-baseline`). The `--dupes-baseline` flag takes precedence |
+| `typeAware` | `boolean` | inherits `typeAware.enabled` | Turn type-aware analysis on or off for `fallow audit` only. The `--type-aware` and `--no-type-aware` flags and `FALLOW_TYPE_AWARE` take precedence |
 
 ```jsonc
 {
@@ -803,7 +810,7 @@ The CLI flags `--production`, `--production-dead-code`, `--production-health`, a
 </Accordion>
 
 <Accordion title="workspaces">
-Extra workspace patterns, added to the workspaces that fallow detects from `package.json` or `pnpm-workspace.yaml`:
+Extra workspace patterns, added to the workspaces that fallow detects automatically (`package.json` `workspaces`, `pnpm-workspace.yaml`, a root Deno config, and `tsconfig.json` `references`). See [Workspaces](/configuration/workspaces):
 
 ```jsonc
 {
@@ -1021,7 +1028,7 @@ For details on the issue type, see [Policy violations](/explanations/dead-code#p
 </Accordion>
 
 <Accordion title="rules">
-Severity per issue type: `error` (default, fails CI with exit code 1), `warn` (reports but exits 0), or `off` (no detection).
+Severity per issue type: `error` (fails CI with exit code 1), `warn` (reports but exits 0), or `off` (no detection). Each rule has its own default. See [Rules](/configuration/rules#available-rule-names) for the default of each rule.
 
 ```jsonc
 {
@@ -1170,15 +1177,18 @@ severity overrides, do not invalidate the extraction cache.
 <Accordion title="regression">
 Regression baseline in the config. It stores the issue counts of a known-good state, so CI can fail when the counts go up. `--save-regression-baseline` (with no path argument) writes it, and `--fail-on-regression` reads it.
 
+The count keys use camelCase, for example `totalIssues` and `unusedExports`. Fallow ignores snake_case keys such as `unused_exports` and treats a missing count as `0`.
+
 ```jsonc
 {
   "regression": {
     "baseline": {
-      "unused_files": 11,
-      "unused_exports": 48,
-      "unused_types": 5,
-      "unused_dependencies": 3,
-      "circular_dependencies": 1
+      "totalIssues": 68,
+      "unusedFiles": 11,
+      "unusedExports": 48,
+      "unusedTypes": 5,
+      "unusedDependencies": 3,
+      "circularDependencies": 1
     }
   }
 }

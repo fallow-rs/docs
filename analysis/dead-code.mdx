@@ -15,7 +15,7 @@ fallow dead-code
 
 ## Issue types
 
-Fallow reports these issue types:
+Fallow reports these core issue types:
 
 | Issue type | Description |
 |:-----------|:------------|
@@ -37,6 +37,8 @@ Fallow reports these issue types:
 | **Test-only dependencies** | Production dependencies that only test files import (move them to devDependencies) |
 | **Stale suppressions** | `fallow-ignore` comments or `@expected-unused` JSDoc tags that no longer match any issue |
 
+Fallow also has framework-specific rules, such as unused component props and route collisions, and opt-in rules, such as private type leaks. To set the severity of a rule, see [Rules & severity](/configuration/rules). To see the filter flag of each issue type, run `fallow dead-code --help`.
+
 <Tip>
 Most projects find 50+ unused exports on the first run. Start with `--unused-exports` to get the largest cleanup first.
 </Tip>
@@ -44,29 +46,32 @@ Most projects find 50+ unused exports on the first run. Start with `--unused-exp
 Typical output with more than one issue type:
 
 ```bash title="$ fallow dead-code"
-● Unused files (9)
+── Unused Code ─────────────────────────────────────
+
+● Unused files (3)
   scripts/check-db.ts
   src/features/forecasting/hooks/useCashFlowForecast.ts
   src/features/forecasting/hooks/useIncomeForecast.ts
-  src/features/forecasting/hooks/useTargetProgress.ts
-  src/features/forecasting/hooks/useYearComparison.ts
-  ... and 4 more
-  Files not imported or referenced by any entry point: https://docs.fallow.tools/explanations/dead-code#unused-files
+  Files not reachable from any entry point: https://docs.fallow.tools/explanations/dead-code#unused-files
+  To suppress: // fallow-ignore-file unused-file
 
-● Unused exports (24)
+● Unused exports (8)
   test/component-helpers.tsx (5)
+    :1 act (re-export)
+    :1 waitFor (re-export)
+    :1 within (re-export)
     :33 ThemeContext
     :58 ToastContext
-    :1 within (re-export)
-    :1 waitFor (re-export)
-    :1 act (re-export)
   src/server/jobs/queue.ts (3)
     :61 enqueueJobDelayed
     :206 sweepStuckProcessingJobs
     :276 getDeadLetterJobs
-  Exported symbols with zero references: https://docs.fallow.tools/explanations/dead-code#unused-exports
+  Exported symbols with no known consumers: https://docs.fallow.tools/explanations/dead-code#unused-exports
+  To auto-fix: fallow fix --dry-run
+  To suppress: // fallow-ignore-next-line unused-export
+  3 in src, 5 in test directories
 
-✗ 401 issues (0.16s)
+✗ 3 files · 8 exports (0.16s)
 ```
 
 ## Filtering by issue type
@@ -90,17 +95,23 @@ fallow dead-code --unresolved-imports --unlisted-deps
     ```
 
     ```ansi
-    src/components/Card/index.ts
-      unused-export  CardFooter  (line 1)
+    ── Unused Code ─────────────────────────────────────
 
-    src/server/jobs/queue.ts
-      unused-export  enqueueJobDelayed  (line 61)
-      unused-export  sweepStuckProcessingJobs  (line 206)
+    ● Unused files (1)
+      src/server/jobs/worker.ts
+      Files not reachable from any entry point: https://docs.fallow.tools/explanations/dead-code#unused-files
 
-    src/server/jobs/worker.ts
-      unused-file  Not reachable from any entry point
+    ● Unused exports (3)
+      src/server/jobs/queue.ts (2)
+        :61 enqueueJobDelayed
+        :206 sweepStuckProcessingJobs
+      src/components/Card/index.ts
+        :1 CardFooter
+      Exported symbols with no known consumers: https://docs.fallow.tools/explanations/dead-code#unused-exports
+      To auto-fix: fallow fix --dry-run
+      To suppress: // fallow-ignore-next-line unused-export
 
-    Found 401 issues (17 errors, 384 warnings)
+    ✗ 1 file · 3 exports (0.16s)
     ```
   </Tab>
   <Tab title="JSON">
@@ -112,6 +123,7 @@ fallow dead-code --unresolved-imports --unlisted-deps
 
     ```json
     {
+      "kind": "dead-code",
       "schema_version": 9,
       "version": "3.28.0",
       "elapsed_ms": 160,
@@ -152,7 +164,7 @@ fallow dead-code --unresolved-imports --unlisted-deps
     ```json
     {
       "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-      "version": "3.28.0",
+      "version": "2.1.0",
       "runs": [{
         "tool": { "driver": { "name": "fallow", "version": "3.28.0" } },
         "results": [
@@ -274,14 +286,16 @@ fallow dead-code --changed-since HEAD~5
 In CI, this reports only the issues that a pull request adds.
 
 ```bash title="$ fallow dead-code --changed-since main"
+── Unused Code ─────────────────────────────────────
+
 ● Unused exports (2)
   src/features/savings/hooks/usePotGroups.ts
-    :8  usePotGroupTotals
+    :8 usePotGroupTotals
   src/server/jobs/queue.ts
     :276 getDeadLetterJobs
-  Exported symbols with zero references: https://docs.fallow.tools/explanations/dead-code#unused-exports
+  Exported symbols with no known consumers: https://docs.fallow.tools/explanations/dead-code#unused-exports
 
-✗ 2 issues (0.04s)
+✗ 2 exports (0.04s)
 ```
 
 ## Baseline comparison
@@ -290,10 +304,10 @@ To adopt fallow on an existing codebase, save the current issues as a baseline. 
 
 ```bash
 # Save current issues as baseline
-fallow dead-code --save-baseline
+fallow dead-code --save-baseline fallow-baselines/dead-code.json
 
 # Only fail on new issues (compared to baseline)
-fallow dead-code --baseline
+fallow dead-code --baseline fallow-baselines/dead-code.json
 ```
 
 ## Debugging
@@ -530,9 +544,10 @@ The tools do different amounts of work. `fallow dead-code --circular-deps` runs 
 | [zod](https://github.com/colinhacks/zod) | 174 | **43ms** | 532ms | Fallow 12.4x | 192ms | Fallow 4.5x |
 | [preact](https://github.com/preactjs/preact) | 244 | **75ms** | 299ms | Fallow 4.0x | 134ms | Fallow 1.8x |
 | [fastify](https://github.com/fastify/fastify) | 286 | **97ms** | 224ms | Fallow 2.3x | 165ms | Fallow 1.7x |
-| [vue/core](https://github.com/vuejs/core) | 522 | **137ms** | 173ms | Fallow 1.3x | 145ms | dpdm faster |
+| [vue/core](https://github.com/vuejs/core) | 522 | **137ms** | 173ms | Fallow 1.3x | 145ms | Fallow 1.1x |
 | [TypeScript](https://github.com/microsoft/TypeScript) | 38,146 | 2.18s | 5.16s | Fallow 2.4x | **136ms** | dpdm faster |
-| [next.js](https://github.com/vercel/next.js) | 20,552 | 3.00s | **485ms** | madge faster | 463ms | dpdm faster |
+| [next.js](https://github.com/vercel/next.js) | 20,552 | 3.00s | 485ms | madge faster | **463ms** | dpdm faster |
+| [astro](https://github.com/withastro/astro) | 2,859 | 3.81s | 170ms | madge faster | **138ms** | dpdm faster |
 
 <Info>
   Fallow is faster than madge on small and mid-size projects and on the large TypeScript repo. madge is faster on large monorepos such as next.js and astro. dpdm is fast, but it reports incomplete cycle counts on these fixtures. Fallow finds cycles in the module graph that dead code analysis already builds, so cycle detection does not build a second graph.

@@ -15,7 +15,8 @@ The `--dupes-*` flags apply to combined mode. When you do not set one, fallow us
 |:-----|:------------|
 | `-r, --root <PATH>` | Project root directory (default: current working directory) |
 | `-c, --config <PATH>` | Path to config file (default: auto-detected) |
-| `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`, `badge`. Alias: `--output`. `--format json` is compact by default; add `--pretty` for indented output. |
+| `--allow-remote-extends` | Allow trusted config files to extend HTTPS URLs |
+| `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`, `badge`, `github-annotations`, `github-summary`. Alias: `--output`. `--format json` is compact by default; add `--pretty` for indented output. |
 | `--pretty` | Indent `--format json` output so you can read it. JSON is compact by default, so machines and agents get the same schema with less output. Applies only to JSON output. SARIF, Code Climate, baselines, snapshots, caches, and other persisted JSON keep their format with or without this flag. |
 | `-q, --quiet` | Suppress progress bars and status messages |
 | `--no-cache` | Disable incremental caching and parse all files again |
@@ -26,6 +27,7 @@ The `--dupes-*` flags apply to combined mode. When you do not set one, fallow us
 | `--diff-stdin` | Read the unified diff from stdin and not from a file. Equivalent to `--diff-file -`. Cannot be combined with a `--diff-file PATH` value other than `-`. Use it to pipe `gh pr diff` or `git diff` directly into fallow. |
 | `--churn-file <PATH>` | For projects with no git repository, import change history from a `fallow-churn/v1` JSON file and not from `git log`. Affects only the health signals that use churn. See [`fallow health` › Importing churn from a non-git VCS](/cli/health#importing-churn-from-a-non-git-vcs). |
 | `--baseline <PATH>` | Compare against a previously saved baseline file |
+| `--baseline-mode <MODE>` | How `--baseline` matches health findings: `count` (default) matches per file and category, `identity` matches per function identity. `identity` works only with a baseline that you saved with `--baseline-mode identity`. See [`fallow health`](/cli/health). |
 | `--save-baseline <PATH>` | Save the current results as a baseline file |
 | `--fail-on-stale-baseline` | Exit 1 when a loaded `--baseline` has an entry that matched nothing in this run. Applies to `dead-code` and `check`, the bare run, `dupes` and `health`, in every output format. It also exits 1 when the loaded file is a baseline of another `kind`, because such a file suppresses nothing. The result is the exit code and one stderr line with the stale count, the baseline path and the command to save the baseline again. Some runs cannot judge the baseline: a narrowed scope, `health --report-only`, `audit` and `decision-surface`. These runs do not apply the gate. They print a warning on stderr and do not pass silently. A narrowed scope skips only the unmatched-entry check. It still applies the other-`kind` check, because the scope of the run does not change which command saved the file. The report output does not change. The run always reports the result as `baseline_staleness.gate_trips`, with or without this flag. That field describes the baseline and not the exit code, so it can be true even when the run did not apply the gate. `gate_outcomes["stale-baseline"].status` reports `fail` for both parts of the rule, and stays `skipped` on `audit`. |
 | `--fail-on-regression` | Fail if the issue count grows by more than the tolerance, compared with a regression baseline |
@@ -48,9 +50,9 @@ The `--dupes-*` flags apply to combined mode. When you do not set one, fallow us
 | `-o, --output-file <PATH>` | Write the report to a file and not to stdout, for any `--format` (no ANSI codes). Use it on large projects, where the terminal scrollback cuts off the top of the report. Progress and a `Report written to <path>` confirmation stay on stderr (suppressed by `--quiet`). Valid with `dead-code`, `dupes`, `health`, `security`, and the bare command. Works together with `--sarif-file`. |
 | `--report-path-prefix <PREFIX>` | Override the repository-root offset that fallow adds in front of each path in the CI formats. An empty string disables the offset. See [Repository-root paths in CI formats](#repository-root-paths-in-ci-formats). |
 | `--group-by <MODE>` | Group output by CODEOWNERS ownership (`owner`), first directory component (`directory`), workspace package (`package`), or GitLab CODEOWNERS section (`section`). `json`, `human`, `sarif` and `codeclimate` show the groups. All other formats render one flat document and print a warning on stderr. See [Grouped output](#grouped-output). |
-| `--summary` | Print a one-line summary of issue counts at the end of the run. In JSON format, adds a `summary` counts object to the output. |
-| `--only <check,dupes,health>` | Run only specific analyses when no subcommand is given |
-| `--skip <check,dupes,health>` | Skip specific analyses when no subcommand is given |
+| `--summary` | In human output, show only the issue counts per category, without the individual items. JSON output does not change. |
+| `--only <dead-code,dupes,health>` | Run only specific analyses when no subcommand is given. `check` is an alias for `dead-code`. |
+| `--skip <dead-code,dupes,health>` | Skip specific analyses when no subcommand is given |
 | `--coverage <PATH>` | In combined mode, give Istanbul coverage data to the health analysis. Same fallback chain as [`fallow health --coverage`](/cli/health#options). |
 | `--coverage-root <PATH>` | Absolute prefix to strip from Istanbul coverage paths in combined mode. See [`fallow health --coverage-root`](/cli/health#options). |
 | `--dupes-mode <MODE>` | Override duplicate detection mode. |
@@ -67,6 +69,10 @@ The `--dupes-*` flags apply to combined mode. When you do not set one, fallow us
 | `--trend` | Compare current health metrics against the most recent saved snapshot. Implies `--score`. Also available on [`fallow health`](/cli/health). |
 | `--save-snapshot [PATH]` | Save a vital signs snapshot to track trends. Default path: `.fallow/snapshots/<timestamp>.json`. Always computes file scores and hotspots. Also available on [`fallow health`](/cli/health). |
 | `--include-entry-exports` | Report unused exports in entry files. Without this flag, fallow marks them as used. Finds typos in framework exports (for example, `meatdata` instead of `metadata`). You can also set `includeEntryExports: true` in your fallow config. When you set the CLI flag, it takes priority. |
+| `--type-aware` | Opt in to TypeScript semantic analysis for project-wide symbol evidence. It does not emit compiler diagnostics. See [Type-aware analysis](/analysis/type-aware). |
+| `--no-type-aware` | Turn type-aware analysis off, even when `typeAware.enabled` or `FALLOW_TYPE_AWARE` turns it on |
+| `--type-aware-project <PATH>` | TypeScript project config for type-aware analysis. Repeatable. |
+| `--type-aware-require <MODE>` | `best-effort` keeps conservative findings and reports semantic gaps. `complete` fails the quality gate when a semantic query is incomplete. |
 
 ## Path scope
 
@@ -181,7 +187,7 @@ loaded config: /repo/.fallowrc.json
 In a monorepo with more than one config, this line tells you which `.fallowrc.json` fallow uses. Fallow does not print the line when:
 
 - `--quiet` is set
-- `--format` is anything other than `human` (`json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`, `badge`)
+- `--format` is anything other than `human` (`json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`, `badge`, `github-annotations`, `github-summary`)
 
 To see the resolved config with `extends` merged, use the [`fallow config`](/cli/config) subcommand.
 
@@ -257,7 +263,7 @@ With a subcommand other than `audit`, fallow rejects the per-analysis CLI flags 
 
 ## Grouped output
 
-With `--group-by`, each team or package sees its own issues. The flag splits all issues into labeled groups. It works with every subcommand, and with the formats that can show groups.
+With `--group-by`, each team or package sees its own issues. The flag splits all issues into labeled groups. It works with the analysis subcommands, and with the formats that can show groups. `fallow flags` ignores it.
 
 | Format | `--group-by` |
 |:-------|:-------------|

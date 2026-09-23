@@ -19,19 +19,30 @@ One command translates your knip configuration to fallow automatically. After th
 
     fallow looks for `knip.json`, `knip.jsonc`, `.knip.json`, `.knip.jsonc`, `knip.ts`, `knip.config.ts`, and the `knip` field in `package.json`. Fallow detects the TypeScript config files (`knip.ts`, `knip.config.ts`) but cannot parse them. Convert them to `knip.json` first.
 
-    ```bash title="$ fallow migrate --dry-run"
-    Detected knip config: knip.json
+    ```text title="$ fallow migrate --dry-run"
+    {
+      "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+      // Migrated from knip.json
+      "entry": [
+        "src/index.ts",
+        "src/cli.ts"
+      ],
+      "ignoreFindings": [
+        "**/*.generated.ts"
+      ],
+      "ignoreDependencies": [
+        "@types/node"
+      ]
+    }
 
-    Migrating settings:
-      entry          → entry: ["src/index.ts", "src/cli.ts"]
-      ignore         → ignorePatterns: ["**/*.generated.ts"]
-      ignoreDeps     → ignoreDependencies: ["@types/node"]
+    Migrated from: knip.json
 
-    ⚠ Cannot migrate:
-      ignoreBinaries → not applicable in fallow
+    Warning (1):
+      [knip] `ignoreBinaries`: Binary filtering is not configurable in fallow
 
-    Would write: .fallowrc.json
-    Run without --dry-run to write the config.
+    Note: knip and fallow use different glob engines; verify migrated entry / ignoreFindings with `fallow dead-code` before relying on CI. See https://docs.fallow.tools/migration/from-knip
+
+    Note: knip's ignore also suppresses dependency and manifest issues by file path; fallow's ignoreFindings never hides manifest-owned findings such as unused dependencies. See https://docs.fallow.tools/migration/from-knip
     ```
   </Step>
 
@@ -66,11 +77,12 @@ One command translates your knip configuration to fallow automatically. After th
 |:-----|:-------|
 | `entry` | `entry` |
 | `project` | -- (fallow auto-discovers project files) |
-| `ignore` | `ignorePatterns` |
+| `ignore` | `ignoreFindings` (matching files stay in the analysis graph) |
 | `ignoreDependencies` | `ignoreDependencies` |
 | `ignoreExportsUsedInFile` | `ignoreExportsUsedInFile` (boolean and `{ type, interface }` object form both supported) |
+| `rules`, `include`, `exclude` | `rules` (knip issue types map to fallow rule names) |
 | `ignoreBinaries` | -- (not applicable) |
-| Plugin configs | Closest fallow plugin equivalent |
+| Plugin configs | -- (fallow's built-in plugins detect the framework; the migration warns you to remove the section) |
 
 ## Warnings and caveats
 
@@ -79,21 +91,21 @@ One command translates your knip configuration to fallow automatically. After th
 **Unknown rule names.** Your knip `rules`, `exclude`, or `include` entries can reference a key that fallow does not know. The cause can be a typo, a future knip rule, or an issue type that the migrator does not know yet. The migration then prints a warning like this one:
 
 ```text
-Warning (1 skipped field):
-  [knip] `rules.unsued-files`: unknown knip issue type `unsued-files`; not migrated
-  (suggestion: check for a typo or report the missing mapping at https://docs.fallow.tools/migration/from-knip)
+Warning (1):
+  [knip] `rules.unsued-files`: unknown knip issue type `unsued-files`; not migrated (suggestion: check for a typo or report the missing mapping at https://docs.fallow.tools/migration/from-knip)
 ```
 
 Some keys are on the documented list of keys that cannot be mapped: `binaries`, `optionalPeerDependencies`, and similar issue types that knip reports and fallow does not. For these keys, the warning reads `issue type \`X\` has no fallow equivalent` and has no suggestion.
 
-**Glob-engine drift.** knip and fallow use different glob engines. The migration copies `entry` and `ignorePatterns` verbatim, but they can match a slightly different set of files than in knip. When the migrated config has either field, the migrate command prints:
+**Glob-engine drift.** knip and fallow use different glob engines. The migration copies `entry` and `ignoreFindings` verbatim, but they can match a slightly different set of files than in knip. When the migrated config has either field, the migrate command prints:
 
 ```text
-Note: knip and fallow use different glob engines; verify migrated entry / ignorePatterns
-      with `fallow dead-code` before relying on CI. See https://docs.fallow.tools/migration/from-knip
+Note: knip and fallow use different glob engines; verify migrated entry / ignoreFindings with `fallow dead-code` before relying on CI. See https://docs.fallow.tools/migration/from-knip
 ```
 
-Common patterns (brace expansion `{ts,tsx}`, double-star `**`, `src/**`) match the same files in both engines. One known difference: fallow's `ignorePatterns` does not treat a leading `!` as negation, and matches the entry literally. Run `fallow dead-code` on a representative subset before you use the migrated globs in CI.
+Common patterns (brace expansion `{ts,tsx}`, double-star `**`, `src/**`) match the same files in both engines. `ignoreFindings` keeps a leading `!` as an exception to the earlier patterns. Run `fallow dead-code` on a representative subset before you use the migrated globs in CI.
+
+**Ignore scope.** knip's `ignore` also hides dependency and manifest issues by file path. Fallow's `ignoreFindings` never hides manifest-owned findings, such as unused dependencies. The migrate command prints a note about this difference for every knip migration.
 
 ## Comparison
 
@@ -130,10 +142,10 @@ Common patterns (brace expansion `{ts,tsx}`, double-star `**`, `src/**`) match t
     | Feature | Fallow | knip |
     |:--------|:-------|:-----|
     | Duplication detection | Built-in (`fallow dupes`) | Not included |
-    | SARIF output | Yes | No |
+    | SARIF output | Yes | Yes (`sarif` reporter) |
     | Baseline comparison | Yes (`--baseline`) | No |
     | Git-aware analysis | `--changed-since` | No |
-    | Production mode | `--production` | No |
+    | Production mode | `--production` | `--production` |
     | Auto-fix | Exports + dependencies | Exports + dependencies |
     | Config format | JSONC, JSON, TOML | JSON, TS |
   </Tab>

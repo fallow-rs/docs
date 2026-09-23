@@ -16,7 +16,7 @@ A file that only an HTML page, a Vue template, or a stylesheet references is not
     - `<script src="./main.js">` script references
     - `<link rel="stylesheet" href="./styles.css">` stylesheet references
     - `<link rel="modulepreload" href="./vendor.js">` module preload references
-    - Root-relative paths (for example `<script src="/src/main.tsx">`). Fallow resolves them against the project root, as Vite, Parcel, and similar dev servers do. This also applies when the reference is in a JSX, TSX, JS, or TS source file (see the JSX templates tab).
+    - Root-relative paths (for example `<script src="/src/main.tsx">`). Fallow resolves them against the directory of the HTML file first, then against the project root, then against `public/` in the project root. `html` tagged templates in JS and TS files use the same order, without the `public/` step (see the SSR layouts tab).
 
     ```html index.html
     <!DOCTYPE html>
@@ -54,7 +54,7 @@ A file that only an HTML page, a Vue template, or a stylesheet references is not
 
     - `<script>` and `<script setup>` blocks
     - `lang="ts"` and `lang="tsx"` attributes
-    - `<script src="./external.ts">` external script references
+    - `<script src="./external.ts">` external script references (Vue only. In Svelte, a `<script src>` tag is runtime HTML and does not add an import.)
     - HTML comments (`<!-- ... -->`), which fallow removes before parsing
 
     **Vue template tracking:**
@@ -95,28 +95,14 @@ A file that only an HTML page, a Vue template, or a stylesheet references is not
     </Warning>
   </Tab>
   <Tab title="SSR layouts">
-    SSR frameworks such as [Hono](https://hono.dev) render HTML from layout components with JSX or with a tagged template literal (`` html`...` ``). Fallow reads `<script src="...">` and `<link rel="stylesheet|modulepreload" href="...">` in both forms as it does in plain HTML. Each one is an asset reference that keeps the target file reachable.
+    SSR frameworks such as [Hono](https://hono.dev) can render HTML from a tagged template literal (`` html`...` ``). Fallow reads `<script src="...">` and `<link rel="stylesheet|modulepreload" href="...">` in these templates as it does in plain HTML. Each one is an asset reference that keeps the target file reachable.
 
     **Fallow reads:**
 
-    - `<script src="./app.js">` inside JSX/TSX layouts and `` html`...` `` tagged templates
-    - `<link rel="stylesheet" href="./global.css">` inside JSX/TSX layouts and `` html`...` `` tagged templates
-    - `<link rel="modulepreload" href="./vendor.js">` inside JSX/TSX layouts and `` html`...` `` tagged templates
-    - Root-relative paths (`<link href="/static/style.css">`). Fallow resolves them against the parent directory of the source file first, then against the project root, as Vite, Parcel, and Hono serve static assets
-
-    ```tsx Layout.tsx
-    export const Layout = () => (
-      <html>
-        <head>
-          <link rel="stylesheet" href="/static/style.css" />
-          <script src="/static/app.js"></script>
-        </head>
-        <body>
-          <h1>Hello from Hono</h1>
-        </body>
-      </html>
-    );
-    ```
+    - `<script src="./app.js">` inside `` html`...` `` tagged templates
+    - `<link rel="stylesheet" href="./global.css">` inside `` html`...` `` tagged templates
+    - `<link rel="modulepreload" href="./vendor.js">` inside `` html`...` `` tagged templates
+    - Root-relative paths (`<link href="/static/style.css">`). Fallow resolves them against the parent directory of the source file first, then against the project root
 
     ```ts layout.ts
     import { html } from 'hono/html'
@@ -134,10 +120,10 @@ A file that only an HTML page, a Vue template, or a stylesheet references is not
     `
     ```
 
-    Fallow reads references to `/static/style.css` and `/static/app.js` from both files and marks those files in `static/` as reachable.
+    Fallow reads references to `/static/style.css` and `/static/app.js` from this file and marks those files in `static/` as reachable.
 
     <Note>
-    In JSX, fallow reads only lowercase intrinsic elements (`<script>`, `<link>`) with plain string literals (`src="foo.css"`). It skips capitalized React-style components (`<Script>`, `<Link>`) and expression containers (`href={someVar}`) on purpose. Their meaning depends on the component, and fallow cannot resolve that statically.
+    Fallow does not read `<script src>` and `<link href>` in JSX or TSX layouts. In JSX, these attributes are runtime HTML, not module imports, so they do not add a graph edge. If a JSX layout is the only reference to an asset, add the asset to `entry` or `ignorePatterns`.
 
     In tagged templates, fallow matches only the bare identifier tag `html`. It ignores other tags, such as `css`, `sql`, and `gql`. It skips an asset reference that an interpolation splits (`` html`<script src="${base}/app.js">` ``), so it does not produce a broken specifier.
     </Note>

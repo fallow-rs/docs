@@ -62,18 +62,27 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
         | `command` | -- (all) | Command to run (`dead-code`, `dupes`, `health`, `audit`, `security`, `fix`, or empty for all). Legacy alias: `check` = `dead-code`. |
         | `root` | `.` | Project root directory |
         | `config` | -- | Path to config file (`.fallowrc.json`, `.fallowrc.jsonc`, `fallow.toml`, or `.fallow.toml`) |
-        | `format` | `sarif` | Output format |
+        | `format` | `sarif` | Output format (`human`, `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`, or `badge`) |
+        | `sarif` | `false` | Upload SARIF to GitHub Code Scanning. Needs `permissions: security-events: write`. |
+        | `artifacts-dir` | `.` | Directory for the files that the action writes, such as `fallow-results.json` and `fallow-results.sarif`. Relative to the workflow workspace. |
         | `production` | `false` | Turn on production mode for every analysis |
         | `production-dead-code` | `false` | Combined mode only: per-analysis production mode for dead-code |
         | `production-health` | `false` | Combined mode only: per-analysis production mode for health |
         | `production-dupes` | `false` | Combined mode only: per-analysis production mode for duplication |
         | `fail-on-issues` | `true` | Exit with code 1 when there are issues |
+        | `issue-types` | -- | Comma-separated issue types to report (dead-code command) |
+        | `include-entry-exports` | `false` | Report unused exports in entry files and do not mark them as used. This catches typos in framework exports (dead-code analysis). |
+        | `fail-on-regression` | `false` | Exit with code 1 when the issue counts increase compared to the regression baseline (dead-code command) |
+        | `tolerance` | `0` | Allowed increase before a regression fails, for example `2%` or `5` (dead-code command) |
+        | `regression-baseline` | -- | Path to the regression baseline file to compare against (dead-code command) |
+        | `save-regression-baseline` | -- | Save the current results as a regression baseline file (dead-code command) |
         | `changed-since` | -- | Only check files changed since this ref |
         | `auto-changed-since` | `true` | In a PR, check only changed files, compared to the base SHA. Ignored when `changed-since` is set. |
         | `baseline` | -- | Path to a baseline file to compare against. With `command: audit`, the action rejects it with exit 2. Use `dead-code-baseline`, `health-baseline`, or `dupes-baseline` for audit. |
         | `save-baseline` | -- | Save the current results as a baseline file. With `command: audit`, the action rejects it with exit 2, because audit runs three analyses with different baseline formats. |
         | `fail-on-stale-baseline` | `false` | Fail the job when the loaded `baseline` has entries that match nothing in this run, or when it is a baseline of another `kind`. You get the staleness warning without this input: every run that loads a baseline reports it. A scoped run cannot judge a whole-project baseline, so a narrowed run first reads the baseline again over the whole project. This input only decides if that verdict fails the job. It does not depend on `fail-on-issues`, because a fully stale baseline on a now-clean project reports zero issues. When the run still cannot cover the whole project (`production`, `workspace`, `changed-workspaces`, or a positional path in `args`), the gate warns and does not judge. |
         | `min-score` | -- | `command: health` only: fail when the health score is below this threshold (0-100). Implies `--score`. Unless you set a health section input, the action adds `--complexity`, so annotations, SARIF, and the PR comment still have content. `target_thresholds` and `hotspot_summary` do not come back. With this input, the CLI turns off its own findings rule and the count gate, so only the score decides the run. Any other command rejects it with exit 2. |
+        | `min-severity` | -- | `command: health` only: fail when a complexity finding reaches this severity (`moderate`, `high`, or `critical`). The `fail-on-issues` count gate is separate and still counts every finding. To gate on severity alone, set `fail-on-issues: false`. |
         | `fail-on-empty-analysis` | `false` | Fail the job when the run analyzed no source file. In that case every count is zero because the run measured nothing, not because the project is clean. By default the run warns and passes, so a repository whose scope has no source on purpose still passes. |
         | `version` | -- | Fallow version to install. The Action ref does not set the fallow CLI version: `uses: fallow-rs/fallow@v3` selects only the Action wrapper code. The action picks the CLI version from this input, then the `fallow` dependency spec in the project `package.json`, then `latest`. |
         | `workspace` | -- | Limit the output to one or more workspaces (exact names, globs, `!` negation; comma-separated) |
@@ -81,6 +90,14 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
         | `comment` | `false` | Post results as a PR comment |
         | `review-comments` | `false` | Post inline PR review comments from typed `review-github` output. Later runs resolve threads for fixed findings |
         | `review-guidance` | `false` | Add collapsed "What to do" guidance blocks to inline PR review comments. Requires `review-comments: true` |
+        | `max-comments` | `50` | Maximum number of inline review comments, and of items in the sticky details table |
+        | `comment-layout` | `default` | Layout of the sticky PR comment: `default`, `compact`, `gate-only`, or `details`. Use `gate-only` when the Check Run is the main place where you read PR findings. |
+        | `comment-id` | -- | Marker id of the sticky comment. The default is `fallow-results`, with the workspace name added when the run covers one workspace. |
+        | `summary-scope` | `all` | Scope of the sticky PR summary. Use `diff` to also apply the diff filter to project-level dependency, catalog, and override findings. Inline review comments do not change. |
+        | `diff-filter` | `added` | Show line-level findings only on added PR lines. Use `diff_context`, `file`, or `nofilter` for a wider review scope. |
+        | `diff-file` | -- | Path to a unified diff file. Fallow then limits source findings to lines in an added hunk. When you also set `changed-since`, the diff filter decides the findings, and `changed-since` still decides the file discovery. |
+        | `api-retries` | `3` | Maximum number of HTTP retries for `fallow ci reconcile-review` and the GitHub API calls of the action |
+        | `api-retry-delay` | `2` | Minimum delay in seconds between retries after a rate limit. A `Retry-After` header from the server overrides it. |
         | `review-id` | -- | Stable identifier (1-64 characters, `A-Za-z0-9._-`) that keeps the inline review comments of each job separate when more than one fallow review job posts to the same pull request. See [Isolating parallel review jobs](#isolating-parallel-review-jobs). |
         | `annotations` | `true` | Show findings as inline PR annotations through workflow commands (no Advanced Security required). On fallow >= 3.4.2, the action renders them natively with `fallow report --format github-annotations`. Older binaries use the bundled jq renderers. With `version: latest`, you get the native path with no change on your side. The step log line `fallow: annotations rendered via native github-annotations` (or `via jq fallback`) tells you which renderer ran. The job summary follows the same rule with `github-summary`. |
         | `max-annotations` | `50` | Maximum number of inline annotations. On the native path, the cap applies to the rendered stream. GitHub shows at most 10 annotations per type per step. |
@@ -92,19 +109,39 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
         | `min-lines` | -- | Minimum line count for a clone (dupes command) |
         | `threshold` | -- | Fail when duplication is more than this % (dupes command) |
         | `skip-local` | `false` | Only report cross-directory duplicates (dupes command) |
+        | `cross-language` | `false` | Remove TypeScript type annotations, so TypeScript and JavaScript clones match (dupes command) |
+        | `ignore-imports` | `false` | Exclude import declarations from clone detection (dupes command) |
+        | `top` | -- | Show only the N worst offenders (health and dupes commands) |
+        | `max-cyclomatic` | -- | Maximum cyclomatic complexity (health command, CLI default 20) |
+        | `max-cognitive` | -- | Maximum cognitive complexity (health command, CLI default 15) |
+        | `sort` | -- | Sort order for health results: `cyclomatic` (default), `cognitive`, `lines`, or `severity` (health command) |
+        | `complexity` | `false` | Show only the complexity findings section (health command) |
+        | `file-scores` | `false` | Compute the maintainability index for each file (health command) |
+        | `hotspots` | `false` | Find files that are complex and change often (health command) |
+        | `targets` | `false` | Show ranked refactoring recommendations (health command) |
+        | `since` | -- | Git history window for hotspots: a duration (`6m`, `90d`, `1y`) or an ISO date (health command) |
+        | `min-commits` | -- | Minimum number of commits for a file in the hotspot ranking (health command, CLI default 3) |
         | `score` | `false` | Compute the health score (0-100 with letter grade). Adds the health delta header to PR comments (health and bare command) |
         | `trend` | `false` | Compare the current metrics with the most recent saved snapshot. Implies `score` (health and bare command) |
         | `save-snapshot` | -- | Save a vital signs snapshot for trend tracking. Set `true` for the default path, or give a custom path (health and bare command) |
-        | `type-aware` | `false` | Turn on optional project-wide TypeScript semantic evidence. Does not report compiler diagnostics or generic typed lint findings. |
+        | `type-aware` | `auto` | Optional project-wide TypeScript semantic evidence: `true`, `false`, or `auto`. With `auto`, the action installs the matching `fallow-type-aware` sidecar when your fallow config turns on `typeAware`, and the config decides. `true` also passes `--type-aware`. `false` skips the sidecar and passes `--no-type-aware`. Does not report compiler diagnostics or generic typed lint findings. |
         | `type-aware-projects` | `""` | Comma-separated tsconfig paths. Empty uses automatic project discovery. |
-        | `type-aware-require` | `best-effort` | Use `complete` to fail when semantic analysis is partial or unavailable, including valid zero-finding runs. |
+        | `type-aware-require` | `""` | `best-effort` or `complete`. When empty, the action passes no value, and your config or the CLI default (`best-effort`) decides. Use `complete` to fail when semantic analysis is partial or unavailable, including valid zero-finding runs. |
         | `dry-run` | `true` | Preview changes without modifying files (fix command) |
         | `coverage` | -- | Path to Istanbul `coverage-final.json` for accurate per-function CRAP scores (health and audit commands) |
         | `coverage-root` | -- | Absolute prefix to remove from Istanbul file paths before matching (health and audit commands). Use it when CI or Docker generated the coverage under a different checkout root, for example `/home/runner/work/myapp`. |
+        | `runtime-coverage` | -- | Path to paid runtime coverage input for the health command: a V8 coverage directory, a V8 JSON file, or an Istanbul `coverage-final.json` |
+        | `min-invocations-hot` | -- | Hot-path threshold for runtime coverage findings (health command, CLI default 100) |
+        | `min-observation-volume` | -- | Minimum observation volume for high-confidence runtime coverage verdicts (health command) |
+        | `low-traffic-threshold` | -- | Share of the total trace volume below which an invoked function is `low_traffic` and not `active` (health command) |
         | `max-crap` | `30.0` | CRAP score threshold (health and audit commands). Functions at or above this score count toward the verdict. |
         | `gate` | `new-only` | Audit verdict gate. `new-only` fails only on findings that the changeset introduces. `all` fails on every finding in changed files. |
         | `security-gate` | -- | Security delta gate for `command: security`. `new` fails only on changed-line candidates. `newly-reachable` fails only on candidates that became reachable from entry points, and needs a base ref from `changed-since` or PR auto-scoping. A gated security failure exits with code 8, and the `issues` output counts only the candidates that match the gate. The PR comment and review renderers do not support security envelopes yet, so the action skips them for this command. |
         | `dead-code-baseline` / `health-baseline` / `dupes-baseline` | -- | Baseline file paths for each analysis in the audit command (saved by `fallow dead-code|health|dupes --save-baseline`). With these, old issues in touched files do not decide the verdict. |
+        | `no-cache` | `false` | Turn off the incremental parse cache and parse all files again |
+        | `threads` | -- | Number of parser threads (default: the number of CPU cores) |
+        | `only` | -- | Without `command`: run only these analyses (comma-separated: `dead-code`, `dupes`, `health`) |
+        | `skip` | -- | Without `command`: skip these analyses (comma-separated: `dead-code`, `dupes`, `health`) |
         | `args` | -- | More arguments to pass to fallow. With `command: audit`, the action rejects `--fail-on-stale-baseline` with exit 2. An audit analyzes only the files that changed against its base, so it cannot judge a whole-project baseline. |
       </Step>
       <Step title="Upload SARIF (optional)">
@@ -191,6 +228,11 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
         | `FALLOW_PRODUCTION_HEALTH` | `""` | Combined mode only: set to `"true"` or `"false"` to override `FALLOW_PRODUCTION` for health. When empty, `FALLOW_PRODUCTION` decides. |
         | `FALLOW_PRODUCTION_DUPES` | `""` | Combined mode only: set to `"true"` or `"false"` to override `FALLOW_PRODUCTION` for duplication. When empty, `FALLOW_PRODUCTION` decides. |
         | `FALLOW_FAIL_ON_ISSUES` | `true` | Fail the pipeline when there are issues |
+        | `FALLOW_ISSUE_TYPES` | `""` | Comma-separated issue types to report (dead-code command) |
+        | `FALLOW_INCLUDE_ENTRY_EXPORTS` | `"false"` | Report unused exports in entry files and do not mark them as used (same as `--include-entry-exports`) |
+        | `FALLOW_FAIL_ON_REGRESSION` | `"false"` | Fail when the issue counts increase compared to the regression baseline (dead-code command) |
+        | `FALLOW_TOLERANCE` | `"0"` | Allowed increase before a regression fails (dead-code command) |
+        | `FALLOW_REGRESSION_BASELINE` / `FALLOW_SAVE_REGRESSION_BASELINE` | `""` | Regression baseline file to compare against, and the file to save the current results to (dead-code command) |
         | `FALLOW_TYPE_AWARE` | `""` | Set to `"true"` to turn on semantic evidence or `"false"` to turn it off. When empty, the repository config decides. |
         | `FALLOW_TYPE_AWARE_PROJECTS` | `""` | Comma-separated tsconfig paths. Empty uses automatic project discovery. The template passes each path as a separate CLI flag. |
         | `FALLOW_TYPE_AWARE_REQUIRE` | `""` | `best-effort` or `complete`. When empty, the repository config decides. `complete` fails on partial or unavailable semantic evidence. |
@@ -199,12 +241,14 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
         | `FALLOW_SAVE_BASELINE` | -- | Save the current results as a baseline file. With `FALLOW_COMMAND=audit`, the template rejects it with exit 2, because audit runs three analyses with different baseline formats. |
         | `FALLOW_FAIL_ON_STALE_BASELINE` | `"false"` | Fail the pipeline when the loaded `FALLOW_BASELINE` has entries that match nothing in this run, or when it is a baseline of another `kind`. You get the staleness warning without this variable: every run that loads a baseline reports it. A scoped run cannot judge a whole-project baseline, so a narrowed pipeline first reads the baseline again over the whole project. This variable only decides if that verdict fails the pipeline. It does not depend on `FALLOW_FAIL_ON_ISSUES`, because a fully stale baseline on a now-clean project reports zero issues. When the run still cannot cover the whole project (`FALLOW_PRODUCTION`, `FALLOW_WORKSPACE`, `FALLOW_CHANGED_WORKSPACES`, or a positional path in `FALLOW_ARGS`), the gate warns and does not judge. |
         | `FALLOW_MIN_SCORE` | `""` | `FALLOW_COMMAND: health` only: fail when the health score is below this threshold (0-100). Implies `--score`. Unless a health section variable is set, the template adds `--complexity`, so the Code Quality report and the MR note still have content. With this variable, the CLI turns off its own findings rule and the count gate. |
+        | `FALLOW_MIN_SEVERITY` | `""` | `FALLOW_COMMAND: health` only: fail when a complexity finding reaches this severity (`moderate`, `high`, or `critical`). `FALLOW_FAIL_ON_ISSUES` is a separate count gate. |
         | `FALLOW_FAIL_ON_EMPTY_ANALYSIS` | `"false"` | Fail the pipeline when the run analyzed no source file. By default, the run warns and passes. |
         | `FALLOW_SECURITY_GATE` | `""` | Security delta gate for `FALLOW_COMMAND: "security"`. `new` fails only on changed-line candidates. `newly-reachable` fails only on candidates that became reachable from entry points, and needs a base ref from `FALLOW_CHANGED_SINCE` or MR auto-detection. A gated security failure exits with code 8. The MR comment and review renderers do not support security envelopes yet, so the template skips them for this command. |
         | `FALLOW_COMMENT` | `false` | Post an MR summary comment with a collapsible section for each analysis |
         | `FALLOW_REVIEW` | `false` | Post inline MR discussions on changed lines with suggestion blocks for auto-fixable issues |
         | `FALLOW_REVIEW_GUIDANCE` | `false` | Add collapsed "What to do" guidance blocks to inline MR discussions |
         | `FALLOW_REVIEW_ID` | -- | Stable identifier (1-64 characters, `A-Za-z0-9._-`) that keeps the inline review discussions of each job separate when more than one fallow review job posts to the same MR. See [Isolating parallel review jobs](#isolating-parallel-review-jobs). |
+        | `FALLOW_COMMENT_ID` | `""` | Marker id of the sticky comment. When empty and the run covers one workspace, the template adds the workspace name. |
         | `FALLOW_SUMMARY_SCOPE` | `all` | Scope of the sticky MR summary. Use `diff` to also apply the diff filter to project-level dependency, catalog, and override findings. Inline review discussions do not change |
         | `FALLOW_PR_COMMENT_LAYOUT` | `default` | Layout of the sticky MR comment: `default`, `compact`, `gate-only`, or `details`. Use `gate-only` when Code Quality is the main place where you read MR findings |
         | `FALLOW_MAX_COMMENTS` | `50` | Maximum number of inline review comments (applies to `FALLOW_REVIEW`) |
@@ -213,17 +257,34 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
         | `FALLOW_SCRIPTS_REF` | -- | Pin the CI scripts to a git ref (tag, branch, or SHA) for reproducible builds. When empty, the template uses vendored scripts first. Else it uses the ref of the exact installed fallow version, when it can. |
         | `FALLOW_SKIP_INSTALL` | `""` | Set to `"true"` to skip `npm install -g fallow` and use the `fallow` that is already on the `PATH` of the job shell. If there is none, the job fails at once. See the setup gotchas step below. |
         | `FALLOW_DIFF_FILTER` | `added` | Show line-level findings only in added diff hunks. Use `diff_context`, `file`, or `nofilter` for a wider review scope. |
+        | `FALLOW_DIFF_FILE` | `""` | Path to a unified diff file. When empty in an MR pipeline, the comment and review scripts make the diff with `git diff`. |
+        | `FALLOW_API_RETRIES` | `"3"` | Maximum number of HTTP retries for `fallow ci reconcile-review` and the API calls of the scripts |
+        | `FALLOW_API_RETRY_DELAY` | `"2"` | Minimum delay in seconds between retries after a rate limit. A `Retry-After` header from the server overrides it. |
         | `FALLOW_WORKSPACE` | -- | Limit the output to one or more workspaces (exact names, globs, `!` negation; comma-separated) |
         | `FALLOW_CHANGED_WORKSPACES` | -- | Limit a monorepo run to workspaces with a file changed since `REF`. Requires full git history. Cannot be used with `FALLOW_WORKSPACE`. A missing ref is a hard error. |
         | `FALLOW_DUPES_MODE` | `mild` | Detection mode for dupes (`strict`, `mild`, `weak`, `semantic`) |
+        | `FALLOW_MIN_TOKENS` / `FALLOW_MIN_LINES` | `""` | Minimum token count and minimum line count for a clone (dupes command) |
+        | `FALLOW_THRESHOLD` | `""` | Fail when duplication is more than this % (dupes command) |
+        | `FALLOW_SKIP_LOCAL` / `FALLOW_CROSS_LANGUAGE` / `FALLOW_IGNORE_IMPORTS` | `"false"` | Same as the `--skip-local`, `--cross-language`, and `--ignore-imports` flags (dupes command) |
+        | `FALLOW_MAX_CYCLOMATIC` / `FALLOW_MAX_COGNITIVE` | `""` | Maximum cyclomatic and cognitive complexity (health command) |
+        | `FALLOW_TOP` | `""` | Show only the N worst offenders (health and dupes commands) |
+        | `FALLOW_SORT` | `""` | Sort order for health results: `cyclomatic` (default), `cognitive`, `lines`, or `severity` |
+        | `FALLOW_COMPLEXITY` / `FALLOW_FILE_SCORES` / `FALLOW_HOTSPOTS` / `FALLOW_TARGETS` | `"false"` | Turn on single health report sections, the same as `--complexity`, `--file-scores`, `--hotspots`, and `--targets` |
+        | `FALLOW_SINCE` / `FALLOW_MIN_COMMITS` | `""` | Git history window and minimum commit count for hotspots (health command) |
         | `FALLOW_SCORE` | `false` | Compute the health score (0-100 with letter grade). Adds the health delta header to MR comments (health and bare command) |
         | `FALLOW_TREND` | `false` | Compare the current metrics with the most recent saved snapshot. Implies `FALLOW_SCORE` (health and bare command) |
         | `FALLOW_SAVE_SNAPSHOT` | -- | Save a vital signs snapshot for trend tracking. Set `true` for the default path, or give a custom path (health and bare command) |
         | `FALLOW_COVERAGE` | -- | Path to Istanbul `coverage-final.json` for accurate per-function CRAP scores (health, audit, and default combined commands) |
         | `FALLOW_COVERAGE_ROOT` | -- | Rebase Istanbul file paths before matching (health, audit, and default combined commands). Use it when CI or Docker generated the coverage under a different checkout root. |
+        | `FALLOW_PRODUCTION_COVERAGE` | `""` | Path to paid runtime coverage input: a V8 coverage directory, a V8 JSON file, or an Istanbul `coverage-final.json` |
+        | `FALLOW_MIN_INVOCATIONS_HOT` / `FALLOW_MIN_OBSERVATION_VOLUME` / `FALLOW_LOW_TRAFFIC_THRESHOLD` | `""` | Thresholds for runtime coverage verdicts (health command) |
         | `FALLOW_MAX_CRAP` | `30.0` | CRAP score threshold (health and audit commands) |
         | `FALLOW_AUDIT_GATE` | `new-only` | Audit verdict gate (`new-only` or `all`) |
         | `FALLOW_AUDIT_DEAD_CODE_BASELINE` / `FALLOW_AUDIT_HEALTH_BASELINE` / `FALLOW_AUDIT_DUPES_BASELINE` | -- | Baseline file paths for each analysis in the audit command (saved by `fallow dead-code|health|dupes --save-baseline`) |
+        | `FALLOW_DRY_RUN` | `"true"` | Preview changes without modifying files (fix command) |
+        | `FALLOW_NO_CACHE` | `"false"` | Turn off the incremental parse cache |
+        | `FALLOW_THREADS` | `""` | Number of parser threads |
+        | `FALLOW_ONLY` / `FALLOW_SKIP` | `""` | Without `FALLOW_COMMAND`: run only, or skip, these analyses (comma-separated) |
         | `FALLOW_ARGS` | -- | More arguments (space-separated). With `FALLOW_COMMAND=audit`, the template rejects `--fail-on-stale-baseline` with exit 2. An audit analyzes only the files that changed against its base, so it cannot judge a whole-project baseline. |
 
         <Info>
@@ -569,7 +630,7 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
     - run: npx fallow health --format compact
     ```
 
-    Reports complexity hotspots and circular dependencies. To change the threshold, use `--max-cyclomatic 15`.
+    Reports complexity findings, the health score, file scores, hotspots, and refactoring targets. Circular dependencies lower the health score and can show as refactoring targets. To list each cycle, run `fallow dead-code --circular-deps`. To change the threshold, use `--max-cyclomatic 15`.
   </Tab>
   <Tab title="Other CI">
     Fallow works in any CI environment that can run Node.js or [install fallow](/installation). The commands are the same everywhere:
@@ -592,9 +653,16 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
 
     | Code | Meaning |
     |:-----|:--------|
-    | `0` | No error-severity issues found |
-    | `1` | Error-severity issues found |
-    | `2` | Fatal error (invalid config, parse failure) |
+    | `0` | No error-severity issues found, or an audit verdict of `pass` or `warn` |
+    | `1` | Error-severity issues found, or an audit verdict of `fail` |
+    | `2` | Validation or runtime error (invalid config, parse failure). With `--format json`, stdout has a JSON error envelope. |
+    | `3` | A requested resource is not available: `config --path` found no config, or a license is missing or not valid |
+    | `4` | The runtime coverage sidecar is not available, cannot be verified, is not compatible, or stopped unexpectedly |
+    | `5` | Fallow could not prepare or parse the runtime coverage input |
+    | `6` | The runtime coverage sidecar reported an internal error |
+    | `7` | Network failure (license and cloud operations) |
+    | `8` | Security gate hit (`fallow security --gate`) |
+    | `10` to `13` | Upload of a coverage inventory or static findings failed. See [upload exit codes](/cli/coverage#exit-codes). |
   </Tab>
 </Tabs>
 

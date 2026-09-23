@@ -226,14 +226,14 @@ fallow coverage upload-inventory \
 |:-----|:------------|
 | `--api-key <KEY>` | Fallow cloud bearer token. **Use `$FALLOW_API_KEY` on shared CI runners.** Other processes can see a secret on the command line with `ps`, and it can leak into shell history or process audit logs. |
 | `--api-endpoint <URL>` | Override the base URL. Use it for staging and on-prem deployments. |
-| `--project-id <OWNER/REPO>` | Project identifier, in `owner/repo` form. |
+| `--project-id <ID>` | Project identifier, for example `owner/repo` or a bare name such as `my-app`. |
 | `--git-sha <SHA>` | The commit SHA for this inventory. Max 64 chars, `[A-Za-z0-9._-]` only. |
-| `--allow-dirty` | Hide the warning when the working tree has uncommitted changes. |
+| `--allow-dirty` | Upload even when the working tree has uncommitted changes. Without this flag, fallow refuses the upload with exit code 10. With it, fallow prints a warning, because the inventory comes from the working copy and can differ from the git SHA. |
 | `--exclude-paths <GLOB>` | More globs to skip. Fallow applies them after the configured fallow ignore rules. Repeatable. |
 | `--path-prefix <PREFIX>` | Prefix that fallow adds in front of each `filePath`, so the static inventory paths have the same shape as the paths from the runtime beacon. Required for containerized deployments. The beacon reports the absolute V8 path inside the container (for example, `/app/src/foo.ts`). By default, the inventory has repo-relative paths (`src/foo.ts`). Must start with `/` and use POSIX separators. See [Path prefix](#path-prefix-containerized-deployments) for common values. |
 | `--with-callers` | Also upload importer edges (the modules that import each declaration) with the inventory. The dashboard then shows the callers of untracked code. The inventory rows also have per-function complexity and per-file churn. |
 | `--dry-run` | Print what fallow would upload, and exit. No network call. |
-| `--ignore-upload-errors` | Treat upload failures as warnings (exit 0). Validation errors still fail. |
+| `--ignore-upload-errors` | Treat network and server errors as warnings (exit 0). Validation, payload-size, and auth errors still fail. |
 
 ### Function naming
 
@@ -273,10 +273,10 @@ After the upload, the server checks up to 100 recent runtime rows and reports th
 |:----:|:--------|:--------------|
 | `0`  | ok | Upload succeeded, or `--dry-run`, or `--ignore-upload-errors` downgraded a transient failure. |
 | `7`  | network | DNS, TLS, connect, or transport failure. |
-| `10` | validation | Missing API key, unresolvable project-id, zero functions in walk. |
+| `10` | validation | Missing API key, unresolvable project-id, zero functions in walk, or uncommitted changes without `--allow-dirty`. |
 | `11` | payload too large | Inventory exceeds the server's 200,000-function cap. Scope with `--exclude-paths`. |
 | `12` | auth rejected | 401 / 403 from the server. Rotate the token or widen its scope. |
-| `13` | server error | 5xx after retries, or other non-2xx status. |
+| `13` | server error | 5xx or other non-2xx status, or a malformed response body. |
 
 ### Example CI job (GitHub Actions)
 
@@ -334,7 +334,7 @@ Fallow reads the API key only from `FALLOW_API_KEY`. There is no `--api-key` fla
 
 When CI needs a custom PEM trust bundle for fallow cloud, set `FALLOW_CA_BUNDLE=/path/to/bundle.pem`. The bundle replaces the default WebPKI roots. In private-CA environments, pass a complete bundle with the public roots and the private CA. Relative bundle paths resolve from the working directory of the process.
 
-Fallow tries each upload up to three times on network failures, HTTP 429, and HTTP 502/503/504. On HTTP 429, fallow follows `Retry-After` in delta seconds or as an HTTP date, up to 60 seconds. When a setup or transport failure stops all maps from uploading, fallow exits 7. When only some maps fail, fallow still exits 1.
+Fallow tries each upload up to three times on network failures, HTTP 429, and HTTP 502/503/504. On HTTP 429, fallow follows `Retry-After` in delta seconds or as an HTTP date, up to 60 seconds. When fallow cannot set up the HTTP client, or when every map fails with a network error, fallow exits 7. When only some maps fail, or when an upload fails with an HTTP error, fallow exits 1.
 
 ### Source-map CI snippets
 
@@ -382,8 +382,9 @@ Fallow tries each upload up to three times on network failures, HTTP 429, and HT
 | Exit | Meaning |
 |:----:|:--------|
 | `0` | All maps uploaded, or dry-run completed. |
-| `1` | Some or all uploads failed, for example because of invalid JSON maps, auth rejection, rate limits, server errors, or network retries that ran out. |
+| `1` | Some or all uploads failed, for example because of invalid JSON maps, auth rejection, rate limits, or server errors. |
 | `2` | Bad invocation: missing `FALLOW_API_KEY`, a repo or SHA that fallow cannot resolve, a missing directory, or zero maps found. |
+| `7` | Network failure: fallow could not set up the HTTP client, or every map failed with a network error after its retries. |
 
 ## See also
 

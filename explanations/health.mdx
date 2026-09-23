@@ -141,11 +141,12 @@ Per-file scores from [`fallow health --file-scores`](/cli/health). Fallow exclud
 Fallow uses a **simplified Maintainability Index**, adapted for JavaScript/TypeScript module graphs.
 
 ```
+dampening = min(lines / 50, 1)
 fan_out_penalty = min(ln(fan_out + 1) × 4, 15)
-MI = 100 - (complexity_density × 30) - (dead_code_ratio × 20) - fan_out_penalty
+MI = 100 - (complexity_density × 30 × dampening) - (dead_code_ratio × 20) - fan_out_penalty
 ```
 
-Fallow clamps the result to \[0, 100\]. Higher is better.
+Fallow clamps the result to \[0, 100\]. Higher is better. The dampening factor lowers the density weight for files under 50 lines. A short file with a few branches has a high density, but it is still easy to read.
 
 | Range | Interpretation | Action |
 |:------|:---------------|:-------|
@@ -275,14 +276,18 @@ For evidence from real traffic (hot and cold paths, runtime-weighted dead-code r
 
 ### Interpreting the numbers
 
-| Score | Interpretation | Action |
-|:------|:---------------|:-------|
-| < 30 | Acceptable risk | No action needed |
-| 30-99 | Moderate risk, complex untested code | Add test coverage or reduce complexity |
-| 100-999 | High risk | Prioritize: add tests, then simplify |
-| > 999 | Extreme risk (shown as ">999" in terminal) | Refactor urgently. This code is complex, and no test reaches it |
+| Score | Finding `severity` | Action |
+|:------|:-------------------|:-------|
+| < 30 | No finding (below the default threshold) | No action needed |
+| 30-49 | `moderate` | Add test coverage or reduce complexity |
+| 50-99 | `high` | Prioritize: add tests, then simplify |
+| 100 or more | `critical` | Refactor urgently. This code is complex, and no test reaches it |
+
+A finding gets the highest severity of its cyclomatic, cognitive, and CRAP values.
 
 To keep human output readable, fallow shows scores above 999 as `>999`. JSON output always has the exact value.
+
+The `risk` column in `--file-scores` output uses different bands. It shows the highest CRAP score in the file: low below half of `maxCrap`, moderate up to `maxCrap`, and high at or above `maxCrap`. With the default `maxCrap` of 30, the bands are `low <15`, `moderate 15-30`, and `high >=30`.
 
 ### File-level aggregation
 
@@ -295,7 +300,7 @@ Each file has two aggregated values:
 
 The health summary shows the active model as `coverage_model` (`static_estimated`, `istanbul`, or the legacy `static_binary`).
 
-### Refactoring targets
+### Refactoring targets {#untested-risk-targets}
 
 Fallow reports the `add_test_coverage` refactoring target (label `untested risk`) when both conditions are true:
 
@@ -405,12 +410,12 @@ Michael Feathers started this method, and Adam Tornhill made it systematic in [*
 </Accordion>
 
 
-## Refactoring targets
+## Refactoring targets {#refactoring-targets}
 
-Refactoring targets are ranked recommendations that you can act on. [`fallow health --targets`](/cli/health) produces them. It ranks files by refactoring priority with the metrics above.
+Refactoring targets are ranked recommendations that you can act on. [`fallow health --targets`](/cli/health) produces them. Fallow gives each file a priority score from the metrics above, and then sorts the targets by `efficiency` (priority divided by effort), highest first. Quick wins come first.
 
 <Tip>
-**Quick start**: Run `fallow health --targets` to get a prioritized refactoring list. For the fastest improvements, filter by `effort: low`. To block new regressions, save a baseline with `--save-baseline` and pass `--baseline` in CI. Update the baseline as you fix targets.
+**Quick start**: Run `fallow health --targets` to get a prioritized refactoring list. For the fastest improvements, add `--effort low`. To block new regressions, save a baseline with `--save-baseline` and pass `--baseline` in CI. Update the baseline as you fix targets.
 </Tip>
 
 <Info>
@@ -423,11 +428,11 @@ The other sections show measurements. Targets tell you what to do about those me
 priority = min(complexity_density, 1) × 30
          + hotspot_boost × 25            (hotspot_score / 100 if in hotspots, else 0)
          + dead_code_ratio × 20
-         + min(fan_in / 20, 1) × 15
-         + min(fan_out / 30, 1) × 10
+         + min(fan_in / fan_in_p95, 1) × 15
+         + min(fan_out / fan_out_p95, 1) × 10
 ```
 
-Fallow normalizes all inputs to \[0, 1\], so each weight is a true percentage share. The formula does not use the Maintainability Index on purpose. MI already includes density and dead code, so they would count twice.
+`fan_in_p95` and `fan_out_p95` are the 95th percentiles of your project (floors 5 and 8), so the fan-in and fan-out terms adapt to the size of the codebase. Fallow normalizes all inputs to \[0, 1\], so each weight is a true percentage share. The formula does not use the Maintainability Index on purpose. MI already includes density and dead code, so they would count twice.
 
 | Score | Interpretation | Action |
 |:------|:---------------|:-------|
@@ -447,22 +452,35 @@ Every target has an effort estimate (`low`, `medium`, or `high`) based on three 
 
 For "high", one criterion is enough (OR). For "low", all three must be true (AND). Fallow computes the fan-in percentiles from the file-score distribution of the project (P25 floor 2, P95 floor 5). A small file with fan-in at or above the P95 of the project is still "high", because a change to it affects many files.
 
-In human output, the effort comes after the category label, separated by ` · `:
+Fallow divides the priority by the effort (low = 1, medium = 2, high = 3) to get `efficiency`. The default sort uses `efficiency`.
+
+Every target also has a `confidence` level, based on the source of the data:
+
+| Confidence | Categories | Why |
+|:-----------|:-----------|:----|
+| **high** | dead code, circular dependency, complexity, untested risk | Deterministic graph and AST analysis |
+| **medium** | high impact, coupling | Heuristic fan-in and fan-out thresholds |
+| **low** | churn+complexity | Depends on the quality of the git history |
+
+In human output, the second line of each target shows the category, the effort, and the confidence, separated by ` · `:
 ```text
-dead code · low    Remove 12 unused exports...
-complexity · high  Extract 3 functions with cognitive complexity > 30...
+dead code · effort:low · confidence:high  Remove 12 unused exports to reduce surface area (86% dead)
+complexity · effort:high · confidence:high  Extract parseRow (cognitive: 34) in 520-LOC file into smaller functions
 ```
 
 ### Evidence
 
-For three recommendation categories, fallow adds structured evidence that links the target to specific analysis data. With this evidence, agents and scripts can act on a recommendation without a second tool call.
+Fallow adds structured evidence that links the target to specific analysis data. With this evidence, agents and scripts can act on a recommendation without a second tool call.
 
 | Category | Evidence fields | Example |
 |:---------|:---------------|:--------|
 | `remove_dead_code` | `unused_exports`: list of export names | `["assertEqual", "assertIs", "assertNever"]` |
-| `extract_complex_functions` | `complex_functions`: list of `{name, line, cognitive}` | `[{"name": "processData", "line": 45, "cognitive": 113}]` |
+| `extract_complex_functions` | `complex_functions`: list of `{name, line, cognitive}` with cognitive complexity >= 30 | `[{"name": "processData", "line": 45, "cognitive": 113}]` |
+| `add_test_coverage` | `complex_functions`: up to 3 functions of the file with the highest cognitive complexity | `[{"name": "parseRow", "line": 12, "cognitive": 18}]` |
 | `break_circular_dependency` | `cycle_path`: list of file paths forming the cycle | `["src/a.ts", "src/b.ts", "src/c.ts"]` |
-| All other categories | `evidence` omitted from JSON | (none) |
+| Any category | `direct_callers`: files that import the target, with the imported symbols. `clone_siblings`: other instances of clones in the file | `[{"path": "src/app.ts", "symbols": [...]}]` |
+
+When no evidence field has data, fallow omits `evidence` from the JSON.
 
 Evidence is for tools. In human output, the recommendation text already includes the key evidence (e.g., "Remove 12 unused exports" or "Extract processData (cognitive: 113)").
 
@@ -489,32 +507,35 @@ Fallow checks the rules in priority order and gives each target the category of 
 | Category | Display label | Trigger | What it means |
 |:---------|:-------------|:--------|:-------------|
 | Urgent churn + complexity | `churn+complexity` | Hotspot score ≥ 50, accelerating trend, density > 0.5 | File that changes often and gets more complex, highest urgency |
-| Break circular dependency | `circular dep` | File in an import cycle with fan-in ≥ 5 | Changes cascade through the cycle to many dependents |
-| Split high-impact file | `high impact` | Fan-in ≥ 20 (or ≥ 10 with ≥ 5 functions) and density > 0.3 | Many files depend on it, so each new bug affects many files |
+| Break circular dependency | `circular dependency` | File in an import cycle with fan-in ≥ 5 | Changes cascade through the cycle to many dependents |
+| Split high-impact file | `high impact` | Fan-in ≥ P95 (floor 5), or fan-in ≥ P75 (floor 3) with ≥ 5 functions, and density > 0.3 | Many files depend on it, so each new bug affects many files |
 | Remove dead code | `dead code` | Dead code ratio ≥ 0.5 with ≥ 3 value exports | Most exports are unused. Make the API smaller |
 | Extract complex functions | `complexity` | Top cognitive complexity ≥ 30 | Contains functions that are very hard to understand |
-| Reduce coupling | `coupling` | Fan-out ≥ 15 and MI < 60 (excluding entry points) | Too many imports reduce testability |
+| Reduce coupling | `coupling` | Fan-out ≥ P90 (floor 5) and MI < 60 (excluding entry points) | Too many imports reduce testability |
 | Add test coverage | `untested risk` | `crap_above_threshold` ≥ 2 and density > 0.3 | Multiple complex functions lack a test dependency path |
+| Break circular dependency | `circular dependency` | Any other file in an import cycle | The cycle spreads changes, but few files depend on this one |
 
 A file can match more than one rule, but only the match with the highest priority sets the category. JSON output still shows all contributing factors.
 
 ```text fallow health --targets --top 5
 ● Refactoring targets (5)
+  1 low effort · 1 medium · 3 high
+    score = quick-win ROI (higher = better) · pri = absolute priority
 
-  92.3    src/core/processor.ts
-          churn+complexity · high  Actively-changing file with growing complexity, stabilize before adding features
+   55.8  pri:55.8    src/legacy/old-api.ts
+         dead code · effort:low · confidence:high  Remove 8 unused exports to reduce surface area (73% dead)
 
-  71.2    src/utils/helpers.ts
-          high impact · high  Split high-impact file, 15 dependents amplify every change
+   30.8  pri:92.3    src/core/processor.ts
+         churn+complexity · effort:high · confidence:low  Actively-changing file with growing complexity, stabilize before adding features
 
-  55.8    src/legacy/old-api.ts
-          dead code · low  Remove 8 unused exports to reduce surface area (73% dead)
+   26.0  pri:52.0    src/graph/resolver.ts
+         circular dependency · effort:medium · confidence:high  Break import cycle, 8 files depend on this, changes cascade through the cycle
 
-  52.0    src/graph/resolver.ts
-          circular dep · medium  Break import cycle, 8 files depend on this, changes cascade through the cycle
+   23.7  pri:71.2    src/utils/helpers.ts
+         high impact · effort:high · confidence:medium  Split high-impact file (640 LOC), 15 dependents amplify every change
 
-  41.8    src/components/Dashboard.tsx
-          complexity · high  Extract renderMetrics (cognitive: 45) and renderFilters (cognitive: 32) into smaller functions
+   13.9  pri:41.8    src/components/Dashboard.tsx
+         complexity · effort:high · confidence:high  Extract renderMetrics (cognitive: 45) and renderFilters (cognitive: 32) in 520-LOC file into smaller functions
 
   Prioritized refactoring recommendations based on complexity, churn, and coupling signals: https://docs.fallow.tools/explanations/health#refactoring-targets
 ```
@@ -529,9 +550,11 @@ With `--format json`, each target has structured data for tools:
     {
       "path": "src/core/processor.ts",
       "priority": 92.3,
+      "efficiency": 30.8,
       "recommendation": "Actively-changing file with growing complexity, stabilize before adding features",
       "category": "urgent_churn_complexity",
       "effort": "high",
+      "confidence": "low",
       "factors": [
         {
           "metric": "complexity_density",
@@ -550,9 +573,11 @@ With `--format json`, each target has structured data for tools:
     {
       "path": "src/helpers/util.ts",
       "priority": 38.8,
+      "efficiency": 38.8,
       "recommendation": "Remove 12 unused exports to reduce surface area (86% dead)",
       "category": "remove_dead_code",
       "effort": "low",
+      "confidence": "high",
       "factors": [
         {
           "metric": "dead_code_ratio",
@@ -595,6 +620,7 @@ Fallow clamps the result to \[0, 100\]. Each penalty measures a different qualit
 | Unit size | `min(functions_over_60_loc_per_k × 0.5, 10)` | 10 |
 | Coupling | `min(coupling_high_pct × 0.5, 5)` | 5 |
 | Duplication | `min(max(0, duplication_pct − 5) × 1.0, 10)` | 10 |
+| Prop drilling | `min(prop_drilling_chain_count × 1, 5)`, only when the opt-in `prop-drilling` rule runs | 5 |
 
 `health_score.formula_version` identifies the formula. Version 2 uses scale-invariant density and tail metrics, so many healthy files do not hide problems in a large monorepo. Older snapshots without the v2 fields use the previous average, p90, and raw-count aggregators.
 
@@ -627,13 +653,13 @@ When you pass `--explain`, or run through MCP, the JSON output of each command i
 {
   "schema_version": 11,
   "_meta": {
-    "docs": "https://docs.fallow.tools/explanations/health",
+    "docs": "https://docs.fallow.tools/cli/health",
     "metrics": {
       "maintainability_index": {
         "name": "Maintainability Index",
-        "description": "Composite score: 100 - (complexity_density × 30) - ...",
+        "description": "Composite file score combining complexity density, dead code ratio, and coupling.",
         "range": "[0, 100]",
-        "interpretation": "higher is better; <40 poor, 40–70 moderate, >70 good"
+        "interpretation": "higher is better"
       }
     }
   }

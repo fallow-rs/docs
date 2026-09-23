@@ -44,11 +44,11 @@ Fallow prints the payload to stderr. The normal output of your command does not 
 
 ## What is collected
 
-When you enable telemetry, fallow sends one small, high-level event per analysis run:
+When you enable telemetry, fallow records one small, high-level event per analysis run. A successful run gives a `workflow_completed` event. A failed run gives a `workflow_failed` event. To print this example, run `fallow telemetry inspect --example`:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "event": "workflow_completed",
   "fallow_version": "3.28.0",
   "workflow": "audit",
@@ -59,25 +59,37 @@ When you enable telemetry, fallow sends one small, high-level event per analysis
   "quiet": true,
   "ci": false,
   "tty": false,
-  "os": "linux",
-  "arch": "x86_64",
+  "os": "macos",
+  "arch": "aarch64",
   "duration_bucket_ms": "500-2000",
   "outcome": "issues_found",
   "exit_code_bucket": "1",
+  "run_scope": "changed_only",
+  "config_shape": "custom_rules",
+  "output_destination": "stdout",
+  "analysis_mode": "static",
+  "file_count_bucket": "500-1999",
+  "function_count_bucket": "1000-9999",
+  "avg_fan_out_bucket": "1-2",
   "findings_present": true,
+  "result_count_bucket": "1-9",
+  "report_truncated": true,
+  "truncation_reason": "comment_limit",
+  "cache_state": "warm",
   "mcp_tool": "find_dupes",
-  "parent_run": "tmp_8x7p4k"
+  "has_parent_run": true,
+  "run_role": "followup",
+  "followup_kind": "audit"
 }
 ```
 
-Four fields are optional:
+Many fields are optional. Fallow omits a field when it does not apply to the run:
 
 - `agent_source` appears only on agent-driven runs.
-- `findings_present` is omitted by commands that run no analysis, and by older binaries.
+- `failure_reason` appears only on `workflow_failed` events.
 - `mcp_tool` appears only when a run came through the MCP server.
-- `parent_run` appears only when a run is explicitly correlated to a previous one.
-
-In all other cases, fallow omits these fields.
+- `truncation_reason` appears only when `report_truncated` is `true`.
+- The scale buckets, `findings_present`, `result_count_bucket`, `report_truncated`, and `cache_state` appear only when the workflow computes that value.
 
 | Field | Purpose |
 |:------|:--------|
@@ -88,9 +100,23 @@ In all other cases, fallow omits these fields.
 | `output_format` / `quiet` | Protect the output contracts that users and agents rely on most. |
 | `duration_bucket_ms` | Find slow workflow classes without collecting exact timings. |
 | `outcome` / `exit_code_bucket` | Measure clean runs, findings, and failures without uploading raw error text. |
+| `failure_reason` | Group failed runs into a fixed allowlist: `validation`, `unsupported_format`, `config`, `analysis`, `diff`, `network`, `auth`, `gate`, `signal`, or `unknown`. Fallow never parses raw error text for it. |
+| `run_scope` | Classify the run as `full_project`, `changed_only`, `workspace_scoped`, or `file_scoped`, without names or refs. |
+| `config_shape` | Classify the config as `default`, `custom_config`, `custom_rules`, or `plugins_enabled`, without paths, rule names, plugin names, or values. |
+| `output_destination` | Classify the report destination as `stdout`, `file`, or `ci_comment`, without paths or URLs. |
+| `analysis_mode` | Classify the analysis family (`static`, `runtime_coverage`, `production_coverage`, `security`, `similar_code`, or `fix`), without raw command lines. |
+| `file_count_bucket` / `function_count_bucket` / `avg_fan_out_bucket` | Coarse project scale from counts that the workflow already computed. Exact counts never leave your machine. |
 | `findings_present` | Whether the analysis found any issues, independent of the exit code. This makes informational analyses measurable, such as default-config `dupes`, which never exits non-zero. |
+| `result_count_bucket` | Coarse result volume: `0`, `1-9`, `10-99`, `100+`, or `unknown`. |
+| `report_truncated` / `truncation_reason` | Whether a report or PR comment was cut short, and why (`comment_limit`, `max_items`, `size_limit`, or `unknown`). |
+| `cache_state` | Segment the duration of combined runs by cache state: `cold`, `warm`, `partial`, or `unknown`. |
 | `mcp_tool` | Attribute MCP usage to a specific tool, from a fixed allowlist of tool names. |
-| `parent_run` | Link explicit agent follow-up runs with a short allowlisted token. It is never a path or a free-form string. |
+| `has_parent_run` / `run_role` / `followup_kind` | Separate root runs from agent follow-up runs, and classify the follow-up by workflow. The event never contains the correlation token. |
+
+Two values travel as private HTTP headers, never as fields in the event:
+
+- `X-Fallow-Parent-Run`: a sanitized correlation token for follow-up runs. Fallow sends it only when a run is explicitly linked to a previous one.
+- `X-Fallow-Install`: the anonymous install grouping token described above.
 
 When fallow runs through the MCP server, the server tags the CLI process that it starts. The one event from that run then counts toward the `mcp` surface and the specific tool, instead of a plain `cli_json` run. Code Mode snippets can make several read-only host calls. Fallow attributes the CLI events from those calls to `code_execute`, not to free-form code text or nested helper names. This tagging sends no extra event and does not change what fallow collects.
 
@@ -121,14 +147,15 @@ Fallow does not upload any of these:
 - versions
 - free-form vendor strings
 
-If you write an agent wrapper, set `FALLOW_AGENT_SOURCE=<allowlisted-value>`. An ambiguous source sends `unknown`. **Setting `FALLOW_AGENT_SOURCE` never enables telemetry by itself and uploads no codebase content.** When more than one agent environment is present, attribution is best-effort and can depend on check order. To name the agent yourself, set `FALLOW_AGENT_SOURCE`.
+If you write an agent wrapper, set `FALLOW_AGENT_SOURCE=<allowlisted-value>`. Fallow ignores a value that is not on the allowlist, and then sends no `agent_source`. If your wrapper cannot name the agent, set `FALLOW_AGENT_SOURCE=unknown`. **Setting `FALLOW_AGENT_SOURCE` never enables telemetry by itself and uploads no codebase content.** When more than one agent environment is present, attribution is best-effort and can depend on check order. To name the agent yourself, set `FALLOW_AGENT_SOURCE`.
 
 ## Transport and server privacy
 
 - Fallow sends each request as an HTTPS POST with a JSON body to `https://api.fallow.cloud/v1/telemetry/events` (override the host with `FALLOW_API_URL`)
 - Fallow uses no cookies and sends no authentication token
-- The upload runs on a background thread and does not slow down your command
-- Fallow does not wait for the upload, so the fastest runs and runs on slow networks often drop their event. The counts are a rough, biased sample, not an exact usage count
+- At exit, fallow writes the event to a local spool file (`telemetry-spool.jsonl`, next to the user-level telemetry config). It does not upload the event during the run that produced it
+- At the start of the next telemetry-enabled run, a background thread uploads the spooled events. The upload does not slow down your command
+- Delivery is best-effort. The spool keeps at most the 64 newest events, so a machine that stays offline drops its oldest events. The counts are a rough sample, not an exact usage count
 - Fallow ignores network errors, and they never affect command output or the exit code
 - Fallow never writes telemetry to stdout
 - The server does not add customer, repository, organization, git, package-registry, or license data to telemetry

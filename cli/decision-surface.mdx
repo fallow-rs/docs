@@ -23,7 +23,7 @@ fallow decision-surface --base main --max-decisions 5
 ```
 
 <Note>
-  `fallow decision-surface` **always exits 0**. It never blocks CI. The output includes the verdict for information only. [`fallow audit`](/cli/audit) is the command that exits non-zero on a fail verdict. Use `decision-surface` to find the one or two things that need a human judgment call. Use `audit` to find out if CI blocks the change.
+  `fallow decision-surface` **always exits 0** when the analysis runs. It never blocks CI, and its output has no verdict. A runtime error, such as a base ref that does not exist, exits 2. [`fallow audit`](/cli/audit) is the command that exits non-zero on a fail verdict. Use `decision-surface` to find the one or two things that need a human judgment call. Use `audit` to find out if CI blocks the change.
 </Note>
 
 ## When to reach for it
@@ -65,15 +65,20 @@ Fallow **ranks** the decisions by consequence (blast radius x reversibility) and
 |:------|:-----|:-----------|
 | `question` | string | The judgment, as a question for a human. |
 | `category` | `"coupling-boundary"` \| `"public-api-contract"` \| `"dependency"` | The kind of structural choice. |
-| `routed_expert` | string | Who to ask: the person or role whose judgment the category needs. |
-| `signal_id` | string | The deterministic anchor for this decision, taken from the module graph. It is stable across runs on the same tree. Use it as the key to re-attach review comments. |
+| `expert` | string[] | Who to ask, from ownership routing. Empty when no ownership signal is available for the anchor file. |
+| `bus_factor_one` | boolean | Present and `true` when only one person qualifies as owner of the anchor file. |
+| `signal_id` | string | The deterministic anchor for this decision, taken from the module graph (`sig:` and a hash). It is stable across runs on the same tree. Use it as the key to re-attach review comments. |
+| `signal_key` | string | The raw graph key that `signal_id` hashes, for example `package.json::left-pad`. |
+| `anchor_file`, `anchor_line` | string, integer | The project-relative file and the 1-based line of the anchor. `0` means the head of the file. |
 | `tradeoff` | string | The structural cost, stated as a fact and never as a recommendation. Example: `"Couples app to infra; 4 in-repo modules already depend on this anchor"`. |
-| `internal_consumer_count` | integer | The number of in-repo modules **outside the diff** that already depend on the anchor. This is your reversibility signal: a higher count means the choice is more expensive to undo. Fallow displays this number. The ranking uses a separate blast figure. |
-| `previous_signal_id` | string \| null | Present when the anchor file was renamed. It holds the `signal_id` from before the rename, so a review tool can re-attach an earlier comment across a `git mv`. |
+| `internal_consumer_count` | integer | The number of in-repo modules **outside the diff** that already depend on the anchor. This is your reversibility signal: a higher count means the choice is more expensive to undo. Fallow displays this number. The ranking uses `blast` and `consequence`. |
+| `blast`, `consequence` | integer | The ranking inputs: the number of modules beyond the diff that the decision affects, and that number times a weight per category. Fallow sorts on `consequence`, highest first. |
+| `previous_signal_id` | string | Present only when the anchor file was renamed. It holds the `signal_id` from before the rename, so a review tool can re-attach an earlier comment across a `git mv`. |
+| `actions` | array | `ask-expert` when `expert` is not empty, and `suppress` with the comment to paste, except on `dependency` decisions. |
 
 The human output shows the question and the trade-off. Read reversibility from the consumer count. Fallow never labels a decision as a one-way or two-way door.
 
-To suppress a `coupling-boundary` or `public-api-contract` decision, add an inline `// fallow-ignore` comment at the decision's anchor. Suppression works the same way as for other fallow findings. A `dependency` decision anchors on `package.json`, which cannot hold a comment. It has no `suppress` action, but `ask-expert` still applies. Suppression removes a decision from the output. It does not change the verdict.
+To suppress a `coupling-boundary` or `public-api-contract` decision, add `// fallow-ignore-next-line decision-surface <category>` above the decision's anchor. The `suppress` action holds the exact comment. A `dependency` decision anchors on `package.json`, which cannot hold a comment. It has no `suppress` action, but `ask-expert` still applies. Suppression removes a decision from the output. It does not change the verdict.
 
 ## How an agent consumes it
 
@@ -86,7 +91,7 @@ fallow decision-surface --base main --format json --quiet
 A typical agent flow:
 
 1. Read `decisions[]` in order.
-2. For each decision, show the **question** and the `routed_expert` to the human, not the raw diff.
+2. For each decision, show the **question** and the `expert` list to the human, not the raw diff.
 3. Use `internal_consumer_count` to choose how strongly to flag the decision. `0` means a cheap choice that is easy to undo. A high count means many modules depend on the anchor, so the choice is expensive to undo.
 4. Quote the `tradeoff` text word for word. It is a fact, so the agent can pass it on without comment.
 5. Attach each comment to `signal_id`. If the run reports a `previous_signal_id`, move the earlier comment across the rename. Do not post a duplicate.
@@ -117,11 +122,11 @@ fallow decision-surface --base HEAD~5
 | `--base <REF>` | Git ref to compare against (for example `main`, `HEAD~5`, or a commit SHA). Alias for `--changed-since`. Default: the `git merge-base` with the branch's upstream or the remote default (`origin/main`). To pin the base without a flag, set [`FALLOW_AUDIT_BASE`](/configuration/environment#fallow_audit_base). |
 | `--changed-since <REF>` | Alias for `--base`. Compares against changes since this git ref. |
 | `--max-decisions <N>` | Maximum number of decisions in the output. Default 4. Fallow clamps values to the 3 to 5 band and does not reject values outside it. |
-| `-f, --format <FORMAT>` | Output format: `human` (default) or `json`. |
+| `-f, --format <FORMAT>` | Output format: `human` (default) or `json`. Other values print the human output. Fallow writes the human output to stderr. |
 | `-r, --root <PATH>` | Project root directory. |
 | `-c, --config <PATH>` | Path to a fallow config file. |
-| `-w, --workspace <NAME>` | Scope to a single workspace package. |
-| `-q, --quiet` | Suppress progress and status output on stderr. |
+| `-w, --workspace <NAME>` | Scope output to selected workspace packages. Accepts exact names, globs, and `!`-prefixed negations. |
+| `-q, --quiet` | Suppress progress and status output on stderr. In human format, this also hides the decisions, so use it with `--format json`. |
 
 See [global flags](/cli/global-flags) for the full list.
 
@@ -154,55 +159,59 @@ fallow decision-surface --base main --workspace @app/api --format json
 ## Example output
 
 ```bash title="$ fallow decision-surface --base main"
-Decision surface: 3 decisions vs main (d4a2f91..HEAD)
-
-● coupling-boundary  (ask: architecture owner)
-  src/app/checkout.ts → src/infra/queue.ts
-  Should the app zone depend directly on infra here?
-  trade-off: Couples app to infra; 4 in-repo modules already depend on this anchor.
-  internal consumers: 4
-
-● public-api-contract  (ask: API owner)
-  src/lib/client.ts:createClient
-  This export is now public surface consumed outside the diff. Is the contract right?
-  trade-off: Locks the createClient signature for external callers.
-  internal consumers: 2
-
-● dependency  (ask: platform owner)
-  package.json → fast-xml-parser
-  A new third-party dependency enters the graph. Is it warranted?
-  trade-off: Adds a third-party maintenance and supply-chain surface.
-  internal consumers: 0
+Decisions to make (2):
+  1. [dependency] `package.json` adds 1 third-party dependency (`left-pad`),
+       imported by 1 in-repo module. What does each replace, and who owns the
+       new surface?
+     trade-off: Takes on 1 new maintenance and supply-chain surface; 0 in-repo
+       modules outside this diff already import the added packages.
+     ask: alice (bus-factor 1)
+  2. [public-api-contract] This change adds 2 exports to the public API surface.
+       Intended as maintained contracts, or should they stay internal?
+     trade-off: Adds 2 maintained contracts; 0 in-repo modules already consume
+       this surface, and any external consumers become a contract you cannot
+       remove without a breaking change.
+     ask: alice (bus-factor 1)
 ```
+
+When the change has no structural decision, the output is `Decisions: none (no consequential structural decision in this change)`.
 
 ## JSON output
 
-`fallow decision-surface --format json` returns the `decisions[]` array. Each entry has the fields in [What each decision carries](#what-each-decision-carries). [`fallow review --format json`](/cli/audit#json-envelope) returns the same decisions under its `decisions` key.
+`fallow decision-surface --format json` returns the `decisions[]` array. Each entry has the fields in [What each decision carries](#what-each-decision-carries). `signal_count` is the number of signal IDs that fallow emitted, including decisions below the cap. `truncated` is present when fallow collapsed decisions below the cap. [`fallow review --format json`](/cli/audit#json-envelope) returns the same decisions in `decisions.decisions[]`, without `actions`.
 
 ```json title="$ fallow decision-surface --base main --format json"
 {
+  "kind": "decision-surface",
+  "schema_version": 1,
+  "version": "3.28.0",
   "command": "decision-surface",
-  "base_ref": "main",
-  "head_sha": "d4a2f91",
   "decisions": [
     {
-      "signal_id": "coupling:app/checkout->infra/queue",
-      "category": "coupling-boundary",
-      "question": "Should the app zone depend directly on infra here?",
-      "routed_expert": "architecture owner",
-      "tradeoff": "Couples app to infra; 4 in-repo modules already depend on this anchor",
-      "internal_consumer_count": 4
-    },
-    {
-      "signal_id": "public-api:lib/client:createClient",
+      "signal_id": "sig:efab2fe6cef7b663",
       "category": "public-api-contract",
-      "question": "This export is now public surface consumed outside the diff. Is the contract right?",
-      "routed_expert": "API owner",
-      "tradeoff": "Locks the createClient signature for external callers",
-      "internal_consumer_count": 2,
-      "previous_signal_id": "public-api:lib/old-client:createClient"
+      "question": "This change adds 2 exports to the public API surface. Intended as maintained contracts, or should they stay internal?",
+      "anchor_file": "src/index.ts",
+      "anchor_line": 1,
+      "signal_key": "src/index.ts::y|src/index.ts::z",
+      "blast": 0,
+      "consequence": 0,
+      "expert": ["alice"],
+      "bus_factor_one": true,
+      "internal_consumer_count": 0,
+      "tradeoff": "Adds 2 maintained contracts; 0 in-repo modules already consume this surface, and any external consumers become a contract you cannot remove without a breaking change.",
+      "actions": [
+        { "type": "ask-expert", "description": "Ask alice to make this call", "auto_fixable": false },
+        {
+          "type": "suppress",
+          "description": "Suppress this decision if it is settled",
+          "command": "// fallow-ignore-next-line decision-surface public-api-contract",
+          "auto_fixable": false
+        }
+      ]
     }
-  ]
+  ],
+  "signal_count": 1
 }
 ```
 

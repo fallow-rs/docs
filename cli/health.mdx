@@ -51,7 +51,7 @@ Overrides keep the exceptions visible in the output. Suppression comments hide t
 
 | Flag | Description |
 |:-----|:------------|
-| `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`, [`badge`](/integrations/badges) |
+| `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`, [`badge`](/integrations/badges), `github-annotations`, `github-summary` |
 | `--top <N>` | Show only the top N results per section (findings, file scores, hotspots, targets) |
 | `--sort <METRIC>` | Sort complexity findings by: `cyclomatic` (default), `cognitive`, `lines`, `severity` |
 | `--explain` | Add metric explanations. In human format, print a `Description:` line under each section header. In JSON format, add a `_meta` object with metric descriptions and docs links. |
@@ -73,7 +73,7 @@ By default, fallow includes all standard sections. To select individual sections
 | `--targets` | Show only refactoring targets: ranked recommendations with priority scores, effort estimates, contributing factors, and evidence for AI agents. The JSON of each target can include `direct_callers[]` (direct importers with the symbols they import) and `clone_siblings[]` (duplicate-code siblings with stable `dup:<8hex>` fingerprints for `fallow dupes --trace`). Fallow omits both arrays when they are empty. Human output adds `importers:` and `clones:` lines only when that evidence is present. |
 | `--score` | Show only the project health score (0-100) with a letter grade (A/B/C/D/F). The output includes the score by default when you set no section flags. Plain `--score` skips the churn-backed hotspot penalty, so the score does not run `git log` on each run. To include the hotspot penalty, pass `--hotspots` (or `--targets` with `--score`). Snapshot (`--save-snapshot`) and trend (`--trend`) runs still compute hotspot vital signs, so the saved data stays complete. |
 | `--coverage-gaps` | Show runtime files and exports that no test dependency path reaches. Mock-aware. See [With coverage gaps](#with-coverage-gaps). Opt-in (default off). Set the severity with the `coverage-gaps` rule. |
-| `--coverage <PATH>` | Path to Istanbul-format coverage data (`coverage-final.json`) for accurate per-function CRAP scores. Jest, Vitest, c8, and nyc produce this format. With this flag, fallow uses the canonical formula `CC^2 * (1-cov/100)^3 + CC` instead of the static binary model. Relative paths resolve against `--root`. Fallbacks: `FALLOW_COVERAGE`, then `health.coverage`, then auto-detection. [`fallow audit`](/cli/audit) uses the same chain. Fallow computes statement coverage per function, over the statements in the body of that function. The statements of a nested function belong to the nested function, not to the function that contains it. |
+| `--coverage <PATH>` | Path to Istanbul-format coverage data (`coverage-final.json`, or a directory that contains it) for accurate per-function CRAP scores. Jest, Vitest, c8, and nyc produce this format. With this flag, fallow uses the canonical formula `CC^2 * (1-cov/100)^3 + CC` instead of the static binary model. Relative paths resolve against `--root`. Fallbacks: `FALLOW_COVERAGE`, then `health.coverage`, then auto-detection. [`fallow audit`](/cli/audit) uses the same chain. Fallow computes statement coverage per function, over the statements in the body of that function. The statements of a nested function belong to the nested function, not to the function that contains it. |
 | `--coverage-root <PATH>` | Absolute prefix to strip from file paths in coverage data before fallow prepends the project root. Use it when a different environment (CI runner, Docker) generated the coverage, for example `/home/runner/work/myapp`. Fallbacks: `FALLOW_COVERAGE_ROOT`, then `health.coverageRoot`. `fallow audit` uses the same chain. |
 | `--runtime-coverage <PATH>` | Merge runtime coverage into the health report. Accepts a V8 coverage directory, a single V8 JSON file, or a single Istanbul coverage map JSON file. A single local capture is free and needs no license. Continuous or multi-capture runtime monitoring requires a valid license or trial. |
 | `--min-invocations-hot <N>` | Threshold for hot-path classification when `--runtime-coverage` is active (default: `100`). |
@@ -119,6 +119,7 @@ partial or unavailable, use `--type-aware-require complete`. See
 
 | Flag | Description |
 |:-----|:------------|
+| `[PATH]` | Report only findings in this file or directory. Fallow still builds the full project graph. |
 | `-w, --workspace <NAME>` | Scope output to one or more workspace packages while keeping the full cross-workspace graph. Comma-separated values, globs (`apps/*`, `@scope/*`), and `!`-prefixed negation are supported. Fallow recomputes vital signs, health score, hotspots, file scores, findings, and `summary.files_analyzed` for the scoped subset. |
 | `--changed-since <REF>` | Analyze only functions in files changed since the given git ref (for example `main`, `HEAD~5`). Also applies to hotspot analysis. |
 | `--group-by <owner\|directory\|package\|section>` | Split the report into one section per group. JSON output adds `grouped_by` and a `groups` array. Each group has its own `vital_signs`, `health_score`, `findings`, `file_scores`, `hotspots`, `large_functions`, and `targets`, computed for the files of that group. The top-level metrics stay project-wide, so a tool that ignores grouping still sees the project headline. Human output adds a summary block per group with score, files, hot, and p90 (worst first with `--score`). SARIF tags every result with `properties.group`, and CodeClimate adds a top-level `group` field per issue. GitHub Code Scanning and GitLab Code Quality can then split findings per team or package. Compact, markdown, and badge output ignore grouping and print a note on stderr that points to `--format json`. |
@@ -138,8 +139,9 @@ partial or unavailable, use `--type-aware-require complete`. See
 
 | Flag | Description |
 |:-----|:------------|
-| `--save-baseline` | Save the current complexity findings as a baseline for later comparison. Fallow refuses the save with exit 2 when the destination holds a baseline of another `kind`. A destination with no `kind` gets one on the next save. |
-| `--baseline` | Compare against a saved baseline and report only new findings. Applies only to complexity findings, not to file scores. |
+| `--save-baseline <PATH>` | Save the current complexity findings as a baseline for later comparison. Fallow refuses the save with exit 2 when the destination holds a baseline of another `kind`. A destination with no `kind` gets one on the next save. |
+| `--baseline <PATH>` | Compare against a saved baseline and report only new findings. Applies only to complexity findings, not to file scores. |
+| `--baseline-mode <MODE>` | How `--baseline` matches findings: `count` (default, per file and finding category) or `identity` (per function, identified by file path and function name). `identity` works only with a baseline that you saved with `--baseline-mode identity`. When you rename or move a function, save the baseline again. A save without this flag refuses to overwrite a baseline that has identities. Pass `--baseline-mode count` to replace it on purpose. |
 | `--fail-on-stale-baseline` | Exit 1 when the loaded baseline has an entry that matches no current finding. See [global flags](/cli/global-flags). Has no effect with `--report-only`, which is an explicit request to never fail. |
 
 When a quarter or more of the saved entries match no current finding, the run prints a warning on stderr with the command to save the baseline again. A run narrowed by `--changed-since`, `--diff-file`, `--workspace`, `--changed-workspaces` or `--production` prints no warning, because it cannot judge a whole-project baseline.
@@ -163,7 +165,7 @@ Each command writes its own baseline format, and a saved baseline names that for
 
 ## Exit codes
 
-Plain `fallow health` (no gate flag) is advisory by default, for visibility. For backward compatibility, it still fails on any finding. The gate flags change what sets the exit code:
+Plain `fallow health` (no gate flag) exits 1 on any finding. To show health without a failure, use `--report-only`. The gate flags change what sets the exit code:
 
 | Invocation | Exit 0 when | Exit 1 when |
 |:-----------|:------------|:------------|
