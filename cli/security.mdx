@@ -60,7 +60,7 @@ fallow security
 
 | Flag | Description |
 |:-----|:------------|
-| `--runtime-coverage <PATH>` | Add production runtime state to `tainted-sink` candidates and use it as an extra ranking signal. Accepts a V8 coverage directory, a single V8 JSON file, or an Istanbul coverage map JSON file |
+| `--runtime-coverage <PATH>` | Add production runtime state to `tainted-sink` candidates and use it as an extra ranking signal. Accepts a V8 coverage directory, a single V8 JSON file, or an Istanbul coverage map JSON file. A single local capture is free. Continuous or multi-capture monitoring needs a license. See [fallow license](/cli/license). |
 | `--min-invocations-hot <N>` | Threshold for hot-path classification when `--runtime-coverage` is active (default: `100`) |
 
 ### Regression gate
@@ -155,7 +155,7 @@ Each catalogue finding has `kind: "tainted-sink"`, a `category` (the catalogue i
 | `sql-injection` | 89 | `query` / `execute` with concatenation or interpolation, raw escape hatches (`sql.raw`, Prisma unsafe raw, Knex raw, `sequelize.literal`) |
 | `ssrf` | 918 | `fetch` / `got` / `ky` / `needle` / `request` / `axios` / `superagent` / `undici` / `http(s).request` |
 | `path-traversal` | 22 | `path.join` / `path.resolve` / `node:fs` path methods / route `sendFile` |
-| `header-injection` | 113 | response `setHeader` / `writeHead` |
+| `header-injection` | 113 | response `setHeader` / `writeHead` (a `writeHead` headers object with only literal names and literal values is not a candidate) |
 | `open-redirect` | 601 | `res.redirect` / `location.href` / `location.assign` / `window.open` |
 | `postmessage-wildcard-origin` | 346 | `postMessage(..., "*")` |
 | `tls-validation-disabled` | 295 | HTTPS/TLS options with `rejectUnauthorized: false`, plus `NODE_TLS_REJECT_UNAUTHORIZED = "0"` |
@@ -373,7 +373,7 @@ Each finding also has a `candidate` record, an optional `taint_flow` triple, and
 The `candidate` record has three slots:
 
 - `source_kind`: the kind of untrusted input that reaches the sink, as a stable catalogue source id such as `"http-request-input"`, `"process-env"`, `"process-argv"`, `"message-event-data"`, or `"location-input"`. Absent when no untrusted source matched (always absent for `client-server-leak`). Treat an unknown id as an untrusted source of unknown kind. Never drop a candidate because its id is unknown.
-- `sink`: a complete description of the sink site (`path`, `line`, `col`, `category`, `cwe`, and the captured `callee`). You can act on `candidate.sink` without reading the rest of the finding. URL-category sinks (SSRF, open redirect) can add `url_shape` when the shape is statically visible: `"fixed-origin-dynamic-path"` (a fixed origin with a dynamic path or query, the less alarming shape) or `"dynamic-origin"` (the origin itself is dynamic).
+- `sink`: a complete description of the sink site (`path`, `line`, `col`, `category`, `cwe`, and the captured `callee`). You can act on `candidate.sink` without reading the rest of the finding. URL-category sinks (SSRF, open redirect) can add `url_shape` when the shape is statically visible: `"fixed-origin-dynamic-path"` (a fixed origin with a dynamic path or query, the less alarming shape) or `"dynamic-origin"` (the origin itself is dynamic). The static prefix must complete the authority. A dynamic value directly after the host, in the port, or after userinfo makes the shape `"dynamic-origin"`. A `/`, `?`, or `#` after the host completes it. A relative URL counts as fixed-origin only when a path segment comes before the dynamic value: `` `/path/${id}` `` is fixed-origin, `` `/${id}` `` is `"dynamic-origin"`.
 - `boundary`: whether the flow crosses a `client_server` boundary (a `"use client"` file in the trace) or a `cross_module` boundary (the source reaches the sink across one or more import hops). It also has an `architecture_zone` (`from`/`to`) when the anchor is part of a declared architecture-boundary violation.
 
 There is no `impact` field. The verifying agent decides exploitability. Fallow flags candidates with structural evidence and a review-priority tier from `severity`.
@@ -382,7 +382,7 @@ There is no `impact` field. The verifying agent decides exploitability. Fallow f
 
 `candidate.network` is present only on `secret-to-network` candidates. Its `destination` field holds the URL of the network call when the URL is a static string literal. That case is usually intended auth to the credential's own provider. `destination` is absent when the destination is dynamic, which is the stronger exfiltration signal. Use this field to tell exfiltration from intended auth without reading the code again.
 
-`finding_id` is a stable correlation id. It is identical across runs for the same rule, path, and line, and it matches the SARIF `partialFingerprints["fallowSecurity/v1"]` value of the finding. Two candidates of the same rule on the same line share one ID. Use it to track a candidate across runs (for example after a rebase) and to join JSON and SARIF output.
+`finding_id` is a stable correlation id. It is identical across runs for the same rule, path, line, and column, and it matches the SARIF `partialFingerprints["fallowSecurity/v2"]` value of the finding. Two sinks on the same line get different IDs. Use it to track a candidate across runs (for example after a rebase) and to join JSON and SARIF output. IDs from earlier fallow versions hash only the rule, path, and line, so every ID changes when you upgrade. See [Finding identity migration](/cli/security-agent-verification#finding-identity-migration).
 
 ## Subcommands
 
@@ -413,7 +413,7 @@ fallow security survivors --candidates candidates.json --verdicts verdicts.json
 
 The output reports `summary.unverdicted`, so you can tell reviewed candidates from unreviewed ones. The human output separates verifier dispositions from candidates that still need review. Without `--require-verdict-for-each-candidate`, an incomplete verdict file does not fail the run. The gap shows in `summary.unverdicted`.
 
-When two candidates in the candidate file have the same `finding_id`, `survivors` exits 2. This happens when two sinks of the same rule are on one line.
+`survivors` exits 2 when the candidate file has a duplicate `finding_id`, or when the verdict file has two verdicts for one `finding_id`. It also exits 2 when a verdict names a `finding_id` that is not in the candidate file. A verdict file from an earlier fallow version therefore fails against new candidates. Regenerate the candidates and the verdicts together.
 
 ### blind-spots
 

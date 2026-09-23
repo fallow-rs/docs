@@ -1,13 +1,13 @@
 ---
 title: "Cloud beacon setup"
-description: "Send production execution counts from a browser or Node service to Fallow Cloud, so you can see which functions run and which never do. Covers setup, the first-ingest check, and an empty dashboard."
+description: "Send production execution counts from a browser or Node service to fallow cloud, so you can see which functions run and which never do. Covers setup, the first-ingest check, and an empty dashboard."
 keywords: ["fallow beacon", "runtime coverage", "browser coverage", "node coverage", "cloud ingest"]
 icon: "tower-broadcast"
 ---
 
-The beacon records how often each function runs in production and sends those counts to Fallow Cloud. You use the counts to find hot paths and code that never runs.
+The beacon records how often each function runs in production and sends those counts to fallow cloud. You use the counts to find hot paths and code that never runs.
 
-In HTTP mode, the beacon sends nothing until you give it three values: an API key, a project id, and the Fallow Cloud endpoint.
+In HTTP mode, the beacon sends nothing until you give it three values: an API key, a project id, and the fallow cloud endpoint. If the API key or the endpoint is missing or empty, the beacon does not start. It reports a `transport-misconfigured` error through `onRuntimeMismatch`, or through `console.error` when you do not set that callback.
 
 ## Browser setup
 
@@ -34,13 +34,18 @@ const beacon = createBrowserBeacon({
 beacon.start();
 ```
 
-In browser code, use an ingest-only key with the prefix `fallow_pub_k1_`. This key can only call `POST /v1/ingest`. Never put a full `fallow_live_k1_` key in a browser bundle.
+In browser code, use an ingest-only key with the prefix `fallow_pub_k1_`. This key can only call `POST /v1/ingest`. Never put a full `fallow_live_k1_` key in a browser bundle. If the browser beacon gets a `fallow_live_k1_` key, it logs an error to the console.
 
-The first browser snapshot can contain only startup code, so the beacon skips it on purpose. To send data, do one of these:
+To report only part of the page sessions, set `sampleRate` to a value from 0 to 1. The default is `1`, so every session reports.
 
-- Go through at least one real workflow in the app.
-- Wait for the 30-second flush.
-- Hide the page, which starts a flush.
+The beacon reads `window.__coverage__` every 30 seconds by default (`flushIntervalMs`), and again when the page is hidden or unloaded. If `window.__coverage__` does not exist, the browser beacon sends nothing and does not report an error.
+
+The beacon skips the first snapshot when every instrumented function in it has already run, because that snapshot shows only startup code. It checks again at the next read. To send data, do these steps:
+
+1. Go through at least one real workflow in the app, so that the snapshot also contains functions that did not run.
+2. Wait for the next 30-second read, or hide the page.
+
+If every instrumented function in your app runs at startup, the browser beacon never sends data.
 
 ## Node setup
 
@@ -64,7 +69,17 @@ const beacon = createNodeBeacon({
 });
 
 beacon.start();
+
+process.on("SIGTERM", async () => {
+  await beacon.flush();
+  await beacon.stop();
+  process.exit(0);
+});
 ```
+
+The beacon keeps the first Node snapshot as a baseline and does not send it. Call `flush()` before shutdown, so that the last counts are sent.
+
+If `globalThis.__coverage__` has Istanbul counters, the Node beacon uses them instead of V8 coverage. Set `coverageSource: "v8"` or `coverageSource: "istanbul"` to select the source yourself.
 
 Use a full `fallow_live_k1_` key and keep it on the server. Bun and Deno need Istanbul instrumentation at build time, because their V8 capture is unavailable or incomplete.
 
@@ -76,7 +91,7 @@ The beacon logs nothing when an upload succeeds. To confirm that data arrives, c
 2. The onboarding card at [fallow.cloud](https://fallow.cloud) changes to a repository row after aggregation.
 3. The key's `last used` value updates under Settings, API keys.
 
-Fallow Cloud processes an accepted ingest asynchronously. Expect a short delay between the `202` response and the repository row.
+Fallow cloud processes an accepted ingest asynchronously. Expect a short delay between the `202` response and the repository row.
 
 ## If the dashboard stays empty
 
@@ -88,13 +103,14 @@ Check these in order:
 4. `projectId` is stable and different for each repository or service.
 5. Browser builds contain Istanbul counters, or Node started with `NODE_V8_COVERAGE`.
 6. The app exercised real routes or jobs after the beacon started.
-7. The first `/v1/ingest` response is `202`, not `401`, `403`, `402`, `413`, or `429`.
+7. The first `/v1/ingest` response is `202`, not `401`, `403`, `402`, `413`, or `429`. A `206` response also means that fallow cloud accepted the data, but it keeps only a sample of the payloads.
+8. `projectId` is 200 characters or fewer, `environment` is 64 characters or fewer, and `commitSha` is a git SHA of 40 characters or fewer. A container image ref does not fit in `commitSha`.
 
-When no coverage source is available, the beacon emits one `onRuntimeMismatch` error that tells you what to fix, and then stops. Fix that error before you wait for another batch.
+When the Node beacon finds no coverage source, or a configuration value is too long, it reports one `onRuntimeMismatch` error that tells you what to fix. Then it stops. Without an `onRuntimeMismatch` callback, the beacon logs the error with `console.error`. Fix that error before you wait for another batch.
 
 ## Add static inventory
 
-Runtime capture tells Fallow Cloud only what V8 or Istanbul observed. To see the functions that were never tracked, upload the static inventory in CI. Fallow Cloud then shows them as `untracked`:
+Runtime capture tells fallow cloud only what V8 or Istanbul observed. To see the functions that were never tracked, upload the static inventory in CI. Fallow cloud then shows them as `untracked`:
 
 ```bash
 # FALLOW_API_KEY holds the API key as a CI secret
@@ -102,6 +118,8 @@ fallow coverage upload-inventory
 ```
 
 The command reads the key from `FALLOW_API_KEY`. You can also pass `--api-key`, but on a shared CI runner other processes can see a command-line secret.
+
+The inventory must use the same project id as the beacon `projectId`. By default, the command uses `$GITHUB_REPOSITORY`, then `$CI_PROJECT_PATH`, then the `origin` remote URL. Pass `--project-id` when your beacon uses a different value. If your deployment runs from a container directory such as `/app`, pass `--path-prefix /app`, so that the inventory paths match the paths that the beacon reports.
 
 For bundled or minified code, also upload source maps from CI. [`fallow coverage`](/cli/coverage) documents the inventory and source-map commands.
 

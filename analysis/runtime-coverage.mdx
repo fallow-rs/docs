@@ -41,7 +41,7 @@ The report also has these fields:
 | `importance` | For each runtime-observed function, how much it matters in production: `invocations`, `cyclomatic`, `owner_count`, an `importance_score`, and a `reason`. |
 | `actionable` | Whether the report has enough evidence to act on, with `actionability_reason` and `actionability_verdict`. A capture with no tracked functions reports an `insufficient_evidence` verdict, so fallow does not read it as cold. This verdict can only hold back action: it never gates a positive verdict or a confidence score. |
 | `provenance` | Context about the data behind the report (`data_source`, `is_production`, `freshness_days`, `untracked_ratio`, `unresolved_ratio`, `stale`, `stale_after_days`). Context only. It never gates a verdict. |
-| `watermark` | Trial or license grace marker. Fallow adds it when paid-feature access is in warning mode. |
+| `watermark` | Set when a license or trial is in its grace period, for example `license-expired-grace` when the license expired 8 to 30 days ago. The analysis still runs. See [Trial and watermark behavior](#trial-and-watermark-behavior). |
 | `warnings` | Non-fatal merge diagnostics, for example partial source-map remapping. |
 
 ### Summary fields
@@ -99,7 +99,7 @@ Two flags control how strict fallow is when it assigns verdicts:
 |:--------|:-----|:------|:--------|:-----|
 | Static reachability gaps | `--coverage-gaps` | none | Which runtime files and exports have no transitive test path? | no |
 | Exact CRAP scoring | `--coverage` | Istanbul JSON | How covered is each function for CRAP calculation? | no |
-| Runtime coverage | `--runtime-coverage` | V8 directory, V8 JSON file, or Istanbul JSON | Which functions actually ran, which stayed cold, and which hot paths changed? | yes |
+| Runtime coverage | `--runtime-coverage` | V8 directory, V8 JSON file, or Istanbul JSON | Which functions actually ran, which stayed cold, and which hot paths changed? | A single local capture is free. More needs a license. |
 
 To find untested code, use `--coverage-gaps`. For more accurate CRAP scores, use `--coverage`. For evidence about the code that production runs, use `--runtime-coverage`.
 
@@ -135,7 +135,7 @@ Pick one:
 
 ## First-run workflow
 
-1. Start a trial or activate a license with [`fallow license`](/cli/license).
+1. Optional: start a trial or activate a license with [`fallow license`](/cli/license). A single local capture works without one.
 2. Run [`fallow coverage setup`](/cli/coverage).
 3. Follow the generated recipe in `docs/collect-coverage.md`.
 4. When coverage exists, run `fallow coverage setup` or `fallow health --runtime-coverage <path>` again.
@@ -171,9 +171,19 @@ Line-level hot-path matching needs protocol 0.5 or newer in the sidecar. Older s
 
 ## Trial and watermark behavior
 
-Runtime coverage is a paid feature with a trial flow. Fallow verifies the license offline against a compiled-in Ed25519 public key. Only `fallow license activate --trial` and `fallow license refresh` need network access.
+Runtime coverage collects paid runtime intelligence. A single local capture is free and needs no license. Continuous or multi-capture monitoring (for example, a V8 directory with more than one JSON file) needs a license with the `runtime_coverage` feature. To try it, start a 30-day trial with `fallow license activate --trial --email <addr>`.
 
-If a license is expired but still inside the grace window, the analysis still runs, and fallow adds a watermark to the output. After the hard-fail window, fallow blocks paid features until you refresh the license.
+Fallow verifies the license offline against a compiled-in Ed25519 public key. Only `fallow license activate --trial` and `fallow license refresh` need network access.
+
+When a license expires, fallow gives you a grace period:
+
+| Days after expiry | Behavior |
+|:------------------|:---------|
+| 1 to 7 | The analysis runs as normal. `fallow license status` tells you to refresh. |
+| 8 to 30 | The analysis runs. The output gets the `license-expired-grace` watermark and verdict. |
+| 31 or more | Fallow blocks runtime coverage and exits with code `3`. Run `fallow license refresh`. |
+
+When a license is present, fallow checks it for every runtime coverage run, also for a single capture. An expired license past the grace period, an invalid token, or a license without the `runtime_coverage` feature stops the run with exit code `3`. For details, see [fallow license](/cli/license#exit-behavior).
 
 ## See also
 

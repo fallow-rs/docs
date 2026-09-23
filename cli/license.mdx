@@ -1,11 +1,13 @@
 ---
 title: "fallow license"
-description: "Turn on paid runtime coverage on your machine or CI runner. Fallow license activates a trial or JWT, shows status, refreshes a license, or deactivates the local token."
+description: "Turn on continuous and multi-capture runtime coverage on your machine or CI runner. Fallow license activates a trial or JWT, shows status, refreshes a license, or deactivates the local token."
 keywords: ["fallow license", "trial", "license activate", "license refresh", "runtime coverage", "JWT", "CLI"]
 icon: "key"
 ---
 
-Use `fallow license` to manage the local license that turns on the paid runtime-coverage features.
+Use `fallow license` to manage the local license for runtime coverage, the feature that collects paid runtime intelligence.
+
+You need a license only for continuous or multi-capture runtime monitoring. A single local capture is free and needs no license. All static analysis is free and open source (MIT). For pricing and tiers, see [fallow.tools/pricing](https://fallow.tools/pricing).
 
 ```bash
 fallow license status
@@ -100,14 +102,32 @@ On a shared CI runner where you do not want to write to a home directory, use `F
 
 ## Exit behavior
 
-Common outcomes:
+| Situation | Exit code |
+|:----------|:----------|
+| `status` with a valid license, or a license in the grace period | `0` |
+| `status` with no license, or a license more than 30 days past expiry | `3` |
+| `activate` with a malformed, truncated, or not valid JWT | `3` |
+| `activate --trial` without `--email` | `2` |
+| `activate --trial` or `refresh` fails: network error, rate limit, or rejection by the server | `7` |
 
-| Situation | Result |
-|:----------|:-------|
-| Valid license | exit code `0` |
-| No license or hard-fail expired license | non-zero status |
-| Network failure during `--trial` or `refresh` | exit code `7` |
-| Malformed or truncated JWT | non-zero status with a verification error |
+### Grace period
+
+When a license expires, fallow gives you a grace period before it blocks runtime coverage:
+
+| Days after expiry | Behavior |
+|:------------------|:---------|
+| 1 to 7 | Runtime coverage runs as normal. `status` tells you to refresh. |
+| 8 to 30 | Runtime coverage runs. Its output gets the `license-expired-grace` watermark and verdict. |
+| 31 or more | Fallow blocks runtime coverage with exit code `3`. |
+
+### Runtime coverage runs
+
+Commands that take `--runtime-coverage` (`health`, `audit`, `security`, and `coverage analyze`) check the license before they start the sidecar:
+
+- With no license, the run continues. A single local capture works. The sidecar rejects continuous or multi-capture input.
+- With a license present, fallow checks it also for a single capture. A token that is not valid, a license more than 30 days past expiry, or a license without the `runtime_coverage` feature stops the run with exit code `3`.
+
+To go back to the free single-capture mode, run `fallow license deactivate` and unset `FALLOW_LICENSE` and `FALLOW_LICENSE_PATH`.
 
 ### Actionable error messages
 
@@ -129,7 +149,7 @@ License verification rejects a JWT when its `iat` (issued-at) claim is more than
 - a JWT signed with a clock that is ahead
 - a local machine with a clock that is behind
 
-On rejection, fallow prints a `license appears to be issued <duration> in the future` error and exits non-zero. Paid features thus fail closed. Fallow does not accept a license that the local clock cannot validate.
+On rejection, fallow prints a `license appears to be issued <duration> in the future` error and exits non-zero. Licensed features thus fail closed. Fallow does not accept a license that the local clock cannot validate.
 
 Common causes that are not user errors:
 
@@ -143,7 +163,7 @@ For an environment with predictable drift, first make sure that the system clock
 
 <CardGroup cols={2}>
   <Card title="Runtime coverage" icon="chart-network" href="/analysis/runtime-coverage">
-    See what paid runtime coverage adds to health analysis.
+    See what runtime coverage adds to health analysis.
   </Card>
   <Card title="Coverage setup" icon="wand-magic-sparkles" href="/cli/coverage">
     Run the guided first-run setup. It sets up the sidecar and writes a collection recipe.
