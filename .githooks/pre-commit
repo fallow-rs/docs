@@ -1,26 +1,14 @@
 #!/usr/bin/env bash
 set -e
 
-# Keep public-content-manifest.json in step with the content it describes.
-#
-# The manifest is fully derived: per-file sha256 and byte counts plus an
-# aggregate hash. CI runs `npm run content:check` against the checked-out
-# commit, so a commit that edits public content without refreshing the
-# manifest turns main red with "public-content-manifest.json is stale". That
-# is a mechanical failure, so a hook can prevent it outright.
-#
-# Regeneration takes well under a second, so this runs unconditionally rather
-# than behind a list of content paths. A hardcoded list here would be a second
-# copy of the one in scripts/public-content.mjs, free to drift the moment a
-# content directory is added.
-#
-# The generator reads the WORKING TREE, not the index. A manifest is only
-# valid for this commit when every file it describes is in the index at the
-# same content. When that does not hold, refusing beats committing a manifest
-# that describes something other than the commit.
+# Refresh public-content-manifest.json so that `npm run content:check` passes in CI.
+# The hook always runs: a list of content paths here would copy the allowlist
+# in scripts/public-content.mjs and could drift from it.
+# The generator reads the working tree, not the index, so the hook refuses the
+# commit when a listed file is not staged at its working-tree content.
 
 if ! command -v node > /dev/null 2>&1; then
-  echo "pre-commit: node is missing; skipping the content manifest refresh (CI still enforces it)." >&2
+  echo "pre-commit: node is not installed. The hook did not refresh public-content-manifest.json. CI still checks it." >&2
   exit 0
 fi
 
@@ -30,7 +18,6 @@ if git diff --quiet -- public-content-manifest.json; then
   exit 0
 fi
 
-# Every path the refreshed manifest names must be staged at this exact content.
 mismatched=$(
   node -e '
     const { execFileSync } = require("child_process");
@@ -38,7 +25,6 @@ mismatched=$(
     const manifest = JSON.parse(fs.readFileSync("public-content-manifest.json", "utf8"));
     const bad = [];
     for (const entry of manifest.content.files) {
-      if (entry.path === "public-content-manifest.json") continue;
       try {
         const staged = execFileSync("git", ["rev-parse", ":" + entry.path], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
         const onDisk = execFileSync("git", ["hash-object", entry.path], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
@@ -53,10 +39,10 @@ mismatched=$(
 
 if [ -n "$mismatched" ]; then
   git checkout -- public-content-manifest.json
-  echo "pre-commit: the content manifest cannot be made to match this commit." >&2
-  echo "It is generated from the working tree, but these files differ from what is staged:" >&2
+  echo "pre-commit: public-content-manifest.json cannot match this commit." >&2
+  echo "The manifest comes from the working tree, but these files are not staged at their working-tree content:" >&2
   printf '  %s\n' "$mismatched" >&2
-  echo "Stage them, or stash them, then commit again." >&2
+  echo "Stage or stash these files, then commit again." >&2
   exit 1
 fi
 

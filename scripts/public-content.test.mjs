@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, symlink, utimes, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -73,8 +80,26 @@ test("archive output is reproducible for the same content and commit", async () 
     sourceCommit,
   });
 
+  const committedManifest = JSON.parse(
+    await readFile(join(root, "public-content-manifest.json"), "utf8"),
+  );
+
   assert.equal(first.artifact.sha256, second.artifact.sha256);
-  assert.equal(first.source.content_sha256, second.source.content_sha256);
+  assert.equal(first.source.commit, sourceCommit);
+  assert.equal(first.source.content_sha256, committedManifest.content.sha256);
+});
+
+test("archive rejects public content that is not committed", async () => {
+  const root = await createFixture();
+  await writeManifest(root);
+  const sourceCommit = commitFixture(root);
+  await writeFile(join(root, "analysis", "draft.mdx"), "# Draft\n");
+  await writeManifest(root);
+
+  await assert.rejects(
+    createArchive({ root, outputDirectory: "archive", sourceCommit }),
+    /untracked or changed:\n(?:.*\n)*\?\? analysis\/draft\.mdx/u,
+  );
 });
 
 test("archive rejects provenance that differs from checkout HEAD", async () => {
@@ -189,8 +214,6 @@ test("public content rejects private repository links", async () => {
   }
 });
 
-// Pins the `)` terminator of the private-repo marker: a markdown link is the most
-// likely way the URL enters an MDX page.
 test("public content rejects a private repository link in markdown link syntax", async () => {
   const root = await createFixture();
   await writeFile(
@@ -204,15 +227,45 @@ test("public content rejects a private repository link in markdown link syntax",
   );
 });
 
-test("public content rejects high-confidence credentials", async () => {
+test("public content rejects each leak marker", async () => {
+  const cases = [
+    ["See .internal/runbook.md", /Found private documentation alias/u],
+    ["Open /Users/alex/project", /Found machine-local macOS path/u],
+    ["Open C:\\Users\\alex\\project", /Found machine-local Windows path/u],
+    [
+      `-----BEGIN ${"RSA"} PRIVATE KEY-----`,
+      /Found private key material/u,
+    ],
+    [`Leaked key: ghp_${"a".repeat(36)}`, /Found GitHub access token/u],
+    [`Leaked key: AKIA${"A".repeat(16)}`, /Found AWS access key/u],
+    [`Leaked key: sk_live_${"a".repeat(24)}`, /Found live Stripe secret key/u],
+  ];
+  for (const [text, expected] of cases) {
+    const root = await createFixture();
+    await writeFile(join(root, "analysis", "health.mdx"), `${text}\n`);
+    await assert.rejects(buildManifest(root), expected);
+  }
+});
+
+test("public content accepts text near the leak markers", async () => {
   const root = await createFixture();
   await writeFile(
     join(root, "analysis", "health.mdx"),
-    `Leaked key: ghp_${"a".repeat(36)}\n`,
+    "Read src/internal-api.ts and https://github.com/fallow-rs/fallow\n",
   );
+
+  const manifest = await buildManifest(root);
+  assert.ok(
+    manifest.content.files.some((file) => file.path === "analysis/health.mdx"),
+  );
+});
+
+test("public content rejects unsupported file types", async () => {
+  const root = await createFixture();
+  await writeFile(join(root, "analysis", "notes.txt"), "notes\n");
 
   await assert.rejects(
     buildManifest(root),
-    /Found GitHub access token/u,
+    /Unsupported file type in public content: analysis\/notes\.txt/u,
   );
 });

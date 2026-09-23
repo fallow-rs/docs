@@ -19,6 +19,7 @@ const MANIFEST_NAME = "public-content-manifest.json";
 const ARCHIVE_NAME = "fallow-public-docs.tar.gz";
 const PROVENANCE_NAME = "fallow-public-docs.provenance.json";
 const REQUIRED_FILES = ["docs.json", "index.mdx"];
+const USTAR_PATH_LIMIT = 100;
 const PUBLIC_ROOT_FILES = new Set([
   ".mintignore",
   "adoption.mdx",
@@ -159,11 +160,15 @@ const walkDirectory = async (root, directory, extensions) => {
     }
 
     if (!metadata.isFile()) {
-      throw new Error(`Unsupported public content entry: ${repositoryPath}`);
+      throw new Error(
+        `Public content entry is not a file or directory: ${repositoryPath}`,
+      );
     }
 
     if (!extensions.has(extensionOf(entry.name))) {
-      throw new Error(`Unsupported public content file type: ${repositoryPath}`);
+      throw new Error(
+        `Unsupported file type in public content: ${repositoryPath}. Allowed types: ${[...extensions].join(", ")}.`,
+      );
     }
 
     files.push(repositoryPath);
@@ -190,11 +195,10 @@ const findUnownedMdx = async (root, directory = "") => {
     }
 
     if (entry.isFile() && entry.name.endsWith(".mdx")) {
-      const isOwnedRootPage =
-        !repositoryPath.includes("/") && PUBLIC_ROOT_FILES.has(repositoryPath);
-      const isOwnedDirectory =
-        CONTENT_DIRECTORIES.has(topLevelDirectory);
-      if (!isOwnedRootPage && !isOwnedDirectory) {
+      if (
+        !PUBLIC_ROOT_FILES.has(repositoryPath) &&
+        !CONTENT_DIRECTORIES.has(topLevelDirectory)
+      ) {
         files.push(repositoryPath);
       }
     }
@@ -207,12 +211,14 @@ const validateLeakMarkers = (path, content) => {
   const text = content.toString("utf8");
   for (const marker of LEAK_MARKERS) {
     if (marker.pattern.test(text)) {
-      throw new Error(`Found ${marker.label} in public content: ${path}`);
+      throw new Error(
+        `Found ${marker.label} in public content: ${path}. Remove it before you publish.`,
+      );
     }
   }
 };
 
-export const collectPublicFiles = async (root = DEFAULT_ROOT) => {
+const collectPublicFiles = async (root = DEFAULT_ROOT) => {
   const files = [];
 
   for (const path of [...PUBLIC_ROOT_FILES].sort()) {
@@ -244,18 +250,18 @@ export const collectPublicFiles = async (root = DEFAULT_ROOT) => {
 
   for (const path of REQUIRED_FILES) {
     if (!files.includes(path)) {
-      throw new Error(`Required public content file is missing: ${path}`);
+      throw new Error(`Required public content file is missing: ${path}.`);
     }
   }
 
   const unownedMdx = await findUnownedMdx(root);
   if (unownedMdx.length > 0) {
     throw new Error(
-      `MDX files outside the public allowlist: ${unownedMdx.join(", ")}`,
+      `MDX files outside the public allowlist: ${unownedMdx.join(", ")}. Move each page into a public content directory, or remove it.`,
     );
   }
 
-  return [...new Set(files)].sort();
+  return files.sort();
 };
 
 export const buildManifest = async (root = DEFAULT_ROOT) => {
@@ -312,7 +318,7 @@ export const checkManifest = async (root = DEFAULT_ROOT) => {
   } catch (error) {
     if (error.code === "ENOENT") {
       throw new Error(
-        `${MANIFEST_NAME} is missing. Run npm run content:manifest.`,
+        `${MANIFEST_NAME} is missing. Run npm run content:manifest and commit the result.`,
       );
     }
     throw error;
@@ -320,7 +326,7 @@ export const checkManifest = async (root = DEFAULT_ROOT) => {
 
   if (committed !== generated) {
     throw new Error(
-      `${MANIFEST_NAME} is stale. Run npm run content:manifest.`,
+      `${MANIFEST_NAME} is stale. Run npm run content:manifest and commit the result.`,
     );
   }
 
@@ -335,8 +341,10 @@ const writeOctal = (header, offset, length, value) => {
 
 const createTarHeader = (path, size) => {
   const pathBytes = Buffer.byteLength(path);
-  if (pathBytes > 100) {
-    throw new Error(`Archive path exceeds the ustar limit: ${path}`);
+  if (pathBytes > USTAR_PATH_LIMIT) {
+    throw new Error(
+      `Archive path is longer than the ${USTAR_PATH_LIMIT}-byte ustar limit: ${path}`,
+    );
   }
 
   const header = Buffer.alloc(512);
@@ -363,7 +371,7 @@ const createTarHeader = (path, size) => {
   return header;
 };
 
-export const createTar = (entries) => {
+const createTar = (entries) => {
   const chunks = [];
   for (const entry of [...entries].sort((left, right) =>
     left.path.localeCompare(right.path),
@@ -388,7 +396,7 @@ export const createArchive = async ({
 }) => {
   if (!/^[0-9a-f]{40}$/u.test(sourceCommit ?? "")) {
     throw new Error(
-      "Archive creation requires --source-commit with a full commit SHA.",
+      "Archive creation needs a full 40-character commit SHA. Pass --source-commit <sha> or set GITHUB_SHA.",
     );
   }
 
@@ -397,7 +405,9 @@ export const createArchive = async ({
     encoding: "utf8",
   }).trim();
   if (head !== sourceCommit) {
-    throw new Error(`Archive source commit ${sourceCommit} does not match checkout HEAD ${head}.`);
+    throw new Error(
+      `Archive source commit ${sourceCommit} does not match checkout HEAD ${head}. Check out that commit, or pass --source-commit ${head}.`,
+    );
   }
   const publicationPaths = [MANIFEST_NAME, ...manifest.content.files.map((file) => file.path)];
   const dirtyPublicationPaths = execFileSync(
@@ -406,7 +416,9 @@ export const createArchive = async ({
     { encoding: "utf8" },
   ).trim();
   if (dirtyPublicationPaths !== "") {
-    throw new Error("Archive publication inputs must be tracked and clean.");
+    throw new Error(
+      `Commit the public content before you create an archive. These paths are untracked or changed:\n${dirtyPublicationPaths}`,
+    );
   }
   const sourceProvenance = {
     schema_version: 1,
@@ -425,7 +437,7 @@ export const createArchive = async ({
       sha256(content) !== file.sha256
     ) {
       throw new Error(
-        `Public content changed while creating the archive: ${file.path}`,
+        `Public content changed during archive creation: ${file.path}. Run the command again.`,
       );
     }
     entries.push({
@@ -468,6 +480,14 @@ export const createArchive = async ({
   return artifactProvenance;
 };
 
+const readFlagValue = (arguments_, index) => {
+  const value = arguments_[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${arguments_[index]} needs a value, for example: --archive dist.`);
+  }
+  return value;
+};
+
 const parseArguments = (arguments_) => {
   const result = {
     mode: "--check",
@@ -483,21 +503,20 @@ const parseArguments = (arguments_) => {
     }
     if (argument === "--archive") {
       result.mode = argument;
-      result.outputDirectory = arguments_[index + 1];
+      result.outputDirectory = readFlagValue(arguments_, index);
       index += 1;
       continue;
     }
     if (argument === "--source-commit") {
-      result.sourceCommit = arguments_[index + 1];
+      result.sourceCommit = readFlagValue(arguments_, index);
       index += 1;
       continue;
     }
-    throw new Error(`Unknown argument: ${argument}`);
+    throw new Error(
+      `Unknown argument: ${argument}. Use --check, --write, --archive <directory> or --source-commit <sha>.`,
+    );
   }
 
-  if (result.mode === "--archive" && !result.outputDirectory) {
-    throw new Error("--archive requires an output directory.");
-  }
   return result;
 };
 
@@ -516,14 +535,14 @@ const run = async () => {
       sourceCommit: arguments_.sourceCommit,
     });
     console.log(
-      `Wrote ${provenance.artifact.filename} (${provenance.artifact.sha256}).`,
+      `Wrote ${provenance.artifact.filename} and ${PROVENANCE_NAME} to ${arguments_.outputDirectory} (sha256 ${provenance.artifact.sha256}).`,
     );
     return;
   }
 
   const manifest = await checkManifest();
   console.log(
-    `${MANIFEST_NAME} is current (${manifest.content.sha256}).`,
+    `${MANIFEST_NAME} is current (sha256 ${manifest.content.sha256}).`,
   );
 };
 
