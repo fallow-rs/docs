@@ -1,14 +1,16 @@
 ---
 title: "fallow audit"
-description: "CLI reference for fallow audit. Combined dead code, complexity, duplication, and styling analysis scoped to changed files, with a pass/warn/fail verdict for PR quality gates and AI-generated code review."
+description: "Get one pass, warn, or fail verdict for the files a PR changes, from dead code, complexity, duplication, and styling checks. CLI reference for fallow audit, the quality gate for PRs and AI-generated code review."
 keywords: ["fallow audit", "code review", "AI code review", "quality gate", "verdict", "changed files", "PR review", "CLI"]
 icon: "terminal"
 ---
 
-Audit changed files for dead code, complexity, duplication, and styling. Returns a **pass**, **warn**, or **fail** verdict based on the severity of issues found. Scoping to changed files keeps signal-to-noise high: by default only issues introduced by the current PR or commit fail the gate; inherited findings in touched files are shown as context.
+`fallow audit` tells you if a PR passes your quality gate. It checks the changed files for dead code, complexity, duplication, and styling, and returns a **pass**, **warn**, or **fail** verdict from the severity of the issues it finds.
+
+Audit checks only the changed files, which keeps the signal-to-noise ratio high. By default, only issues that the current PR or commit introduces fail the gate. Inherited findings in touched files show as context.
 
 <Note>
-  `fallow audit` is the PR-time gate. For the initial full-repo cleanup on an existing codebase, start with [Adopt Fallow in an existing repo](/adoption), which walks through `fallow`, `fallow dead-code`, `fallow dupes`, and `fallow health`, and hands the actual cleanup to an AI agent before turning `audit` on in CI.
+  `fallow audit` is the gate for pull requests. For the first full-repo cleanup of an existing codebase, start with [Adopt Fallow in an existing repo](/adoption). That guide walks through `fallow`, `fallow dead-code`, `fallow dupes`, and `fallow health`, and hands the actual cleanup to an AI agent before you turn on `audit` in CI.
 </Note>
 
 ```bash
@@ -21,22 +23,22 @@ fallow audit
 
 | Flag | Description |
 |:-----|:------------|
-| `--base <REF>` | Git ref to compare against (e.g., `main`, `HEAD~5`, a commit SHA). Alias for `--changed-since`. When omitted, the base is the `git merge-base` against the branch's upstream or the remote default (`origin/main`); set [`FALLOW_AUDIT_BASE`](/configuration/environment#fallow_audit_base) to pin it without a flag. |
+| `--base <REF>` | Git ref to compare against (for example `main`, `HEAD~5`, or a commit SHA). Alias for `--changed-since`. Default: the `git merge-base` with the branch's upstream or the remote default (`origin/main`). To pin the base without a flag, set [`FALLOW_AUDIT_BASE`](/configuration/environment#fallow_audit_base). |
 
 ### Diff scoping
 
 | Flag | Description |
 |:-----|:------------|
-| `--diff-file <PATH>` | Path to a pre-computed unified diff (e.g. `git diff --unified=0 main...HEAD > /tmp/pr.diff`) that narrows source-anchored findings to lines inside an added hunk. Pass `-` for stdin (`gh pr diff \| fallow audit --diff-file -`) or use the `--diff-stdin` alias. The bundled GitHub Action and GitLab CI template pre-compute the diff and pass it automatically; you only need this flag for non-PR pipelines or local invocations. The filtering rules and the `FALLOW_DIFF_FILE` fallback are documented under [global flags](/cli/global-flags#reference). |
+| `--diff-file <PATH>` | Path to a pre-computed unified diff (for example `git diff --unified=0 main...HEAD > /tmp/pr.diff`). Fallow keeps only the source-anchored findings on lines inside an added hunk. Pass `-` for stdin (`gh pr diff \| fallow audit --diff-file -`) or use the `--diff-stdin` alias. The bundled GitHub Action and GitLab CI template compute the diff and pass it for you. You need this flag only for non-PR pipelines or local runs. [Global flags](/cli/global-flags#reference) documents the filtering rules and the `FALLOW_DIFF_FILE` fallback. |
 
 ### Gate
 
 | Flag | Description |
 |:-----|:------------|
-| `--gate new-only` | Default. Compare against the base ref and fail only on findings introduced by the current changeset. Inherited findings are reported in JSON `attribution` and annotated with `introduced: false`. |
-| `--gate all` | Strict mode. Fail on every finding in changed files, including findings inherited from the base ref. Skips the extra base-snapshot attribution pass for lower latency. |
+| `--gate new-only` | Default. Compare against the base ref and fail only on findings that the current changeset introduces. JSON reports inherited findings in `attribution` and marks them `introduced: false`. |
+| `--gate all` | Strict mode. Fail on every finding in changed files, including findings inherited from the base ref. Skips the extra base-snapshot attribution pass, so the run is faster. |
 
-The gate has three surface forms. They all accept the same values (`new-only`, `all`) and the precedence is CLI flag > config > MCP param > default.
+You can set the gate in three places. All three accept the same values (`new-only`, `all`). Precedence: CLI flag > config > MCP param > default.
 
 <CodeGroup>
 ```bash CLI
@@ -58,76 +60,97 @@ gate = "all"
 
 #### Docs-only-diff fast path
 
-Under `--gate new-only`, audit normally runs every analysis twice: once on the current tree and once on a temporary worktree at the base ref so it can attribute each finding as introduced or inherited. When every changed file is either a non-behavioral doc (`.md`, `.markdown`, `.txt`, `.rst`, `.adoc`) or token-equivalent at the base ref (a comment-only or whitespace-only edit on a `.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.mts`/`.cjs`/`.cts` source file), audit reuses the current run's findings as the base snapshot, classifies everything as inherited, and skips the second worktree analysis entirely. Common case: docs-only PRs and formatter sweeps complete in roughly one analysis pass instead of two.
+Under `--gate new-only`, audit normally runs every analysis twice: once on the current tree, and once on a temporary worktree at the base ref. The second run tells audit if each finding is introduced or inherited.
 
-Run `fallow audit --base main --gate new-only --performance` to see whether the fast path fired: the JSON output includes `base_snapshot_skipped: true|false` and the human output prints the same on stderr. The optimization activates automatically whenever every entry in the diff qualifies; there is no flag to opt in or out.
+audit skips the second run when every changed file is one of these:
+
+- a non-behavioral doc (`.md`, `.markdown`, `.txt`, `.rst`, `.adoc`)
+- a `.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.mts`/`.cjs`/`.cts` source file that is token-equivalent at the base ref (a comment-only or whitespace-only edit)
+
+In that case, audit reuses the findings of the current run as the base snapshot and classifies all of them as inherited. Docs-only PRs and formatter sweeps then take about one analysis pass instead of two.
+
+To check if the fast path fired, run `fallow audit --base main --gate new-only --performance`. The JSON output has `base_snapshot_skipped: true|false`, and the human output prints the same value on stderr. The fast path turns on automatically when every entry in the diff qualifies. No flag turns it on or off.
 
 #### New-only duplication demotion
 
-Clone-group attribution carries one carve-out under `--gate new-only`: an introduced clone group none of whose instances overlap an added line from the run's diff is demoted to inherited. This covers changes that remove duplication elsewhere and thereby re-shape a surviving clone group into a new structural key: the group is new to the report, but no duplicated line was written by this change, so it does not fail the gate.
+Under `--gate new-only`, clone-group attribution has one exception. When no instance of an introduced clone group overlaps an added line in the diff of the run, audit demotes the group to inherited. This happens when a change removes duplication elsewhere and so gives a remaining clone group a new structural key. The group is new to the report, but the change wrote no duplicated line, so the group does not fail the gate.
 
-Every demotion is observable. The gate-excluded note on stderr gains a sub-line naming the demoted count and the diff that decided it:
+You can see every demotion. The stderr note about findings that the gate excluded gets an extra line with the demoted count and the diff that decided it:
 
 ```text
 audit gate excluded 3 inherited findings (run with --gate all to enforce)
   of which 1 clone group was reclassified as pre-existing: no duplicated line was added by this change (diff source: merge-base worktree diff vs main)
 ```
 
-With `--explain`, the duplication section adds one line per demoted group, capped like the clone listing: the group's `dup:<fingerprint>` id (matching the listing and `fallow dupes --trace`), its instance locations, and the deciding rule, plus a closing line naming the diff source. In JSON, each demoted entry in `duplication.clone_groups[]` carries a `demotion_reason` field and the `attribution` block counts demotions in `duplication_demoted`; see [Key fields](#key-fields).
+With `--explain`, the duplication section adds one line per demoted group, with the same cap as the clone listing. Each line shows:
 
-The decision uses the same diff precedence as [diff scoping](#diff-scoping): a diff supplied via `--diff-file`, `--diff-stdin`, or `FALLOW_DIFF_FILE` wins over the merge-base worktree diff. A supplied diff computed against a narrower base than the merge base (for example a last-commit-only diff on a multi-commit branch) can demote duplication the branch genuinely introduced, so derive supplied diffs from the same base the audit compares against. When no diff is available at all, the check is skipped and every introduced clone group keeps gating.
+- the group's `dup:<fingerprint>` id (matching the listing and `fallow dupes --trace`)
+- its instance locations
+- the deciding rule
+
+A closing line names the diff source. In JSON, each demoted entry in `duplication.clone_groups[]` has a `demotion_reason` field, and the `attribution` block counts demotions in `duplication_demoted`. See [Key fields](#key-fields).
+
+The decision uses the same diff precedence as [diff scoping](#diff-scoping). A diff from `--diff-file`, `--diff-stdin`, or `FALLOW_DIFF_FILE` wins over the merge-base worktree diff. A supplied diff with a narrower base than the merge base can demote duplication that the branch really introduced. An example is a diff of only the last commit on a branch with several commits. Compute a supplied diff from the same base that the audit compares against. When no diff is available, audit skips this check and every introduced clone group still gates.
 
 ### Output
 
 | Flag | Description |
 |:-----|:------------|
-| `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab` |
+| `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`, `github-annotations`, `github-summary`. `badge` exits 2. |
 | `-q, --quiet` | Suppress progress and status output on stderr |
-| `--explain` | Add metric explanations in JSON output (`_meta` objects with docs links). In human output, also lists each clone group the new-only gate demoted, with the deciding diff source. See [New-only duplication demotion](#new-only-duplication-demotion). |
+| `--explain` | Add metric explanations to JSON output (`_meta` objects with docs links). In human output, also list each clone group that the new-only gate demoted, with the deciding diff source. See [New-only duplication demotion](#new-only-duplication-demotion). |
 
 ### Review brief
 
 | Flag | Description |
 |:-----|:------------|
-| `--brief` | Render the deterministic review brief instead of the gating audit report. Answers "where do I look?" rather than "will CI block this?", runs the same analysis, and always exits 0. Orthogonal to `--format`. Implied by `fallow review`. See [Review brief and decision surface](#review-brief-and-decision-surface). |
-| `--max-decisions <N>` | Cap on the number of consequential structural decisions surfaced in the brief's decision surface (the working-memory limit). Default 4; clamped to a 3 to 5 band. Only consulted on the brief path. |
-| `--walkthrough-guide` | Emit the agent-contract walkthrough guide: the current digest (brief + decision surface), the review direction, the JSON schema the agent must return, and a deterministic graph-snapshot hash pinned into the digest. Implies the brief; always exits 0. See [Agent walkthrough loop](#agent-walkthrough-loop). |
-| `--walkthrough-file <PATH>` | Ingest an agent's judgment JSON and post-validate it against the live graph; see [Agent walkthrough loop](#agent-walkthrough-loop) for the accepted and rejected outcomes. Implies the brief; always exits 0. |
-| `--walkthrough` | Render the walkthrough guide as a staged human terminal tour (Stage 1 load-bearing, Stage 2 mechanical), or a paste-into-PR artifact with `--format markdown`. `--format json --walkthrough` emits the same agent-contract JSON as `--walkthrough-guide`. Implies the brief; always exits 0. |
-| `--mark-viewed <FILE>` | Record one or more changed files as viewed in the local walkthrough viewed-state ledger, then render the tour. Files already viewed (and still current) collapse into the Cleared panel. Repeatable. Stale marks (the tree moved) are ignored on render but never deleted. Only consulted on the `--walkthrough` path. |
-| `--show-cleared` | Expand the Cleared panel in the human/markdown walkthrough tour: list each de-prioritized and already-viewed file instead of the collapsed one-line summary. Only consulted on the `--walkthrough` path. |
-| `--show-deprioritized` | Expand the de-prioritized units in the brief's weighted focus map ("show me what you de-prioritized"). The `deprioritized` escape-hatch list is always present in `--format json` regardless; this flag only re-expands the collapse-by-default human focus render. Only consulted on the brief path. |
+| `--brief` | Render the deterministic review brief instead of the gating audit report. The brief answers "where do I look?", not "will CI block this?". It runs the same analysis and always exits 0. Works with every `--format`. `fallow review` implies this flag. See [Review brief and decision surface](#review-brief-and-decision-surface). |
+| `--max-decisions <N>` | Maximum number of structural decisions in the decision surface of the brief. Default 4. Fallow clamps the value to a 3 to 5 band. Used only on the brief path. |
+| `--walkthrough-guide` | Print the walkthrough guide for an agent: the current digest (brief + decision surface), the review direction, the JSON schema that the agent must return, and a deterministic graph-snapshot hash pinned into the digest. Implies the brief. Always exits 0. See [Agent walkthrough loop](#agent-walkthrough-loop). |
+| `--walkthrough-file <PATH>` | Read the judgment JSON of an agent and validate it against the live graph. See [Agent walkthrough loop](#agent-walkthrough-loop) for the accepted and rejected outcomes. Implies the brief. Always exits 0. |
+| `--walkthrough` | Render the walkthrough guide as a staged tour in the terminal (Stage 1 load-bearing, Stage 2 mechanical). With `--format markdown`, render text that you can paste into a PR. `--format json --walkthrough` prints the same agent-contract JSON as `--walkthrough-guide`. Implies the brief. Always exits 0. |
+| `--mark-viewed <FILE>` | Record one or more changed files as viewed in the local walkthrough ledger, then render the tour. Files that are already viewed (and still current) collapse into the Cleared panel. Repeatable. When the tree moves, the render ignores the stale marks but never deletes them. Used only on the `--walkthrough` path. |
+| `--show-cleared` | Expand the Cleared panel in the human and markdown walkthrough tour. The panel then lists each de-prioritized and already-viewed file, instead of a one-line summary. Used only on the `--walkthrough` path. |
+| `--show-deprioritized` | Expand the de-prioritized units in the weighted focus map of the brief. `--format json` always includes the `deprioritized` list. This flag only expands the human focus render, which collapses the list by default. Used only on the brief path. |
 
 ### Scoping
 
 | Flag | Description |
 |:-----|:------------|
-| `-w, --workspace <NAME>` | Scope to a single workspace package |
-| `--production` | Exclude test/story/dev files (applies to dead-code, health, and dupes) |
+| `[PATH]` | Report only findings in this file or directory. Fallow still builds the full project graph. |
+| `-w, --workspace <NAME>` | Scope output to one or more workspace packages. Comma-separated values, globs, and `!`-prefixed negation are supported. |
+| `--production` | Exclude test, story, and dev files (applies to dead-code, health, and dupes) |
 | `--production-dead-code` | Production mode for dead-code only. See [global flags](/cli/global-flags#per-analysis-production-mode). |
 | `--production-health` | Production mode for health only. |
 | `--production-dupes` | Production mode for duplication only. |
-| `--no-css` | Disable audit styling analytics entirely. |
-| `--css-deep` | Force deep styling analytics on when config disables it. Deep CSS is on by default in audit: project-wide styling reachability is narrowed back to changed anchors, and JSON can include `complexity.css_analytics` plus first-class `complexity.styling_findings`. |
+| `--no-css` | Turn off audit styling analytics completely. |
+| `--css-deep` | Force deep styling analytics on when config turns it off. Deep CSS is on by default in audit. Fallow narrows project-wide styling reachability back to changed anchors, and JSON can include `complexity.css_analytics` and first-class `complexity.styling_findings`. |
 | `--no-css-deep` | Keep local styling analytics on, but skip project-wide styling reachability. |
 
 ### Thresholds
 
 | Flag | Description |
 |:-----|:------------|
-| `--max-crap <N>` | Maximum CRAP score before the audit fails (default: 30.0, configurable via `health.maxCrap`). Functions meeting or exceeding this score contribute to the fail verdict alongside dead-code and complexity findings. Pair with `--coverage` for accurate per-function CRAP; without Istanbul data fallow estimates coverage from the module graph. |
-| `--coverage <PATH>` | Path to Istanbul-format coverage data (`coverage-final.json`) for accurate per-function CRAP scores in the health sub-analysis. Also configurable via `FALLOW_COVERAGE`, then `health.coverage` (the same chain as `fallow health`). Same format and semantics as [`fallow health --coverage`](/cli/health#coverage); without any of them, fallow auto-detects `coverage/coverage-final.json` or falls back to the static-estimate model. The resolved map feeds both the head pass and the base attribution pass. A configured file that does not exist exits 2, like `fallow health`. Relative paths resolve against `--root`. |
-| `--coverage-root <PATH>` | Absolute prefix to strip from file paths in coverage data before prepending the project root. Also configurable via `FALLOW_COVERAGE_ROOT`, then `health.coverageRoot`; a relative `health.coverageRoot` is rejected with exit 2, like `fallow health`. Use when coverage was generated under a different checkout root in CI or Docker (e.g., `/home/runner/work/myapp` on GitHub Actions). |
+| `--max-crap <N>` | Maximum CRAP score before the audit fails (default: 30.0, configurable via `health.maxCrap`). A function at or above this score adds to the fail verdict, together with dead-code and complexity findings. Pair with `--coverage` for accurate per-function CRAP. Without Istanbul data, fallow estimates coverage from the module graph. |
+| `--coverage <PATH>` | Path to Istanbul-format coverage data (`coverage-final.json`) for accurate per-function CRAP scores in the health sub-analysis. You can also set it with `FALLOW_COVERAGE`, then `health.coverage` (the same chain as `fallow health`). Format and semantics match [`fallow health --coverage`](/cli/health#section-selection). Without any of these, fallow auto-detects `coverage/coverage-final.json` or falls back to the static-estimate model. The head pass and the base attribution pass both use the resolved map. A configured file that does not exist exits 2, as in `fallow health`. Relative paths resolve against `--root`. |
+| `--coverage-root <PATH>` | Absolute prefix to strip from file paths in coverage data before fallow prepends the project root. You can also set it with `FALLOW_COVERAGE_ROOT`, then `health.coverageRoot`. A relative `health.coverageRoot` exits 2, as in `fallow health`. Use it when CI or Docker generated the coverage under a different checkout root (for example `/home/runner/work/myapp` on GitHub Actions). |
+
+### Runtime coverage
+
+| Flag | Description |
+|:-----|:------------|
+| `--runtime-coverage <PATH>` | Merge runtime coverage into the health sub-analysis, so you do not need a second `fallow health` run in CI. Accepts a V8 coverage directory, a single V8 JSON file, or an Istanbul coverage map JSON file. The `hot-path-touched` verdict is informational and does not change the exit code. See [`fallow health --runtime-coverage`](/cli/health#section-selection). A single local capture is free. Continuous or multi-capture monitoring needs a license. See [fallow license](/cli/license). |
+| `--min-invocations-hot <N>` | Threshold for hot-path classification when `--runtime-coverage` is active (default: `100`). |
 
 ### Baselines
 
 | Flag | Description |
 |:-----|:------------|
-| `--dead-code-baseline <PATH>` | Baseline file produced by `fallow dead-code --save-baseline`. Dead-code issues present in the baseline are excluded from the verdict. |
-| `--health-baseline <PATH>` | Baseline file produced by `fallow health --save-baseline`. Complexity findings present in the baseline are excluded from the verdict. |
-| `--dupes-baseline <PATH>` | Baseline file produced by `fallow dupes --save-baseline`. Clone groups present in the baseline are excluded from the verdict. |
+| `--dead-code-baseline <PATH>` | Baseline file produced by `fallow dead-code --save-baseline`. Dead-code issues in the baseline do not count toward the verdict. |
+| `--health-baseline <PATH>` | Baseline file produced by `fallow health --save-baseline`. Complexity findings in the baseline do not count toward the verdict. |
+| `--dupes-baseline <PATH>` | Baseline file produced by `fallow dupes --save-baseline`. Clone groups in the baseline do not count toward the verdict. |
 
-The global `--baseline` / `--save-baseline` flags are **rejected** on `audit` (exit 2) because audit runs three analyses with incompatible baseline formats. Use the per-analysis flags above, or configure defaults in `.fallowrc.json`:
+`audit` **rejects** the global `--baseline` / `--save-baseline` flags (exit 2), because audit runs three analyses with incompatible baseline formats. Use the per-analysis flags above, or set defaults in `.fallowrc.json`:
 
 ```jsonc
 {
@@ -139,49 +162,59 @@ The global `--baseline` / `--save-baseline` flags are **rejected** on `audit` (e
 }
 ```
 
-Store committed baselines outside `.fallow/`, because `fallow init` adds that directory to `.gitignore` for machine-local cache.
+Store committed baselines outside `.fallow/`. `fallow init` adds that directory to `.gitignore` for the machine-local cache.
 
-CLI flags override config. Baselines are a no-op if unset; any subset (e.g. dead-code only) is allowed.
+CLI flags override config. An unset baseline has no effect. You can set any subset (for example dead-code only).
 
 #### Audit cannot judge a baseline
 
-Every audit analyzes only the files that changed against its base. A whole-project baseline then matches less of the run, and the narrow scope is the reason rather than a stale baseline. An audit loads the baselines you pass and judges none of them. Each loaded baseline has its own `baseline_staleness` object in the envelope: `dead_code.baseline_staleness`, `duplication.baseline_staleness` and `complexity.summary.baseline_staleness`. All three report `change_scoped: true`. Their `scope_reasons` names what narrowed that sub-pass: `changed-since` for `dead_code`, and `changed-files` for `duplication` and `complexity`. All three report `gate_trips: false`. A section that loaded a baseline it cannot read as its own reports `true`. Do not build a gate on those values. To judge a baseline, run the command that owns it over the whole project. The section label is not the command name: `duplication` belongs to `fallow dupes`, `complexity` to `fallow health`, and `dead_code` to `fallow dead-code`.
+An audit analyzes only the files that changed against its base. A whole-project baseline therefore matches less of the run. The narrow scope causes this, not a stale baseline. An audit loads the baselines that you pass, but it does not judge them.
 
-An audit that loaded a baseline also carries `gate_outcomes["stale-baseline"]` as `{"status": "skipped", "enforced": false}`. There is one entry for any number of loaded baselines, and it puts the fact on the gate outcomes line. The pull-request comment and the merge-request note render that line. The entry stays `skipped` for a baseline of another `kind` too. See [CI](/integrations/ci) for what the shipped integrations report per baseline.
+Each loaded baseline has its own `baseline_staleness` object in the envelope:
 
-An audit checks the `kind` of every baseline it loads and reports every mismatch. Each mismatch warns on stderr and names the flag that carried the path: `--dead-code-baseline`, `--dupes-baseline` or `--health-baseline`. That section carries `baseline_staleness.unrecognised_format: true`. Point that flag at a baseline from the command that owns it.
+- `dead_code.baseline_staleness`
+- `duplication.baseline_staleness`
+- `complexity.summary.baseline_staleness`
 
-`audit` accepts `--fail-on-stale-baseline`, and the gate always stands down. A run that sets the flag with a baseline warns once on stderr and names the commands that can run the gate.
+All three report `change_scoped: true`. Their `scope_reasons` names what narrowed that sub-pass: `changed-since` for `dead_code`, and `changed-files` for `duplication` and `complexity`. All three report `gate_trips: false`. A section that loaded a baseline it cannot read as its own reports `true`. Do not build a gate on these values.
+
+To judge a baseline, run the command that owns it over the whole project. The section label is not the command name: `duplication` belongs to `fallow dupes`, `complexity` to `fallow health`, and `dead_code` to `fallow dead-code`.
+
+An audit that loaded a baseline also has `gate_outcomes["stale-baseline"]` set to `{"status": "skipped", "enforced": false}`. There is one entry for any number of loaded baselines. The entry puts this fact on the gate outcomes line, which the pull-request comment and the merge-request note render. The entry also stays `skipped` for a baseline of another `kind`. See [CI](/integrations/ci) for what the shipped integrations report per baseline.
+
+An audit checks the `kind` of every baseline that it loads, and reports every mismatch. Each mismatch prints a warning on stderr that names the flag with the path: `--dead-code-baseline`, `--dupes-baseline` or `--health-baseline`. That section has `baseline_staleness.unrecognised_format: true`. To fix it, point that flag at a baseline from the command that owns it.
+
+`audit` accepts `--fail-on-stale-baseline`, but in audit this gate never runs. A run that sets the flag with a baseline prints one warning on stderr, which names the commands that can run the gate.
 
 ## Verdict
 
 | Verdict | Exit code | When | What to do |
 |:--------|:----------|:-----|:-----------|
 | **pass** | 0 | No introduced issues in changed files (`new-only`) or no issues at all (`all`) | Ship it. |
-| **warn** | 0 | Issues found, all warn-severity | CI passes, but consider fixing before they become errors. |
+| **warn** | 0 | Issues found, all warn-severity | CI passes. Consider a fix before the issues become errors. |
 | **fail** | 1 | Error-severity issues found | Fix the reported issues before merging. |
-| **error** | 2 | Runtime error (invalid ref, not a git repo, config error) | Check the error message. In JSON format, emits `{"error": true, "message": "...", "exit_code": 2}`. |
+| **error** | 2 | Runtime error (invalid ref, not a git repo, config error) | Check the error message. In JSON format, audit prints `{"error": true, "message": "...", "exit_code": 2}`. |
 
-Dead code issues follow your [rules configuration](/configuration/rules) severity (error/warn/off). Complexity findings above configured thresholds are always errors; thresholds are inherited from your `fallow health` config (defaults: cyclomatic 20, cognitive 15). Duplication is a warning unless a `--threshold` is configured. With the default `new-only` gate, inherited error-severity findings can appear in the report while the audit exits 0.
+Dead code issues use the severity from your [rules configuration](/configuration/rules) (error/warn/off). Complexity findings above the configured thresholds are always errors. The thresholds come from your `fallow health` config (defaults: cyclomatic 20, cognitive 15). Duplication is a warning unless you configure a `--threshold`. With the default `new-only` gate, the report can show inherited error-severity findings while the audit exits 0.
 
 <Info>
-  Inline suppression comments (`// fallow-ignore-next-line`) work in audit. Findings in changed files are suppressed the same way as in `fallow dead-code`.
+  Inline suppression comments (`// fallow-ignore-next-line`) work in audit. They suppress findings in changed files in the same way as in `fallow dead-code`.
 </Info>
 
 ### JSON contract: which fields are severity-aware
 
-Audit emits three counts that look interchangeable but answer different questions. CI integrations and downstream consumers must gate on the right one:
+Audit reports three counts that look alike but answer different questions. A CI integration or other tool that reads the output must gate on the right one:
 
 | Field | What it counts | Severity-aware? |
 |:------|:---------------|:----------------|
-| `verdict` | Overall outcome (`pass` / `warn` / `fail`) honoring per-rule severity from `.fallowrc.json` | **Yes** |
-| `attribution.dead_code_introduced`, `attribution.complexity_introduced`, `attribution.duplication_introduced`, `attribution.styling_introduced` | Findings introduced by the changeset under `gate: new-only`, regardless of severity | No |
-| `summary.dead_code_issues`, `summary.complexity_findings`, `summary.duplication_clone_groups` | All findings in changed files (any gate), regardless of severity | No |
-| Per-finding `introduced: true \| false` | Whether each individual finding was introduced by the changeset | No (severity is per-rule, not per-finding) |
+| `verdict` | Overall outcome (`pass` / `warn` / `fail`). Uses the per-rule severity from `.fallowrc.json` | **Yes** |
+| `attribution.dead_code_introduced`, `attribution.complexity_introduced`, `attribution.duplication_introduced`, `attribution.styling_introduced` | Findings that the changeset introduced under `gate: new-only`, at any severity | No |
+| `summary.dead_code_issues`, `summary.complexity_findings`, `summary.duplication_clone_groups` | All findings in changed files (any gate), at any severity | No |
+| Per-finding `introduced: true \| false` | Whether the changeset introduced this finding | No (severity is per-rule, not per-finding) |
 
-**Rule of thumb for CI gating**: branch on `verdict == "fail"` (or check the exit code, which mirrors the verdict). Counting introduced findings re-introduces the bug `command: audit` was designed to fix: a project with `unused-exports: warn` would fail CI on every PR that introduces a warn-tier finding, even though the verdict correctly says `warn` ("do not fail"). The official GitHub Action and GitLab CI template already do this; third-party wrappers should mirror the same contract.
+**Rule of thumb for CI gating**: branch on `verdict == "fail"`, or check the exit code, which follows the verdict. Do not count introduced findings. A count brings back the bug that `command: audit` was built to fix: a project with `unused-exports: warn` would fail CI on every PR that adds a warn-tier finding, although the verdict correctly says `warn` ("do not fail"). The official GitHub Action and GitLab CI template already gate on the verdict. Third-party wrappers should follow the same contract.
 
-**Rule of thumb for AI agents**: read `verdict` first to know whether the run passed or failed, then read `attribution` for new-vs-inherited counts and walk the per-category finding arrays for actionable details. Use `introduced: true` to filter to changes the current PR is responsible for.
+**Rule of thumb for AI agents**: read `verdict` first to see if the run passed or failed. Then read `attribution` for the new and inherited counts, and walk the finding arrays per category for the details. To keep only the findings that the current PR introduced, filter on `introduced: true`.
 
 ## Examples
 
@@ -264,7 +297,7 @@ Audit scope: 8 changed files vs main (d4a2f91..HEAD)
 ✓ dead code: 0 issues · complexity: 2 findings (warn) · 8 changed files (1.18s)
 ```
 
-The `■` summary line appears only on warn verdicts, before any detail sections. It is suppressed with `--quiet`.
+The `■` summary line appears only on warn verdicts, before any detail sections. `--quiet` hides it.
 
 ```bash title="$ fallow audit (fail)"
 Audit scope: 12 changed files vs main (d4a2f91..HEAD)
@@ -298,11 +331,11 @@ Audit scope: 12 changed files vs main (d4a2f91..HEAD)
 
 ## How it works
 
-1. **Resolve base ref**: uses `--base` if provided, then `FALLOW_AUDIT_BASE`, otherwise auto-detects the `git merge-base` (fork point) against the branch's upstream (`@{upstream}`) or the remote default (`origin/HEAD` → `origin/main` → `origin/master`). Resolving the merge-base, rather than a bare branch name, means a feature branch compares against where it actually forked rather than a possibly-stale local `main`. Repositories with no `origin` remote fall back to the local `main` / `master` branch. Hard-errors if no base can be determined.
+1. **Resolve base ref**: audit uses `--base` if you set it, then `FALLOW_AUDIT_BASE`. Otherwise it auto-detects the `git merge-base` (fork point) with the branch's upstream (`@{upstream}`) or the remote default (`origin/HEAD` → `origin/main` → `origin/master`). Because audit uses the merge-base and not a bare branch name, a feature branch compares against the point where it forked, not against a local `main` that can be stale. Repositories with no `origin` remote fall back to the local `main` / `master` branch. If audit cannot find a base, it stops with an error.
 2. **Find changed files**: runs `git diff --name-only <base>...HEAD` (three-dot diff, showing changes since the merge base).
 3. **Run three analyses** scoped to changed files: [dead code](/cli/dead-code), [complexity](/cli/health), [duplication](/cli/dupes).
-4. **Compute attribution**: with `new-only`, runs the same analyses at the base ref and compares structural issue keys.
-5. **Compute verdict**: `new-only` gates only introduced findings; `all` gates every finding in changed files without the extra base-snapshot analysis.
+4. **Compute attribution**: with `new-only`, audit runs the same analyses at the base ref and compares structural issue keys.
+5. **Compute verdict**: `new-only` gates only introduced findings. `all` gates every finding in changed files and skips the extra base-snapshot analysis.
 
 ## JSON output
 
@@ -362,19 +395,19 @@ Audit scope: 12 changed files vs main (d4a2f91..HEAD)
 | `changed_files_count` | integer | Number of files changed between base and HEAD |
 | `base_ref` | string | The git ref used for comparison |
 | `summary.dead_code_issues` | integer | Total dead code issues in changed files |
-| `summary.dead_code_has_errors` | boolean | Whether any dead code issues have error severity |
-| `summary.complexity_findings` | integer | Functions exceeding complexity thresholds |
+| `summary.dead_code_has_errors` | boolean | Whether any dead code issue has error severity |
+| `summary.complexity_findings` | integer | Functions above the complexity thresholds |
 | `summary.max_cyclomatic` | integer \| null | Highest cyclomatic complexity found (null if none) |
 | `summary.duplication_clone_groups` | integer | Clone groups involving changed files |
-| `attribution.*_introduced` | integer | Findings whose structural key did not exist at the base ref. With `gate=all`, these stay `0` because audit skips the base-snapshot attribution pass. |
+| `attribution.*_introduced` | integer | Findings whose structural key did not exist at the base ref. With `gate=all`, these stay `0`, because audit skips the base-snapshot attribution pass. |
 | `attribution.*_inherited` | integer | Findings already present at the base ref. Also `0` under `gate=all`. |
-| `attribution.duplication_demoted` | integer | Clone groups the `new-only` gate demoted from introduced to inherited because no instance overlaps an added line. Always present in audit-family JSON (audit, review brief, MCP `audit`). Demoted groups stay counted in `duplication_inherited`, so this never exceeds it. |
-| `dead_code.*[].introduced` | boolean | Present in audit JSON sub-results when base attribution is available. `true` means the finding is new relative to the base ref. |
-| `duplication.clone_groups[].demotion_reason` | string | Present only on demoted groups. Kebab-case reason for the demotion, currently `no-added-lines`; further values may be added, so treat an unknown value as "some demotion reason". Never emitted by `fallow dupes --format json`. |
-| `complexity.styling_findings[]` | array | Present when CSS analysis is active. Contains first-class styling issues with rule severity and actions. Each item carries optional `introduced` attribution when the base comparison is available. |
-| `complexity.css_analytics` | object | Descriptive CSS analytics emitted with CSS analysis: specificity, token usage, duplicate declaration context, and cleanup candidates. Use it as evidence around `styling_findings`, not as a gate by itself. |
+| `attribution.duplication_demoted` | integer | Clone groups that the `new-only` gate demoted from introduced to inherited, because no instance overlaps an added line. Always present in audit-family JSON (audit, review brief, MCP `audit`). Demoted groups still count in `duplication_inherited`, so this value never exceeds it. |
+| `dead_code.*[].introduced` | boolean | Present in audit JSON sub-results when base attribution is available. `true` means the finding is new compared with the base ref. |
+| `duplication.clone_groups[].demotion_reason` | string | Present only on demoted groups. A kebab-case reason for the demotion, currently `no-added-lines`. Fallow can add more values, so treat an unknown value as "some demotion reason". `fallow dupes --format json` never emits this field. |
+| `complexity.styling_findings[]` | array | Present when CSS analysis is active. Holds first-class styling issues with rule severity and actions. Each item has an optional `introduced` attribution when the base comparison is available. |
+| `complexity.css_analytics` | object | Descriptive CSS analytics from the CSS analysis: specificity, token usage, context for duplicate declarations, and cleanup candidates. Use it as evidence for `styling_findings`. Do not gate on it alone. |
 
-The `dead_code`, `complexity`, and `duplication` sub-objects contain full results in the same format as [`fallow dead-code`](/cli/dead-code#json-output), [`fallow health`](/cli/health#json-output), and [`fallow dupes`](/cli/dupes#json-output) respectively. These are omitted when no files changed. By default, the `complexity` sub-object can also include the health report's `css_analytics` and `styling_findings` blocks. When `--runtime-coverage` is supplied, it can also include `runtime_coverage` and additive `coverage_intelligence` blocks.
+The `dead_code`, `complexity`, and `duplication` sub-objects hold full results in the same format as [`fallow dead-code`](/cli/dead-code#output), [`fallow health`](/cli/health#json-output), and [`fallow dupes`](/cli/dupes#json-output). audit omits them when no files changed. By default, the `complexity` sub-object can also include the `css_analytics` and `styling_findings` blocks of the health report. When you pass `--runtime-coverage`, it can also include `runtime_coverage` and additive `coverage_intelligence` blocks.
 
 ## MCP tool
 
@@ -391,30 +424,44 @@ The `audit` MCP tool wraps `fallow audit --format json --quiet --explain`:
 }
 ```
 
-When `base` is omitted it resolves as described under [How it works](#how-it-works); set `FALLOW_AUDIT_BASE` in the server env to pin it. Set `gate` to `all` for strict mode. Styling findings are included by default; set `css_deep` to `false` to skip project-wide styling reachability, or `true` to force it back on when config disables it. Returns the same JSON envelope as the CLI.
+When you omit `base`, the tool resolves it as described under [How it works](#how-it-works). To pin it, set `FALLOW_AUDIT_BASE` in the server environment. Set `gate` to `all` for strict mode. The tool includes styling findings by default. Set `css_deep` to `false` to skip project-wide styling reachability, or to `true` to force it back on when config turns it off. The tool returns the same JSON envelope as the CLI.
 
 See [MCP integration](/integrations/mcp) for setup instructions.
 
 ## Audit cache maintenance
 
-Under `--gate new-only`, `audit` creates a temporary base snapshot (a git worktree checkout) to compare against the base ref. When the current checkout has `node_modules`, audit links it into the snapshot so tsconfig `extends` chains into installed packages and path aliases resolve like the working tree. Snapshots are unregistered from git immediately after materialization, so they never appear in `git worktree list`, IDE repo views, or `.git/worktrees/`, even if the process is force-killed. Entries registered by earlier fallow versions are deregistered automatically on the next audit, with their warm caches preserved.
+Under `--gate new-only`, `audit` creates a temporary base snapshot (a git worktree checkout) to compare against the base ref.
 
-Each project root keeps one root-owned base-snapshot cache, rebuilt in place when the resolved base SHA changes, and the reuse lock is held for the whole audit so cleanup can never remove files under a running audit. Automatic age-based GC runs on every audit: the [`FALLOW_AUDIT_CACHE_MAX_AGE_DAYS`](/configuration/environment#fallow_audit_cache_max_age_days) env var (or the `audit.cacheMaxAgeDays` config field) tunes the 30-day default, and `0` disables the age-based sweep. Two subcommands maintain the caches on demand.
+- When the current checkout has `node_modules`, audit links it into the snapshot. tsconfig `extends` chains into installed packages and path aliases then resolve as in the working tree.
+- audit unregisters the snapshot from git right after it creates it. The snapshot never appears in `git worktree list`, IDE repo views, or `.git/worktrees/`, even if the process is force-killed.
+- The next audit deregisters entries that earlier fallow versions registered, and keeps their warm caches.
+
+Each project root keeps one base-snapshot cache that the root owns. audit rebuilds it in place when the resolved base SHA changes. audit holds the reuse lock for the whole run, so cleanup can never remove files under a running audit.
+
+Every audit runs an automatic age-based garbage collection (GC). The default age is 30 days. To change it, set the [`FALLOW_AUDIT_CACHE_MAX_AGE_DAYS`](/configuration/environment#fallow_audit_cache_max_age_days) env var or the `audit.cacheMaxAgeDays` config field. `0` turns off the age-based sweep. Two subcommands clean the caches on demand.
 
 ### `audit-cache remove`
 
-To reclaim one project's caches unconditionally (warm or not), use `fallow audit-cache remove --root <PATH>`:
+To remove all caches of one project, warm or not, run `fallow audit-cache remove --root <PATH>`:
 
 ```bash
 fallow audit-cache remove --root ./my-project --dry-run   # preview what would be removed
 fallow audit-cache remove --root ./my-project --yes        # remove (required in non-interactive shells)
 ```
 
-`--dry-run` reports what would be removed without touching the filesystem, and non-interactive removal requires `--yes`. Lock-contended entries (an audit is mid-rebuild) are left in place and reported, and the command exits 2.
+`--dry-run` reports what the command would remove and does not touch the filesystem. Removal in a non-interactive shell requires `--yes`. The command leaves lock-contended entries (an audit is in the middle of a rebuild) in place, reports them, and exits 2.
 
 ### `audit-cache prune`
 
-`fallow audit-cache prune` applies the same GC policy every `fallow audit` run applies silently (orphaned-sidecar cleanup, age-based reclaim under the resolved threshold, and reclaim of abandoned entries whose recorded owner root no longer exists) and reports every cache entry it considered, with sizes and ages. Entries owned by other live projects are never touched. Reach for it when audit caches from deleted checkouts or long-gone branches are holding disk space and you want the cleanup now, with a visible decision per entry, instead of waiting for the next audit's silent sweep.
+Use `fallow audit-cache prune` when audit caches from deleted checkouts or old branches take disk space. It cleans up now, with a visible decision per entry, and you do not wait for the silent sweep of the next audit.
+
+`prune` applies the same GC policy that every `fallow audit` run applies silently:
+
+- cleanup of orphaned sidecars
+- age-based reclaim under the resolved threshold
+- reclaim of abandoned entries whose recorded owner root no longer exists
+
+It reports every cache entry that it considered, with sizes and ages. It never touches entries that other live projects own.
 
 ```bash
 fallow audit-cache prune --dry-run          # preview every decision without touching the filesystem
@@ -424,16 +471,16 @@ fallow audit-cache prune --max-age-days 7   # tighter age threshold for this run
 
 | Flag | Description |
 |:-----|:------------|
-| `--dry-run` | Preview decisions without touching the filesystem: nothing is removed and no lock or age-tracking sidecars are created. |
-| `--max-age-days <N>` | Age threshold in days for this invocation. Precedence: this flag, then [`FALLOW_AUDIT_CACHE_MAX_AGE_DAYS`](/configuration/environment#fallow_audit_cache_max_age_days), then `audit.cacheMaxAgeDays`, then the 30-day default; the JSON output reports which source won. `0` disables age-based reclaim but still reclaims orphaned entries and entries whose recorded owner root is gone. |
+| `--dry-run` | Preview decisions without touching the filesystem. The command removes nothing and creates no lock or age-tracking sidecars. |
+| `--max-age-days <N>` | Age threshold in days for this run. Precedence: this flag, then [`FALLOW_AUDIT_CACHE_MAX_AGE_DAYS`](/configuration/environment#fallow_audit_cache_max_age_days), then `audit.cacheMaxAgeDays`, then the 30-day default. The JSON output reports which source won. `0` turns off age-based reclaim, but the command still reclaims orphaned entries and entries whose recorded owner root is gone. |
 
-`--root` is optional for `prune` and defaults to the current directory. Reported sizes come from a full recursive walk of each cache entry, which can take a few seconds on large caches.
+`--root` is optional for `prune` and defaults to the current directory. The command measures sizes with a full recursive walk of each cache entry, which can take a few seconds on large caches.
 
-Human output prints one row per considered entry, sorted by path, with the decision, reason, size, and age. Entries kept because another live project owns them come with a hint naming `audit-cache remove` as the way to clear that project's own cache, and the closing line totals the reclaimed bytes.
+Human output prints one row per considered entry, sorted by path, with the decision, reason, size, and age. An entry that stays because another live project owns it gets a hint: run `audit-cache remove` to clear the cache of that project. The closing line gives the total of reclaimed bytes.
 
-Unlike `remove`, `prune` exits 0 whenever it ran, including runs with lock-contention skips (an audit is mid-rebuild) or per-entry failures; on a shared runner, entries owned by other users are reported as kept rather than failing the invocation. Exit code 2 is reserved for validation errors and an unreadable scan root. Machine consumers gate on the `complete` field of the JSON envelope, not the exit code.
+`prune` exits 0 whenever it ran, unlike `remove`. This includes runs that skip entries because of lock contention (an audit is in the middle of a rebuild) and runs with per-entry failures. On a shared runner, the command reports entries of other users as kept and does not fail. Exit code 2 is only for validation errors and an unreadable scan root. Scripts gate on the `complete` field of the JSON envelope, not on the exit code.
 
-With `--format json`, prune emits its own maintenance envelope, separate from the audit envelope and a sibling of the `audit-cache-remove` envelope:
+With `--format json`, prune returns its own maintenance envelope. It is separate from the audit envelope, and sits next to the `audit-cache-remove` envelope:
 
 ```json title="$ fallow audit-cache prune --format json"
 {
@@ -470,43 +517,48 @@ With `--format json`, prune emits its own maintenance envelope, separate from th
 |:------|:-----|:------------|
 | `dry_run` | boolean | `true` when the run only previewed decisions. |
 | `max_age_days`, `max_age_source` | integer, string | The resolved age threshold and which precedence level supplied it (`flag`, `env`, `config`, or `default`) |
-| `entries[]` | array | One item per considered cache entry: `path`, `pass` (`owned`, `legacy`, or `foreign`), `disposition` (`removed`, `kept`, `skipped`, or `failed`), a short kebab-case `reason` (e.g. `aged-out`, `fresh`, `owner-live`), `age_days`, `size_bytes`, and `owner_root` (each of the last three is `null` when not measurable). |
-| `found`, `removed`, `kept`, `skipped`, `failed` | integer | Aggregate counts; `removed + kept + skipped + failed` always equals `found` |
-| `complete` | boolean | `true` when nothing was skipped or failed. The field to gate on in scripts; the exit code stays 0 either way. |
-| `reclaimed_bytes` | integer | Bytes removed from disk by this run. On a dry run, the bytes the run would have removed. |
+| `entries[]` | array | One item per considered cache entry: `path`, `pass` (`owned`, `legacy`, or `foreign`), `disposition` (`removed`, `kept`, `skipped`, or `failed`), a short kebab-case `reason` (for example `aged-out`, `fresh`, `owner-live`), `age_days`, `size_bytes`, and `owner_root` (each of the last three is `null` when not measurable). |
+| `found`, `removed`, `kept`, `skipped`, `failed` | integer | Aggregate counts. `removed + kept + skipped + failed` always equals `found` |
+| `complete` | boolean | `true` when nothing was skipped or failed. Gate on this field in scripts. The exit code stays 0 either way. |
+| `reclaimed_bytes` | integer | Bytes that this run removed from disk. On a dry run, the bytes that the run would remove. |
 
-To see the same per-entry decisions during a normal audit run (where the GC is silent), set `RUST_LOG=fallow=debug`: both `fallow audit` and `audit-cache prune` then log one diagnostic line per considered entry with its decision, reason, age, and threshold. With `RUST_LOG` unset, audit output is unchanged.
+A normal audit run does its GC silently. To see the per-entry decisions, set `RUST_LOG=fallow=debug`. `fallow audit` and `audit-cache prune` then log one diagnostic line per considered entry, with its decision, reason, age, and threshold. With `RUST_LOG` unset, the audit output does not change.
 
 ## Review brief and decision surface
 
-`fallow review` is an alias for `fallow audit --brief`. It produces a deterministic, graph-derived review brief and **always exits 0**: the verdict is carried informationally, unlike `fallow audit`, which gates (exits non-zero on a fail verdict). `--format` is orthogonal to `--brief`, so the brief renders in `human` or `json` like any other audit output.
+`fallow review` shows a reviewer where to look in a change. It is an alias for `fallow audit --brief`. It produces a deterministic review brief from the module graph and **always exits 0**. The output includes the verdict for information only. `fallow audit` is the command that gates (exits non-zero on a fail verdict). `--format` is independent of `--brief`, so the brief renders in `human` or `json` like any other audit output.
 
-The brief answers "where do I look?" rather than "will CI block this?". It runs the same analysis as the gating audit and organizes it around four jobs:
+The brief answers "where do I look?", not "will CI block this?". It runs the same analysis as the gating audit and organizes the result around four jobs:
 
 | Job | What it does |
 |:----|:-------------|
-| **subtract** | Dead code, complexity, and duplication for the changed files are reported but kept **out** of the judgment loop, so the reviewer is not asked to weigh in on mechanical findings. |
-| **focus** | Changed-file units are ranked by a composite attention score, labeled `review-here` or `not-prioritized`, plus a full `deprioritized` list (re-expand the human render with [`--show-deprioritized`](#options)). |
-| **structure** | The decision surface: the few consequential structural decisions the change embeds. |
+| **subtract** | Fallow reports dead code, complexity, and duplication for the changed files, but keeps them **out** of the judgment loop. The reviewer does not have to judge mechanical findings. |
+| **focus** | Fallow ranks the changed-file units by a composite attention score and labels each one `review-here` or `not-prioritized`. It also gives a full `deprioritized` list. To expand that list in the human output, use [`--show-deprioritized`](#options). |
+| **structure** | The decision surface: the few structural decisions in the change that have large consequences. |
 | **direct** | The walkthrough guide for an agent (see [Agent walkthrough loop](#agent-walkthrough-loop)). |
 
 ### Decision surface
 
-The decision surface is the ranked, capped ([`--max-decisions`](#options)) set of `coupling-boundary`, `public-api-contract`, and `dependency` decisions the change embeds, each a framed judgment question anchored to a `signal_id`. [`fallow decision-surface`](/cli/decision-surface) emits it on its own and documents the categories, the fields each decision carries, and suppression.
+The decision surface is the ranked set of `coupling-boundary`, `public-api-contract`, and `dependency` decisions in the change, capped by [`--max-decisions`](#options). Each decision is a framed judgment question anchored to a `signal_id`. [`fallow decision-surface`](/cli/decision-surface) prints the decision surface alone. That page documents the categories, the fields of each decision, and suppression.
 
 ### JSON envelope
 
-`fallow review --format json` carries `decisions`, `focus`, `deltas`, `impact_closure`, `partition`, and `graph_facts`.
+`fallow review --format json` returns `decisions`, `focus`, `deltas`, `impact_closure`, `partition`, and `graph_facts`.
 
-`deltas` also carries the dependency keys the decision surface reads: `dependency_added` (`<manifest>::<name>`) and `dependency_major_bumped` (`<manifest>::<name>@<from>-><to>`), so the envelope names what changed even when the cap collapses the decision. Both are always present, as empty arrays when nothing changed.
+`deltas` also has the dependency keys that the decision surface reads: `dependency_added` (`<manifest>::<name>`) and `dependency_major_bumped` (`<manifest>::<name>@<from>-><to>`). The envelope names what changed even when the cap collapses the decision. Both keys are always present, as empty arrays when nothing changed.
 
-`impact_closure` reports the blast radius as a magnitude, a sample, and a distribution rather than one long list. `affected_count` is the exact number of files the change reaches outside the diff, computed before any capping. `affected_not_shown` is a path-sorted sample of at most ten of them: a prefix of the sorted set, so it clusters in whichever directory sorts first and is meant for jumping into representative files, never for enumerating the reach or inferring its shape. `affected_by_dir` is the shape: `{ dir, count }` rows, heaviest directory first with the directory path breaking ties, at most twenty-five rows, with `affected_by_dir_omitted` counting the lighter directories that did not fit. Every row's count is exact. `coordination_gap` is separate and uncapped, and it is not a subset of the sample: it deliberately skips story and test consumers the affected set counts.
+`impact_closure` reports the blast radius as a magnitude, a sample, and a distribution instead of one long list:
 
-`partition` carries `independent_slices` only when there are two or more of them: the connected components of the inter-unit dependency graph, each a sorted list of module directories. Two or more slices mean the change splits along a graph-proven seam into pieces that can be reviewed and merged on their own; a single slice would only repeat `order`, so the field is absent. An orientation fact, never a demand to split.
+- `affected_count` is the exact number of files outside the diff that the change reaches, computed before any cap.
+- `affected_not_shown` is a path-sorted sample of at most ten of those files. It is a prefix of the sorted set, so it clusters in the directory that sorts first. Use it to open representative files. Do not use it to list the full reach or to infer its shape.
+- `affected_by_dir` gives the shape as `{ dir, count }` rows: heaviest directory first, the directory path as tie-breaker, at most twenty-five rows. `affected_by_dir_omitted` counts the lighter directories that did not fit. The count in every row is exact.
+- `coordination_gap` is separate and has no cap. It is not a subset of the sample. It skips, on purpose, the story and test consumers that the affected set counts.
+
+`partition` has `independent_slices` only when there are two or more slices. A slice is a connected component of the dependency graph between units, given as a sorted list of module directories. Two or more slices mean that the change splits along a seam that the graph proves, into pieces that you can review and merge separately. A single slice would only repeat `order`, so fallow leaves the field out. The field helps you orient. It never asks you to split the change.
 
 ### Agent walkthrough loop
 
-The walkthrough guide turns the brief into a strict agent contract. The verifier is the graph, not a second model: every judgment an agent returns is post-validated against the live graph, and the agent's free-text framing is fenced as non-deterministic and never gates.
+The walkthrough guide turns the brief into a strict contract with a coding agent. The graph checks the agent, not a second model. Fallow validates every judgment that the agent returns against the live graph. Fallow fences the free-text framing of the agent as non-deterministic, and that framing never gates.
 
 **1. Fetch the guide.**
 
@@ -514,15 +566,26 @@ The walkthrough guide turns the brief into a strict agent contract. The verifier
 fallow review --base main --walkthrough-guide --format json
 ```
 
-Returns `digest` (brief + decision surface), `direction`, `graph_snapshot_hash`, `agent_schema`, `injection_note`, `emitted_signal_ids`, and `change_anchors`. The digest is built from the graph only (PR prose is never folded in, so it is injection-resistant), and the snapshot hash is pinned into the digest.
+The response has `digest` (brief + decision surface), `direction`, `graph_snapshot_hash`, `agent_schema`, `injection_note`, `emitted_signal_ids`, and `change_anchors`. Fallow builds the digest from the graph only and never adds PR prose, so the digest resists injection. The snapshot hash is pinned into the digest.
 
-Each `direction.units[]` entry carries `test_adjacency`: `none` (no test file imports the changed unit directly), `untouched` (a test imports it and none of those tests is in the diff), or `changed` (at least one importing test moved with the change). It is absent when the graph was not retained or the unit is itself a test file. A graph fact about direct importers, not a coverage claim.
+Each `direction.units[]` entry has `test_adjacency`:
 
-`agent_schema` publishes `action_vocabulary` (`block`, `address`, `consider`, `fyi`), the closed set a judgment's `action` may use, and a recommended `concern_vocabulary` (the thirteen trade-off lenses: `abstraction`, `coupling`, `data-model`, `error-handling`, `control-flow`, `performance`, `dependencies`, `api-ergonomics`, `compatibility`, `state-ownership`, `extensibility`, `testability`, `trust-boundary`). `concern` stays free text on the wire; a value from the list lets a review surface group judgments by lens.
+- `none`: no test file imports the changed unit directly.
+- `untouched`: a test imports the unit, and none of those tests is in the diff.
+- `changed`: at least one importing test changed together with the unit.
 
-`change_anchors` is a per-hunk anchor set: one stable, content-addressed `chg:` id per changed region, derived from the same diff source the run used. Its id is content-addressed (file path + normalized added text, line numbers excluded) so it survives an edit above the hunk and a whitespace-only change, and it is rename-durable via `previous_change_anchor`. It lets an agent anchor a judgment about a changed REGION that has no graph finding (a trade-off with no `signal_id`), so the broader trade-off can still be post-validated rather than hallucinated.
+The field is absent when the graph was not retained or the unit is itself a test file. It is a graph fact about direct importers, not a coverage claim.
 
-**2. The agent returns judgment JSON.** Each judgment cites a `signal_id` fallow emitted OR a `change_anchor` fallow emitted; echo the hash.
+`agent_schema` publishes two lists:
+
+- `action_vocabulary` (`block`, `address`, `consider`, `fyi`): the closed set of values for the `action` of a judgment.
+- a recommended `concern_vocabulary` with the thirteen trade-off lenses: `abstraction`, `coupling`, `data-model`, `error-handling`, `control-flow`, `performance`, `dependencies`, `api-ergonomics`, `compatibility`, `state-ownership`, `extensibility`, `testability`, `trust-boundary`.
+
+`concern` stays free text in the JSON. A value from the list lets a review tool group judgments by lens.
+
+`change_anchors` has one stable `chg:` id per changed region (hunk), derived from the same diff source that the run used. The id is content-addressed (file path + normalized added text, without line numbers). It survives an edit above the hunk and a whitespace-only change, and it survives a rename through `previous_change_anchor`. With a change anchor, an agent can anchor a judgment about a changed REGION that has no graph finding (a trade-off with no `signal_id`). Fallow can then validate that broader trade-off, so the agent cannot invent it.
+
+**2. The agent returns judgment JSON.** Each judgment cites a `signal_id` OR a `change_anchor` that fallow emitted. The agent echoes the hash.
 
 ```json
 {
@@ -539,7 +602,7 @@ Each `direction.units[]` entry carries `test_adjacency`: `none` (no test file im
 }
 ```
 
-`action` tells the receiving author what to do with the judgment: `block` and `address` are required actions, `consider` is optional, `fyi` needs nothing. It is the reviewer's instruction, fenced with the framing, never a gate.
+`action` tells the author of the change what to do with the judgment. `block` and `address` are required actions, `consider` is optional, and `fyi` needs nothing. It is the instruction of the reviewer. Fallow fences it together with the framing, and it never gates.
 
 **3. Post-validate the judgment against the live graph.**
 
@@ -547,7 +610,7 @@ Each `direction.units[]` entry carries `test_adjacency`: `none` (no test file im
 fallow review --base main --walkthrough-file judgment.json --format json
 ```
 
-Each judgment is sorted into one of these outcomes:
+Fallow sorts each judgment into one of these outcomes:
 
 | Outcome | Condition | Shape |
 |:--------|:----------|:------|
@@ -555,7 +618,7 @@ Each judgment is sorted into one of these outcomes:
 | `accepted` (change) | No `signal_id`, but the `change_anchor` is one fallow emitted and the snapshot still matches. | Framing fenced `deterministic: false`; `anchor_kind: "change"` (the weaker anchor, a changed region only). |
 | `rejected` (unanchored) | The `signal_id` is not one fallow emitted (a hallucinated id). | `reason: "unanchored-signal-id"`. |
 | `rejected` (unknown change anchor) | The `change_anchor` is not one fallow emitted (a hallucinated region). | `reason: "unknown-change-anchor"`. |
-| `rejected` (invalid action) | The anchor resolved but the `action` is outside the closed vocabulary. A judgment with a hallucinated anchor and a bad label is rejected for the anchor, never as `invalid-action`. | `reason: "invalid-action"`, `invalid_value: "<the offending label>"` so the agent can fix it in one round trip. |
+| `rejected` (invalid action) | The anchor resolved, but the `action` is outside the closed vocabulary. When a judgment has a hallucinated anchor and a bad label, fallow rejects it for the anchor, never as `invalid-action`. | `reason: "invalid-action"`, `invalid_value: "<the offending label>"` so the agent can fix it in one round trip. |
 | `rejected` (stale) | The echoed graph-snapshot hash no longer matches (the tree moved). | `reason: "stale-snapshot"`, `stale: true`. Re-fetch the guide. |
 
 An accepted judgment echoes `action` next to `agent_framing` when the agent set one.

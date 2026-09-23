@@ -1,14 +1,19 @@
 ---
 title: "Claude Code hooks"
-description: "Block Claude Code git commits and pushes with a PreToolUse hook that runs fallow audit and feeds structured findings back to the agent."
+description: "Stop Claude Code from committing or pushing code that fails fallow audit. A PreToolUse hook blocks the command and sends the findings back to the agent to fix."
 keywords: ["Claude Code", "hooks", "PreToolUse", "fallow audit", "git push", "git commit", "agent gate", "local gate", "AGENTS.md", "Codex"]
 icon: "shield-check"
 ---
 
-Claude Code hooks let you insert deterministic checks into the agent loop. This pattern is not a Git hook. It is a local `PreToolUse` gate on Claude's `Bash` tool. When Claude tries `git commit` or `git push`, the hook runs `fallow audit --format json --quiet --explain --gate-marker agent`. `pass` and `warn` are allowed. `fail` is blocked, and the JSON findings are sent back to Claude on stderr so it can fix the code and retry.
+This gate stops Claude Code from committing or pushing code that fails `fallow audit`. Claude gets the findings, fixes the code, and tries again.
+
+The gate is not a Git hook. It is a local `PreToolUse` hook on the Claude `Bash` tool. When Claude runs `git commit` or `git push`, the hook runs `fallow audit --format json --quiet --explain --gate-marker agent`:
+
+- On `pass` or `warn`, the command continues.
+- On `fail`, the hook blocks the command and sends the JSON findings to Claude on stderr.
 
 <Info>
-  This is Option C: local agent gate in the adoption rollout. Use it together with the shared CI gate from [fallow audit](/cli/audit), not instead of it. See [Adopt Fallow in an existing repo](/adoption#7-turn-on-pr-enforcement).
+  This is Option C (local agent gate) in the adoption rollout. Use it together with the shared CI gate from [fallow audit](/cli/audit). It does not replace the CI gate. See [Adopt Fallow in an existing repo](/adoption#7-turn-on-pr-enforcement).
 </Info>
 
 ## Install it in one command
@@ -17,66 +22,72 @@ Claude Code hooks let you insert deterministic checks into the agent loop. This 
 fallow hooks install --target agent
 ```
 
-That command writes a project-level `.claude/settings.json` and `.claude/hooks/fallow-gate.sh`. It detects whether your repo also has an `AGENTS.md` or `.codex/` and, if so, adds a managed Codex fallback block to `AGENTS.md` as well; the block includes the task-to-command matrix from [`fallow schema`](/cli/schema) and refreshes on upgrade when you re-run the installer. To remove the generated artifacts later, run `fallow hooks uninstall --target agent`.
+The command writes a project-level `.claude/settings.json` and `.claude/hooks/fallow-gate.sh`. If your repo also has an `AGENTS.md` or `.codex/`, it adds a managed Codex fallback block to `AGENTS.md`. The block includes the task-to-command matrix from [`fallow schema`](/cli/schema). When you upgrade fallow and run the installer again, the block updates. To remove the generated files later, run `fallow hooks uninstall --target agent`.
 
-Preview first with `--dry-run`:
+To preview the changes, add `--dry-run`:
 
 ```bash
 fallow hooks install --target agent --dry-run
 ```
 
-Output looks like this, with one line per affected path and a description of what changed:
+The output has one line for each path and says what changes:
 
 ```text
-fallow hooks install --target agent (install):
+fallow hooks install --target agent (install) (dry run):
   .claude/settings.json          updated (1 handler added, 1 preserved)
-  .claude/hooks/fallow-gate.sh   created
-  AGENTS.md                      managed block inserted
+  .claude/hooks/fallow-gate.sh   would create
+  AGENTS.md                      would insert managed block
 ```
 
 <Note>
-  [`fallow agent install`](/cli/agent) installs this gate together with the skill, the MCP registration, and an `AGENTS.md` task map for every harness it detects. The older `fallow setup-hooks` command is deprecated: it still works throughout fallow 3 with a warning and is removed in the next major.
+  [`fallow agent install`](/cli/agent) installs this gate together with the skill, the MCP registration, and an `AGENTS.md` task map for each harness it detects. The older `fallow setup-hooks` command is deprecated. It still works in all of fallow 3 with a warning, and the next major version removes it.
 </Note>
 
 ## Install globally for every repo
 
-Pass `--user` to install the gate under your home directory instead of per-project. The settings file lands at `~/.claude/settings.json`, the hook script at `~/.claude/hooks/fallow-gate.sh`, and the emitted handler command uses `"$HOME"` in place of `"$CLAUDE_PROJECT_DIR"` so it resolves in every repo Claude Code opens:
+To install the gate once for all repos, pass `--user`. The installer writes to your home directory:
+
+- The settings file goes to `~/.claude/settings.json`.
+- The hook script goes to `~/.claude/hooks/fallow-gate.sh`.
+- The handler command uses `"$HOME"` in place of `"$CLAUDE_PROJECT_DIR"`, so it works in every repo that Claude Code opens.
 
 ```bash
 fallow hooks install --target agent --user
 ```
 
-Project-level installs override the global one when both are present, so you can still opt a specific repo into a stricter or laxer policy.
+When a repo has both, the project-level install overrides the global one. Use this to give one repo a stricter or looser policy.
 
 ## Gate semantics
 
-The hook runs `fallow audit --format json --quiet --explain --gate-marker agent` and blocks the agent's `git commit` or `git push` only when the audit returns `verdict: "fail"`. The `--gate-marker agent` flag lets local [Impact tracking](/cli/impact) record blocked-then-cleared containment events when it is enabled. Audit defaults to `gate=new-only`: inherited findings on touched files are reported in `attribution` and annotated with `introduced: false` on individual issues, but they do not affect the verdict. Only findings the changeset *introduces* fail the gate.
+The hook blocks the `git commit` or `git push` only when `fallow audit` returns `verdict: "fail"`. When local [Impact tracking](/cli/impact) is enabled, the `--gate-marker agent` flag lets it record blocked-then-cleared containment events.
 
-This is the adoption-friendly default for legacy codebases: an agent editing a 10-year-old file is not punished for the existing dead exports already there, only for any new ones it adds.
+Audit defaults to `gate=new-only`. Only findings that the changeset *introduces* fail the gate. Inherited findings in touched files still show in `attribution`, and each of those issues has `introduced: false`. They do not change the verdict.
 
-To gate every finding in changed files (the strict mode), set the gate in your project config:
+This default helps you adopt fallow on a legacy codebase. An agent that edits a 10-year-old file is not blocked by the old unused exports in it. Only new ones block it.
+
+To gate every finding in changed files (strict mode), set the gate in your project config:
 
 ```toml fallow.toml
 [audit]
 gate = "all"
 ```
 
-Or override per invocation by editing `.claude/hooks/fallow-gate.sh` to pass `--gate all` explicitly. The script is regenerated on every `fallow hooks install --target agent` run, so prefer the config-file approach for persistence.
+You can also edit `.claude/hooks/fallow-gate.sh` to pass `--gate all`. But each `fallow hooks install --target agent` run regenerates the script and removes your edit. Use the config file for a permanent setting.
 
 ## Comparison base
 
-The hook runs bare `fallow audit` with no `--base`, so audit auto-detects the comparison base as the `git merge-base` (fork point) against the branch's upstream or the remote default (`origin/main`). The merge-base is resolved at run time, so a branch freshly cut from `origin/main` is gated only on the changes it actually introduces.
+The hook runs `fallow audit` with no `--base`. Audit then uses the `git merge-base` (fork point) as the comparison base. It compares against the upstream of the branch, or else the remote default (`origin/main`). Audit finds the merge-base at run time, so a new branch from `origin/main` is gated only on its own changes.
 
-Two setups want an explicit base. Set [`FALLOW_AUDIT_BASE`](/configuration/environment#fallow_audit_base) (it takes effect because the gate passes no `--base`):
+Two setups need an explicit base. For these, set [`FALLOW_AUDIT_BASE`](/configuration/environment#fallow_audit_base). It takes effect because the gate passes no `--base`:
 
-- **Forks.** On a fork, `origin` is your fork and can lag the real upstream. Pin `FALLOW_AUDIT_BASE=upstream/main` so the gate compares against the true upstream.
-- **A non-default integration branch.** If your team merges into `develop` (or a release branch) rather than `main`, pin `FALLOW_AUDIT_BASE=origin/develop`.
+- **Forks.** On a fork, `origin` is your fork, and it can be behind the real upstream. Set `FALLOW_AUDIT_BASE=upstream/main` to compare against the real upstream.
+- **A non-default integration branch.** If your team merges into `develop` or a release branch and not into `main`, set `FALLOW_AUDIT_BASE=origin/develop`.
 
-The env var is the right knob here because the generated `fallow-gate.sh` is regenerated on every `fallow hooks install --target agent` run, so an edit to the script does not survive a reinstall.
+Use the env var, not a script edit. Each `fallow hooks install --target agent` run regenerates `fallow-gate.sh`, so a reinstall removes script edits.
 
 ## Version floor
 
-The installed gate enforces a minimum fallow version via the `FALLOW_GATE_MIN_VERSION` env var (default `2.85.0`). The gate passes `--gate-marker agent` (added in v2.85.0) so local Impact can record blocked-then-cleared events; older binaries reject the flag entirely, which would make every audit fail open. The gate therefore blocks with an upgrade hint when the `fallow` on `PATH` is below the floor. This prevents a stale npm-global or `~/.cargo/bin/fallow` from masquerading as a working gate.
+The gate requires a minimum fallow version, set by the `FALLOW_GATE_MIN_VERSION` env var (default `2.85.0`). The gate passes `--gate-marker agent`, which v2.85.0 added. Older binaries reject this flag, and every audit would then fail open. So if the `fallow` on `PATH` is older than the floor, the gate blocks and shows an upgrade hint. This stops an old npm-global or `~/.cargo/bin/fallow` from looking like a working gate.
 
 ```bash
 # Raise the floor (require a newer fallow across your team)
@@ -86,11 +97,17 @@ export FALLOW_GATE_MIN_VERSION=3.0.0
 export FALLOW_GATE_MIN_VERSION=
 ```
 
-Every block logs the binary path and version that fired it, e.g. `fallow-gate: blocked by fallow 2.48.1 at /usr/local/bin/fallow`, so "which binary ran this?" is answered without re-diagnosis. The header of the installed script also stamps `# Installer version: X.Y.Z` for forensics when the gate disagrees with your current `fallow --version`.
+Each block logs the path and version of the binary that ran, for example `fallow-gate: blocked by fallow 3.28.0 at /usr/local/bin/fallow`. You can see which binary ran without more debugging. The header of the installed script also has `# Installer version: X.Y.Z`. Use it when the gate does not agree with your current `fallow --version`.
 
 ## Inspect hook state
 
-`fallow hooks status` shows what is installed on all three surfaces without touching anything: the Git pre-commit hook, the Claude Code gate, and the Codex `AGENTS.md` managed block. Agents and scripts use the JSON form before proposing setup changes:
+`fallow hooks status` shows what is installed and changes nothing. It checks three places:
+
+- the Git pre-commit hook
+- the Claude Code gate
+- the Codex `AGENTS.md` managed block
+
+Agents and scripts read the JSON form before they propose setup changes:
 
 ```bash
 fallow hooks status --format json
@@ -106,7 +123,7 @@ fallow hooks status --format json
 }
 ```
 
-`user_edited` flags a hook file that exists but no longer carries fallow's generator marker (or a torn managed block), so an agent knows not to overwrite it without asking. `script_version` and `min_version_floor` expose the gate script's installer stamp and version floor, which lets tooling detect a stale gate.
+`user_edited` is `true` when a hook file exists but has lost the fallow generator marker, or when a managed block is broken. An agent then knows not to overwrite the file without asking. `script_version` and `min_version_floor` give the installer version and the version floor of the gate script. Tools use them to find an old gate.
 
 ## Remove it
 
@@ -114,14 +131,20 @@ fallow hooks status --format json
 fallow hooks uninstall --target agent
 ```
 
-Removes the fallow-gate handler from `.claude/settings.json`, deletes the hook script if it still carries the generator marker (use `--force` to remove user-edited scripts), and strips the managed block from `AGENTS.md`. Handlers you added outside fallow stay untouched. Pass `--user` to uninstall the global artifacts at `~/.claude/` instead of the project ones.
+This command does three things:
 
-The uninstall flow is idempotent: running it a second time prints `unchanged` / `not present` and exits 0. Dry-run is supported (`fallow hooks uninstall --target agent --dry-run`).
+- It removes the fallow-gate handler from `.claude/settings.json`.
+- It deletes the hook script if the script still has the generator marker. To also remove a user-edited script, pass `--force`.
+- It removes the managed block from `AGENTS.md`.
 
-`fallow hooks install --target agent` also recognises and cleans up hook commands that older manual setups emitted (absolute paths, `~/`-based paths, Windows drive paths), so re-running it on a pre-existing install upgrades the handler to the canonical form without leaving duplicates.
+Handlers that you added outside fallow stay. To uninstall the global files at `~/.claude/` in place of the project files, pass `--user`.
+
+Uninstall is idempotent. A second run prints `unchanged` or `not present` and exits 0. It also supports a dry run: `fallow hooks uninstall --target agent --dry-run`.
+
+`fallow hooks install --target agent` also finds and removes hook commands from older manual setups. These include absolute paths, `~/`-based paths, and Windows drive paths. When you run it on an existing install, it upgrades the handler to the canonical form and leaves no duplicates.
 
 <Note>
-  Related but distinct: `fallow hooks install --target git` scaffolds a shell-level Git pre-commit hook in `.git/hooks/` that runs fallow on changed files. That is the *human* enforcement path. This page is the *agent* enforcement path. The two can be used together: git hooks catch human commits, the agent gate catches agent commits.
+  `fallow hooks install --target git` is a different hook. It creates a shell-level Git pre-commit hook in `.git/hooks/` that runs fallow on changed files. That hook checks *human* commits. The gate on this page checks *agent* commits. You can use both together.
 </Note>
 
 ## Manual setup
@@ -149,7 +172,7 @@ The uninstall flow is idempotent: running it a second time prints `unchanged` / 
 
 ### 2. Create `.claude/hooks/fallow-gate.sh`
 
-Copy the canonical script from the fallow repo, [`crates/cli/src/setup_hooks/fallow-gate.sh`](https://github.com/fallow-rs/fallow/blob/main/crates/cli/src/setup_hooks/fallow-gate.sh), into `.claude/hooks/fallow-gate.sh`. Omit the `# Installer version:` line (the installer stamps it for forensics). Prefer `fallow hooks install --target agent`; copy by hand only where you cannot run that command.
+Copy the canonical script from the fallow repo, [`crates/cli/src/setup_hooks/fallow-gate.sh`](https://github.com/fallow-rs/fallow/blob/main/crates/cli/src/setup_hooks/fallow-gate.sh), into `.claude/hooks/fallow-gate.sh`. Leave out the `# Installer version:` line, because only the installer writes it. Use `fallow hooks install --target agent` when you can. Copy the script by hand only when you cannot run that command.
 
 ### 3. Make the script executable
 
@@ -158,20 +181,20 @@ chmod +x .claude/hooks/fallow-gate.sh
 ```
 
 <Tip>
-  The hook checks `fallow` first, then falls back to `npx --no-install fallow`. Keep `jq` on PATH because the hook reads Claude's stdin JSON and Fallow's JSON output. Skip paths print one stderr line so the agent does not silently trust a missing gate.
+  The hook looks for fallow in this order: `fallow` on PATH, `./node_modules/.bin/fallow`, `yarn exec fallow` (for Yarn Plug'n'Play), and `npx --no-install fallow`. Keep `jq` on PATH, because the hook reads the stdin JSON from Claude and the JSON output from fallow. When the hook skips the check, it prints one line to stderr. The agent then knows that the gate did not run.
 </Tip>
 
 <Note>
-  In JSON mode, `fallow audit` reports invalid refs, non-Git directories, and config errors as `{ "error": true, ... }` with exit code `2`. The gate lets those through so a brand-new repo or empty history is not stuck before the first successful audit.
+  In JSON mode, `fallow audit` reports invalid refs, non-Git directories, and config errors as `{ "error": true, ... }` with exit code `2`. The gate does not block on these errors. A new repo or a repo with empty history can then commit before the first successful audit.
 </Note>
 
 <Warning>
-  This gate runs before Claude executes the shell command, so `git push --no-verify` does not bypass it. Keep CI on `fallow audit` as the shared gate for humans and non-Claude workflows.
+  This gate runs before Claude runs the shell command, so `git push --no-verify` does not bypass it. Keep `fallow audit` in CI as the shared gate for humans and for workflows outside Claude.
 </Warning>
 
 ## Codex fallback
 
-Codex now has an experimental hooks surface, but the low-friction fallback while it stabilizes is still `AGENTS.md`. Add this to your repo root `AGENTS.md`:
+Codex has its own [hooks](https://learn.chatgpt.com/docs/hooks), but fallow does not install a Codex hook. For Codex, fallow uses an `AGENTS.md` block. Add this block to the `AGENTS.md` at your repo root:
 
 ```md
 ## Fallow local gate
@@ -179,11 +202,18 @@ Codex now has an experimental hooks surface, but the low-friction fallback while
 Before any `git commit` or `git push`, run `fallow audit --format json --quiet --explain --gate-marker agent`. If the verdict is `fail`, fix the reported findings before retrying. Treat JSON runtime errors like `{ "error": true, ... }` as non-blocking.
 ```
 
-`fallow hooks install --target agent` maintains this block for you, scoped between `<!-- fallow:setup-hooks:start -->` and `<!-- fallow:setup-hooks:end -->` markers so re-running the command is idempotent.
+`fallow hooks install --target agent` keeps this block up to date for you. The block is between `<!-- fallow:setup-hooks:start -->` and `<!-- fallow:setup-hooks:end -->` markers, so you can run the command again safely.
 
 ## Why this works well with agents
 
-`fallow audit --explain` gives Claude structured findings with docs links and fix guidance, while [Agent Skills](/integrations/agent-skills) teaches the agent how to act on them. The result is a tight feedback loop: Claude tries to commit or push, the gate blocks only real `fail`-severity issues, Claude reads the JSON envelope, fixes the code, and retries.
+`fallow audit --explain` gives Claude structured findings with docs links and fix guidance. [Agent Skills](/integrations/agent-skills) teach the agent how to act on them. The loop is short:
+
+1. Claude tries to commit or push.
+2. The gate blocks only on `fail`-severity issues.
+3. Claude reads the JSON output and fixes the code.
+4. Claude tries again.
+
+## See also
 
 <CardGroup cols={3}>
   <Card title="Adoption rollout" icon="rocket" href="/adoption#7-turn-on-pr-enforcement">

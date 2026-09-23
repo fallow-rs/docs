@@ -1,17 +1,17 @@
 ---
 title: "Production mode"
-description: "Restrict fallow's dead code analysis to production code by excluding test files, devDependencies, and type-only imports."
+description: "Get findings for the code you ship only. Production mode excludes test files, story files, and devDependencies, and flags dependencies that are only imported as types."
 keywords: ["production mode", "test files", "devDependencies", "type-only imports", "shipping code"]
 icon: "industry"
 ---
 
-Production mode restricts analysis to code that ships to users, ignoring test and development files.
+Production mode limits the analysis to code that ships to users. Fallow ignores test and development files, so the report shows only the unused code and dependencies in your production build.
 
 ```bash
 fallow dead-code --production
 ```
 
-Or set it in your config:
+You can also set it in your config:
 
 ```jsonc
 // .fallowrc.json
@@ -24,12 +24,14 @@ Or set it in your config:
 
 | Behavior | Default | Production |
 |:---------|:--------|:-----------|
-| Test files (`*.test.*`, `*.spec.*`, `__tests__/`) | Included | Excluded |
+| Test files (`*.test.*`, `*.spec.*`, `*.e2e.*`, `__tests__/`, `test/`, `tests/`) | Included | Excluded |
 | Story files (`*.stories.*`) | Included | Excluded |
 | Mock files (`__mocks__/`) | Included | Excluded |
 | Package.json scripts analyzed | All | Only `start`, `build`, `serve`, `preview`, `prepare`, `prepublishOnly`, `postinstall`, and `pre`/`post` lifecycle hooks for `start`, `build`, `serve`, `install` |
 | Unused devDependencies | Reported | Skipped |
-| Type-only dependencies | Not flagged | Flagged (should be devDependencies) |
+| Unused optionalDependencies | Reported | Skipped |
+| Test-only dependencies | Flagged (move to devDependencies) | Skipped |
+| Type-only dependencies | Not flagged | Flagged (move to devDependencies) |
 
 ```bash title="$ fallow dead-code --production"
 ● Unused exports (2)
@@ -51,21 +53,21 @@ Or set it in your config:
 
 ## Type-only dependency detection
 
-In production mode, fallow detects dependencies that are only imported via `import type`:
+In production mode, fallow finds dependencies that your code imports only with `import type`:
 
 ```ts
 import type { Config } from 'some-package';  // Type-only, erased at runtime
 ```
 
-These packages belong in `devDependencies` since types are erased at runtime and don't need to be installed in production.
+Move these packages to `devDependencies`. The compiler erases types, so production installs do not need them.
 
 <Tip>
-In monorepos, production mode catches dependencies that should be devDependencies, keeping each package's install footprint minimal.
+In a monorepo, production mode finds the dependencies in each package that belong in devDependencies. This keeps each package install small.
 </Tip>
 
 ## Per-analysis production mode
 
-Combined mode (bare `fallow`) and `fallow audit` can enable production mode per analysis instead of globally:
+In combined mode (bare `fallow`) and in `fallow audit`, you can enable production mode for each analysis separately:
 
 ```jsonc
 // .fallowrc.json
@@ -78,9 +80,16 @@ Combined mode (bare `fallow`) and `fallow audit` can enable production mode per 
 }
 ```
 
-Use `--production-health`, `--production-dead-code`, or `--production-dupes` for one invocation, or `FALLOW_PRODUCTION_HEALTH=true` and the related env vars in CI. The global `--production` flag still enables production mode for every analysis.
+For one run, pass `--production-health`, `--production-dead-code`, or `--production-dupes`. In CI, set `FALLOW_PRODUCTION_HEALTH=true` or one of the related env vars. The global `--production` flag still enables production mode for every analysis.
 
-Precedence (highest to lowest): CLI flags, per-analysis env var, global `FALLOW_PRODUCTION`, config. CLI flags only enable; env vars and config can also disable. Worked examples:
+Fallow applies these sources in order of precedence, highest first:
+
+1. CLI flags
+2. Per-analysis env var
+3. Global `FALLOW_PRODUCTION`
+4. Config
+
+`--production` and the per-analysis flags can only enable production mode. `--no-production` turns it off for every analysis, and it overrides env vars and config. It conflicts with `--production`. Env vars and config can enable or disable production mode. Examples:
 
 ```bash
 # Run health in production mode, dead-code and dupes on the full tree
@@ -95,13 +104,16 @@ FALLOW_PRODUCTION=false FALLOW_PRODUCTION_HEALTH=true fallow
 
 # CLI flags beat env vars; this enables all three regardless of FALLOW_PRODUCTION_* env
 fallow --production
+
+# Turn production mode off for every analysis, even when config sets production: true
+fallow --no-production
 ```
 
 ## See also
 
 <CardGroup cols={2}>
   <Card title="CI Integration" icon="circle-check" href="/integrations/ci">
-    Use production mode in your CI pipeline for lean, fast checks.
+    Run production mode in your CI pipeline.
   </Card>
   <Card title="Rules & Severity" icon="scale-balanced" href="/configuration/rules">
     Control which issue types are errors, warnings, or disabled.

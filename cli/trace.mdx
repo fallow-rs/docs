@@ -1,11 +1,14 @@
 ---
 title: "fallow trace"
-description: "CLI reference for fallow trace. Walk the callers and callees of one exported symbol through the module graph, or find the shortest import path between two modules. A standalone, best-effort surface, separate from the ranked review brief."
+description: "See what calls an exported symbol and what it calls before you change it, or find how one module comes to import another. Fallow trace is a best-effort command, separate from the ranked review brief."
 keywords: ["fallow trace", "call chain", "callers", "callees", "symbol trace", "import path", "module graph", "CLI"]
 icon: "route"
 ---
 
-Walk the symbol-level call chain for one exported symbol: callers **up** (modules that import the symbol) and callees **down** (import-symbol edges plus intra-module call sites), bounded by `--depth`. `trace` is its own surface for following how a symbol connects through the codebase before you change it.
+Before you change an exported symbol, use `fallow trace` to see how it connects to the rest of the codebase. The command walks the call chain of one symbol in two directions, up to `--depth`:
+
+- **Callers**, up: the modules that import the symbol.
+- **Callees**, down: the import-symbol edges, plus the call sites in the same module.
 
 ```bash
 fallow trace src/api.ts:fetchUser --format json --quiet
@@ -13,10 +16,10 @@ fallow trace src/api.ts:fetchUser --callers --depth 2
 fallow trace --path src/app.ts src/db.ts
 ```
 
-`--path` answers a different question from the symbol target: which chain of imports carries one module to another. See [Import path between two modules](#import-path-between-two-modules).
+`--path` answers a different question: which chain of imports connects one module to another. See [Import path between two modules](#import-path-between-two-modules).
 
 <Note>
-  `fallow trace` is a standalone, best-effort symbol-level surface. It is **not** folded into the ranked [review brief](/cli/audit#review-brief-and-decision-surface) and is never an input to the focus map or its ranking. Use it when you want to see how a symbol connects, not when you want a prioritized review.
+  `fallow trace` is a standalone, best-effort command. Its results are **not** part of the ranked [review brief](/cli/audit#review-brief-and-decision-surface), and they never change the focus map or its ranking. Use `trace` to see how a symbol connects. For a prioritized review, use the review brief.
 </Note>
 
 ## Target
@@ -27,7 +30,9 @@ fallow trace --path src/app.ts src/db.ts
 fallow trace src/api.ts:fetchUser
 ```
 
-`FILE` is a project-relative path and `SYMBOL` is the exported symbol name. Omit it when you pass `--path`, which takes two file paths instead.
+`FILE` is a project-relative path, and `SYMBOL` is the exported symbol name. When you pass `--path`, omit this argument. `--path` takes two file paths.
+
+When a file exists at the exact path from the project root, fallow takes that file. `src/api.ts` then never selects `packages/x/src/api.ts`. When no file has the exact path, fallow accepts a path suffix. A short path that matches more than one file takes the first match, so use the full project-relative path in a monorepo.
 
 ## Options
 
@@ -35,21 +40,21 @@ fallow trace src/api.ts:fetchUser
 |:-----|:------------|
 | `--callers` | Walk only the callers direction. |
 | `--callees` | Walk only the callees direction. |
-| `--depth <N>` | Bound the walk depth in each requested direction. |
-| `--path <FROM> <TO>` | Find the shortest import path between two modules instead of walking a symbol. Mutually exclusive with the `FILE:SYMBOL` target, `--callers`, `--callees`, and `--depth`. |
+| `--depth <N>` | Maximum walk depth in each requested direction (default: `2`). |
+| `--path <FROM> <TO>` | Find the shortest import path between two modules. You cannot use it with the `FILE:SYMBOL` target, `--callers`, `--callees`, or `--depth`. |
 
-When neither `--callers` nor `--callees` is set, both directions are walked. `trace` also accepts the project, output, and performance [global flags](/cli/global-flags) (`--root`, `--config`, `--format` with `human` or `json`, `--quiet`, `--no-cache`, `--threads`, `--changed-since`).
+Without `--callers` or `--callees`, fallow walks both directions. `trace` also accepts the project, output, and performance [global flags](/cli/global-flags): `--root`, `--config`, `--format` with `human` or `json`, `--quiet`, `--no-cache`, `--threads`, and `--changed-since`.
 
 ## How it works
 
-The walk is best-effort and syntactic. Resolved and unresolved callees are reported honestly: an unresolved callee (for example, a dynamic call fallow cannot statically resolve) is surfaced as unresolved rather than silently dropped, so the chain reflects what fallow could and could not follow.
+The walk is best-effort and syntactic. Fallow reports resolved and unresolved callees. An unresolved callee, for example a dynamic call that fallow cannot resolve statically, stays in the output as unresolved. The chain thus shows what fallow could follow and what it could not.
 
-When the same export is referenced in both type and value space, JSON output adds `direct_references_by_namespace` with separate evidence for each lane. `namespace` and `direct_references` keep their existing winning-lane meaning for compatibility. The grouped field is omitted when only one lane has references, so consumers should treat its absence as the common single-namespace case.
+When code references the same export in type space and in value space, the JSON output adds `direct_references_by_namespace`. This field has separate evidence for each namespace. For compatibility, `namespace` and `direct_references` keep their earlier meaning: they describe only the winning namespace. When only one namespace has references, fallow omits `direct_references_by_namespace`. Read a missing field as the usual case of one namespace.
 
 ## Ambiguous star exports
 
-When two `export *` sources contribute the requested name, the barrel exports
-nothing under that name. JSON output reports `symbol_found: false` and adds a
+When two `export *` sources both give the requested name, the barrel exports
+nothing under that name. The JSON output reports `symbol_found: false` and adds a
 `star_export_ambiguity` object:
 
 ```json
@@ -62,19 +67,19 @@ nothing under that name. JSON output reports `symbol_found: false` and adds a
 }
 ```
 
-`sources` contains the sorted project-relative declaration origins.
-`namespaces` identifies whether the collision is in type space, value space,
-or both, with `type` before `value`. This field distinguishes a barrel
-collision from an unknown or misspelled symbol. Keep one origin, rename the
-others, or replace the star exports with explicit re-exports.
+`sources` lists the files that declare the name, sorted, as project-relative paths.
+`namespaces` tells you if the collision is in type space, value space,
+or both, with `type` before `value`. With this object, you can tell a barrel
+collision from an unknown or misspelled symbol. To fix the collision, keep one
+origin and rename the others, or replace the star exports with explicit re-exports.
 
-The same best-effort call-chain data is available as opt-in evidence on [`fallow inspect --symbol-chain`](/cli/inspect#evidence-flags) and the `inspect_target` MCP tool's `symbol_chain` option.
+You can also get the same best-effort call-chain data as opt-in evidence from [`fallow inspect --symbol-chain`](/cli/inspect#evidence-flags) and from the `symbol_chain` option of the `inspect_target` MCP tool.
 
 ## Import path between two modules
 
-`fallow trace --path <FROM> <TO>` reports the shortest chain of imports by which `FROM` reaches `TO`. Both are project-relative file paths. Use it when you want to know how a module ends up depending on another one, rather than how a symbol is called.
+Use `--path` to find out why a module depends on another module. `fallow trace --path <FROM> <TO>` reports the shortest chain of imports from `FROM` to `TO`. Both are project-relative file paths.
 
-Exact project-relative or absolute paths take priority over suffix matches. An abbreviation is accepted only when it identifies one module. A missing or ambiguous endpoint exits with code `2`; use the full project-relative path to disambiguate.
+An exact project-relative or absolute path wins over a suffix match. Fallow accepts an abbreviation only when it identifies one module. A missing or ambiguous endpoint exits with code `2`. To remove the ambiguity, use the full project-relative path.
 
 ```bash title="$ fallow trace --path pages/report.tsx components/Box.tsx"
 Shortest import path (syntactic; OFF the ranked path)
@@ -88,7 +93,7 @@ Shortest import path (syntactic; OFF the ranked path)
   [3] components/RelatedContent.tsx:3 -> components/Box.tsx
 ```
 
-JSON output carries the same walk under `kind: "trace"` with its own `schema_version`:
+The JSON output has the same walk under `kind: "trace"`, with its own `schema_version`:
 
 ```json title="$ fallow trace --path pages/report.tsx components/Box.tsx --format json"
 {
@@ -122,16 +127,20 @@ JSON output carries the same walk under `kind: "trace"` with its own `schema_ver
 }
 ```
 
-Three behaviors are worth relying on. A type-only hop is reported with `type_only: true` rather than skipped, so a path that exists only in type space is visible instead of silently absent. An unreachable pair is a result, not an error: `reachable` is `false`, `path` is empty, `hops` is `0`, and `reason` says no import path was found. The command still exits `0`. And tracing a module to itself answers `reachable: true` with `hops: 0`, so branch on `reachable` rather than on the hop count, which is `0` in both cases.
+You can rely on these behaviors:
+
+- Fallow reports a type-only hop with `type_only: true` and does not skip it. A path that exists only in type space is thus visible.
+- An unreachable pair is a result, and not an error. `reachable` is `false`, `path` is empty, `hops` is `0`, and `reason` says that fallow found no import path. The command still exits `0`.
+- A trace from a module to itself returns `reachable: true` with `hops: 0`. The hop count is `0` in both cases, so branch on `reachable`.
 
 ## See also
 
 <CardGroup cols={3}>
   <Card title="Inspect a target" icon="search-code" href="/cli/inspect">
-    Compose one evidence bundle for a file or exported symbol, with opt-in `--symbol-chain`.
+    Get one evidence bundle for a file or exported symbol, with opt-in `--symbol-chain`.
   </Card>
   <Card title="Audit and review brief" icon="terminal" href="/cli/audit">
-    Changed-file verdict plus the graph-derived review brief and decision surface.
+    Get a verdict on changed files, plus the graph-derived review brief and decision surface.
   </Card>
   <Card title="Resolve a stack trace" icon="bug" href="/cli/trace-error">
     Map runtime stack-trace frames back to the definitions they name.

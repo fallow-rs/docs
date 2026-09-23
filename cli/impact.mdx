@@ -1,13 +1,23 @@
 ---
 title: "fallow impact"
-description: "CLI reference for fallow impact. A local-only value report: what fallow is surfacing, the trend, commits contained at the gate, and findings resolved over time."
+description: "See what fallow has done for you in a project. Fallow impact is a local-only report of current findings, the trend, commits stopped at the gate, and findings resolved over time."
 keywords: ["fallow impact", "CLI", "value report", "statusline", "containment", "resolved findings", "local-only"]
 icon: "terminal"
 ---
 
-Show what fallow has done for you in this project: how many issues it is surfacing, the trend since the last recorded run, how many commits the pre-commit or agent gate contained (blocked, then cleared after a fix), and how many findings were genuinely resolved over time.
+See what fallow has done for you in this project. `fallow impact` reports:
 
-Impact is **opt-in and local-only**. History lives in your user config dir (see [Storage and cleanup](#storage-and-cleanup)): **nothing is ever written into the repo** (no `.fallow/` directory, no `.gitignore` change), nothing is uploaded, and recording never affects exit codes or analysis output. Recording is also skipped in CI.
+- how many issues fallow reports now
+- the trend since the last recorded run
+- how many commits the pre-commit or agent gate contained (blocked, then cleared after a fix)
+- how many findings were truly resolved over time
+
+Impact is **opt-in and local-only**. The history is in your user config dir (see [Storage and cleanup](#storage-and-cleanup)):
+
+- **fallow never writes anything into the repo**: no `.fallow/` directory, and no `.gitignore` change.
+- Fallow uploads nothing.
+- Recording never changes exit codes or analysis output.
+- Fallow does not record in CI.
 
 ```bash
 fallow impact enable        # track this project (overrides the global default)
@@ -20,17 +30,17 @@ fallow impact reset         # delete this project's history (--all wipes every p
 fallow impact --all         # roll up every project: impact across all your repos
 ```
 
-Enable Impact once for every project with `fallow impact default on`. A per-project `fallow impact enable` or `disable` always wins over the global default, so you can opt one repo out without disabling everywhere.
+To turn on Impact for every project at once, run `fallow impact default on`. A per-project `fallow impact enable` or `disable` always wins over the global default. You can thus opt one repo out and keep Impact on everywhere else.
 
 ## Status bars
 
-`fallow impact statusline` prints exactly one path-free plain-text line for shell and editor status bars. It reads the local Impact store only, starts no analysis, never enables recording, and keeps stderr empty on success.
+`fallow impact statusline` prints exactly one plain-text line for shell and editor status bars. The line contains no paths. The command reads only the local Impact store. It starts no analysis, never turns on recording, and writes nothing to stderr on success.
 
-The command intentionally ignores `--format`. Do not parse its output as JSON. Trend output uses only comparable whole-project scans. Older changed-file history is labeled and shown without a trend.
+The command ignores `--format` on purpose. Do not parse its output as JSON. The trend uses only whole-project scans that fallow can compare. Fallow labels older changed-file history and shows it without a trend.
 
 ## Across all your repos
 
-`fallow impact --all` aggregates the per-project histories in your config dir into one ranked table plus grand totals, so you can see what fallow has done for you across every project at once. It reads only the stored histories (no analysis), so it works from anywhere, including outside a repo.
+To see what fallow has done for you in all your projects at once, run `fallow impact --all`. It combines the per-project histories in your config dir into one ranked table, plus grand totals. It reads only the stored histories and runs no analysis, so it works from any directory, also outside a repo.
 
 ```bash
 fallow impact --all                  # ranked table + grand totals (sorted by most recent)
@@ -38,7 +48,9 @@ fallow impact --all --sort resolved  # rank by lifetime findings resolved
 fallow impact --all --limit 10       # cap printed rows (totals still cover every project)
 ```
 
-Sort with `--sort {recent,resolved,contained,name}` (default `recent`). Projects with no recorded history yet are summarized, not listed. Repos are labeled by their folder name; histories recorded by older fallow versions show a short key until their next recorded run. The `--format json` output is a separate `impact-cross-repo` shape (each entry embeds the same per-project report as `fallow impact`, plus a stable `project_key`); like the single-project report, it never includes any filesystem path. As with all of Impact, this reflects local-developer work and is empty in CI.
+To sort, use `--sort {recent,resolved,contained,name}` (default `recent`). Fallow summarizes projects with no recorded history yet, and does not list them. Each repo has its folder name as its label. A history from an older fallow version shows a short key until its next recorded run.
+
+The `--format json` output has a separate `impact-cross-repo` shape. Each entry contains the same per-project report as `fallow impact`, plus a stable `project_key`. Like the single-project report, it never includes a filesystem path. As with all of Impact, the report shows local developer work, and it is empty in CI.
 
 ## What it tracks
 
@@ -47,27 +59,39 @@ Sort with `--sort {recent,resolved,contained,name}` (default `recent`). Projects
 | Surfacing | Issue counts from the most recent recorded run |
 | Trend | Delta versus the previous recorded run |
 | Containment | A gate-marked `fallow audit` that failed, followed by a later run that cleared it: an issue stopped before it landed |
-| Resolved | Findings that disappeared because code was removed or refactored. Findings silenced with a `fallow-ignore` comment are counted separately as suppressed, never as wins |
+| Resolved | Findings that went away because someone removed or refactored the code. Fallow counts findings silenced with a `fallow-ignore` comment separately, as suppressed, and never as wins |
 
-History accrues from `fallow audit` runs invoked with a gate marker: the Git pre-commit hook from [`fallow init --hooks`](/cli/init) and the Claude Code agent gate from [`fallow hooks install --target agent`](/integrations/claude-hooks) both pass one. Whole-project surfacing and trend advance on local bare `fallow` runs.
+Fallow adds to the history when `fallow audit` runs with a gate marker. Two gates pass that marker: the Git pre-commit hook from [`fallow init --hooks`](/cli/init), and the Claude Code agent gate from [`fallow hooks install --target agent`](/integrations/claude-hooks). Local bare `fallow` runs update the whole-project Surfacing and Trend signals.
 
 ## The weekly digest
 
-When tracking is enabled and has non-zero results, fallow surfaces the headline numbers at most once a week: JSON output carries an `impact-report` entry in the [`next_steps[]` array](/integrations/mcp) (also on otherwise clean runs), and bare `fallow` prints a one-line `Impact:` summary alongside the failure summary. The cadence stamp lives in the impact store, so the digest stays weekly across agents, sessions, and surfaces. Zero results never surface, and CI never sees the digest.
+When tracking is on and the results are not zero, fallow shows the headline numbers at most once a week:
+
+- The JSON output has an `impact-report` entry in the [`next_steps[]` array](/integrations/mcp), also on runs that are otherwise clean.
+- Bare `fallow` prints a one-line `Impact:` summary next to the failure summary.
+
+Fallow stores the time of the last digest in the impact store. The digest thus stays weekly across agents, sessions, and surfaces. Fallow never shows a digest with zero results, and CI never gets the digest.
 
 ## Storage and cleanup
 
-Each project keeps one small history file in your user config dir (`~/Library/Application Support/fallow/` on macOS, `$XDG_CONFIG_HOME/fallow/` on Linux, `%APPDATA%\fallow\` on Windows), keyed by repository, so running `fallow impact` from any subdirectory or git worktree of a repo shows that repo's history. Concurrent recordings (for example, a pre-commit gate firing in two worktrees at once) are serialized with an advisory lock so neither run loses the other's data.
+Each project keeps one small history file in your user config dir:
 
-Stores for repos you delete from disk stay until you reclaim them. Set [`FALLOW_IMPACT_STORE_MAX_AGE_DAYS`](/configuration/environment#fallow_impact_store_max_age_days) to a number of days and a recorded run prunes any store untouched for longer than that. Unset (the default) keeps every store forever. You can also wipe history explicitly with `fallow impact reset` (this project) or `fallow impact reset --all` (every project).
+- `~/Library/Application Support/fallow/` on macOS
+- `$XDG_CONFIG_HOME/fallow/` on Linux
+- `%APPDATA%\fallow\` on Windows
+
+Fallow keys each file by repository. When you run `fallow impact` from any subdirectory or git worktree of a repo, you see the history of that repo. An advisory lock puts concurrent recordings in sequence, for example a pre-commit gate that runs in two worktrees at once. Neither run thus loses the data of the other.
+
+When you delete a repo from disk, its store stays until you remove it. Set [`FALLOW_IMPACT_STORE_MAX_AGE_DAYS`](/configuration/environment#fallow_impact_store_max_age_days) to a number of days. A recorded run then removes each store that nobody touched for longer than that. When the variable is unset (the default), fallow keeps every store forever. You can also delete history with `fallow impact reset` (this project) or `fallow impact reset --all` (every project).
 
 ## JSON output
 
-`fallow impact --format json` and `fallow impact status --format json` emit the report shape from the published [output schema](https://github.com/fallow-rs/fallow/blob/main/docs/output-schema.json):
+`fallow impact --format json` and `fallow impact status --format json` print the report shape from the published [output schema](https://github.com/fallow-rs/fallow/blob/main/docs/output-schema.json):
 
 ```json
 {
   "kind": "impact",
+  "schema_version": "2",
   "enabled": true,
   "enabled_source": "project",
   "record_count": 14,
@@ -82,22 +106,22 @@ Stores for repos you delete from disk stay until you reclaim them. Set [`FALLOW_
 }
 ```
 
-Three fields exist for agents that manage opt-ins conversationally:
+Three fields help an agent that asks the user about the opt-in in a conversation:
 
-- `enabled_source`: why tracking is on or off: `project` (an explicit per-repo enable/disable), `user` (the global default), or `default` (off).
-- `explicit_decision`: set only by an explicit `impact enable` or `impact disable`, so an agent can distinguish "asked and declined" (`enabled: false`, `explicit_decision: true`) from "never asked" (`enabled: false`, `explicit_decision: false`) and offer the opt-in exactly once.
-- `onboarding_declined`: set by [`fallow init --decline`](/cli/init); suppresses fallow's first-contact setup pointer for this project.
+- `enabled_source` says why tracking is on or off. The values are `project` (an explicit per-repo enable or disable), `user` (the global default), or `default` (off).
+- `explicit_decision` is set only by an explicit `impact enable` or `impact disable`. An agent can thus tell "asked and declined" (`enabled: false`, `explicit_decision: true`) from "never asked" (`enabled: false`, `explicit_decision: false`), and offer the opt-in exactly once.
+- `onboarding_declined` is set by [`fallow init --decline`](/cli/init). It stops the first-contact setup pointer of fallow for this project.
 
 ## See also
 
 <CardGroup cols={3}>
   <Card title="fallow init" icon="terminal" href="/cli/init">
-    Install the pre-commit hook that passes the gate marker Impact records.
+    Install the pre-commit hook. It passes the gate marker that Impact records.
   </Card>
   <Card title="Claude Code hooks" icon="robot" href="/integrations/claude-hooks">
-    The agent gate that feeds containment counts.
+    Install the agent gate. It adds to the containment count.
   </Card>
   <Card title="Environment variables" icon="gear" href="/configuration/environment">
-    `FALLOW_IMPACT_STORE_MAX_AGE_DAYS` and the other Impact knobs.
+    `FALLOW_IMPACT_STORE_MAX_AGE_DAYS` and the other Impact settings.
   </Card>
 </CardGroup>

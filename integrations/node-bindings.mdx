@@ -1,13 +1,18 @@
 ---
 title: "Node.js bindings"
-description: "Call fallow analyses directly from Node.js via NAPI bindings. No CLI subprocess or JSON parsing, with the same JSON envelopes the CLI emits."
+description: "Run fallow analyses from your own Node.js code and get typed results. The NAPI bindings need no CLI subprocess or JSON parsing and return the same JSON envelopes as the CLI."
 keywords: ["Node.js", "napi", "bindings", "programmatic API", "JavaScript", "TypeScript", "embed fallow", "library"]
 icon: "node-js"
 ---
 
-The `@fallow-cli/fallow-node` package exposes the main fallow analyses as async Node.js functions. The bindings avoid CLI subprocesses and JSON parsing, reuse the shared analysis layer, and return the same JSON report envelopes the CLI emits for `--format json`. The optional `detectSimilarCode` function verifies and launches its exact local model companion.
+With `@fallow-cli/fallow-node`, you call the main fallow analyses as async Node.js functions. You do not start a CLI subprocess or parse JSON. The functions use the same analysis layer as the CLI and return the same JSON report envelopes as `--format json`. The optional `detectSimilarCode` function verifies and starts its local model companion, which must be the exact matching version.
 
-Use them when you want to embed fallow inside another tool, a Node.js server, an editor extension, or a custom script that otherwise would shell out to the CLI.
+Use the bindings to embed fallow in code that would otherwise call the CLI:
+
+- another tool
+- a Node.js server
+- an editor extension
+- a custom script
 
 ## Install
 
@@ -15,9 +20,15 @@ Use them when you want to embed fallow inside another tool, a Node.js server, an
 npm install @fallow-cli/fallow-node
 ```
 
-The package is a native NAPI-RS addon with platform-specific `optionalDependencies` for macOS (arm64, x64), Linux (gnu + musl on arm64 and x64), and Windows (x64, arm64). npm picks the matching binary at install time.
+The package is a native NAPI-RS addon. It has platform-specific `optionalDependencies` for these platforms:
 
-Node 18 or newer is required.
+- macOS (arm64, x64)
+- Linux (gnu and musl on arm64 and x64)
+- Windows (x64, arm64)
+
+npm installs the matching binary.
+
+The package requires Node 22 or newer.
 
 ## Basic usage
 
@@ -46,11 +57,18 @@ const similar = await detectSimilarCode({
 console.log(similar.candidates);
 ```
 
-Every function returns a promise resolving to the same JSON envelope the CLI emits when called with `--format json`: a top-level `kind` discriminator on typed roots, `schema_version`, `summary`, relative paths, injected `actions` arrays, and (when `explain: true`) a `_meta` block with docs links.
+Each function returns a promise. The promise resolves to the same JSON envelope that the CLI prints with `--format json`. The envelope has:
+
+- a top-level `kind` discriminator on typed roots
+- `schema_version`
+- `summary`
+- relative paths
+- injected `actions` arrays
+- a `_meta` block with docs links, when `explain: true`
 
 ## API
 
-All eight functions are async and accept an optional options object. Unknown fields are ignored. Enum-like fields take lowercase CLI-style literals (`"mild"`, `"cyclomatic"`, `"handle"`, `"low"`).
+All eight functions are async and take an optional options object. The functions ignore unknown fields. Enum-like fields take lowercase CLI-style literals, such as `"mild"`, `"cyclomatic"`, `"handle"`, and `"low"`.
 
 | Function | CLI equivalent | Returns |
 |:---------|:---------------|:--------|
@@ -61,7 +79,7 @@ All eight functions are async and accept an optional options object. Unknown fie
 | `detectSimilarCode(options?)` | `fallow similar-code --format json` | `SimilarCodeReport` with unverified candidates |
 | `detectFeatureFlags(options?)` | `fallow flags --format json` | `FeatureFlagsReport` |
 | `computeComplexity(options?)` | `fallow health --format json` | `HealthReport` |
-| `computeHealth(options?)` | `fallow health --format json` | Alias for `computeComplexity` with a product-oriented name |
+| `computeHealth(options?)` | `fallow health --format json` | Alias for `computeComplexity` |
 
 ### Shared options
 
@@ -71,30 +89,34 @@ Every options object extends `AnalysisOptions`:
 |:------|:-----|:--------|:--------|
 | `root` | `string` | `process.cwd()` | Project root directory |
 | `configPath` | `string` | auto-discover | Path to `.fallowrc.json` / `.fallowrc.jsonc` / `fallow.toml` / `.fallow.toml` |
+| `allowRemoteExtends` | `boolean` | `false` | Let trusted config files extend HTTPS URLs (same as `--allow-remote-extends`) |
 | `noCache` | `boolean` | `false` | Skip the extraction cache |
-| `threads` | `number` | CPU count | Parallelism; must be > 0 |
+| `threads` | `number` | CPU count | Number of threads. Must be > 0 |
+| `diffFile` | `string` | unset | Path to a unified diff file for line-level scoping (same as `--diff-file`). Diffs from stdin work only in the CLI. |
 | `production` | `boolean` | `false` | Production mode (excludes test/build files) |
 | `changedSince` | `string` | unset | Scope analysis to files changed since a git ref |
-| `workspace` | `string[]` | unset | Restrict to named workspace packages (monorepo) |
-| `changedWorkspaces` | `string` | unset | Restrict to workspaces whose files changed since a git ref. Mutually exclusive with `workspace`. |
-| `explain` | `boolean` | `false` | Inject a `_meta` block with metric / rule documentation |
+| `workspace` | `string[]` | unset | Restrict to the named workspace packages (monorepo) |
+| `changedWorkspaces` | `string` | unset | Restrict to workspaces with files changed since a git ref. Cannot be used with `workspace`. |
+| `explain` | `boolean` | `false` | Add a `_meta` block with metric and rule documentation |
 
 ### Dead-code options
 
-`detectDeadCode`, `detectCircularDependencies`, and `detectBoundaryViolations` accept the same superset, `DeadCodeOptions`. Setting any of the filter booleans below restricts the report to the selected issue types; leaving them all unset returns every category (the CLI's default behavior).
+`detectDeadCode`, `detectCircularDependencies`, and `detectBoundaryViolations` take the same options type, `DeadCodeOptions`. When you set one or more filter booleans below, the report has only those issue types. When you set none, the report has every category, as the CLI does by default.
 
-| Field | Type |
-|:------|:-----|
-| `unusedFiles` / `unusedExports` / `unusedDeps` / `unusedTypes` | `boolean` |
-| `unusedEnumMembers` / `unusedClassMembers` | `boolean` |
-| `unresolvedImports` / `unlistedDeps` | `boolean` |
-| `duplicateExports` / `circularDeps` / `boundaryViolations` / `staleSuppressions` | `boolean` |
+| Field | Type | Notes |
+|:------|:-----|:------|
+| `unusedFiles` / `unusedExports` / `unusedDeps` / `unusedTypes` | `boolean` | |
+| `privateTypeLeaks` | `boolean` | Opt-in. Private type leaks show only when you set this filter. |
+| `unusedEnumMembers` / `unusedClassMembers` | `boolean` | |
+| `unresolvedImports` / `unlistedDeps` | `boolean` | |
+| `duplicateExports` / `circularDeps` / `boundaryViolations` / `staleSuppressions` | `boolean` | |
 | `files` | `string[]` | Restrict to specific files (like `fallow dead-code path/to/file.ts`) |
 | `includeEntryExports` | `boolean` | Report unused exports on entry files |
+| `typeAware` | `{ enabled?, projects?, require? }` | Type-aware TypeScript analysis: `enabled` (`boolean`), `projects` (`string[]` of tsconfig paths), and `require` (`"best-effort" \| "complete"`) |
 
 ### Duplication options
 
-`DuplicationOptions` adds duplication-specific fields on top of `AnalysisOptions`:
+`DuplicationOptions` adds these fields to `AnalysisOptions`:
 
 | Field | Type | Default |
 |:------|:-----|:--------|
@@ -109,11 +131,11 @@ Every options object extends `AnalysisOptions`:
 | `ignoreImports` | `boolean` | `true` |
 | `top` | `number` | unset |
 
-Each returned clone group includes `spread`. Near-miss groups also include `similarity`. Duplication stats can include `clone_groups_ignored` and `near_candidates_skipped`; zero values are omitted.
+Each returned clone group has `spread`. Near-miss groups also have `similarity`. Duplication stats can have `clone_groups_ignored` and `near_candidates_skipped`. The report leaves out these fields when the value is zero.
 
 ### Similar-code options
 
-`SimilarCodeOptions` adds model-backed discovery fields on top of
+`SimilarCodeOptions` adds these fields for model-based search to
 `AnalysisOptions`:
 
 | Field | Type | Default |
@@ -123,16 +145,17 @@ Each returned clone group includes `spread`. Near-miss groups also include `simi
 | `top` | positive `number` | unset |
 | `files` | `string[]` | unset |
 
-The loader resolves the exact-version `fallow-similar-code` package and
-verifies its native binary before source is read. `detectSimilarCode` never
-downloads the model. After explicit user approval, run
-`fallow similar-code setup --local` once through the CLI. Results remain
-unverified. Read [Semantic similar code](/analysis/similar-code) before using a
-score to plan a refactor.
+Before it reads any source, the loader finds the `fallow-similar-code` package
+of the exact matching version and verifies its native binary.
+`detectSimilarCode` never downloads the model. To get the model, run
+`fallow similar-code setup --local` once through the CLI, after explicit user
+approval. The results are unverified. Read
+[Semantic similar code](/analysis/similar-code) before you use a score to plan
+a refactor.
 
 ### Feature flag options
 
-`FeatureFlagsOptions` adds one field on top of `AnalysisOptions`:
+`FeatureFlagsOptions` adds one field to `AnalysisOptions`:
 
 | Field | Type | Default |
 |:------|:-----|:--------|
@@ -140,23 +163,26 @@ score to plan a refactor.
 
 ### Complexity / health options
 
-`ComplexityOptions` mirrors the `fallow health` flag surface:
+`ComplexityOptions` matches the `fallow health` flags:
 
 | Field | Type | Notes |
 |:------|:-----|:------|
 | `maxCyclomatic`, `maxCognitive` | `number` (0 to 65535) | Per-function thresholds |
 | `maxCrap` | `number` | CRAP score ceiling |
-| `top` | `number` | Truncate rankings |
+| `top` | `number` | Limit the number of ranked entries |
 | `sort` | `"cyclomatic" \| "cognitive" \| "lines" \| "severity"` | Finding sort order (default `cyclomatic`) |
-| `complexity`, `fileScores`, `coverageGaps`, `hotspots`, `targets`, `score` | `boolean` | Enable individual report sections |
+| `complexity`, `fileScores`, `coverageGaps`, `hotspots`, `targets`, `score` | `boolean` | Turn on single report sections |
+| `complexityBreakdown` | `boolean` | Add the `contributions[]` breakdown of decision points to each complexity finding |
+| `css` | `boolean` | Add structural CSS analytics (same as `--css`) |
 | `ownership`, `ownershipEmails` | `boolean` + `"raw" \| "handle" \| "anonymized" \| "hash"` | Ownership-aware hotspots |
 | `effort` | `"low" \| "medium" \| "high"` | Filter refactoring targets |
 | `since`, `minCommits` | `string`, `number` | Git history window for hotspots |
-| `coverage`, `coverageRoot` | `string` | Istanbul coverage file + root |
+| `coverage`, `coverageRoot` | `string` | Istanbul coverage file and its root |
+| `typeAware` | `{ enabled?, projects?, require? }` | Type-aware TypeScript analysis, as in the dead-code options |
 
 ## Structured errors
 
-Rejected promises throw a `FallowNodeError` (a plain `Error` with extra fields) that mirrors the CLI's structured error surface:
+A rejected promise throws a `FallowNodeError`. This is a plain `Error` with extra fields, and it has the same structured errors as the CLI:
 
 ```ts
 import type { FallowNodeError } from '@fallow-cli/fallow-node';
@@ -174,23 +200,37 @@ try {
 }
 ```
 
-The exit-code ladder matches the CLI: `0` ok, `2` generic / validation, `7` network (paid features only), etc.
+The exit codes are the same as in the CLI, for example `0` for success, `2` for a generic or validation error, and `7` for a network error (license and cloud operations).
 
 ## When to use bindings vs the CLI
 
 | Use the bindings | Use the CLI |
 |:-----------------|:-----------|
-| Embedding fallow in a long-running Node process (editor, devserver, CI runner) | One-off invocation from a shell script or GitHub Action |
-| You already have a Node runtime and want to skip subprocess + JSON parse overhead | You want zero runtime dependencies (native binary via `npx fallow`) |
-| You need to call many analyses in sequence without re-initializing | You want CLI human output, progress bars, or interactive flags |
+| You embed fallow in a long-running Node process (editor, devserver, CI runner) | You run fallow once from a shell script or GitHub Action |
+| You already have a Node runtime and want to skip the cost of a subprocess and JSON parsing | You want zero runtime dependencies (native binary via `npx fallow`) |
+| You call many analyses in sequence and do not want to initialize again each time | You want human-readable CLI output, progress bars, or interactive flags |
 | You need typed access to the result envelope in TypeScript | You consume the analysis from Rust, Python, Go, or any non-Node language |
 
-Both paths run the same analysis engine and return the same data. The bindings are not a reduced subset.
+The bindings and the CLI run the same analysis engine and return the same data.
 
 ## Limitations
 
-- The bindings wrap the **one-shot** analyses. Commands that write to the filesystem (`fix`, `init`, `hooks install`, `hooks uninstall`, `audit --save-baseline`, `license activate`, `coverage setup`) are not exposed.
-- `detectSimilarCode` is read-only and never performs its first model download. Use the CLI after explicit approval: `fallow similar-code setup --local`.
-- No baseline or regression support yet. Use the CLI's `--baseline` / `--save-baseline` flags for those workflows.
-- No watch mode. If you want incremental analysis, re-invoke the relevant function; fallow's per-file cache makes repeat runs fast.
-- The API surface is young; breaking changes between minor versions are possible until it stabilizes.
+- The bindings cover the **one-shot** analyses only. They do not include commands that write to the filesystem: `fix`, `init`, `hooks install`, `hooks uninstall`, `--save-baseline`, `license activate`, and `coverage setup`.
+- `detectSimilarCode` is read-only and never does the first model download. For that, run `fallow similar-code setup --local` through the CLI after explicit approval.
+- There is no baseline or regression support yet. For those workflows, use the CLI flags `--baseline` and `--save-baseline`.
+- There is no watch mode. For incremental analysis, call the function again. The fallow per-file cache makes repeat runs fast.
+- The API is new. Until it is stable, a minor version can have breaking changes.
+
+## See also
+
+<CardGroup cols={3}>
+  <Card title="CLI reference" icon="terminal" href="/cli/dead-code">
+    Look up the commands and flags that the bindings mirror.
+  </Card>
+  <Card title="JSON schema" icon="brackets-curly" href="/cli/schema">
+    Read the machine-readable contract of the result envelopes.
+  </Card>
+  <Card title="MCP server" icon="robot" href="/integrations/mcp">
+    Give agents the same analyses as structured tool calls.
+  </Card>
+</CardGroup>

@@ -1,11 +1,11 @@
 ---
 title: "Code duplication"
-description: "Detect copy-pasted code blocks across your TypeScript and JavaScript codebase. Built in to the same binary as dead-code, dependency, complexity, and architecture analysis."
+description: "Find copy-pasted code in your TypeScript and JavaScript codebase and see which copies to extract first. Runs in the same binary and config as dead-code, dependency, complexity, and architecture analysis."
 keywords: ["code duplication", "copy paste", "clone detection", "suffix array", "semantic clones", "refactoring", "dead code", "cross-reference", "clone families"]
 icon: "clone"
 ---
 
-`fallow dupes` finds duplicated code blocks across your entire codebase. jscpd v5 is faster for raw duplication scanning on the current README benchmark fixtures; fallow's advantage is running duplication inside the same audit flow as dead code, dependency, complexity, and architecture checks.
+`fallow dupes` finds duplicated code blocks in your whole codebase and ranks them, so you know which copies to extract first. It runs in the same audit as the dead code, dependency, complexity, and architecture checks. For raw duplication scans, jscpd v5 is faster on the current README benchmark fixtures.
 
 ```bash
 fallow dupes
@@ -13,111 +13,115 @@ fallow dupes
 
 ## Why built-in duplication matters
 
-Most dead-code analysis tools stop at finding unused exports and unreachable files. Fallow goes further: it includes duplication detection in the same binary, using the same module graph. This means you can cross-reference dead code with duplication in a single pass.
+Most dead-code analysis tools find only unused exports and unreachable files. Fallow also detects duplication in the same binary, with the same module graph. You can therefore compare dead code with duplication in one pass.
 
-When you run `fallow dead-code --include-dupes`, fallow identifies code blocks that are both duplicated and unused. These are the highest-value cleanup targets: removing them eliminates dead code and reduces duplication simultaneously.
+`fallow dead-code --include-dupes` finds code blocks that are duplicated and unused. These are the best blocks to clean up first. When you delete one, you remove dead code and duplication in one change.
 
-Running duplication analysis alongside dead-code detection also means:
+One run for duplication and dead code also gives you:
 
-- **One tool, one config, one CI step**: No need to install and configure a separate duplication detector
-- **Shared file discovery**: The same ignore patterns, entry points, and workspace config apply to both analyses
-- **Cross-analysis insights**: Clone families that span unused files are flagged as combined findings
-- **Consistent output formats**: JSON, SARIF, markdown, compact, and CodeClimate output work the same way for duplication as for dead code
+- **One tool, one config, one CI step.** You do not install and configure a separate duplication detector.
+- **Shared file discovery.** The same ignore patterns, entry points, and workspace config apply to both analyses.
+- **Combined findings.** Fallow reports clone families in unused files as combined findings.
+- **The same output formats.** JSON, SARIF, markdown, compact, and CodeClimate output work the same way for duplication and for dead code.
 
 ## Detection modes
 
 <Tabs>
   <Tab title="Strict">
-    Exact token-for-token clones only. No normalization is applied; the code must be character-identical after tokenization.
+    Only exact token-for-token clones. Fallow applies no normalization. The code must be character-identical after tokenization.
 
     ```bash
     fallow dupes --mode strict
     ```
 
-    Best for finding exact copy-paste where nothing was changed.
+    Use it to find exact copies with no changes.
   </Tab>
   <Tab title="Mild (default)">
-    The default mode. Strict and mild modes produce identical results. AST-based tokenization already strips whitespace and comments before comparison.
+    The default mode. Strict and mild modes give identical results, because AST-based tokenization already removes whitespace and comments before the comparison.
 
     ```bash
     fallow dupes --mode mild
     ```
 
-    The recommended starting point for general-purpose detection.
+    Start with this mode for general detection.
   </Tab>
   <Tab title="Weak">
-    Matches clones even when string literal values differ. Variable names must still match.
+    Matches clones also when string literal values differ. Variable names must still match.
 
     ```bash
     fallow dupes --mode weak
     ```
 
-    Good for finding code that was duplicated and only had strings (URLs, messages, labels) changed.
+    Use it to find copied code where only the strings (URLs, messages, labels) changed.
   </Tab>
   <Tab title="Semantic">
-    Catches clones with renamed variables and different literal values. Uses token-type normalization to match structurally equivalent code.
+    Finds clones with renamed variables and different literal values. Token-type normalization matches code with the same structure.
 
     ```bash
     fallow dupes --mode semantic
     ```
 
-    The most aggressive mode. Finds code that was copied and then adapted with new variable names and values.
+    The broadest mode. Finds code that someone copied and then changed with new variable names and values.
   </Tab>
 </Tabs>
 
 <Info>
   `dupes --mode semantic` still compares normalized code structure. To find
-  complete functions that may share intent despite different structure, use
-  the separate, opt-in [`fallow similar-code`](/analysis/similar-code)
-  workflow. Its model-backed results are always unverified and require review.
+  complete functions that can have the same intent with a different structure,
+  use the separate, opt-in [`fallow similar-code`](/analysis/similar-code)
+  workflow. Its model-backed results are always unverified, and you must review them.
 </Info>
 
 ### Near-miss clones
 
-Add `--near` to include function-scoped clones with small structural edits:
+To also report function-scoped clones with small structural edits, add `--near`:
 
 ```bash
 fallow dupes --near
 ```
 
-Near-miss detection uses semantic token normalization and requires at least 80% shingle similarity between every pair in a group. It runs alongside exact clone detection and remains opt-in because it does more work and can surface code that needs human review. Set `duplicates.near` to `true` to enable it by default, or use `fallow.duplication.near` in VS Code.
+Near-miss detection uses semantic token normalization. Every pair in a group must have at least 80% shingle similarity. It runs next to exact clone detection. It is opt-in, because it does more work and can report code that a person must review. To turn it on by default, set `duplicates.near` to `true`, or use `fallow.duplication.near` in VS Code.
 
-Here's what typical output looks like:
+Typical output:
 
 ```bash title="$ fallow dupes"
-● Duplicates (3 clone groups)
+note: module wiring excluded from clone detection (--no-ignore-imports to include it)
 
-     57 lines  2 instances
+● Duplicates (2 clone groups)
+
+     57 lines  2 instances  dup:3f9a1c2e
     src/components/Calendar/CalendarMonth.stories.tsx:597-653
     src/components/Calendar/CalendarYear.stories.tsx:818-874
 
-     42 lines  3 instances
+     42 lines  3 instances  dup:8b41d0a7
     src/features/forecasting/server/procedures/analytics.ts:141-181
     src/features/forecasting/server/procedures/cashflow.ts:153-194
     src/features/forecasting/server/procedures/income.ts:590-631
 
-  Identical code blocks detected via suffix-array analysis, https://docs.fallow.tools/explanations/duplication#clone-groups
+  Duplicate code blocks - https://docs.fallow.tools/explanations/duplication#clone-groups
 
-✓ 27,255 lines (19.4%) duplicated across 398 files (0.23s)
+✗ 27,255 lines (19.4%) duplicated across 398 files (0.23s)
 ```
 
-In semantic mode, fallow also reports renamed identifiers:
+Each group header shows the line count, the instance count, the spread (when it is above 0), and the `dup:` handle of the group.
+
+In semantic mode, fallow also matches copies with renamed identifiers and changed literal values. The output has the same shape. It does not list the renamed identifiers:
 
 ```bash title="$ fallow dupes --mode semantic"
+note: module wiring excluded from clone detection (--no-ignore-imports to include it)
+
 ● Duplicates (2 clone groups)
 
-    196 lines  2 instances
+    196 lines  2 instances  spread 1  dup:c4e07b19
     src/lib/dutch-holidays.ts:193-388
-    src/lib/dutch-holidays.ts:389-584
-    Renamed: holidays2024→holidays2025, year2024→year2025
+    src/lib/dutch-holidays.ts:401-596
 
-     42 lines  3 instances
+     42 lines  3 instances  dup:8b41d0a7
     src/features/forecasting/server/procedures/analytics.ts:141-181
     src/features/forecasting/server/procedures/cashflow.ts:153-194
     src/features/forecasting/server/procedures/income.ts:590-631
-    Renamed: analyticsData→cashflowData→incomeData
 
-  Identical code blocks detected via suffix-array analysis, https://docs.fallow.tools/explanations/duplication#clone-groups
+  Duplicate code blocks - https://docs.fallow.tools/explanations/duplication#clone-groups
 
 ✗ 94,457 lines (67.2%) duplicated across 775 files (3.74s)
 ```
@@ -134,7 +138,7 @@ fallow dupes --skip-local           # Only cross-directory duplicates
 
 ### Minimum occurrences
 
-By default fallow reports every duplicated pair (`minOccurrences: 2`). If you follow the "rule of three" and only want to refactor logic once it appears in three or more places, raise the threshold:
+By default, fallow reports every duplicated pair (`minOccurrences: 2`). If you follow the "rule of three" and refactor logic only when it appears in three or more places, raise the threshold:
 
 ```jsonc
 {
@@ -144,17 +148,17 @@ By default fallow reports every duplicated pair (`minOccurrences: 2`). If you fo
 }
 ```
 
-Values below `2` are rejected, since a single occurrence is not a duplicate. Raising this skips context-sensitive pairs and focuses on widespread copy-paste worth abstracting. The VS Code extension exposes the same control as the `fallow.duplication.minOccurrences` setting.
+Fallow rejects values below `2`, because a single occurrence is not a duplicate. A higher value skips pairs that can depend on context, and keeps the copies that are worth an abstraction. The VS Code extension has the same control as the `fallow.duplication.minOccurrences` setting.
 
 ### Spread-aware ranking
 
-Fallow multiplies duplicated token count by occurrence count, then applies a spread boost. Spread is the maximum directory-tree distance between copies. Copies in the same file use one spread step per 250 lines of separation. The boost is capped at 15%, so larger and more repeated clones remain the main priority.
+Fallow ranks clone groups so the most expensive copies come first. It multiplies the duplicated token count by the occurrence count, then adds a spread boost. Spread is the maximum directory-tree distance between copies. For copies in the same file, each 250 lines between them count as one spread step. The boost is at most 15%, so larger and more repeated clones stay the main priority.
 
-The default report and `--top` use this order. JSON output includes `spread` on every clone group, plus `similarity` for near-miss groups.
+The default report and `--top` use this order. The JSON output has `spread` on every clone group, and `similarity` on near-miss groups.
 
 ### Reviewed clone groups
 
-Use `duplicates.ignoredClones` when a specific clone group is intentional but you want other duplication findings to remain active:
+When a clone group is intentional, add it to `duplicates.ignoredClones`. Fallow still reports all other duplication findings:
 
 ```jsonc
 {
@@ -164,46 +168,52 @@ Use `duplicates.ignoredClones` when a specific clone group is intentional but yo
 }
 ```
 
-Each entry combines the group's `fingerprint` with its instance count. Copy the fingerprint from the human listing or `clone_groups[].fingerprint` in JSON, then append `:<instance_count>`. A token change or a new copy makes the group reportable again. Formatting-only edits keep the same fingerprint.
+Each entry is the `fingerprint` of the group plus its instance count. Copy the fingerprint from the human listing or from `clone_groups[].fingerprint` in JSON, then add `:<instance_count>`. After a token change or a new copy, fallow reports the group again. An edit that changes only formatting keeps the same fingerprint.
 
-JSON output sets `stats.clone_groups_ignored` when reviewed groups are hidden. Near-miss runs set `stats.near_candidates_skipped` if bounded-work limits skip candidate comparisons, which means the near-miss result may be incomplete.
+When fallow hides reviewed groups, the JSON output sets `stats.clone_groups_ignored`. When work limits skip candidate comparisons in a near-miss run, fallow sets `stats.near_candidates_skipped`. The near-miss result can then be incomplete.
 
 #### Migrating collision handles
 
-Ordinary `dup:<8hex>` handles and widened `dup:<16hex>` handles are unchanged. When groups share a full content fingerprint, their handles use `dup:<16hex>-rN`. These collision handles stay the same when an identical report is produced from another checkout location, but can change when the colliding groups change.
+Ordinary `dup:<8hex>` handles and widened `dup:<16hex>` handles do not change. When groups have the same full content fingerprint, their handles use `dup:<16hex>-rN`. A collision handle stays the same when you produce an identical report from another checkout location. It can change when the colliding groups change.
 
-Older numeric collision handles such as `dup:<16hex>-1` still load in `ignoredClones`, but no longer hide or select a group. A baseline containing those handles also lets the affected findings reappear. Run `fallow dupes` again, review each affected group, then copy its reported handle into your configuration or refresh the baseline. Do not mechanically replace `-1` with `-r1`: the ordinal can refer to a different group.
+Older numeric collision handles such as `dup:<16hex>-1` still load in `ignoredClones`, but they no longer hide or select a group. With a baseline that has these handles, the affected findings also appear again. To migrate:
 
-Upgrade every runner that reads a shared configuration before adding `-rN` keys to `ignoredClones`. Older binaries reject that syntax.
+1. Run `fallow dupes` again.
+2. Review each affected group.
+3. Copy its reported handle into your configuration, or refresh the baseline.
+
+Do not replace `-1` with `-r1` without a review. The number can point to a different group.
+
+Before you add `-rN` keys to `ignoredClones`, upgrade every runner that reads a shared configuration. Older binaries reject that syntax.
 
 ## Clone families
 
-Clone groups sharing the same file set are grouped into **clone families** with refactoring suggestions:
+Fallow puts clone groups with the same set of files into a **clone family** and suggests a refactoring:
 
-- **Extract function**: clones are in the same file
-- **Extract module**: clones span multiple files
+- **Extract function**: the clones are in the same file.
+- **Extract module**: the clones are in more than one file.
 
 ## Cross-language detection
 
-Compare TypeScript and JavaScript files by stripping type annotations:
+To compare TypeScript and JavaScript files, pass `--cross-language`. Fallow removes type annotations before it compares:
 
 ```bash
 fallow dupes --cross-language
 ```
 
-Fallow normalizes `.ts` files to their `.js` equivalent for comparison. This catches clones where one copy was converted from TypeScript to JavaScript or vice versa.
+Fallow converts `.ts` files to their `.js` equivalent for the comparison. This finds clones where someone converted one copy from TypeScript to JavaScript, or the reverse.
 
 ## Ignoring imports
 
-Files with the same module wiring are a structural property of well-formatted code, not copy-paste, so that wiring is stripped from the token stream by default. This covers ES imports, re-export declarations, and top-level static `require()` binding declarations.
+Two files with the same imports are not copy-paste. By default, fallow removes this module wiring from the token stream. This covers ES imports, re-export declarations, and top-level static `require()` binding declarations.
 
-To count module wiring as clone candidates again, opt out on the command line:
+To count module wiring as clone candidates again, use the command-line flag:
 
 ```bash
 fallow dupes --no-ignore-imports
 ```
 
-Or set it permanently in config:
+Or set it in the config:
 
 ```jsonc
 {
@@ -213,21 +223,28 @@ Or set it permanently in config:
 }
 ```
 
-Runtime code, local exports, side-effect `require()` calls, nested `require()` calls, dynamic require arguments, and mixed declarations are still counted.
+Fallow still counts these:
+
+- runtime code
+- local exports
+- side-effect `require()` calls
+- nested `require()` calls
+- dynamic require arguments
+- mixed declarations
 
 ## Incremental analysis
 
-Only check duplication in files changed since a git ref:
+To check duplication only in the files that changed since a git ref, pass `--changed-since`:
 
 ```bash
 fallow dupes --changed-since main
 ```
 
-Useful in CI to only report new duplication introduced in a pull request.
+In CI, this reports only the duplication that a pull request adds.
 
 ## Baseline comparison
 
-Adopt duplication limits incrementally:
+To add duplication limits to an existing codebase, save the current duplication as a baseline. Fallow then fails only on new duplication:
 
 ```bash
 # Save current duplication as baseline
@@ -239,7 +256,7 @@ fallow dupes --baseline fallow-baselines/dupes.json
 
 ## Debugging
 
-Trace all clones of a specific code location:
+To see all clones of one code location, trace it:
 
 ```bash
 fallow dupes --trace src/utils.ts:42
@@ -247,9 +264,9 @@ fallow dupes --trace src/utils.ts:42
 
 ## Benchmarks vs jscpd
 
-Cold runs (no cache) so each tool works from scratch. Fastest tool per row in bold.
+All runs are cold (no cache), so each tool starts from zero. Bold marks the fastest tool per row.
 
-| Project | Files | fallow | jscpd | Faster |
+| Project | Files | Fallow | jscpd | Faster |
 |:--------|------:|-------:|------:|-------:|
 | [astro](https://github.com/withastro/astro) | 2,859 | 549ms | **189ms** | jscpd 2.9x |
 | [fastify](https://github.com/fastify/fastify) | 286 | 90ms | **64ms** | jscpd 1.4x |
@@ -262,9 +279,9 @@ Cold runs (no cache) so each tool works from scratch. Fastest tool per row in bo
 | [vue/core](https://github.com/vuejs/core) | 522 | 109ms | **78ms** | jscpd 1.4x |
 | [zod](https://github.com/colinhacks/zod) | 174 | 54ms | **53ms** | jscpd 1.0x |
 
-jscpd's Rust rewrite (v5) is faster than fallow for raw duplication scanning across these projects. Fallow's advantage is running duplication inside the same single audit pass as dead code, dependency, complexity, CSS, framework, and security checks, not raw scan speed.
+The Rust rewrite of jscpd (v5) is faster than fallow for raw duplication scans on these projects. Fallow runs duplication in the same audit pass as the dead code, dependency, complexity, CSS, framework, and security checks.
 
-Fallow uses a <Tooltip tip="A sorted array of all suffixes of a string, enabling efficient pattern matching without pairwise comparison">suffix array</Tooltip> with <Tooltip tip="Longest Common Prefix array, used alongside suffix arrays to find the longest shared sequences between code blocks">LCP</Tooltip> for clone detection, avoiding quadratic pairwise comparison.
+Fallow finds clones with a <Tooltip tip="A sorted array of all suffixes of a string. It finds patterns without a comparison of each pair.">suffix array</Tooltip> and an <Tooltip tip="Longest Common Prefix array. With a suffix array, it finds the longest shared sequences between code blocks.">LCP</Tooltip> array. This avoids a quadratic comparison of each pair.
 
 ## See also
 
@@ -276,6 +293,6 @@ Fallow uses a <Tooltip tip="A sorted array of all suffixes of a string, enabling
     Set default duplication thresholds and modes in your config file.
   </Card>
   <Card title="Semantic similar code" icon="code-compare" href="/analysis/similar-code">
-    Find differently written functions that may share intent.
+    Find functions that are written differently and can have the same intent.
   </Card>
 </CardGroup>

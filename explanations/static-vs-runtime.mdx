@@ -1,70 +1,71 @@
 ---
 title: "Static vs runtime intelligence"
-description: "Static analysis answers 'what is connected to what?'. Runtime intelligence answers 'what actually ran?'. Both are necessary, neither replaces the other, and they meet in fallow health."
+description: "Know which fallow findings you can act on from the source alone and which need production evidence. Static analysis shows what is connected, runtime intelligence shows what actually ran, and fallow health combines both."
 keywords: ["static analysis", "runtime intelligence", "runtime coverage", "codebase intelligence", "hot paths", "cold paths", "dead code", "health"]
 icon: "layer-group"
 ---
 
-Fallow answers two different questions about your codebase. Static analysis answers "what is connected to what?". Runtime intelligence answers "what actually ran?". Both are necessary. Neither replaces the other.
+Use this page to decide when static analysis is enough and when you need runtime data. Fallow answers two questions about your codebase:
 
-This page explains where each layer stops, what the other layer adds, and why `fallow health` is where they converge.
+- Static analysis answers "what is connected to what?".
+- Runtime intelligence answers "what actually ran?".
+
+You need both. One layer does not replace the other, and `fallow health` combines them.
 
 ## What static intelligence sees
 
-Static analysis builds a module graph from your source. Every file, every import, every export, every re-export chain, every dynamic `import()` it can resolve. From that graph, Fallow derives:
+Static analysis builds a module graph from your source. The graph has every file, import, export, and re-export chain, plus each dynamic `import()` that fallow can resolve. From that graph, fallow finds:
 
-- **Reachability.** Which files are reachable from an entry point and which are not.
-- **Exports with zero importers.** A public API surface that nothing consumes.
-- **Import cycles.** Tight cycles and long ones, without a depth cap.
-- **Duplicated blocks.** Structural clones across modules, including clones with renamed identifiers.
-- **Complexity hotspots.** Per-function cyclomatic and cognitive complexity, maintainability scores, churn correlation.
-- **Architecture boundaries.** Layered, hexagonal, feature-sliced, or custom zones, with re-export chain tracking.
-- **Feature flag definitions.** Where flags are declared, where they're branched on, which branches exist.
+- **Reachability.** Which files are reachable from an entry point, and which are not.
+- **Exports with zero importers.** Public API that no file uses.
+- **Import cycles.** Short and long cycles, with no depth cap.
+- **Duplicated blocks.** Structural clones across modules, also clones with renamed identifiers.
+- **Complexity hotspots.** Cyclomatic and cognitive complexity per function, maintainability scores, and correlation with churn.
+- **Architecture boundaries.** Layered, hexagonal, feature-sliced, or custom zones. Fallow follows re-export chains across zones.
+- **Feature flag definitions.** Where you declare flags, where the code branches on them, and which branches exist.
 
-Concrete examples of what static analysis flags with confidence:
+Static analysis reports these examples with confidence:
 
 - An `export function computeTax` that no file imports, directly or through a barrel.
-- A file at `src/server/jobs/worker.ts` that isn't reached from any entry point, script, or test.
+- A file at `src/server/jobs/worker.ts` that no entry point, script, or test reaches.
 - A tight cycle: `a.ts -> b.ts -> c.ts -> a.ts`.
-- A 60-LOC function with cyclomatic 28 and cognitive 34, colocated with a file that has churned 40 times in the last 90 days.
+- A 60-LOC function with cyclomatic 28 and cognitive 34, in a file that changed 40 times in the last 90 days.
 
-All of that is deterministic. Every finding traces back to a path through the graph.
+These results are deterministic. You can trace each finding back to a path through the graph.
 
 ## What static intelligence cannot see
 
-The graph is a model of the code, not a recording of the program. Some things live below the model:
+The graph is a model of the code. It is not a recording of what the program did. Static analysis cannot see:
 
-- **Dynamic dispatch.** Handlers registered by string key, plugins loaded from an array, methods resolved via `obj[name]()`.
+- **Dynamic dispatch.** Handlers registered by string key, plugins loaded from an array, and methods called through `obj[name]()`.
 - **Conditional imports.** `if (process.env.FOO) { await import("./bar") }` may or may not execute in production.
-- **Feature flag branches.** Static sees both branches. It cannot tell you which branch users actually hit this month.
-- **Traffic-weighted importance.** A 5-line helper called 200 million times a day and a 5-line helper called once at startup look identical in the graph.
-- **Reachable but unused.** A function that is imported and could run, but hasn't been called in 30 days.
+- **Feature flag branches.** Static analysis sees both branches. It cannot tell you which branch users hit this month.
+- **Traffic-weighted importance.** In the graph, a 5-line helper called 200 million times a day looks the same as a 5-line helper called once at startup.
+- **Reachable but unused code.** A function that is imported and could run, but had no calls in 30 days.
 
-Static reachability says "this could run". It does not say "this did run".
+Static reachability tells you that code could run. It does not tell you that the code did run.
 
 ## What runtime intelligence adds
 
-Runtime intelligence is the evidence layer. It records which code actually executed, then merges that evidence back into the same analyses you already run:
+Runtime intelligence adds evidence. It records which code executed, then merges that evidence into the analyses you already run:
 
-- **Hot functions.** The functions that carry production traffic. Changes there deserve extra review.
-- **Cold functions.** Reachable in the graph, silent in reality. High-confidence candidates for removal.
-- **Flag branches observed vs. not observed.** Concrete evidence that a flag is stale, not a guess.
-- **Runtime-weighted health.** Complexity alone is a signal, complexity on a hot path is an alarm.
+- **Hot functions.** The functions that handle production traffic. A change there needs extra review.
+- **Cold functions.** Reachable in the graph, but with no calls in production. These are high-confidence candidates for removal.
+- **Flag branches observed vs. not observed.** Evidence that a flag is stale, instead of a guess.
+- **Runtime-weighted health.** High complexity is a signal. High complexity on a hot path is an alarm.
 
-Runtime coverage is the collection mechanism. Runtime intelligence is what you get from it. The CLI surfaces everything through a single flag: `fallow health --runtime-coverage ./.fallow/runtime.json`. See the [runtime coverage analysis page](/analysis/runtime-coverage) for the collection setup.
+Runtime coverage collects the data. Runtime intelligence is the result you get from that data. You pass it to the CLI with one flag: `fallow health --runtime-coverage ./.fallow/runtime.json`. To set up collection, see the [runtime coverage analysis page](/analysis/runtime-coverage).
 
 ## Where they meet: fallow health
 
-`fallow health` is the surface where static findings and runtime evidence merge into a single verdict.
+`fallow health` merges static findings and runtime evidence into one result. Examples:
 
-Examples:
-
-- A file with cyclomatic complexity 24, dead code ratio 0.7, and zero runtime hits over 30 days. Static alone would call it complex and partly unused. Runtime alone would call it cold. Together, Fallow calls it a confident deletion candidate.
-- A function that just dropped from cognitive 12 to cognitive 26 in this PR, sitting on a hot path with 40M calls a day. Static alone would flag the complexity bump. Runtime adds the review escalation.
-- A feature flag with both branches statically defined, where only the `true` branch has been observed in 60 days. Static alone would see two branches. Runtime retires the other one.
+- A file has cyclomatic complexity 24, a dead code ratio of 0.7, and zero runtime hits over 30 days. Static analysis alone calls it complex and partly unused. Runtime data alone calls it cold. With both, fallow calls it a confident deletion candidate.
+- In this PR, a function went from cognitive 12 to cognitive 26. It is on a hot path with 40M calls a day. Static analysis alone flags the complexity increase. Runtime data raises the priority of the review.
+- A feature flag has two branches in the source, and fallow observed only the `true` branch in 60 days. Static analysis alone sees two branches. Runtime data shows that you can remove the other branch.
 
 <Info>
-  Runtime evidence never overrides static findings, it refines them. A function with zero runtime hits is still only a candidate if static says it's reachable. An unreferenced export is already dead; runtime cannot make it deader.
+  Runtime evidence refines static findings. It never overrides them. A function with zero runtime hits is only a candidate when static analysis says it is reachable. An unreferenced export is already dead, and runtime data does not change that.
 </Info>
 
 ## Mental model
@@ -83,8 +84,30 @@ Examples:
 
 ## Free vs paid layer
 
-Static intelligence is free and open source (MIT). You can run every static analysis on any project, today, with `npx fallow`. Runtime intelligence is the paid team layer, and `runtime coverage` is the collection engine that feeds it. Pricing, tiers, and what's included at each level live at [fallow.tools/pricing](https://fallow.tools/pricing).
+Static intelligence is free and open source (MIT). You can run every static analysis on any project with `npx fallow`, with no license.
+
+Runtime intelligence is the paid part of fallow. Runtime coverage is the feature that collects it. These rules apply:
+
+- A single local capture is free and needs no license.
+- Continuous or multi-capture monitoring needs a license. A 30-day trial is available.
+- Runtime data from fallow cloud needs a `FALLOW_API_KEY` for an organization on the Team tier. It does not use the local license.
+
+To start a trial or activate a license, see [fallow license](/cli/license). For pricing and tiers, see [fallow.tools/pricing](https://fallow.tools/pricing).
 
 <Tip>
-  Start with static. It's free and already cleans up most dead code a typical codebase accumulates. Add runtime once you care about hot-path review, runtime-weighted health, or deletion confidence backed by production evidence.
+  Start with static analysis. It is free, and it already finds most of the dead code in a typical codebase. Add runtime data when you want hot-path review, runtime-weighted health, or deletion confidence from production evidence.
 </Tip>
+
+## See also
+
+<CardGroup cols={3}>
+  <Card title="Runtime coverage" icon="gauge" href="/analysis/runtime-coverage">
+    Set up collection and merge production data into fallow health.
+  </Card>
+  <Card title="Health explained" icon="heart-pulse" href="/explanations/health">
+    How fallow computes the health score, hotspots, and refactor targets.
+  </Card>
+  <Card title="Dead code explained" icon="skull-crossbones" href="/explanations/dead-code">
+    What each dead-code issue type means and when to act.
+  </Card>
+</CardGroup>

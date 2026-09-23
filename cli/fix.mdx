@@ -1,14 +1,14 @@
 ---
 title: "fallow fix"
-description: "CLI reference for fallow fix. Automatically remove unused exports and dependencies from source files with dry-run preview and JSON output."
+description: "Remove unused exports and dependencies without editing each file by hand. Fallow fix edits your source files in place, with a dry-run preview and JSON output."
 keywords: ["fallow fix", "auto-fix", "CLI", "remove unused exports", "remove unused dependencies", "dry run"]
 icon: "terminal"
 ---
 
-Automatically remove unused exports and dependencies from your codebase. Fallow modifies your source files in place, so treat this like a refactoring tool.
+`fallow fix` removes unused exports and dependencies for you, so you do not clean them up by hand. Fallow edits your source files in place, so use it as you would use a refactoring tool.
 
 <Warning>
-  Always commit your changes before running `fallow fix`. This gives you a clean rollback point if anything unexpected happens.
+  Always commit your changes before you run `fallow fix`. Then you can roll back if a change is wrong.
 </Warning>
 
 ```bash
@@ -19,38 +19,59 @@ fallow fix
 
 | Flag | Description |
 |:-----|:------------|
-| `--dry-run` | Preview changes without applying |
-| `--yes, --force` | Skip confirmation (required in non-TTY) |
+| `--dry-run` | Show the changes without applying them |
+| `--yes, --force` | Skip the confirmation prompt (required in non-TTY) |
 | `--no-create-config` | Refuse to create a new `.fallowrc.json` when none exists. See [Missing config file](#missing-config-file). |
+| `[PATH]` | Fix only the findings in this file or directory. Fallow still builds the full project graph. Default: the whole project. |
 | `-f, --format <FORMAT>` | Output format: `human` (default), `json` |
 
 ## What gets fixed
 
-- **Unused exports**: the `export` keyword is removed, keeping the declaration. For exported enums where the enum itself is never referenced outside its body in the file, the entire `enum` block is deleted.
-- **Unused dependencies**: removed from `package.json` when they are not imported by another workspace
-- **Unused enum members**: removed from the enum declaration. When every member of an exported enum is unused, the whole declaration is deleted in one pass instead of leaving behind an empty `export enum X {}` shell. Importers in other files then reference a name that no longer exists, so run your TypeScript build to find and clean them up.
-- **Unused pnpm catalog entries**: removed from `pnpm-workspace.yaml`. See [Catalog entries](#catalog-entries).
-- **Duplicate exports**: an `ignoreExports` rule is appended to your fallow config file. Common in shadcn / Radix / bits-ui namespace-barrel codebases where dozens of `components/<name>/index.ts` files intentionally re-export the same short names. When no fallow config file exists, one is created; see [Missing config file](#missing-config-file).
+| Issue | What `fallow fix` does |
+|:------|:-----------------------|
+| Unused exports | Removes the `export` keyword and keeps the declaration. For an exported enum that the file never references outside the enum body, it deletes the whole `enum` block. |
+| Unused dependencies | Removes the dependency from `package.json` when no other workspace imports it. |
+| Unused enum members | Removes the member from the enum declaration. When all members of an exported enum are unused, it deletes the whole declaration in one pass, so no empty `export enum X {}` stays behind. Importers in other files then use a name that no longer exists. Run your TypeScript build to find and fix them. |
+| Unused class methods | Removes the method only when a type-aware run (`--type-aware` or `typeAware.enabled`) finds no reference to it in the program. Other class members stay. See [Incomplete source evidence](#incomplete-source-evidence). |
+| Unused pnpm catalog entries | Removes the entry from `pnpm-workspace.yaml`. See [Catalog entries](#catalog-entries). |
+| Duplicate exports | Adds an `ignoreExports` rule to your fallow config file. This is common in shadcn, Radix, and bits-ui codebases with namespace barrels, where many `components/<name>/index.ts` files re-export the same short names on purpose. When no fallow config file exists, `fallow fix` creates one. See [Missing config file](#missing-config-file). |
 
-Unused files and class members are not auto-fixed. Use `fallow dead-code` to find those.
+`fallow fix` does not fix unused files. Without type-aware analysis, it does not fix unused class members. Use `fallow dead-code` to find them.
 
 ## Catalog entries
 
-Catalog entries are removed from `pnpm-workspace.yaml` by line-aware deletion. Object-form entries such as `react:\n  specifier: ^18.2.0` are removed as one block. When the last entry of a catalog group is removed, the header is rewritten to `catalog: {}` (or `<name>: {}`) so the file stays installable; bare `catalog:` with no value parses as null and pnpm errors at install time. Other comments and stylistic choices in the file are preserved. After a successful catalog edit fallow reminds you to run `pnpm install` so `pnpm-lock.yaml` stays in sync.
+Fallow deletes catalog entries from `pnpm-workspace.yaml` line by line and keeps the rest of the file intact.
 
-By default, fallow also removes a contiguous YAML comment block immediately above the entry when it clearly belongs to that entry; configure this with [`fix.catalog.deletePrecedingComments`](/configuration/overview) (`"auto"`, `"always"`, or `"never"`). Two escape hatches keep curated comments safe regardless of policy: a `# fallow-keep` marker on any line in the block preserves it (mirrors the inline-suppression convention), and the `auto` policy additionally preserves section-banner blocks whose comment body starts with three or more `=`, `-`, `*`, `_`, `~`, `+`, or `#` characters (e.g. `# === React 18 production pins ===`). The human-mode summary appends `(+M catalog comment lines)` to the fixed-issue count when at least one comment line was absorbed.
+- Fallow removes an object-form entry, such as `react:\n  specifier: ^18.2.0`, as one block.
+- When fallow removes the last entry of a catalog group, it rewrites the header to `catalog: {}` (or `<name>: {}`). This keeps the file installable: a bare `catalog:` with no value parses as null, and pnpm then fails at install time.
+- Fallow keeps the other comments and the formatting of the file.
+- After a catalog edit, fallow reminds you to run `pnpm install`, so `pnpm-lock.yaml` stays in sync.
 
-Entries whose `hardcoded_consumers` is non-empty (a workspace package still pins a hardcoded version of the same package) are skipped to avoid breaking the next `pnpm install`; the skip is surfaced on stderr and in the JSON output (`{"type": "remove_catalog_entry", "applied": false, "skipped": true, "skip_reason": "hardcoded_consumers", "consumers": [...]}`). The JSON action carries both `line` (first deleted line, the leading comment when policy absorbs one) and `entry_line` (the catalog entry's original 1-based line) so CI annotators can pick whichever anchor they need. The JSON envelope carries a top-level `"skipped"` count alongside `"total_fixed"` for partial-fix gating in CI.
+By default, fallow also removes a contiguous YAML comment block directly above the entry when the block clearly belongs to that entry. To change this, set [`fix.catalog.deletePrecedingComments`](/configuration/overview) to `"auto"`, `"always"`, or `"never"`. Two exceptions keep your comments safe:
+
+- A `# fallow-keep` marker on any line in the block keeps the block, for all policies. This is the same convention as inline suppression.
+- The `auto` policy also keeps section-banner blocks. These are comments whose body starts with three or more `=`, `-`, `*`, `_`, `~`, `+`, or `#` characters (for example, `# === React 18 production pins ===`).
+
+When fallow removes at least one comment line, the human summary adds `(+M catalog comment lines)` to the count of fixed issues.
+
+Fallow skips entries with a non-empty `hardcoded_consumers`, so the next `pnpm install` does not break. In that case, a workspace package still pins a hardcoded version of the same package. Fallow reports the skip on stderr and in the JSON output (`{"type": "remove_catalog_entry", "applied": false, "skipped": true, "skip_reason": "hardcoded_consumers", "consumers": [...]}`).
+
+The JSON action has two line fields, so CI annotators can pick the anchor they need:
+
+- `line` is the first deleted line. When the policy removes a leading comment, this is the comment line.
+- `entry_line` is the original 1-based line of the catalog entry.
+
+The JSON envelope has a top-level `"skipped"` count next to `"total_fixed"`. CI can use it to gate on partial fixes.
 
 ## Missing config file
 
-When `fallow fix` finds duplicate-export issues and no fallow config exists, it creates `.fallowrc.json` automatically, scaffolded the same way as `fallow init` (framework and test-runner detection, `$schema`, `entry`, `ignorePatterns`) with the `ignoreExports` rules layered on top, so the post-fix `fallow dead-code` does not start surfacing new findings. The created file is reported on stderr:
+When `fallow fix` finds duplicate-export issues and no fallow config exists, it creates `.fallowrc.json`. The next `fallow dead-code` run then does not show new findings. Fallow builds the file the same way as `fallow init` (framework and test-runner detection, `$schema`, `entry`, `ignorePatterns`) and adds the `ignoreExports` rules. Fallow reports the new file on stderr:
 
 ```text
 Created .fallowrc.json with 2 ignoreExports rule(s). Add it to git.
 ```
 
-In monorepo subpackages (one of `pnpm-workspace.yaml`, `package.json#workspaces`, `turbo.json`, `lerna.json`, `rush.json` above the invocation directory), the create-fallback refuses to avoid fragmenting one config file across N sub-packages. Instead it emits a directive pointing at the workspace root:
+In a monorepo subpackage, `fallow fix` does not create a config file, so your config does not split across N sub-packages. Fallow treats a directory as a subpackage when one of `pnpm-workspace.yaml`, `package.json#workspaces`, `turbo.json`, `lerna.json`, or `rush.json` is above it. Instead, fallow tells you to use the workspace root:
 
 ```text
 Skipped duplicate-export config fix: no fallow config file at packages/ui and the
@@ -58,7 +79,7 @@ directory is inside a monorepo (workspace root: /repo). Run `fallow init` at the
 workspace root, or invoke `fallow fix` from /repo instead of from a subpackage.
 ```
 
-For pre-commit hooks, CI bots, and `fallow watch` where silently materialising a new top-level file would surprise the user, pass `--no-create-config`:
+In pre-commit hooks, CI bots, and `fallow watch`, a new top-level file can be a surprise. To prevent it, pass `--no-create-config`:
 
 ```bash
 # Pre-commit hook
@@ -68,49 +89,63 @@ fallow fix --yes --no-create-config
 fallow fix --yes --no-create-config --format json
 ```
 
-The duplicate-export config-add path is skipped with an explanatory message; source-file edits (unused exports, dependencies, enum members, catalog entries) proceed normally.
+Fallow then skips the config change for duplicate exports and prints a message that tells you why. The source-file edits (unused exports, dependencies, enum members, catalog entries) run as usual.
 
 ## On-disk drift protection
 
-If a parallel editor save, CI rebase, or other tool changes a source file between analysis and the write, `fallow fix` skips that file instead of applying stale line offsets. The skip is reported on stderr (`Skipping <path>: file content changed since fallow dead-code ran. Re-run fallow fix to refresh the analysis first.`) and in the JSON output (`{"type": "skipped", "path": "...", "skipped": true, "skip_reason": "content_changed"}`). A run with any content-changed skip exits with code 2 so CI does not treat the partial run as a clean no-op. The JSON envelope's top-level `skipped_content_changed: number` (always present) carries the count separately from `skipped` (which tallies catalog / YAML guard skips only).
+A source file can change between the analysis and the write, for example from an editor save, a CI rebase, or another tool. `fallow fix` then skips that file, so it does not apply out-of-date line offsets. Fallow reports the skip on stderr (`Skipping <path>: file content changed since fallow dead-code ran. Re-run fallow fix to refresh the analysis first.`) and in the JSON output (`{"type": "skipped", "path": "...", "skipped": true, "skip_reason": "content_changed"}`).
 
-Each per-file rewrite is staged into a sibling temp file, and every stage is promoted to its final path only after all stages succeed. A stage failure (read-only directory, full disk) leaves every target file at its original content. A rename failure mid-batch (rare; the per-file rename is atomic but POSIX has no atomic multi-rename primitive) reports per-path, so a re-run is safe. `package.json` and `pnpm-workspace.yaml` are re-read at fix time instead, so a dependency or catalog entry that has already disappeared is a no-op.
+A run with a content-changed skip exits with code 2, so CI does not treat the partial run as a clean no-op. The JSON envelope always has a top-level `skipped_content_changed: number` with the count. This count is separate from `skipped`, which counts only the catalog and YAML guard skips.
+
+Fallow writes each file change to a temporary file next to the target first. It moves the temporary files to their final paths only after all of them are written.
+
+- If a write fails (read-only directory, full disk), all target files keep their original content.
+- If a rename fails in the middle of the batch, fallow reports it per path, so you can safely run `fallow fix` again. This is rare: each rename is atomic, but POSIX cannot rename many files atomically.
+- Fallow reads `package.json` and `pnpm-workspace.yaml` again at fix time. If a dependency or catalog entry is already gone, nothing happens.
 
 ## Low-confidence export removals
 
-Removing an `export` keyword is only safe when fallow can see every consumer of that symbol. Some consumers are invisible to static analysis: Vitest mock aliases (`test.alias` pointing at a `__mocks__` file), off-workspace end-to-end suites that import shared helpers, and fixture or golden harnesses wired up by a build step. Stripping an export that one of these actually uses turns an analysis false positive into a `tsc` error and a broken build.
+It is safe to remove an `export` keyword only when fallow can see every consumer of that symbol. Static analysis cannot see some consumers:
 
-`fallow fix` therefore withholds export removals in two low-confidence cases:
+- Vitest mock aliases (`test.alias` that points at a `__mocks__` file)
+- end-to-end suites outside the workspace that import shared helpers
+- fixture or golden harnesses that a build step connects
 
-- **Off-graph consumer directories.** The file sits under any of `__mocks__`, `__fixtures__`, `fixtures`, `e2e`, `e2e-tests`, `cypress`, `playwright`, `examples`, `evals`, or `golden` (matched on any path segment). Plain test directories (`test`, `tests`, `__tests__`) are intentionally not on the list, because genuinely-dead test helpers are common and should still auto-remove.
-- **Files with an unresolved import.** The file itself imports something fallow could not resolve, so its local usage graph is incomplete and the "this export is unused" conclusion is lower confidence.
+If fallow removes an export that one of these uses, a false positive becomes a `tsc` error and a broken build. For this reason, `fallow fix` does not remove exports in two low-confidence cases:
 
-In both cases the per-file entry is emitted as `{"type": "skipped", "path": "...", "skipped": true, "skip_reason": "low_confidence_off_graph"}` (or `"low_confidence_unresolved_imports"`), and the JSON envelope's top-level `skipped_low_confidence_exports: number` (always present) carries the combined count, disjoint from `skipped`. Unlike the drift and encoding skips, this is an intentional, conservative decision rather than a recoverable failure: it does **not** change the exit code. The export is still reported by `fallow dead-code`, so you can confirm it is truly unused and remove it by hand. High-confidence exports in normal source files are removed.
+- **Off-graph consumer directories.** The file is under one of `__mocks__`, `__fixtures__`, `fixtures`, `e2e`, `e2e-tests`, `cypress`, `playwright`, `examples`, `evals`, or `golden` (matched on any path segment). Plain test directories (`test`, `tests`, `__tests__`) are not on the list on purpose. Dead test helpers are common, and `fallow fix` still removes them.
+- **Files with an unresolved import.** The file imports something that fallow could not resolve. Its local usage graph is incomplete, so fallow is less sure that the export is unused.
+
+In both cases, fallow writes the per-file entry as `{"type": "skipped", "path": "...", "skipped": true, "skip_reason": "low_confidence_off_graph"}` (or `"low_confidence_unresolved_imports"`). The JSON envelope always has a top-level `skipped_low_confidence_exports: number` with the combined count, separate from `skipped`.
+
+This skip does **not** change the exit code. The drift and encoding skips are recoverable failures, but this skip is a deliberate, conservative choice. `fallow dead-code` still reports the export, so you can confirm that it is unused and remove it by hand. Fallow still removes high-confidence exports in normal source files.
 
 ## Incomplete source evidence
 
-Findings with nonempty `reachability_caveats` remain reported, but their removals are not applied automatically. This includes missing references caused by parse errors, unreadable files, and skipped source files. `workspace_diagnostics` identifies the source of the incomplete evidence. Type-aware approval of a class method does not override this guard.
+Fallow still reports findings with nonempty `reachability_caveats`, but `fallow fix` does not remove them. A caveat can come from a parse error, an unreadable file, or a skipped source file, because each of these can hide a reference. `workspace_diagnostics` shows where the incomplete evidence comes from. Type-aware approval of a class method does not override this guard.
 
-The fix entry has `skipped: true` and `skip_reason: "low_confidence_incomplete_analysis"`. The JSON envelope reports separate counters for `skipped_low_confidence_exports`, `skipped_low_confidence_dependencies`, and `skipped_low_confidence_members`. They are distinct from the general `skipped` counter. These evidence-based skips do not change the exit code; inspect them even when the command succeeds.
+The fix entry has `skipped: true` and `skip_reason: "low_confidence_incomplete_analysis"`. The JSON envelope has separate counters for `skipped_low_confidence_exports`, `skipped_low_confidence_dependencies`, and `skipped_low_confidence_members`. They are separate from the general `skipped` counter. These skips do not change the exit code, so check them even when the command succeeds.
 
 ## File encoding contract
 
-`fallow fix` is UTF-8 only. Two encoding shapes are handled explicitly:
+`fallow fix` supports UTF-8 only. It handles two encoding cases explicitly:
 
-- **UTF-8 BOM round-trip.** Files with a leading UTF-8 byte-order mark (`EF BB BF`, common on Windows-authored TypeScript when Notepad / older VS settings or some IDE plugins are involved) are read with the BOM stripped before line-offset computation and parsing, so reported line numbers do not shift by the BOM codepoint, and the BOM is re-prepended on write so the file's encoding is preserved on round-trip. fallow neither adds nor removes a BOM; if your input has one, the output has one.
+- **UTF-8 BOM round-trip.** Some files start with a UTF-8 byte-order mark (`EF BB BF`). This is common in TypeScript written on Windows with Notepad, older VS settings, or some IDE plugins. Fallow removes the BOM before it parses the file and computes line offsets, so the reported line numbers do not shift. On write, fallow puts the BOM back, so the file keeps its encoding. Fallow never adds or removes a BOM: if your input has one, the output has one.
 
-- **Mixed CRLF / LF rejection.** Files containing both `\r\n` and bare-LF line endings (common after cross-platform edits without `core.autocrlf`) are skipped instead of silently rewritten to the wrong offsets. The stderr message names the remediation:
+- **Mixed CRLF / LF rejection.** Some files contain both `\r\n` and bare-LF line endings. This is common after cross-platform edits without `core.autocrlf`. Fallow skips these files, so it does not write changes at the wrong offsets. The stderr message tells you how to fix the file:
 
   ```text
   Skipping src/mixed.ts: file has mixed CRLF/LF line endings.
   Normalize with `dos2unix` or set `git config core.autocrlf input`, then re-run `fallow fix`.
   ```
 
-  The JSON envelope carries a per-file entry (`{"type": "skipped", "path": "...", "skipped": true, "skip_reason": "mixed_line_endings"}`) and a top-level counter `skipped_mixed_line_endings: number` (always present) disjoint from `skipped_content_changed`. Any non-zero mixed-EOL count exits the run with code 2. **The skip is not self-healing**: re-running `fallow fix` against the same file produces the same skip; you (or your CI / AI agent) must normalize the file's line endings before fallow can act on it. When the same file carries findings for multiple fixers (an unused export AND an unused enum member), the skip is reported once per file, not once per fixer.
+  The JSON envelope has a per-file entry (`{"type": "skipped", "path": "...", "skipped": true, "skip_reason": "mixed_line_endings"}`). It always has a top-level counter `skipped_mixed_line_endings: number`, separate from `skipped_content_changed`. If this count is not zero, the run exits with code 2.
+
+  **The skip does not fix itself.** When you run `fallow fix` again on the same file, you get the same skip. You, your CI, or your AI agent must normalize the line endings of the file first. When one file has findings for more than one fixer (an unused export AND an unused enum member), fallow reports the skip once per file, not once per fixer.
 
 ## Dry-run config diff
 
-`fallow fix --dry-run` against duplicate-export findings prints the proposed config write as a unified diff so you can audit the exact bytes that would land before passing `--yes`. For the create-fallback case the diff shows the full proposed file (BEFORE is empty):
+For duplicate-export findings, `fallow fix --dry-run` prints the proposed config change as a unified diff. You can check the exact bytes before you pass `--yes`. When fallow would create a new config file, the diff shows the full proposed file (BEFORE is empty):
 
 ```diff
 Would create .fallowrc.json with 2 ignoreExports rule(s):
@@ -129,7 +164,7 @@ Would create .fallowrc.json with 2 ignoreExports rule(s):
 +}
 ```
 
-For the edit case (existing config), the diff shows context lines around the proposed additions. JSON output (`--dry-run --format json`) includes the same diff under a `proposed_diff` field on the fix entry, plus a `created_files: [".fallowrc.json"]` array on the create-fallback path so agents can detect file-creation side effects programmatically.
+When a config file already exists, the diff shows context lines around the proposed additions. The JSON output (`--dry-run --format json`) has the same diff in a `proposed_diff` field on the fix entry. When fallow would create a config file, the JSON also has a `created_files: [".fallowrc.json"]` array, so agents can detect that a new file will appear.
 
 ## Examples
 
@@ -173,6 +208,6 @@ Would remove `@trpc/react-query` from dependencies
     Details on what fallow can and cannot auto-fix.
   </Card>
   <Card title="Dead code analysis" icon="skull-crossbones" href="/analysis/dead-code">
-    Understand the full range of dead code fallow detects.
+    The types of dead code that fallow detects.
   </Card>
 </CardGroup>

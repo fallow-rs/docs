@@ -1,27 +1,29 @@
 ---
 title: "Semantic similar code"
-description: "Find JavaScript and TypeScript functions that may share intent even when their names and syntax differ, using a pinned local model and explicit review."
+description: "Find JavaScript and TypeScript functions that may do the same job under different names and syntax, so you can review them for consolidation. Uses a pinned local model, and a person or agent decides."
 keywords: ["similar code", "semantic duplication", "function similarity", "local model", "code review", "refactoring"]
 icon: "code-compare"
 ---
 
-`fallow similar-code` finds functions that may do the same kind of work even
-when they are written differently.
+`fallow similar-code` finds functions that may do the same kind of work, even
+when their code looks different. Use the results to find logic that you can
+possibly consolidate and that `fallow dupes` does not find.
 
-Use it after `fallow dupes` when copied structure is not the whole story. The
-normal duplication detector finds exact, normalized, and near-miss copies.
-Similar-code discovery compares the meaning represented by complete functions.
+`fallow dupes` finds exact, normalized, and near-miss copies. Similar-code
+discovery compares the meaning of complete functions. Run it after
+`fallow dupes`.
 
 <Warning>
   Every result is an unverified candidate. A similarity score is not a
-  probability, proof that behavior matches, or permission to refactor. Inspect
-  both functions and their tests before making a decision.
+  probability. It does not prove that the behavior matches, and it does not
+  mean that a refactor is safe. Inspect both functions and their tests before
+  you decide.
 </Warning>
 
 ## Set up the local model
 
-The matching native companion installs with the main `fallow` npm package.
-Check whether its pinned model is ready:
+The main `fallow` npm package installs the matching native companion. To check
+whether its pinned model is ready, run:
 
 ```bash
 fallow similar-code status
@@ -33,13 +35,14 @@ The first download needs your explicit confirmation:
 fallow similar-code setup --local
 ```
 
-Setup shows the model, license, and download size before it asks. Use `--yes`
-only when you already approved the download and need a non-interactive command.
-Project config and agents cannot approve setup for you.
+Before it asks, setup shows the model, the license, and the download size.
+Use `--yes` only when you already approved the download and need a command
+without a prompt. Project config and agents cannot approve setup for you.
 
-After setup, analysis is offline. Function source stays on your machine. The
-companion receives bounded source over local process input and does not save it.
-Fallow persists derived vectors in the project cache so later runs are faster.
+After setup, the analysis runs offline and function source stays on your
+machine. The companion receives size-limited source over local process input
+and does not save it. Fallow stores derived vectors in a user-local cache with
+a separate namespace for each project, so later runs are faster.
 
 ## Find candidates
 
@@ -47,7 +50,7 @@ Fallow persists derived vectors in the project cache so later runs are faster.
 fallow similar-code
 ```
 
-Machine-readable output uses an independent envelope:
+The JSON output has its own top-level format:
 
 ```bash
 fallow similar-code --format json --quiet > similar-code.json
@@ -57,8 +60,8 @@ A candidate looks like this:
 
 ```json
 {
-  "candidate_id": "sc_...",
-  "review_key": "scr_...",
+  "candidate_id": "similar-code:candidate:v1:...",
+  "review_key": "similar-code:review:v1:...",
   "left": {
     "path": "src/orders/normalize.ts",
     "name": "normalizeOrder",
@@ -79,20 +82,21 @@ A candidate looks like this:
 }
 ```
 
-The score is meaningful only for the pinned model and current settings. Use it
-to rank review work, not to compare projects or set a universal quality bar.
+The score has meaning only for the pinned model and the current settings. Use
+it to rank review work. Do not use it to compare projects or to set a general
+quality bar.
 
-The root output also records:
+The top level of the output also records:
 
-- the exact companion, model revision, artifact digest, and parameters
-- whether every analysis phase completed
-- limits and skipped work
-- vector-cache hits and misses
-- non-severity diagnostics
+- The exact companion, model revision, artifact digest, and parameters.
+- Whether every analysis phase completed.
+- Limits and skipped work.
+- Vector-cache hits and misses.
+- Diagnostics without a severity.
 
-An empty candidate list is conclusive only when `completion.status` is
-`"complete"`. A `"partial"` run tells you which limit or provider problem made
-the result incomplete.
+An empty candidate list proves that there are no candidates only when
+`completion.status` is `"complete"`. A `"partial"` run tells you which limit
+or provider problem made the result incomplete.
 
 ### Focus the search
 
@@ -103,50 +107,53 @@ fallow similar-code --workspace @acme/orders
 fallow similar-code --threshold 0.88 --min-lines 6 --top 20
 ```
 
-`--file` keeps pairs that touch the selected file. `--changed-since` and
-workspace options use the same project scoping as other fallow analyses.
+`--file` keeps only the pairs that include the selected file. `--changed-since`
+and the workspace options scope the project in the same way as other fallow
+analyses.
 
 ## Inspect before judging
 
-Copy `candidate_id` from the discovery output:
+Copy the `candidate_id` from the discovery output. Pass the saved discovery
+JSON with `--candidates`:
 
 ```bash
-fallow similar-code --threshold 0.88 --min-lines 6 \
-  inspect similar-code:candidate:v1:... --format json --quiet
+fallow similar-code inspect similar-code:candidate:v1:... \
+  --candidates similar-code.json --format json --quiet
 ```
 
-Run this from the same project root and reuse the discovery scope plus the
-effective `generation.threshold` and `generation.min_lines` values. Human
-output includes the calibrated part of the inspect command. MCP callers pass
-the same discovery options to `inspect_similar_code`.
+Run this command from the same project root. Inspect reads the candidate from
+the discovery JSON, so you do not repeat the discovery options. The human
+discovery output prints this inspect command for each candidate. MCP callers
+pass the `candidate_id` and the candidate snapshot from the
+`find_similar_code` response to `inspect_similar_code`.
 
-Inspect first reproduces the candidate against your current source. This
-prevents a stale result from being reviewed after either function changed. It
-then adds bounded evidence where available:
+Inspect first reproduces the candidate against your current source. If either
+function changed since discovery, you do not review a stale result. Inspect
+then adds size-limited evidence, where it is available:
 
-- source windows for both functions
-- import-graph relationship and entry-point reachability
-- callers and callees
-- CODEOWNERS ownership and recent churn
-- related tests
-- overlap with deterministic duplication results
-- syntax clues such as async behavior, throws, awaits, and possible side effects
+- Source windows for both functions.
+- Import-graph relationship and entry-point reachability.
+- Callers and callees.
+- CODEOWNERS ownership and recent churn.
+- Related tests.
+- Overlap with deterministic duplication results.
+- Syntax clues such as async behavior, throws, awaits, and possible side effects.
 
-Every evidence source has an availability state. Missing context stays missing.
-Fallow does not turn absence of evidence into a positive verdict.
+Every evidence source has an availability state. Fallow reports missing
+context as missing. It does not treat absent evidence as a positive verdict.
 
 ## Record a separate verdict
 
-The raw candidate document never changes. A person or agent writes a separate
-verdict after inspecting the code:
+Fallow never changes the raw candidate document. After a person or agent
+inspects the code, they write a separate verdict:
 
 ```json
 {
   "schema_version": "1",
   "verdicts": [
     {
-      "candidate_id": "sc_...",
-      "review_key": "scr_...",
+      "candidate_id": "similar-code:candidate:v1:...",
+      "review_key": "similar-code:review:v1:...",
       "candidate_worthy": true,
       "behaviorally_equivalent": false,
       "refactor_safe": false,
@@ -157,7 +164,7 @@ verdict after inspecting the code:
 }
 ```
 
-Join the documents:
+To join the two documents, run:
 
 ```bash
 fallow similar-code review \
@@ -167,7 +174,8 @@ fallow similar-code review \
   --format json --quiet
 ```
 
-The three yes, no, or unknown judgments answer different questions:
+Each of the three judgments is yes, no, or unknown, and each answers a
+different question:
 
 | Field | Question |
 |:------|:---------|
@@ -176,23 +184,25 @@ The three yes, no, or unknown judgments answer different questions:
 | `refactor_safe` | Is consolidation safe in the current architecture? |
 
 Use `null` when you cannot answer. `refactor_safe: true` requires
-`behaviorally_equivalent: true`, which requires `candidate_worthy: true`.
-Available outcomes are `same-responsibility`, `related-but-distinct`,
+`behaviorally_equivalent: true`, and `behaviorally_equivalent: true` requires
+`candidate_worthy: true`.
+
+The available outcomes are `same-responsibility`, `related-but-distinct`,
 `intentional-duplication`, `unrelated`, and `needs-human-review`.
 
 ## Use it with an agent
 
-The MCP server exposes two read-only tools:
+The MCP server has two read-only tools:
 
-- `find_similar_code` returns unverified candidates with provenance and
-  completion accounting.
+- `find_similar_code` returns unverified candidates, with provenance and
+  completion status.
 - `inspect_similar_code` reproduces one candidate and returns its evidence
   packet.
 
 Neither tool downloads a model, edits source, or produces a verdict. If setup
 is missing, the agent should ask you to run `fallow similar-code setup --local`.
-An agent should return `needs-human-review` when tests, callers, behavior, or
-side effects are unclear.
+When tests, callers, behavior, or side effects are unclear, the agent should
+return `needs-human-review`.
 
 ## Configure project defaults
 
@@ -206,21 +216,21 @@ side effects are unclear.
 }
 ```
 
-These fields tune candidate discovery only. Config cannot choose a model,
+These fields change only candidate discovery. Config cannot choose a model,
 provider, executable, download, or credential.
 
-Clear derived project vectors without deleting the downloaded model:
+To clear the derived project vectors and keep the downloaded model, run:
 
 ```bash
-fallow similar-code cache clear
+fallow similar-code cache clear --yes
 ```
 
 ## Where it does not run
 
-Similar-code discovery is separate from bare `fallow`, `audit`, `dupes`, CI
-gates, SARIF, LSP, VS Code diagnostics, and auto-fix. It is a review aid, not a
-new finding category. It accepts only the official pinned local model and does
-not send source to a remote provider.
+Similar-code discovery does not run in bare `fallow`, `audit`, `dupes`, CI
+gates, SARIF, LSP, VS Code diagnostics, or auto-fix. It is a review aid and
+does not add a finding category. It accepts only the official pinned local
+model and never sends source to a remote provider.
 
 ## See also
 
@@ -232,6 +242,6 @@ not send source to a remote provider.
     Connect the read-only discovery and inspect tools.
   </Card>
   <Card title="Configuration" icon="gear" href="/configuration/overview">
-    Set project-owned thresholds, size floors, and ignore globs.
+    Set project thresholds, minimum function sizes, and ignore globs.
   </Card>
 </CardGroup>

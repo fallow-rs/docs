@@ -1,11 +1,13 @@
 ---
 title: "Runtime coverage"
-description: "Merge runtime coverage into fallow health to see which functions actually execute in production-like traffic, which stay cold, and which hot paths changed."
+description: "See which functions your production traffic runs, which never run, and which hot paths a change touches. Runtime coverage merges execution data into fallow health, so you can delete cold code with evidence."
 keywords: ["runtime coverage", "cold code", "hot paths", "v8 coverage", "istanbul", "fallow-cov", "license"]
 icon: "chart-network"
 ---
 
-Runtime coverage adds a runtime layer on top of `fallow health`. Static analysis can tell you which exports have no references and which files are not test-reachable. Runtime coverage answers a different question: which functions actually executed when your deployed app handled real traffic.
+Runtime coverage tells you which functions ran when your deployed app handled real traffic. Use it to delete cold code with confidence and to spot changes to hot code in review.
+
+Static analysis finds exports with no references and files that no test reaches. Runtime coverage adds the production view on top of `fallow health`.
 
 ```bash
 fallow license activate --trial --email you@company.com
@@ -15,32 +17,52 @@ fallow health --runtime-coverage ./coverage
 
 ## What it tells you
 
-When runtime coverage is enabled, fallow merges runtime evidence into the existing health report and assigns each function a **per-finding verdict** combining the static reachability signal with observed production invocations:
+When you enable runtime coverage, fallow merges runtime evidence into the health report. Each function gets a **per-finding verdict**. The verdict combines the static reachability signal with the invocations that fallow observed in production:
 
 | Verdict | Meaning |
 |:--------|:--------|
-| `safe_to_delete` | Statically unused AND V8 tracked AND zero invocations. The strongest delete signal fallow emits. |
-| `review_required` | Statically used but never invoked in production. Needs a human look: could be seasonal, error-path-only, or legitimately dead. |
-| `low_traffic` | Invoked in production, but below the configured `--low-traffic-threshold` ratio of total trace count (spec default 0.1%). Effectively dead for the observed period. |
-| `coverage_unavailable` | V8 could not track the function (lazy-parsed, worker-thread isolate, dynamic `eval`, or the source map did not resolve). Advisory, not a dead-code signal. |
+| `safe_to_delete` | Statically unused AND V8 tracked AND zero invocations. This is the strongest delete signal from fallow. |
+| `review_required` | Statically used but never invoked in production. A person must check it. The function can be seasonal, used only on an error path, or really dead. |
+| `low_traffic` | Invoked in production, but below the `--low-traffic-threshold` ratio of the total trace count (spec default 0.1%). Effectively dead for the observed period. |
+| `coverage_unavailable` | V8 could not track the function (lazy-parsed, worker-thread isolate, dynamic `eval`, or the source map did not resolve). Information only, not a dead-code signal. |
 | `active` | Invoked in production above the low-traffic threshold. Not dead. |
-| `unknown` | Forward-compat sentinel returned by newer sidecars. Rare. |
+| `unknown` | A forward-compatibility value that newer sidecars can return. Rare. |
 
-Fallow also surfaces:
+The report also has these fields:
 
 | Output | Meaning |
 |:-------|:--------|
-| `verdict` | Overall report status: `clean`, `cold-code-detected`, `hot-path-touched`, `license-expired-grace`, or `unknown`. Promotes `hot-path-touched` over `cold-code-detected` in PR-review contexts when `--diff-file` (or `--changed-since`) is set. |
-| `signals` | Array of every signal the post-processing pass detected, independent of `verdict` (which is the single most actionable signal under the current context). Ordered severity-descending; omitted entirely when empty. A typical PR run emits `["cold-code-detected", "hot-path-touched"]` together when both apply. |
-| `summary` | Aggregate counts (`functions_tracked`, `functions_hit`, `functions_unhit`, `functions_untracked`, `coverage_percent`) plus `trace_count`, `period_days`, `deployments_seen`, and an optional `capture_quality` block (`window_seconds`, `instances_observed`, `lazy_parse_warning`, `untracked_ratio_percent`) on protocol-0.3+ sidecars that flags short-window captures where lazy-parsed scripts may not appear. |
-| `findings` | Cold or unresolved functions with a per-finding suppression `id` (`fallow:prod:<hash>`, hashes the current line), an optional cross-surface `stable_id` (`fallow:fn:<hash>`, hashes file + name + start line; one value per function across findings / hot-paths / blast-radius / importance and across V8/Istanbul/oxc producers), an optional content-digest `source_hash` (line-move-immune: a moved-but-unedited function keeps the same value, so baselines stay suppressed across a pure line shift), `line`, per-finding `verdict`, `confidence`, supporting `evidence`, machine-readable `actions`, and an optional `discriminators` block exposing the inputs behind the verdict (`tracking_state` of `called` / `never_called` / `untracked`, `invocation_ratio`, the `low_traffic_threshold` and `min_observation_volume` in effect, and `trace_count` with `meets_observation_volume`) so an agent can reproduce the verdict without re-deriving it. |
-| `hot_paths` | The busiest runtime functions with a stable `id`, an optional `stable_id` join key, `line`, `invocations`, and `percentile` rank. |
-| `actionable` | Whether the report carries enough evidence to act on, with `actionability_reason` and `actionability_verdict`. A capture with no tracked functions reports a first-class `insufficient_evidence` verdict rather than being read as cold. This is a non-action floor: it never gates a positive verdict or a confidence score. |
-| `provenance` | Context block describing the data behind the report (`data_source`, `is_production`, `freshness_days`, `untracked_ratio`, `unresolved_ratio`, `stale`, `stale_after_days`). Context only; it never gates a verdict. |
-| `watermark` | Trial/license grace marker applied when paid-feature access is in warning mode. |
+| `verdict` | Overall report status: `clean`, `cold-code-detected`, `hot-path-touched`, `license-expired-grace`, or `unknown`. In PR review, when `--diff-file` (or `--changed-since`) is set, `hot-path-touched` takes priority over `cold-code-detected`. |
+| `signals` | Every signal that the post-processing pass detected, as an array. `verdict` shows only the most actionable signal for the current context, and `signals` shows all of them. Sorted by severity, highest first. Omitted when empty. A typical PR run emits `["cold-code-detected", "hot-path-touched"]` when both apply. |
+| `summary` | Aggregate counts and capture metadata. See [Summary fields](#summary-fields). |
+| `findings` | Cold or unresolved functions. See [Finding fields](#finding-fields). |
+| `hot_paths` | The busiest runtime functions, with a stable `id`, an optional `stable_id` join key, `line`, `end_line`, `invocations`, and `percentile` rank. |
+| `blast_radius` | For each runtime-observed function, how far a change can spread: `caller_count`, `caller_count_weighted_by_traffic`, `deploys_touched`, and a `risk_band`. |
+| `importance` | For each runtime-observed function, how much it matters in production: `invocations`, `cyclomatic`, `owner_count`, an `importance_score`, and a `reason`. |
+| `actionable` | Whether the report has enough evidence to act on, with `actionability_reason` and `actionability_verdict`. A capture with no tracked functions reports an `insufficient_evidence` verdict, so fallow does not read it as cold. This verdict can only hold back action: it never gates a positive verdict or a confidence score. |
+| `provenance` | Context about the data behind the report (`data_source`, `is_production`, `freshness_days`, `untracked_ratio`, `unresolved_ratio`, `stale`, `stale_after_days`). Context only. It never gates a verdict. |
+| `watermark` | Set when a license or trial is in its grace period, for example `license-expired-grace` when the license expired 8 to 30 days ago. The analysis still runs. See [Trial and watermark behavior](#trial-and-watermark-behavior). |
 | `warnings` | Non-fatal merge diagnostics, for example partial source-map remapping. |
 
-Every finding carries an **evidence block** so the "why" behind a verdict is machine-readable without re-deriving it:
+### Summary fields
+
+- Aggregate counts: `functions_tracked`, `functions_hit`, `functions_unhit`, `functions_untracked`, `coverage_percent`.
+- `trace_count`, `period_days`, and `deployments_seen`.
+- An optional `capture_quality` block (`window_seconds`, `instances_observed`, `lazy_parse_warning`, `untracked_ratio_percent`). Sidecars on protocol 0.3 or newer emit it. It flags short-window captures in which lazy-parsed scripts may not appear.
+
+### Finding fields
+
+- `id`: a per-finding suppression id (`fallow:prod:<hash>`). The hash covers the current line.
+- `stable_id` (optional): a cross-surface id (`fallow:fn:<hash>`). The hash covers file + name + start line. One function has one value across findings, hot paths, blast radius, and importance, and across the V8, Istanbul, and oxc producers.
+- `source_hash` (optional): a content digest that does not change when a line moves. A function that moved but was not edited keeps the same value, so its baseline stays suppressed after a pure line shift.
+- `line`, the per-finding `verdict`, `confidence`, supporting `evidence`, and machine-readable `actions`.
+- `discriminators` (optional): the inputs behind the verdict, so an agent can reproduce the verdict without deriving it again. The block has:
+  - `tracking_state`: `called`, `never_called`, or `untracked`.
+  - `invocation_ratio`.
+  - The `low_traffic_threshold` and `min_observation_volume` in effect.
+  - `trace_count` with `meets_observation_volume`.
+
+Every finding has an **evidence block**. It gives the reason for the verdict in machine-readable form:
 
 ```json
 "evidence": {
@@ -54,39 +76,32 @@ Every finding carries an **evidence block** so the "why" behind a verdict is mac
 }
 ```
 
-`test_only_reference` guards the one case where production mode and static
-reachability disagree. Production mode drops test, spec, story, fixture, and
-benchmark files from discovery, so an export whose only callers live in those
-files reads as statically unused. It is `true` when the function is unreachable
-in the production graph but still referenced from an excluded file, which means
-it is not dead code: removing it breaks the referencing test. Such a function is
-reported as `review_required` rather than `safe_to_delete`, with the action
-"Only tests reference this export; delete the test usage together with the
-function or keep it". It is `false` when the production graph was compared
-against the full tree and no such reference exists, and `null` when the report
-was produced without a production filter, so there is no second reachability
-answer to report.
+`test_only_reference` covers the one case where production mode and static reachability disagree. Production mode drops test, spec, story, fixture, and benchmark files from discovery. An export that only those files call therefore reads as statically unused.
+
+- `true`: the function is unreachable in the production graph, but an excluded file still references it. It is not dead code, because a removal breaks the test that references it. Fallow reports it as `review_required`, not `safe_to_delete`, with the action "Only tests reference this export; delete the test usage together with the function or keep it".
+- `false`: fallow compared the production graph with the full tree and found no such reference.
+- `null`: the report ran without a production filter, so there is no second reachability answer.
 
 ## Confidence thresholds
 
-Two flags tune how aggressively fallow applies verdicts:
+Two flags control how strict fallow is when it assigns verdicts:
 
 | Flag | Default | Effect |
 |:-----|:--------|:-------|
-| `--min-observation-volume <N>` | 5000 | Minimum total trace volume before the sidecar is allowed to emit high-confidence `safe_to_delete` or `review_required` verdicts. Below this threshold, confidence is capped at `medium` to protect against overconfident verdicts on new or low-traffic services. |
-| `--low-traffic-threshold <RATIO>` | 0.001 | Fraction of `trace_count` below which an invoked function is classified `low_traffic` rather than `active`. Expressed as a decimal (0.001 = 0.1%). |
+| `--min-observation-volume <N>` | 5000 | Minimum total trace volume before the sidecar can emit high-confidence `safe_to_delete` or `review_required` verdicts. Below this value, confidence is capped at `medium`, so new or low-traffic services do not get overconfident verdicts. |
+| `--low-traffic-threshold <RATIO>` | 0.001 | An invoked function below this fraction of `trace_count` is classified `low_traffic` instead of `active`. A decimal value (0.001 = 0.1%). |
 
 ## Static coverage vs runtime coverage
 
-These three surfaces live side by side inside `fallow health`, but they answer different questions:
+`fallow health` has three coverage options. Each answers a different question:
 
 | Surface | Flag | Input | Answers | Paid |
 |:--------|:-----|:------|:--------|:-----|
 | Static reachability gaps | `--coverage-gaps` | none | Which runtime files and exports have no transitive test path? | no |
 | Exact CRAP scoring | `--coverage` | Istanbul JSON | How covered is each function for CRAP calculation? | no |
-| Runtime coverage | `--runtime-coverage` | V8 directory, V8 JSON file, or Istanbul JSON | Which functions actually ran, which stayed cold, and which hot paths changed? | yes |
+| Runtime coverage | `--runtime-coverage` | V8 directory, V8 JSON file, or Istanbul JSON | Which functions actually ran, which stayed cold, and which hot paths changed? | A single local capture is free. More needs a license. |
 
-Use `--coverage-gaps` when you want to find untested code. Use `--coverage` when you want better CRAP scores. Use `--runtime-coverage` when you want runtime evidence about real execution paths.
+To find untested code, use `--coverage-gaps`. For more accurate CRAP scores, use `--coverage`. For evidence about the code that production runs, use `--runtime-coverage`.
 
 ## Accepted input
 
@@ -98,44 +113,50 @@ Use `--coverage-gaps` when you want to find untested code. Use `--coverage` when
 | Single V8 JSON file | `./coverage/12345.json` |
 | Single Istanbul coverage map JSON file | `./coverage/coverage-final.json` |
 
-If a V8 dump includes Node's `source-map-cache`, fallow remaps supported source-map URLs before analysis, including file paths, relative paths, `webpack://...`, and `vite://...`. Unsupported virtual schemes fall back safely to raw V8 handling instead of failing the whole run.
+If a V8 dump includes Node's `source-map-cache`, fallow remaps the supported source-map URLs before analysis. Supported URLs include file paths, relative paths, `webpack://...`, and `vite://...`. For an unsupported virtual scheme, fallow uses raw V8 handling and the run continues.
 
 ## Production coverage: getting source attribution
 
-Production runtime coverage is collected against your **built bundle** (a Next.js `.next/server/chunks/*.js`, an Electron `out/main/index.js`, a NestJS `dist/`, a minified browser bundle). Those positions cannot map back to your TypeScript or JSX source on their own, so unless you take one of the two steps below the cloud records every function as `unresolved` and `fallow coverage analyze --cloud` surfaces no attributable findings (a `coverage_unresolved` warning explains why).
+Production runtime coverage records positions in your **built bundle**. Examples are a Next.js `.next/server/chunks/*.js`, an Electron `out/main/index.js`, a NestJS `dist/`, or a minified browser bundle. Bundle positions cannot map back to your TypeScript or JSX source on their own.
+
+If you do not take one of the two steps below, the cloud records every function as `unresolved`. `fallow coverage analyze --cloud` then shows no attributable findings, and a `coverage_unresolved` warning explains why.
 
 Pick one:
 
-- **Upload source maps** (for V8 coverage). After the build, upload the `.map` files as a CI step so the cloud can map bundle positions back to source:
+- **Upload source maps** (for V8 coverage). After the build, upload the `.map` files in a CI step. The cloud uses them to map bundle positions back to source:
 
   ```bash
   fallow coverage upload-source-maps --dir <build-dir>   # e.g. dist, .next, out
   ```
 
-  The maps must be uploaded for the same commit the coverage was collected on. See [`fallow coverage`](/cli/coverage) for the flags, per-commit SHA matching, and CI snippets. When `fallow coverage analyze --cloud` finds built `.map` files locally that have not been uploaded, it prints the exact command to run.
+  Upload the maps for the same commit on which you collected the coverage. [`fallow coverage`](/cli/coverage) documents the flags, per-commit SHA matching, and CI snippets. When `fallow coverage analyze --cloud` finds built `.map` files on disk that you did not upload, it prints the exact command to run.
 
-- **Instrument at build time with Istanbul** (no maps needed). `oxc-coverage-instrument` rewrites your source so the original file and line positions are embedded in the coverage itself, so nothing has to be remapped afterward. This is the path the fallow project dogfoods.
+- **Instrument at build time with Istanbul** (no maps needed). `oxc-coverage-instrument` rewrites your source and puts the original file and line positions in the coverage itself, so nothing needs remapping. The fallow project uses this path for its own code.
 
 ## First-run workflow
 
-The intended first-run path is:
-
-1. Start a trial or activate a license with [`fallow license`](/cli/license).
+1. Optional: start a trial or activate a license with [`fallow license`](/cli/license). A single local capture works without one.
 2. Run [`fallow coverage setup`](/cli/coverage).
 3. Follow the generated recipe in `docs/collect-coverage.md`.
-4. Re-run `fallow coverage setup` or `fallow health --runtime-coverage <path>` once coverage exists.
+4. When coverage exists, run `fallow coverage setup` or `fallow health --runtime-coverage <path>` again.
 
-`fallow coverage setup` is resumable. It checks license state, installs or locates `fallow-cov`, writes a framework-specific collection recipe, detects an existing coverage artifact when present, and then hands off into `fallow health --runtime-coverage`.
+`fallow coverage setup` is resumable. It does these steps:
+
+1. Checks the license state.
+2. Installs or locates `fallow-cov`.
+3. Writes a collection recipe for your framework.
+4. Detects an existing coverage artifact, when one is present.
+5. Continues into `fallow health --runtime-coverage`.
 
 ## Review changed code
 
-Runtime coverage becomes especially useful during change review:
+In change review, runtime coverage shows which hot code a change touches:
 
 ```bash
 fallow health --changed-since main --runtime-coverage ./coverage
 ```
 
-When changed files touch hot runtime code, fallow can upgrade the overall verdict to `hot-path-touched`. That gives PR review a stronger signal than static complexity alone.
+When changed files touch hot runtime code, fallow can upgrade the overall verdict to `hot-path-touched`. PR review then has a stronger signal than static complexity alone.
 
 For tighter line-level scoping, pass a pre-computed unified diff:
 
@@ -144,13 +165,25 @@ git diff --unified=0 main...HEAD > /tmp/pr.diff
 fallow health --runtime-coverage ./coverage --diff-file /tmp/pr.diff
 ```
 
-A hot function is then flagged only when the diff modifies a line inside its `[start_line, end_line]` range, instead of matching the whole file. The bundled GitHub Action and GitLab CI template already pre-compute the diff and pass it through, so PR comments only highlight hot paths the change actually touches. Hot-path matching needs protocol 0.5 or newer in the sidecar (older sidecars only report a start line, so fallow falls back to file-level scoping).
+Fallow then flags a hot function only when the diff changes a line inside its `[start_line, end_line]` range, not anywhere in the file. The bundled GitHub Action and GitLab CI template already pre-compute the diff and pass it in. PR comments therefore show only the hot paths that the change touches.
+
+Line-level hot-path matching needs protocol 0.5 or newer in the sidecar. Older sidecars report only a start line, so fallow uses file-level scoping.
 
 ## Trial and watermark behavior
 
-Runtime coverage is a paid feature with a trial flow. Verification is offline against a compiled-in Ed25519 public key; only `fallow license activate --trial` and `fallow license refresh` require network access.
+Runtime coverage collects paid runtime intelligence. A single local capture is free and needs no license. Continuous or multi-capture monitoring (for example, a V8 directory with more than one JSON file) needs a license with the `runtime_coverage` feature. To try it, start a 30-day trial with `fallow license activate --trial --email <addr>`.
 
-If a license is expired but still inside the grace window, fallow keeps the analysis available but annotates the output with a watermark. Once the hard-fail window is exceeded, paid features are blocked until the license is refreshed.
+Fallow verifies the license offline against a compiled-in Ed25519 public key. Only `fallow license activate --trial` and `fallow license refresh` need network access.
+
+When a license expires, fallow gives you a grace period:
+
+| Days after expiry | Behavior |
+|:------------------|:---------|
+| 1 to 7 | The analysis runs as normal. `fallow license status` tells you to refresh. |
+| 8 to 30 | The analysis runs. The output gets the `license-expired-grace` watermark and verdict. |
+| 31 or more | Fallow blocks runtime coverage and exits with code `3`. Run `fallow license refresh`. |
+
+When a license is present, fallow checks it for every runtime coverage run, also for a single capture. An expired license past the grace period, an invalid token, or a license without the `runtime_coverage` feature stops the run with exit code `3`. For details, see [fallow license](/cli/license#exit-behavior).
 
 ## See also
 

@@ -1,14 +1,20 @@
 ---
 title: "fallow recommend"
-description: "CLI reference for fallow recommend. A read-only, project-tailored config recommendation: what fallow detected, a safe proposed config, and the decisions split into auto, default, and taste."
+description: "Get a config proposal for your project that you can review before you write it. Fallow recommend is read-only and reports what fallow detected, a safe proposed config, and the decisions behind it, split into auto, default, and taste."
 keywords: ["fallow recommend", "config recommendation", "CLI", "onboarding", "agent", "cold start"]
 icon: "terminal"
 ---
 
-Recommend a project-tailored config without writing anything. `fallow recommend` inspects the project (frameworks, workspace layout, tooling) and emits three things: what it **detected**, a safe **proposed config**, and the list of **decisions** behind that proposal, so a human or an agent can review the reasoning instead of trusting a generated file.
+Get a config proposal for your project, with the reasons for each setting, before anything is written. `fallow recommend` examines the frameworks, workspace layout, and tooling of the project. It writes nothing, and it reports:
+
+- what it **detected**
+- a safe **proposed config**
+- the **decisions** behind that proposal
+
+A person or an agent can thus review the reasons, and does not have to trust a generated file.
 
 <Info>
-  Zero config is a valid stop: fallow's defaults are strong, so writing no config at all is fully supported. `recommend` exists for the projects that do want one, and for agents that need to author it with the user instead of guessing.
+  Zero config is a valid end state. The fallow defaults are strong, and fallow fully supports a project with no config. `recommend` is for projects that want a config, and for agents that must write the config with the user and not guess.
 </Info>
 
 ```bash
@@ -16,36 +22,52 @@ fallow recommend
 fallow recommend --format json
 ```
 
-Unlike [`fallow init`](/cli/init), which writes a config file, `recommend` is read-only. The intended flow for agents: run `recommend --format json`, apply the `auto` decisions, disclose the `default` decisions, ask the user about the `taste` decisions, then write the result (or run `init`). When TypeScript is detected, the default decisions point to optional type-aware analysis without adding it to `proposed_config`.
+[`fallow init`](/cli/init) writes a config file. `recommend` is read-only. An agent uses it in these steps:
+
+1. Run `recommend --format json`.
+2. Apply the `auto` decisions.
+3. Tell the user about the `default` decisions.
+4. Ask the user about the `taste` decisions.
+5. Write the result, or run `init`.
+
+When fallow detects TypeScript, the default decisions point to optional type-aware analysis. They do not add it to `proposed_config`.
 
 ## Decision tiers
 
-Every proposed setting comes with its tier and rationale:
+Each proposed setting has a tier and a rationale:
 
 | Tier | Meaning |
 |:-----|:--------|
-| `auto` | Decided from detection (a detected framework, workspace layout, test runner). Safe to apply as-is. |
-| `default` | A disclosed, overridable default or optional capability. It changes `proposed_config` only when the proposed config contains its setting. |
-| `taste` | A genuinely subjective choice. Surfaced as an open `question` for the user; not silently decided. |
+| `auto` | Comes from detection, for example a detected framework, workspace layout, or test runner. Safe to apply as it is. |
+| `default` | A default that fallow tells you about and that you can override, or an optional capability. It changes `proposed_config` only when the proposed config contains its setting. |
+| `taste` | A subjective choice. Fallow shows it as an open `question` for the user, and does not decide it silently. |
 
 ## Options
 
-`fallow recommend` adds no flags of its own. It reads an existing config passed with
-`--config` and takes it into account. [Global flags](/cli/global-flags) such as `--root`,
+`fallow recommend` has no flags of its own. If you pass an existing config with
+`--config`, the command reads it and takes it into account. [Global flags](/cli/global-flags) such as `--root`,
 `--format`, `--quiet`, `--no-cache`, and `--threads` apply.
 
 ## JSON output
+
+This example is for a single-package TypeScript project with Vitest. It shows two of the decisions. A real run also has `taste` decisions (for example `ci-strictness`) with an open `question`, and more `default` decisions.
 
 ```json
 {
   "kind": "recommendation",
   "schema_version": "1",
   "detected": {
-    "has_typescript": true,
     "is_monorepo": false,
-    "package_manager": "npm",
+    "workspace_tool": null,
+    "workspace_patterns": [],
+    "has_typescript": true,
+    "test_framework": "Vitest",
+    "test_framework_ambiguous": false,
     "ui_framework": null,
-    "test_framework": "vitest"
+    "frameworks_present": [],
+    "heterogeneous_frameworks": false,
+    "has_storybook": false,
+    "package_manager": null
   },
   "proposed_config": {
     "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
@@ -62,21 +84,33 @@ Every proposed setting comes with its tier and rationale:
     {
       "setting": "typeAware.enabled",
       "value": null,
-      "rationale": "Detected TypeScript. Run fallow dead-code --type-aware or set typeAware.enabled to true when cleanup depends on exact TypeScript identity. This starts a slower semantic pass and does not replace tsc or Oxlint. Guide: https://docs.fallow.tools/analysis/type-aware",
+      "rationale": "Detected TypeScript. For exact symbol use across aliases, re-exports, class contracts, packages, or tests, run `fallow dead-code --type-aware` or set `typeAware.enabled` to true. This starts a slower semantic pass and does not replace tsc or Oxlint. Guide: https://docs.fallow.tools/analysis/type-aware",
       "kind": "default",
       "question": null
     }
   ],
-  "note": "proposed_config is the safe, detection-derived baseline; resolve every taste decision with the user before finalizing. For the full set of valid config keys and their shapes, run `fallow config-schema`. Zero config is a valid stop.",
+  "note": "proposed_config is the safe, detection-derived baseline; resolve every taste decision with the user before finalizing. For the full set of valid config keys and their shapes, run `fallow config-schema`. Zero config is a valid stop: fallow's defaults are strong, so writing no config at all is fully supported.",
   "config_schema_command": "fallow config-schema"
 }
 ```
 
-The `detected` block also reports monorepo workspace patterns, the workspace tool, Storybook presence, and whether frameworks live in workspace packages rather than the root.
+A `taste` decision has a `question` object with a `header`, the `question` text, and `options`. Each option has a `label` and a `description`.
 
-## Related
+Fallow reads `package_manager` only from the `packageManager` field in `package.json`. `frameworks_present` and `heterogeneous_frameworks` show if frameworks are in workspace packages and not in the root.
 
-- [`fallow init`](/cli/init) writes the config file (and can scaffold `AGENTS.md` and git hooks)
-- [`fallow config-schema`](/cli/schema) prints the full JSON schema for every config key
-- [Type-aware TypeScript analysis](/analysis/type-aware) explains the optional semantic pass
-- The MCP server exposes this command as the read-only `recommend` tool; see [MCP integration](/integrations/mcp)
+## See also {#related}
+
+<CardGroup cols={2}>
+  <Card title="fallow init" icon="terminal" href="/cli/init">
+    Write the config file, and also `AGENTS.md` and git hooks.
+  </Card>
+  <Card title="fallow config-schema" icon="terminal" href="/cli/schema">
+    Print the full JSON schema for every config key.
+  </Card>
+  <Card title="Type-aware analysis" icon="code" href="/analysis/type-aware">
+    Read about the optional semantic pass for TypeScript.
+  </Card>
+  <Card title="Agent integration" icon="robot" href="/integrations/mcp">
+    Call the read-only `recommend` MCP tool from an agent.
+  </Card>
+</CardGroup>

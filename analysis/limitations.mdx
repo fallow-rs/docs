@@ -1,29 +1,32 @@
 ---
 title: "Known limitations"
-description: "Known limitations of fallow's syntactic analysis, including dynamic imports, runtime patterns, and framework-specific edge cases with workarounds."
+description: "Know where fallow can miss a finding or report a false positive, and how to work around it. Covers the limits of syntactic analysis, runtime patterns, and framework edge cases."
 keywords: ["limitations", "workarounds", "false positives", "syntactic analysis", "Svelte", "CSS modules", "NestJS"]
 icon: "triangle-exclamation"
 ---
 
-Fallow's default analysis is syntactic: no TypeScript compiler, no type
-resolution. The optional [`--type-aware`](/analysis/type-aware) pass adds
-bounded checker evidence for Fallow-owned project questions. It does not turn
-Fallow into a compiler or general typed linter.
+This page lists the patterns where fallow can miss a finding or report a false
+positive, with a workaround for each.
+
+The default fallow analysis is syntactic. It does not use the TypeScript
+compiler or resolve types. The optional [`--type-aware`](/analysis/type-aware)
+pass adds limited checker evidence for the project questions that fallow
+answers. It does not make fallow a compiler or a general typed linter.
 
 <Info>
-The limitations below apply to specific patterns. Standard TypeScript projects with `isolatedModules: true` are unaffected by most of them.
+Each limitation below applies to a specific pattern. Most of them do not affect a standard TypeScript project with `isolatedModules: true`.
 </Info>
 
 <Accordion title="Syntactic analysis only (no TypeScript type information)">
-  By default, Fallow parses source code as syntax trees using Oxc and uses
-  `oxc_semantic` for scope-aware binding analysis. It does not invoke the
-  TypeScript compiler or resolve type information. This keeps the default path
+  By default, fallow parses source code into syntax trees with Oxc, and uses
+  `oxc_semantic` for scope-aware binding analysis. It does not run the
+  TypeScript compiler or resolve type information, so the default path stays
   fast. Add [`--type-aware`](/analysis/type-aware) for exact symbol identity,
-  cross-file private type leaks, targeted tests, and public type coupling.
+  private type leaks across files, targeted tests, and public type coupling.
 
-  **Impact:** Type-only imports (`import type { Foo }`) are handled correctly. Value imports used only as type annotations (e.g., `import { Foo }` followed by `const x: Foo`) are also tracked correctly via `oxc_semantic` reference counting. Conditional type exports or dead code behind generic interfaces would require actual type resolution to detect.
+  **Impact:** Fallow handles type-only imports (`import type { Foo }`) correctly. It also tracks value imports that are used only as type annotations (e.g., `import { Foo }` followed by `const x: Foo`), with `oxc_semantic` reference counting. To detect conditional type exports or dead code behind generic interfaces, fallow needs real type resolution.
 
-  **Workaround:** Set `isolatedModules: true` in `tsconfig.json`. esbuild, swc, and Vite already require this, so most modern projects have it. With `isolatedModules`, every import is either explicitly `import type` or a real value import, removing ambiguity.
+  **Workaround:** Set `isolatedModules: true` in `tsconfig.json`. esbuild, swc, and Vite already require this setting, so most modern projects have it. With `isolatedModules`, every import is either an explicit `import type` or a real value import, so there is no ambiguity.
 
   ```jsonc tsconfig.json
   {
@@ -35,19 +38,27 @@ The limitations below apply to specific patterns. Standard TypeScript projects w
 </Accordion>
 
 <Accordion title="Svelte export let prop ambiguity">
-  In Svelte components, `export let` declarations serve double duty: they define component props **and** regular exports. Fallow can't distinguish between props (used by consumers via the template) and utility exports that may genuinely be unused.
+  In Svelte components, an `export let` declaration defines a component prop **and** a regular export. Fallow cannot tell props (which consumers use through the template) apart from utility exports that can really be unused.
 
-  **Impact:** Some unused exports in `.svelte` files may not be reported.
+  **Impact:** Fallow can miss some unused exports in `.svelte` files.
 
-  **Workaround:** No configuration workaround exists. Review Svelte component exports manually. Extract utility functions into separate `.ts` files where fallow can track them accurately.
+  **Workaround:** There is no configuration workaround. Review Svelte component exports manually. Move utility functions into separate `.ts` files, where fallow can track them accurately.
 
   <Tip>
-  This limitation is about `export let` prop detection only. Fallow **does** track template-visible imports since v2.15.0: component tags, directives (`use:tooltip`, `v-focus-trap`), expressions, `$store` subscriptions in Svelte, and `v-on`/`v-bind` object syntax in Vue are all correctly credited as used. See [File types](/analysis/file-types) for details.
+  This limitation applies only to `export let` prop detection. Since v2.15.0, fallow **does** track imports that the template uses. It counts these as used:
+
+  - Component tags.
+  - Directives (`use:tooltip`, `v-focus-trap`).
+  - Expressions.
+  - `$store` subscriptions in Svelte.
+  - `v-on` and `v-bind` object syntax in Vue.
+
+  [File types](/analysis/file-types) has the details.
   </Tip>
 </Accordion>
 
-<Accordion title="CSS/SCSS regex-based parsing">
-  CSS and SCSS files are parsed with lightweight regex extraction rather than a full CSS parser. This covers the most common patterns but not the entire CSS specification.
+<Accordion title="CSS and SCSS extraction">
+  Fallow reads import directives and all SCSS syntax with regex extraction, not with a full parser. For CSS Module class names in standard CSS files, fallow uses a CSS parser (lightningcss). The parser does not read SCSS syntax, so `.module.scss` class names also come from regex extraction.
 
   **What's tracked:**
   - `@import` and `@use` statements
@@ -56,8 +67,8 @@ The limitations below apply to specific patterns. Standard TypeScript projects w
   - `@plugin` directives (Tailwind v4 plugin sources, package or relative)
 
   **What's not tracked:**
-  - `composes:` (CSS Modules composition)
-  - `:global()` and `:local()` pseudo-selectors
+  - `composes:` (CSS Modules composition). A class that another class composes can show as unused.
+  - The scope of `:global()`. Fallow reads the class inside `:global(.name)` as a CSS Module class, so it can report a global class as unused.
   - Complex selector-based dependencies
 
   **Workaround:** If fallow reports false positives for CSS files that use `composes:` or `:global()`, suppress them with `ignorePatterns` or inline comments.
@@ -70,11 +81,11 @@ The limitations below apply to specific patterns. Standard TypeScript projects w
 </Accordion>
 
 <Accordion title="NestJS and dependency injection class members">
-  Fallow tracks class member usage syntactically by looking for direct references in source code. In NestJS and other DI frameworks, abstract class methods may be invoked at runtime through the DI container without appearing as direct references.
+  Fallow tracks class member usage syntactically: it looks for direct references in source code. In NestJS and other DI frameworks, the DI container can call abstract class methods at runtime, with no direct reference in the source.
 
-  **Impact:** Abstract class methods and properties consumed via dependency injection may be reported as unused.
+  **Impact:** Fallow can report abstract class methods and properties that dependency injection uses as unused.
 
-  **Workaround:** Disable `unused-class-members` for DI-heavy projects:
+  **Workaround:** In a project that uses DI a lot, disable `unused-class-members`:
 
   <CodeGroup>
   ```jsonc .fallowrc.json
@@ -93,11 +104,11 @@ The limitations below apply to specific patterns. Standard TypeScript projects w
 </Accordion>
 
 <Accordion title="Library consumer types (noisy but correct)">
-  If your package exports types for external consumers (e.g., `ButtonProps`, `Config`), fallow correctly reports them as unused within your project, because they are. No internal file imports them.
+  If your package exports types for external consumers (e.g., `ButtonProps`, `Config`), fallow reports them as unused in your project. The finding is correct, because no internal file imports them.
 
-  **Impact:** Correct findings that are noisy for library authors.
+  **Impact:** Library authors get correct findings that add noise.
 
-  **Workaround:** Use `ignoreExports` to mark public API files:
+  **Workaround:** Mark the public API files with `ignoreExports`:
 
   ```jsonc .fallowrc.json
   {
@@ -110,7 +121,7 @@ The limitations below apply to specific patterns. Standard TypeScript projects w
 </Accordion>
 
 <Accordion title="Config parsing ceiling">
-  Fallow's built-in plugins parse config files (e.g., `vite.config.ts`, `jest.config.js`) using Oxc's AST parser. This handles static objects, arrays, and `defineConfig()` wrappers, but it can't evaluate arbitrary JavaScript.
+  The built-in fallow plugins parse config files (e.g., `vite.config.ts`, `jest.config.js`) with the Oxc AST parser. The parser handles static objects, arrays, and `defineConfig()` wrappers, but it cannot evaluate arbitrary JavaScript.
 
   **What's handled:**
   - Static object literals and arrays
@@ -123,7 +134,7 @@ The limitations below apply to specific patterns. Standard TypeScript projects w
   - Nested factory functions
   - Dynamic `require()` with variables
 
-  **Workaround:** Add undetected entry points manually in your fallow config:
+  **Workaround:** Add the entry points that fallow misses to your fallow config manually:
 
   ```jsonc .fallowrc.json
   {
@@ -133,9 +144,9 @@ The limitations below apply to specific patterns. Standard TypeScript projects w
 </Accordion>
 
 <Accordion title="React Native native modules">
-  React Native auto-linked native packages (installed via `npx pod-install` or auto-linking) aren't detected as used by fallow. These packages may not have any explicit `import` in JavaScript code.
+  Fallow does not detect auto-linked React Native native packages (installed via `npx pod-install` or auto-linking) as used. These packages can have no explicit `import` in JavaScript code.
 
-  **Impact:** Auto-linked packages like `react-native-screens` or `react-native-gesture-handler` may be reported as unused dependencies.
+  **Impact:** Fallow can report auto-linked packages such as `react-native-screens` or `react-native-gesture-handler` as unused dependencies.
 
   **Workaround:** Add auto-linked packages to `ignoreDependencies`:
 
@@ -151,30 +162,34 @@ The limitations below apply to specific patterns. Standard TypeScript projects w
 </Accordion>
 
 <Accordion title="Hidden directories are not traversed">
-  Discovery skips dot-prefixed directories. Five conventional names are
-  traversed by default (`.storybook`, `.vitepress`, `.well-known`,
-  `.changeset`, `.github`), and an active framework plugin can contribute the
-  hidden directory its framework owns. Everything else is dropped before its
-  contents are parsed, which keeps machine-written trees such as `.next`,
-  `.turbo`, and `.venv` out of analysis without any configuration.
+  Discovery skips directories whose names start with a dot. It traverses five
+  conventional names by default (`.storybook`, `.vitepress`, `.well-known`,
+  `.changeset`, `.github`). An active framework plugin can also add the hidden
+  directory that its framework owns. A hidden directory that a `package.json`
+  script names as a config or file argument (for example
+  `tsx ./.scripts/build.ts`) is also traversed. Fallow drops every other hidden directory
+  before it parses the contents. This keeps machine-written trees such as
+  `.next`, `.turbo`, and `.venv` out of the analysis, with no configuration.
 
-  **Impact:** First-party source under a hidden directory, for example agent
-  hooks in `.claude/hooks/` or plugins in `.omp/extensions/`, is not analyzed.
-  Its imports and exports are invisible, so it neither produces findings of its
-  own nor credits the modules it imports. The run reports the skip rather than
-  dropping it silently: a `skipped-source-dotdir` entry in
-  `workspace_diagnostics[]` and one aggregated note on stderr name each hidden
-  directory that holds source files your project has not otherwise excluded.
+  **Impact:** Fallow does not analyze first-party source in a hidden directory,
+  for example agent hooks in `.claude/hooks/` or plugins in `.omp/extensions/`.
+  Fallow cannot see its imports and exports. The directory produces no findings
+  of its own and does not mark the modules it imports as used.
 
-  **Workaround:** No config field adds a directory to traversal. Analyze the
-  directory on its own by pointing fallow at it:
+  Fallow reports the skip. For each hidden directory that holds source files
+  your project did not exclude, it writes a `skipped-source-dotdir` entry in
+  `workspace_diagnostics[]` and names the directory in one aggregated note on
+  stderr.
+
+  **Workaround:** No config field adds a directory to traversal. To analyze the
+  directory, point fallow at it:
 
   ```bash
   fallow dead-code --root .claude
   ```
 
-  If the directory holds tool or agent scratch state you never want analyzed,
-  add it to `ignorePatterns` to silence the advisory:
+  If the directory holds tool or agent scratch state that you never want
+  analyzed, add it to `ignorePatterns`. The note then stops:
 
   ```jsonc .fallowrc.json
   {
@@ -182,29 +197,21 @@ The limitations below apply to specific patterns. Standard TypeScript projects w
   }
   ```
 
-  Contents already excluded from the run stay silent on their own, so a hidden
-  directory covered by `.gitignore` (including a global gitignore, which
-  commonly covers agent tooling) never produces the advisory.
-</Accordion>
-
-<Accordion title="LSP column offsets are byte-based">
-  The fallow LSP server reports column positions as byte offsets rather than character offsets. For ASCII-only source files this makes no difference. For files with multi-byte characters (emoji, CJK, accented characters), the column number may be off by a few positions.
-
-  **Impact:** Diagnostic squiggles in VS Code may be slightly misaligned on lines containing non-ASCII characters.
-
-  **Workaround:** This is a cosmetic issue only. The line number and file path are always correct, so navigation still works. A fix is planned for a future release.
+  Fallow does not report content that the run already excludes. A hidden
+  directory that `.gitignore` covers (including a global gitignore, which often
+  covers agent tooling) never produces the note.
 </Accordion>
 
 ## See also
 
 <CardGroup cols={3}>
   <Card title="Inline suppression" icon="comment-slash" href="/configuration/suppression">
-    Suppress individual false positives directly in source code.
+    Suppress one false positive at a time in source code.
   </Card>
   <Card title="Configuration" icon="gear" href="/configuration/overview">
-    Full config file reference for ignorePatterns, ignoreExports, and rules.
+    Config file reference for `ignorePatterns`, `ignoreExports`, and `rules`.
   </Card>
   <Card title="Agent integration" icon="robot" href="/integrations/mcp">
-    How agents handle false positives via config and suppression.
+    How agents handle false positives with config and suppression.
   </Card>
 </CardGroup>

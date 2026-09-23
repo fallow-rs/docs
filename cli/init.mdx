@@ -1,21 +1,21 @@
 ---
 title: "fallow init"
-description: "CLI reference for fallow init. Generate a .fallowrc.json, .fallowrc.jsonc, or fallow.toml configuration file with schema support for editor autocomplete."
+description: "Start a fallow config with editor autocomplete and validation. Fallow init generates a .fallowrc.json or fallow.toml configuration file with schema support."
 keywords: ["fallow init", "config", "CLI", "configuration file", "fallowrc", "fallowrc.jsonc", "toml"]
 icon: "terminal"
 ---
 
-Create a configuration file for your project. The generated config includes a `$schema` field so your editor can provide autocomplete and validation.
+Use `fallow init` to create a configuration file for your project. The generated config has a `$schema` field, so your editor gives autocomplete and validation.
 
 <Info>
-  Most projects don't need a config file. Fallow works out of the box by auto-detecting entry points and frameworks. Only create one if you need custom entry points, rules, or ignore patterns.
+  Most projects do not need a config file. Fallow detects entry points and frameworks automatically. Create a config file only if you need custom entry points, rules, or ignore patterns.
 </Info>
 
-Fallow's init command auto-detects your project setup and tailors the generated config accordingly:
+`fallow init` detects your project setup and adapts the generated config to it:
 
-- **TypeScript**: Detects `tsconfig.json` and enables TypeScript-aware defaults
-- **Monorepo**: Detects workspace configurations (npm, yarn, pnpm) and includes workspace patterns
-- **Frameworks**: Detects installed frameworks (Next.js, Remix, Vite, etc.) and adds appropriate entry point patterns
+- **TypeScript**: finds `tsconfig.json` and turns on TypeScript-aware defaults.
+- **Monorepo**: finds workspace configurations (npm, yarn, pnpm) and adds the workspace patterns.
+- **Frameworks**: finds installed frameworks (Next.js, Remix, Vite, and others) and adds the matching entry point patterns.
 
 ```bash
 fallow init
@@ -26,62 +26,72 @@ fallow init
 | Flag | Description |
 |:-----|:------------|
 | `--toml` | Generate `fallow.toml` instead of `.fallowrc.json` |
-| `--agents` | Scaffold a starter `AGENTS.md` guide for coding agents, prefilled from detected project info |
-| `--hooks` | Scaffold a pre-commit git hook that runs fallow on changed files. Alias for `fallow hooks install --target git` |
+| `--agents` | Write a starter `AGENTS.md` guide for coding agents, prefilled with detected project info |
+| `--hooks` | Write a pre-commit git hook that runs fallow on changed files. Alias for `fallow hooks install --target git` |
 | `--branch <REF>` | Fallback base branch for the hook when no upstream is set (requires `--hooks`, default: `main`) |
-| `--decline` | Record that this project deliberately stays unconfigured, so the first-contact setup hint and the `setup` next-step stop appearing. Writes no config file; idempotent |
+| `--decline` | Record that this project stays unconfigured on purpose. Fallow then stops showing the first-contact setup hint and the `setup` next step. Writes no config file. Safe to run more than once |
 
 ## Agent guide scaffold
 
-`fallow init --agents` writes a short starter `AGENTS.md` with project-overview, architecture, command, fallow workflow, and agent-rule prompts, plus a task-to-command matrix that routes common agent intents (deleting "unused" code, committing, prioritizing refactors, consolidating duplication) to the right fallow command. The matrix is the same one exposed as `task_matrix` in [`fallow schema`](/cli/schema). It refuses to overwrite an existing `AGENTS.md`, and it is guidance for agents, not a readiness score.
+`fallow init --agents` gives coding agents a starting guide for your project. It writes a short starter `AGENTS.md` with prompts for these sections: project overview, architecture, commands, fallow workflow, and agent rules.
 
-When the project shape is reliably detectable, the scaffold prefills:
+The file also has a task-to-command matrix. The matrix sends common agent tasks to the right fallow command, for example: delete "unused" code, commit, prioritize refactors, and consolidate duplication. It is the same matrix as `task_matrix` in [`fallow schema`](/cli/schema).
+
+The command does not overwrite an existing `AGENTS.md`. The file is guidance for agents. It is not a readiness score.
+
+When fallow can reliably detect the project shape, it prefills these lines:
 
 - **Install** from the `packageManager` field in `package.json`, or `pnpm install` when `pnpm-workspace.yaml` is present
 - **Test** with the detected test framework (Vitest, Jest, or Playwright), but only when exactly one is present
 - **Typecheck or lint** with `tsc --noEmit` when `tsconfig.json` exists
 - **Module boundaries** with the workspace patterns for monorepos
 
-Anything ambiguous stays blank rather than guessed: fallow never sniffs a package manager from lockfiles, leaves the test line empty when several frameworks are installed, and labels the workspace tool only when the `packageManager` field or `pnpm-workspace.yaml` proves it. Prefilled command lines carry an HTML provenance comment so you know to confirm them.
+Fallow leaves an ambiguous line blank and does not guess:
+
+- It never infers a package manager from lockfiles.
+- It leaves the test line empty when more than one test framework is installed.
+- It names the workspace tool only when the `packageManager` field or `pnpm-workspace.yaml` proves it.
+
+Each prefilled command line has an HTML comment that shows where the value came from. Confirm these lines before you rely on them.
 
 ```bash
 fallow init --agents
 ```
 
-[`fallow agent install`](/cli/agent) writes the same guide together with the skill, the MCP registration, and the commit/push gate for every harness it detects.
+[`fallow agent install`](/cli/agent) writes the same guide. It also writes the skill, the MCP registration, and the commit and push gate for each harness that it detects.
 
 ## Pre-commit hook
 
-Use the hooks namespace to scaffold a git hook that runs `fallow audit` against the base branch before each commit:
+To check each commit before it lands, install a git hook. The hook runs `fallow audit` against the base branch before each commit:
 
 ```bash
 fallow hooks install --target git
 ```
 
-`fallow init --hooks` remains available as a project-initialization shortcut.
+`fallow init --hooks` does the same, as a shortcut during project setup.
 
-Fallow detects your hook manager and writes to the right location:
+Fallow detects your hook manager and writes to the matching location:
 
-1. **Husky** -- adds to `.husky/pre-commit`
-2. **Lefthook** -- adds to `lefthook.yml`
-3. **Bare hooks** -- writes `.git/hooks/pre-commit`
+1. **Husky**: adds to `.husky/pre-commit`
+2. **Lefthook**: adds to `lefthook.yml`
+3. **Bare hooks**: writes `.git/hooks/pre-commit`
 
 The generated hook:
 
-- Includes a binary guard (`command -v fallow`) so commits still work when fallow isn't installed
-- Resolves the base ref at commit time: `git merge-base @{upstream} HEAD` when an upstream is set, falling back to the configured branch (or `main`) otherwise. Feature branches forked from a non-default integration branch (next-release / hotfix / LTS) compare against the right base, not against their own remote tracking branch
-- Runs `fallow audit --base "$BASE" --quiet`, which combines dead-code, complexity, and duplication analysis
-- Defaults to `gate=new-only`, so inherited findings on touched files do not block the commit; only findings introduced by the changeset fail the gate. Set `[audit] gate = "all"` in `fallow.toml` to fail on every finding in changed files
-- Returns exit code 1 on `verdict: "fail"` (default audit semantics); no `--fail-on-issues` is needed
-- Prints `git commit --no-verify` as the bypass option in the success message
+- Has a binary guard (`command -v fallow`), so commits still work when fallow is not installed.
+- Finds the base ref at commit time. When an upstream is set, it uses `git merge-base @{upstream} HEAD`. Otherwise it uses the configured branch, or `main`. A feature branch from a non-default integration branch (next-release, hotfix, or LTS) thus compares against the correct base, and not against its own remote tracking branch.
+- Runs `fallow audit --base "$BASE" --quiet`, which combines dead-code, complexity, and duplication analysis.
+- Uses `gate=new-only` by default. Only findings that the changeset introduces fail the gate. Older findings in touched files do not block the commit. To fail on every finding in changed files, set `[audit] gate = "all"` in `fallow.toml`.
+- Returns exit code 1 on `verdict: "fail"`, as audit does by default. You do not need `--fail-on-issues`.
+- Prints `git commit --no-verify` as the bypass option in the success message.
 
 <Info>
-  Want to gate Claude Code or Codex agent commits as well? Use [`fallow hooks install --target agent`](/integrations/claude-hooks) for the agent enforcement path. The two hooks are complementary: `fallow hooks install --target git` catches human commits, `fallow hooks install --target agent` catches agent commits.
+  To gate commits from Claude Code or Codex agents too, use [`fallow hooks install --target agent`](/integrations/claude-hooks). The two hooks work together. `fallow hooks install --target git` checks human commits, and `fallow hooks install --target agent` checks agent commits.
 </Info>
 
 ### Custom base branch
 
-Override the fallback base branch the hook uses when no upstream is set:
+To change the fallback base branch that the hook uses when no upstream is set, pass `--branch`:
 
 ```bash
 fallow hooks install --target git --branch develop
@@ -89,30 +99,44 @@ fallow hooks install --target git --branch develop
 
 ## Gitignore
 
-`fallow init` automatically adds `.fallow/` to your project's `.gitignore`. The `.fallow/` directory contains machine-local data (parse cache, regression baselines, snapshots) that should not be committed.
+`fallow init` adds `.fallow/` to the `.gitignore` of your project. The `.fallow/` directory holds machine-local data (parse cache, regression baselines, snapshots). Do not commit this data.
 
-- If `.gitignore` exists and already contains `.fallow/`, nothing changes
-- If `.gitignore` exists without it, the entry is appended
-- If `.gitignore` doesn't exist, it is created
+- If `.gitignore` exists and already contains `.fallow/`, nothing changes.
+- If `.gitignore` exists without the entry, fallow appends it.
+- If `.gitignore` does not exist, fallow creates it.
 
 ## Output
 
-By default, creates `.fallowrc.json`:
+By default, `fallow init` creates `.fallowrc.json`. The file content is JSONC, with comments. For a plain JavaScript project, the file looks like this:
 
 ```jsonc
 {
+  // This file is JSONC: fallow reads these comments; generic JSON tools may not.
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "entry": [
+    "src/index.{js,jsx,mjs}",
+    "src/main.{js,jsx,mjs}"
+  ],
+  "duplicates": {
+    // Hide pair-only clones; focus on widespread copy-paste
+    // worth refactoring. Lower to 2 to report every duplicate pair.
+    "minOccurrences": 3
+  },
   "rules": {}
 }
 ```
 
-With `--toml`, creates `fallow.toml`.
+The detected entry patterns change with your project setup. The real file also has commented-out `duplicates.ignore` examples.
+
+With `--toml`, it creates `fallow.toml`. To get editor highlighting for JSON with comments, rename the file to `.fallowrc.jsonc`. Fallow finds both names.
+
+If `.fallowrc.json`, `.fallowrc.jsonc`, `fallow.toml`, or `.fallow.toml` already exists, `fallow init` changes nothing and exits with code 2.
 
 ## See also
 
 <CardGroup cols={2}>
   <Card title="Configuration overview" icon="gear" href="/configuration/overview">
-    Full reference for all configuration options.
+    See every configuration option.
   </Card>
   <Card title="Quickstart" icon="bolt" href="/quickstart">
     Get started with fallow in under a minute.

@@ -1,22 +1,22 @@
 ---
 title: "Non-JS file types"
-description: "Fallow analyzes HTML, Vue, Svelte, Astro, MDX, GraphQL, CSS modules, SCSS, and React Native files automatically. No plugins or config needed."
+description: "Files that only HTML, Vue, Svelte, Astro, MDX, GraphQL, or CSS reference still count as used. Fallow reads these file types and React Native platform files with no plugin or config."
 keywords: ["HTML", "Vue", "Svelte", "Astro", "MDX", "GraphQL", "CSS modules", "React Native", "file types", "SCSS"]
 icon: "file-code"
 ---
 
-Fallow analyzes more than `.js` and `.ts` files. It extracts imports and exports from non-JavaScript file types automatically based on their extension. No plugins or config needed.
+A file that only an HTML page, a Vue template, or a stylesheet references is not unused. Fallow analyzes more than `.js` and `.ts` files: it reads imports and exports from non-JavaScript file types, based on the file extension. You do not need a plugin or config.
 
 <Tabs>
   <Tab title="HTML">
-    Fallow discovers `.html` files and extracts edges from `<script src>` and `<link>` tags. This covers projects that use HTML entry points (such as Parcel or vanilla setups).
+    Fallow finds `.html` files and reads the `<script src>` and `<link>` tags as module graph edges. This covers projects with HTML entry points, such as Parcel or setups with no framework.
 
-    **What's supported:**
+    **Fallow reads:**
 
     - `<script src="./main.js">` script references
     - `<link rel="stylesheet" href="./styles.css">` stylesheet references
     - `<link rel="modulepreload" href="./vendor.js">` module preload references
-    - Root-relative paths (e.g., `<script src="/src/main.tsx">`) are resolved against the project root, matching the convention used by Vite, Parcel, and similar dev servers. Root-relative resolution also applies when the reference comes from a JSX/TSX/JS/TS source file (see the JSX templates tab).
+    - Root-relative paths (for example `<script src="/src/main.tsx">`). Fallow resolves them against the directory of the HTML file first, then against the project root, then against `public/` in the project root. `html` tagged templates in JS and TS files use the same order, without the `public/` step (see the SSR layouts tab).
 
     ```html index.html
     <!DOCTYPE html>
@@ -32,31 +32,38 @@ Fallow analyzes more than `.js` and `.ts` files. It extracts imports and exports
     </html>
     ```
 
-    Fallow sees this file as referencing `./styles/main.css`, `./vendor/lodash.js`, and `./src/main.ts`.
+    Fallow reads references to `./styles/main.css`, `./vendor/lodash.js`, and `./src/main.ts` from this file.
 
     <Tip>
-    The Parcel plugin automatically adds `index.html` as an entry pattern, so HTML entry files are picked up without any extra config.
+    The Parcel plugin adds `index.html` as an entry pattern, so fallow finds HTML entry files with no extra config.
     </Tip>
 
-    **Angular template complexity.** Standalone `.html` files referenced via `templateUrl` and inline `@Component({ template: \`...\` })` literals both contribute synthetic `&lt;template&gt;` complexity findings to `fallow health`. The scanner recognises control-flow blocks (`@if`, `@for`, `@switch`, `@case`, `@defer (when ...)`, `@let`), legacy structural directives (`*ngIf`, `*ngFor`), bound attributes (`[x]`, `(x)`, `bind-x`, `on-x`), and `{{ }}` interpolations. Inline-template findings anchor at the `@Component` decorator line and suppress with `// fallow-ignore-next-line complexity` directly above the decorator; external-template findings suppress with `&lt;!-- fallow-ignore-file complexity --&gt;` at the top of the `.html` file.
+    **Angular template complexity.** `fallow health` reports the complexity of Angular templates as synthetic `&lt;template&gt;` findings. This covers standalone `.html` files that `templateUrl` references and inline `@Component({ template: \`...\` })` literals. Fallow counts these template constructs:
+
+    - control-flow blocks (`@if`, `@for`, `@switch`, `@case`, `@defer (when ...)`, `@let`)
+    - legacy structural directives (`*ngIf`, `*ngFor`)
+    - bound attributes (`[x]`, `(x)`, `bind-x`, `on-x`)
+    - `{{ }}` interpolations
+
+    Fallow reports an inline-template finding on the `@Component` decorator line. To suppress it, put `// fallow-ignore-next-line complexity` directly above the decorator. To suppress an external-template finding, put `&lt;!-- fallow-ignore-file complexity --&gt;` at the top of the `.html` file.
   </Tab>
   <Tab title="Vue / Svelte">
-    Fallow extracts the `<script>` block from Vue and Svelte single-file components and analyzes it like a standalone JS/TS module. It also scans `<template>` sections for component references, directives, and expression usage, so imports used only in templates are correctly tracked.
+    Fallow reads the `<script>` block of Vue and Svelte single-file components and analyzes it like a JS or TS module. It also reads the `<template>` section for component references, directives, and expressions. An import that only the template uses therefore counts as used.
 
     **Script extraction:**
 
     - `<script>` and `<script setup>` blocks
     - `lang="ts"` and `lang="tsx"` attributes
-    - `<script src="./external.ts">` external script references
-    - HTML comments (`<!-- ... -->`) are filtered out before parsing
+    - `<script src="./external.ts">` external script references (Vue only. In Svelte, a `<script src>` tag is runtime HTML and does not add an import.)
+    - HTML comments (`<!-- ... -->`), which fallow removes before parsing
 
     **Vue template tracking:**
 
     - Component tags: `<MyComponent>` resolves to imported `MyComponent`
     - Custom directives: `v-focus-trap` resolves to imported `vFocusTrap`
-    - `v-on` and `v-bind` object syntax (e.g., `v-on="handlers"`)
+    - `v-on` and `v-bind` object syntax (for example `v-on="handlers"`)
     - Template expressions: `{{ formatDate() }}` marks `formatDate` as used
-    - Namespace member access: `utils.formatDate` in templates tracks the member usage
+    - Namespace member access: `utils.formatDate` in a template marks the member as used
 
     **Svelte template tracking:**
 
@@ -81,35 +88,21 @@ Fallow analyzes more than `.js` and `.ts` files. It extracts imports and exports
     </template>
     ```
 
-    Fallow sees this file as importing `ref` from `vue`, `formatDate` from `@/utils/date`, and `FocusTrap` from `@/components/FocusTrap.vue`. The `<FocusTrap>` tag and `formatDate` reference in the template are tracked, so they won't be reported as unused even though they don't appear in the script block.
+    Fallow reads imports of `ref` from `vue`, `formatDate` from `@/utils/date`, and `FocusTrap` from `@/components/FocusTrap.vue`. The template uses `<FocusTrap>` and `formatDate`, so fallow does not report them as unused, although the script block does not use them.
 
     <Warning>
-    Svelte components export props implicitly. Fallow cannot distinguish between props and utility exports, which may cause false negatives for unused exports in `.svelte` files. See [Limitations](/analysis/limitations) for details.
+    Svelte components export props implicitly. Fallow cannot tell props from utility exports, so it can miss unused exports in `.svelte` files. For details, see [Limitations](/analysis/limitations).
     </Warning>
   </Tab>
   <Tab title="SSR layouts">
-    SSR frameworks like [Hono](https://hono.dev) render HTML from layout components using either JSX or a tagged template literal (`` html`...` ``). Fallow treats `<script src="...">` and `<link rel="stylesheet|modulepreload" href="...">` inside both forms the same way it treats them in plain HTML: as asset references that keep the target file reachable.
+    SSR frameworks such as [Hono](https://hono.dev) can render HTML from a tagged template literal (`` html`...` ``). Fallow reads `<script src="...">` and `<link rel="stylesheet|modulepreload" href="...">` in these templates as it does in plain HTML. Each one is an asset reference that keeps the target file reachable.
 
-    **What's supported:**
+    **Fallow reads:**
 
-    - `<script src="./app.js">` inside JSX/TSX layouts and `` html`...` `` tagged templates
-    - `<link rel="stylesheet" href="./global.css">` inside JSX/TSX layouts and `` html`...` `` tagged templates
-    - `<link rel="modulepreload" href="./vendor.js">` inside JSX/TSX layouts and `` html`...` `` tagged templates
-    - Root-relative paths (`<link href="/static/style.css">`) resolve against the source file's parent directory first, then the project root, matching how Vite/Parcel/Hono serve static assets
-
-    ```tsx Layout.tsx
-    export const Layout = () => (
-      <html>
-        <head>
-          <link rel="stylesheet" href="/static/style.css" />
-          <script src="/static/app.js"></script>
-        </head>
-        <body>
-          <h1>Hello from Hono</h1>
-        </body>
-      </html>
-    );
-    ```
+    - `<script src="./app.js">` inside `` html`...` `` tagged templates
+    - `<link rel="stylesheet" href="./global.css">` inside `` html`...` `` tagged templates
+    - `<link rel="modulepreload" href="./vendor.js">` inside `` html`...` `` tagged templates
+    - Root-relative paths (`<link href="/static/style.css">`). Fallow resolves them against the parent directory of the source file first, then against the project root
 
     ```ts layout.ts
     import { html } from 'hono/html'
@@ -127,16 +120,16 @@ Fallow analyzes more than `.js` and `.ts` files. It extracts imports and exports
     `
     ```
 
-    Fallow sees both files as referencing `/static/style.css` and `/static/app.js`, so sibling files in `static/` are correctly marked reachable.
+    Fallow reads references to `/static/style.css` and `/static/app.js` from this file and marks those files in `static/` as reachable.
 
     <Note>
-    In JSX, only lowercase intrinsic elements (`<script>`, `<link>`) and plain string literals (`src="foo.css"`) are tracked. Capitalized React-style components (`<Script>`, `<Link>`) and expression containers (`href={someVar}`) are intentionally skipped because they have component-specific semantics that fallow can't statically resolve.
+    Fallow does not read `<script src>` and `<link href>` in JSX or TSX layouts. In JSX, these attributes are runtime HTML, not module imports, so they do not add a graph edge. If a JSX layout is the only reference to an asset, add the asset to `entry` or `ignorePatterns`.
 
-    In tagged templates, only the bare identifier tag `html` is matched. Other tags like `css`, `sql`, and `gql` are left alone. Asset references split across an interpolation boundary (`` html`<script src="${base}/app.js">` ``) are skipped rather than producing garbled specifiers.
+    In tagged templates, fallow matches only the bare identifier tag `html`. It ignores other tags, such as `css`, `sql`, and `gql`. It skips an asset reference that an interpolation splits (`` html`<script src="${base}/app.js">` ``), so it does not produce a broken specifier.
     </Note>
   </Tab>
   <Tab title="JSDoc">
-    Plain JavaScript files can reference TypeScript types through JSDoc `import()` expressions. Fallow extracts these references and marks the referenced types as used, so untyped JS files don't produce false unused-export reports.
+    Plain JavaScript files can reference TypeScript types through JSDoc `import()` expressions. Fallow reads these references and marks the types as used, so untyped JS files do not cause false unused-export reports.
 
     ```js app.js
     /**
@@ -148,16 +141,21 @@ Fallow analyzes more than `.js` and `.ts` files. It extracts imports and exports
     }
     ```
 
-    Fallow tracks the `Config` and `Result` types from `./types.ts` as used, even though no `import` statement binds them. This works across all JSDoc tag contexts (`@param`, `@returns`, `@type`, `@typedef`, `@callback`) and supports union annotations with multiple `import()` expressions (`{import('./a').A | import('./b').B}`), nested member access, bare package specifiers, and parent-relative paths.
+    Fallow marks the `Config` and `Result` types from `./types.ts` as used, although no `import` statement binds them. This works in all JSDoc tags (`@param`, `@returns`, `@type`, `@typedef`, `@callback`). Fallow also supports:
+
+    - union annotations with more than one `import()` expression (`{import('./a').A | import('./b').B}`)
+    - nested member access
+    - bare package specifiers
+    - parent-relative paths
 
     <Note>
-    Only `/** */` JSDoc blocks are scanned. Single-star `/* */` comments are not JSDoc and are ignored, matching the TypeScript compiler's behavior.
+    Fallow reads only `/** */` JSDoc blocks. It ignores single-star `/* */` comments, because they are not JSDoc. The TypeScript compiler does the same.
     </Note>
   </Tab>
   <Tab title="Astro">
-    Astro components use a frontmatter block delimited by `---` at the top of the file. Fallow extracts everything between the two `---` delimiters and analyzes it as TypeScript.
+    Astro components start with a frontmatter block between two `---` lines. Fallow analyzes the content of this block as TypeScript.
 
-    Fallow also follows per-component client scripts in the template body: `<script src="...">` references and ESM `import` statements inside inline `<script>` blocks. Astro bundles both into the page output at build time, so their targets stay reachable.
+    Fallow also follows the client scripts in the template body: `<script src="...">` references and ESM `import` statements in inline `<script>` blocks. Astro bundles both into the page at build time, so their targets stay reachable.
 
     ```astro Layout.astro
     ---
@@ -179,10 +177,10 @@ Fallow analyzes more than `.js` and `.ts` files. It extracts imports and exports
     </html>
     ```
 
-    Fallow sees this file as importing `Header`, `Footer`, the `Props` type, plus `../scripts/analytics.ts` (external) and `../scripts/hydrate` (inline ESM).
+    Fallow reads imports of `Header`, `Footer`, and the `Props` type from this file. It also reads `../scripts/analytics.ts` (external) and `../scripts/hydrate` (inline ESM).
   </Tab>
   <Tab title="MDX">
-    MDX files can contain JavaScript `import` and `export` statements alongside Markdown content. Fallow extracts these statements and includes them in the module graph.
+    MDX files can contain JavaScript `import` and `export` statements next to Markdown content. Fallow adds these statements to the module graph.
 
     ```mdx guide.mdx
     import { CodeBlock } from '../components/CodeBlock'
@@ -200,13 +198,13 @@ Fallow analyzes more than `.js` and `.ts` files. It extracts imports and exports
     Fallow tracks the imports of `CodeBlock` and `Callout`, and the named export `meta`.
   </Tab>
   <Tab title="GraphQL">
-    GraphQL document files can reference fragments from nearby `.graphql` and `.gql` files with `#import` comments. Fallow extracts those relative document links and keeps imported fragment files reachable.
+    GraphQL documents can import fragments from other `.graphql` and `.gql` files with `#import` comments. Fallow reads these relative links and keeps the imported fragment files reachable.
 
-    **What's supported:**
+    **Fallow reads:**
 
     - `#import "./fragment.graphql"` relative imports
     - `# import '../shared/fields.gql'` with optional whitespace after `#`
-    - Extensionless relative imports such as `#import "./fragment"`, resolved through `.graphql` and `.gql`
+    - Relative imports with no extension, such as `#import "./fragment"`. Fallow tries `.graphql` and `.gql`
 
     ```graphql query.graphql
     #import "./fragments/user-fields"
@@ -225,14 +223,14 @@ Fallow analyzes more than `.js` and `.ts` files. It extracts imports and exports
     }
     ```
 
-    Fallow sees `query.graphql` as referencing `./fragments/user-fields`, probes `.graphql` and `.gql` when no extension is present, and marks `fragments/user-fields.graphql` as reachable.
+    Fallow reads the reference to `./fragments/user-fields` from `query.graphql`. Because the reference has no extension, fallow tries `.graphql` and `.gql`. It then marks `fragments/user-fields.graphql` as reachable.
 
     <Note>
-    Only relative `#import` specifiers starting with `./` or `../` are tracked. Package specifiers and schema-loader syntax are intentionally ignored because they do not map to a local source document in the module graph.
+    Fallow reads only relative `#import` specifiers that start with `./` or `../`. It ignores package specifiers and schema-loader syntax on purpose, because they do not point to a local document in the module graph.
     </Note>
   </Tab>
   <Tab title="CSS / SCSS Modules">
-    Fallow tracks CSS and SCSS module files (`.module.css` and `.module.scss`) by extracting class names as named exports. When a component imports `styles` from a CSS module, fallow knows which classes exist.
+    Fallow treats the class names in CSS and SCSS module files (`.module.css` and `.module.scss`) as named exports. When a component imports `styles` from a CSS module, fallow knows which classes exist.
 
     ```css Button.module.css
     .root {
@@ -254,18 +252,18 @@ Fallow analyzes more than `.js` and `.ts` files. It extracts imports and exports
 
     | Feature | Description |
     |:--------|:------------|
-    | `@import` | CSS import statements create edges in the module graph |
-    | `@use` | Sass `@use` rules are resolved as module imports |
-    | `@forward` | Sass `@forward` rules are treated as re-exports |
-    | `@apply` / `@tailwind` | Detected as Tailwind CSS dependency usage |
-    | `@plugin` | Tailwind v4 plugin sources are extracted as default imports (package or relative) |
+    | `@import` | Adds an edge to the module graph |
+    | `@use` | Fallow resolves Sass `@use` rules as module imports |
+    | `@forward` | Fallow treats Sass `@forward` rules as re-exports |
+    | `@apply` / `@tailwind` | Counts as a use of the Tailwind CSS dependency |
+    | `@plugin` | Fallow reads Tailwind v4 plugin sources as default imports (package or relative) |
 
     <Tip>
-    When Tailwind is in your `package.json`, fallow recognizes `@apply` and `@tailwind` directives as evidence that the `tailwindcss` dependency is used, preventing false "unused dependency" reports. Tailwind v4 `@plugin "pkg"` directives credit their package or local plugin file directly.
+    When Tailwind is in your `package.json`, `@apply` and `@tailwind` directives mark the `tailwindcss` dependency as used. This prevents a false "unused dependency" report. A Tailwind v4 `@plugin "pkg"` directive marks its package or local plugin file as used.
     </Tip>
   </Tab>
   <Tab title="React Native">
-    React Native projects use platform-specific file extensions for different implementations per platform. Fallow understands these extensions and treats them as variants of the same module.
+    React Native projects use a file extension per platform for each platform implementation. Fallow treats these files as variants of the same module.
 
     **Supported platform extensions:**
 
@@ -283,7 +281,7 @@ Fallow analyzes more than `.js` and `.ts` files. It extracts imports and exports
       Button.native.tsx   # Native override
     ```
 
-    When another file imports `./Button`, fallow resolves it to all platform variants and considers each one reachable.
+    When another file imports `./Button`, fallow resolves the import to all platform variants and marks each one as reachable.
   </Tab>
 </Tabs>
 
@@ -294,6 +292,6 @@ Fallow analyzes more than `.js` and `.ts` files. It extracts imports and exports
     How fallow builds the module graph and detects unused code.
   </Card>
   <Card title="Built-in plugins" icon="puzzle-piece" href="/frameworks/built-in">
-    Built-in framework plugins for automatic entry point detection.
+    Framework plugins that detect entry points for you.
   </Card>
 </CardGroup>

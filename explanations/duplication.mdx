@@ -1,87 +1,89 @@
 ---
 title: "Duplication explained"
-description: "What fallow's duplication output means, how clone detection works, and how to interpret and act on the results."
+description: "Decide which duplicated code to extract and which to leave alone. Learn what fallow dupes reports, how to read clone groups and families, and how clone detection works."
 keywords: ["duplication", "clone detection", "clone types", "clone families", "refactoring", "suffix array", "semantic clones"]
 icon: "clone"
 ---
 
-This page covers what `fallow dupes` reports, how to read the output, and when to act.
-
+Use this page to decide which duplication in your codebase is worth a refactor. It explains what `fallow dupes` reports, how to read the output, and when to act.
 
 ## Clone types
 
-Fallow classifies clones using the standard taxonomy from clone detection research.
+Fallow classifies clones with the standard taxonomy from clone detection research.
 
 | Clone type | What matches | Detection mode |
 |:-----------|:-------------|:---------------|
-| **Type-1** | Exact token sequences (whitespace/comments already stripped) | `strict`, `mild` |
-| **Type-2** | Same structure, but identifiers and/or literals differ | `weak`, `semantic` |
+| **Type-1** | Exact token sequences (whitespace and comments already stripped) | `strict`, `mild` |
+| **Type-2** | Same structure, but identifiers, literals, or both differ | `weak`, `semantic` |
 
-As you move from `strict` to `semantic`, recall increases (more clones found) but precision decreases (more potential false positives).
+From `strict` to `semantic`, recall increases (fallow finds more clones) and precision decreases (you get more possible false positives).
 
 <Accordion title="Research: clone taxonomy">
-The Type-1 through Type-4 clone taxonomy was surveyed by [Roy, Cordy, and Koschke (2009)](https://doi.org/10.1016/j.scico.2009.02.007). Fallow detects Type-1 and Type-2 clones. Type-3 (gapped clones with inserted/deleted statements) and Type-4 (semantically equivalent but syntactically different) require analysis beyond token comparison and are not currently supported.
+The Type-1 through Type-4 clone taxonomy was surveyed by [Roy, Cordy, and Koschke (2009)](https://doi.org/10.1016/j.scico.2009.02.007). Fallow detects Type-1 and Type-2 clones. Type-3 clones (gapped clones with inserted or deleted statements) and Type-4 clones (semantically equivalent but syntactically different) need more than token comparison. Fallow does not currently support them.
 </Accordion>
 
 ### Detection modes in detail
 
 | Mode | What is normalized | Trade-off |
 |:-----|:-------------------|:----------|
-| `strict` | Nothing -- exact token match | Highest precision, lowest recall |
-| `mild` | Equivalent to strict (AST tokenization already strips whitespace/comments) | Default, good starting point |
-| `weak` | + string literal values abstracted | Catches copies with different messages/URLs |
-| `semantic` | + identifiers + numeric literals + type annotations stripped | Catches renamed-variable clones, most false positives |
+| `strict` | Nothing, exact token match | Highest precision, lowest recall |
+| `mild` | Same as `strict` (AST tokenization already strips whitespace and comments) | Default, good starting point |
+| `weak` | + string literal values abstracted | Finds copies with different messages or URLs |
+| `semantic` | + identifiers + numeric literals + type annotations stripped | Finds clones with renamed variables, most false positives |
 
 ```text fallow dupes --mode semantic
-● Clone group (196 lines, 2 instances) [semantic match]
-  src/lib/dutch-holidays.ts:193-388
-  src/lib/dutch-holidays.ts:389-584
-  Renamed: holidays2024→holidays2025, year2024→year2025
+● Duplicates (1 clone groups)
+
+    196 lines  2 instances  dup:6f87acd9
+    src/lib/dutch-holidays.ts:193-388
+    src/lib/dutch-holidays.ts:389-584
 ```
+
+The two blocks differ only in names such as `holidays2024` and `holidays2025`. Only `semantic` mode matches them.
 
 
 ## Key metrics
 
 ### Duplication percentage
 
-Fraction of total source tokens that appear in at least one clone group. Computed over the full analyzed file set, not just the groups shown by `--top`.
+The share of source lines that overlap at least one clone instance. Fallow computes it over the full analyzed file set, not only the groups that `--top` shows.
 
 | Range | Interpretation | Action |
 |:------|:---------------|:-------|
 | 0–5% | Low duplication | No action needed |
 | 5–15% | Moderate | Review the largest clone families |
 | 15–30% | High | Prioritize extraction of shared modules |
-| 30%+ | Very high | Likely structural issue; look for copy-pasted modules |
+| 30%+ | Very high | Likely a structural issue. Look for copy-pasted modules |
 
 <Info>
-Duplication percentage is mode-dependent. Running with `semantic` mode will always report a higher percentage than `strict` because more normalization means more matches. Compare percentages only across runs using the same mode.
+The duplication percentage depends on the mode. `semantic` mode always reports a higher percentage than `strict`, because more normalization gives more matches. Compare percentages only between runs with the same mode.
 </Info>
 
 ### Token count and line count
 
 Each clone group reports both token count and line count.
 
-- **Tokens** are language-aware units (keywords, identifiers, operators, literals). This is what the detection engine matches on.
-- **Lines** are the source lines spanned by the clone. Useful for estimating refactoring effort.
+- **Tokens** are language-aware units (keywords, identifiers, operators, literals). The detection engine matches on tokens.
+- **Lines** are the source lines that the clone spans. Use lines to estimate the refactoring effort.
 
-Larger clones have higher refactoring value. A 200-line clone group is worth extracting; a 6-line one probably isn't.
+A larger clone gives more value when you extract it. A 200-line clone group is worth extracting. A 6-line one probably is not.
 
 ### Instance count
 
-The number of locations where the same code appears. A clone group with 5 instances means the same block was copied to 5 places. Fixing a bug in the logic requires updating all 5.
+The number of locations where the same code appears. A clone group with 5 instances means that someone copied the block to 5 places. To fix a bug in that logic, you must update all 5.
 
 | Instances | Risk | Action |
 |:----------|:-----|:-------|
 | 2 | Normal, often acceptable | Extract if the code is complex or likely to change |
 | 3–5 | Bug risk increases | Extract into a shared function or module |
-| 5+ | High maintenance burden | Extract urgently; divergence between copies is likely |
+| 5+ | High maintenance burden | Extract urgently. The copies will likely diverge |
 
 
 ## Clone groups and families
 
 ### Clone groups
 
-A **clone group** is a single duplicated code block found at 2+ locations. Each location is an **instance**.
+A **clone group** is one duplicated code block that fallow found at 2+ locations. Each location is an **instance**.
 
 ```text
 ● Clone group 1 (8 lines, 2 instances)
@@ -89,7 +91,7 @@ A **clone group** is a single duplicated code block found at 2+ locations. Each 
   src/validators/orderValidator.ts:8-15
 ```
 
-This means one block of 8 lines appears in both files. Here's what it looks like:
+One block of 8 lines appears in both files:
 
 <CodeGroup>
 
@@ -117,7 +119,7 @@ return errors;
 
 </CodeGroup>
 
-One clone group = one duplicated block. But the same two files may share more than one block:
+One clone group is one duplicated block. The same two files can share more than one block:
 
 ```text
 ● Clone group 2 (6 lines, 2 instances)
@@ -129,11 +131,11 @@ One clone group = one duplicated block. But the same two files may share more th
   src/validators/orderValidator.ts:31-35
 ```
 
-Three separate clone groups, all between the same two files. That pattern is a **clone family**.
+These are three separate clone groups between the same two files. This pattern is a **clone family**.
 
 ### Clone families
 
-A **clone family** is when multiple clone groups involve the same files. Those files share multiple distinct clones and were probably copy-pasted from each other.
+A **clone family** is a set of clone groups that involve the same files. Those files share several distinct clones, so someone probably copy-pasted one from the other.
 
 ```text
 Family: src/validators/userValidator.ts ↔ src/validators/orderValidator.ts
@@ -141,7 +143,7 @@ Family: src/validators/userValidator.ts ↔ src/validators/orderValidator.ts
   → Extract shared validation module
 ```
 
-This changes the refactoring approach. Individual clone groups suggest extracting a function. A clone family suggests the files themselves need to be merged or restructured.
+A family needs a different refactor. For a single clone group, you extract a function. For a clone family, you merge or restructure the files.
 
 | Pattern | What it tells you | Refactoring strategy |
 |:--------|:------------------|:--------------------|
@@ -153,33 +155,33 @@ This changes the refactoring approach. Individual clone groups suggest extractin
 
 ## When duplication is acceptable
 
-Not all duplication should be eliminated. Context matters.
+Some duplication is fine to keep:
 
-- **Test files**: Test cases often repeat setup code intentionally. Abstracting test setup makes tests harder to read and debug. Use [`--production`](/cli/global-flags) to exclude test/story/dev files entirely, or use `dupes.ignore` patterns for more granular control.
-- **Generated code**: Codegen output (GraphQL, Prisma, OpenAPI) is inherently duplicative. Exclude with `dupes.ignore`.
-- **Small clones (< 10 lines)**: Very small clones are often idiomatic patterns (error handling, guard clauses) rather than meaningful duplication.
-- **Cross-language ports**: If you maintain both `.ts` and `.js` versions intentionally, use `--skip-local` to focus on cross-directory duplicates instead.
+- **Test files**: Test cases often repeat setup code on purpose. Shared test setup makes tests harder to read and debug. To exclude test, story, and dev files entirely, use [`--production`](/cli/global-flags). For more granular control, use `duplicates.ignore` patterns.
+- **Generated code**: Codegen output (GraphQL, Prisma, OpenAPI) contains duplication by design. Exclude it with `duplicates.ignore`.
+- **Small clones (< 10 lines)**: Very small clones are often idiomatic patterns, such as error handling or guard clauses.
+- **Intentional copies in one directory**: `--skip-local` reports only clones that span two or more directories. Use it when you keep side-by-side copies on purpose, such as a `.ts` and a `.js` version of one file. For copies in different directories, exclude one side with `duplicates.ignore`.
 
 <Warning>
-Premature abstraction is worse than duplication. If the duplicated code isn't changing and isn't causing bugs, leave it. Extract clones that are both **large** and **in actively changing files**. Use [`fallow health --hotspots`](/cli/health) to cross-reference.
+Premature abstraction is worse than duplication. If the duplicated code does not change and does not cause bugs, leave it. Extract clones that are both **large** and **in actively changing files**. To find the files that change often, use [`fallow health --hotspots`](/cli/health).
 </Warning>
 
 
 ## Interpreting `--threshold` results
 
-The `--threshold` flag sets a maximum allowed duplication percentage. If the project exceeds the threshold, fallow exits with code 1.
+The `--threshold` flag sets the maximum duplication percentage. If the project is above the threshold, fallow exits with code 1.
 
 ```text fallow dupes --threshold 15
-Duplication: 19.4% (27,255 duplicated lines across 398 files, exceeds 15% threshold)
-Found 1,184 clone groups, 2,959 instances (0.23s) ✗
+✗ 27,255 lines (19.4%) duplicated across 398 files (0.23s)
+Duplication (19.4%) exceeds threshold (15.0%)
 ```
 
-Start with a threshold above your current level, then ratchet it down over time. Combine with `--baseline` for even more gradual adoption.
+Start with a threshold above your current level, then lower it over time. For a more gradual adoption, combine it with `--baseline`.
 
 
 ## How suffix-array detection works
 
-Fallow concatenates all token streams into one sequence, builds a <Tooltip tip="A sorted array of all suffixes of a string, enabling efficient pattern matching without pairwise comparison">suffix array</Tooltip> with <Tooltip tip="Longest Common Prefix array, used alongside suffix arrays to find the longest shared sequences between code blocks">LCP array</Tooltip>, and scans for repeated subsequences above the minimum length. This runs in O(n log n) time, no pairwise file comparison needed.
+Fallow joins all token streams into one sequence and builds a <Tooltip tip="A sorted array of all suffixes of a string, enabling efficient pattern matching without pairwise comparison">suffix array</Tooltip> with an <Tooltip tip="Longest Common Prefix array, used alongside suffix arrays to find the longest shared sequences between code blocks">LCP array</Tooltip>. Then it scans for repeated subsequences above the minimum length. This runs in O(n log n) time and needs no pairwise file comparison.
 
 <Accordion title="Research: suffix-array clone detection">
 Token-based clone detection was pioneered by [Baker (1995)](https://doi.org/10.1109/WCRE.1995.514697). Suffix-array approaches for scalable clone detection were developed by [Li et al. (2006)](https://doi.org/10.1145/1137983.1138012). Fallow's approach is closest to the suffix-array method, with normalization levels corresponding to clone types.
@@ -188,16 +190,16 @@ Token-based clone detection was pioneered by [Baker (1995)](https://doi.org/10.1
 
 ## Limitations
 
-- **Type-3 clones** (gapped clones with inserted/deleted lines) are not detected by default. Add `--near` to find function-scoped near-miss clones with small structural edits. Near-miss detection uses semantic normalization and requires at least 80% shingle similarity between every pair in a group.
-- **Type-4 clones** (semantically equivalent but syntactically different) are not detected. Two functions that do the same thing but are written differently will not be flagged.
-- **Cross-file-type detection** only works between `.ts` and `.js` files (via `--cross-language`). Other language pairs are not supported.
-- **Minimum size thresholds** mean very small clones (below `--min-tokens` / `--min-lines`) are invisible. This is intentional: small clones are usually idiomatic patterns.
-- **Semantic mode false positives**: Normalizing identifiers and literals can match code that is structurally similar but semantically unrelated. Review semantic-mode results before acting.
+- **Type-3 clones** (gapped clones with inserted or deleted lines): fallow does not detect these by default. To find function-scoped near-miss clones with small structural edits, add `--near`. Near-miss detection uses semantic normalization and requires at least 80% shingle similarity between every pair in a group.
+- **Type-4 clones** (semantically equivalent but syntactically different): fallow does not detect these. Fallow does not flag two functions that do the same thing but are written differently.
+- **Cross-file-type detection** works only between `.ts` and `.js` files (with `--cross-language`). Fallow does not support other language pairs.
+- **Minimum size thresholds**: fallow does not report clones below `--min-tokens` or `--min-lines`. This is intentional, because small clones are usually idiomatic patterns.
+- **Semantic mode false positives**: When fallow normalizes identifiers and literals, it can match code that is structurally similar but semantically unrelated. Review semantic-mode results before you act on them.
 
 
 ## JSON `_meta` object
 
-When `--explain` is passed (or via MCP), the JSON output includes a `_meta` object:
+When you pass `--explain`, or run through MCP, the JSON output includes a `_meta` object:
 
 ```json
 {
@@ -226,6 +228,17 @@ When `--explain` is passed (or via MCP), the JSON output includes a `_meta` obje
 }
 ```
 
-This is an excerpt. `_meta` carries an entry for every metric the report can emit, plus a `field_definitions` block describing shared wire fields such as `actions[]`.
+This is an excerpt. `_meta` has an entry for every metric that the report can emit. It also has a `field_definitions` block that describes shared output fields such as `actions[]`.
 
-AI agents and CI systems can use this to interpret results without consulting external documentation.
+With `_meta`, AI agents and CI systems can interpret the results without external documentation.
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="fallow dupes" icon="terminal" href="/cli/dupes">
+    All flags for the duplication command.
+  </Card>
+  <Card title="Health explained" icon="heart-pulse" href="/explanations/health">
+    Find hotspots to decide which clones to extract first.
+  </Card>
+</CardGroup>

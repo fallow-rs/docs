@@ -1,11 +1,11 @@
 ---
 title: "fallow flags"
-description: "CLI reference for fallow flags. Detect feature flag patterns, environment variable gates, SDK calls, and config-based toggles across your codebase."
+description: "Find the feature flags in your codebase, so you can review them. Fallow flags detects environment variable gates, SDK calls, and config-based toggles."
 keywords: ["fallow flags", "feature flags", "environment variables", "LaunchDarkly", "Statsig", "Unleash", "GrowthBook", "PostHog", "Vercel Flags", "Optimizely", "Eppo", "SDK", "config", "CLI"]
 icon: "terminal"
 ---
 
-Detect feature flag patterns in your codebase. Reports flag locations, detection confidence, and cross-references with dead code findings.
+`fallow flags` finds the feature flags in your codebase, so you know where each flag is and which ones to review. For each feature flag, fallow reports the location and the detection confidence, and links it to dead code findings.
 
 ```bash
 fallow flags
@@ -17,11 +17,10 @@ fallow flags
 
 | Flag | Description |
 |:-----|:------------|
-| `--top <N>` | Show only the top N flags |
-| `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab` |
+| `--top <N>` | Show only the top N feature flags |
+| `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`. Other formats exit 2. |
 | `-q, --quiet` | Suppress progress output |
 | `--explain` | Add metric explanations. In JSON format, adds a `_meta` object with descriptions and docs links. |
-| `--summary` | Print a one-line summary of flag counts at the end of the run. In JSON format, adds a `summary` counts object. |
 
 ### Scoping
 
@@ -29,38 +28,28 @@ fallow flags
 |:-----|:------------|
 | `-r, --root <PATH>` | Project root directory (default: current working directory) |
 | `-c, --config <PATH>` | Path to config file (default: auto-detected) |
-| `-w, --workspace <NAME>` | Scope output to a single workspace package |
-| `--changed-since <REF>` | Only report flags in files changed since a git ref |
-| `--production` | Production mode: exclude test/story/dev files |
-| `--no-production` | Force production mode off, overriding a project config's `production: true` (conflicts with `--production`) |
+| `-w, --workspace <PATTERNS>` | Scope output to one or more workspaces. Accepts exact package names, globs, and `!`-prefixed negation. Pass comma-separated values or repeat the flag. |
+| `--changed-workspaces <REF>` | Scope output to the workspaces that contain a file changed since `REF`. Cannot be combined with `--workspace`. |
+| `--changed-since <REF>` | Report only feature flags in files changed since a git ref |
+| `--production` | Production mode: exclude test, story, and dev files |
+| `--no-production` | Turn production mode off, even when the project config sets `production: true` (conflicts with `--production`) |
 
 ### Performance
 
 | Flag | Description |
 |:-----|:------------|
-| `--no-cache` | Disable incremental caching (force full re-parse) |
+| `--no-cache` | Disable incremental caching and parse all files again |
 | `--threads <N>` | Number of parser threads (default: available parallelism) |
-| `--performance` | Show pipeline timing breakdown |
 
 ### CI
 
 | Flag | Description |
 |:-----|:------------|
-| `--ci` | CI mode: equivalent to `--format sarif --fail-on-issues --quiet` |
-| `--fail-on-issues` | Exit with code 1 if flags are found |
-| `--sarif-file <PATH>` | Write SARIF output to a file (in addition to `--format`) |
-| `--group-by <MODE>` | Group output by `owner` (CODEOWNERS), `directory` (first path component), `package` (workspace package), or `section` (GitLab CODEOWNERS `[Section]` headers). See [global flags](/cli/global-flags#grouped-output). |
+`fallow flags` reports feature flags for review. It has no quality gate, so it always exits 0 after a successful run. `--ci`, `--fail-on-issues`, `--sarif-file`, and `--output-file` are not valid with `fallow flags` and exit 2. To get a SARIF file, use `--format sarif` and redirect the output.
 
 ### Regression
 
-| Flag | Description |
-|:-----|:------------|
-| `--baseline <PATH>` | Compare against a previously saved baseline file |
-| `--save-baseline <PATH>` | Save current results as a baseline file |
-| `--fail-on-regression` | Fail if flag count increased beyond tolerance vs a regression baseline |
-| `--tolerance <N>` | Allowed increase: `"2%"` (percentage) or `"5"` (absolute). Default: `"0"` |
-| `--regression-baseline <PATH>` | Path to regression baseline file (default: `.fallow/regression-baseline.json`) |
-| `--save-regression-baseline <PATH>` | Save current flag counts as a regression baseline |
+`fallow flags` does not support baselines or regression detection. `--help` lists the global flags `--baseline`, `--save-baseline`, `--fail-on-regression`, `--tolerance`, `--regression-baseline`, and `--save-regression-baseline`, but they have no effect on this command and write no file. The same is true for `--summary`, `--group-by`, and `--performance`.
 
 ## Detection categories
 
@@ -72,15 +61,17 @@ Fallow detects three categories of feature flag patterns:
 | **SDK calls** | Feature flag SDK method calls from known providers (LaunchDarkly, Statsig, Unleash, GrowthBook, Split, PostHog, Vercel Flags, ConfigCat, Flagsmith, Optimizely, Eppo) | LaunchDarkly `variation()`, Statsig `checkGate()`, PostHog `useFeatureFlagEnabled()`, Vercel Flags `flag({ key })` |
 | **Config object patterns** | Object property lookups used as boolean guards (opt-in) | `config.featureX`, `settings.enableNewFlow` |
 
-Each detected flag includes a confidence level indicating how certain fallow is that the pattern represents a feature flag.
+Each detected feature flag has a confidence level. It shows how sure fallow is that the pattern is a feature flag.
 
 ## Configuration
 
-Fallow ships with built-in detectors for the common providers and env-var conventions, so most projects need no configuration. If `fallow flags` reports `No feature flags detected` but your project does use flags, you are likely on an SDK or env prefix fallow does not recognize by default. Extend detection with the `flags` section in `.fallowrc.json`, `.fallowrc.jsonc`, `fallow.toml`, or `.fallow.toml`.
+Fallow has built-in detectors for the common providers and env-var conventions, so most projects need no configuration.
 
-When you run `fallow flags` on full defaults and nothing is found, the CLI lists the built-in env prefixes and SDKs it scanned for, so you can tell a true negative from a missing detector.
+If `fallow flags` reports `No feature flags detected` but your project uses feature flags, your SDK or env prefix is probably not in the defaults. Add it in the `flags` section of `.fallowrc.json`, `.fallowrc.jsonc`, `fallow.toml`, or `.fallow.toml`.
 
-The `flags` fields (`sdkPatterns`, `envPrefixes`, `configObjectHeuristics`) are documented in the [configuration reference](/configuration/overview#flags). Custom `sdkPatterns` and `envPrefixes` are merged with the built-in sets, never replace them.
+When you run `fallow flags` with all defaults and fallow finds nothing, the CLI lists the built-in env prefixes and SDKs that it checked. Use this list to tell a true negative from a missing detector.
+
+The [configuration reference](/configuration/overview#flags) documents the `flags` fields (`sdkPatterns`, `envPrefixes`, `configObjectHeuristics`). Fallow merges custom `sdkPatterns` and `envPrefixes` with the built-in sets. They never replace the built-in sets.
 
 ```json In-house SDK, extra env prefixes, and config heuristics
 {
@@ -138,6 +129,7 @@ fallow flags --production
 
 ```json title="$ fallow flags --format json"
 {
+  "kind": "feature-flags",
   "schema_version": 8,
   "version": "3.28.0",
   "elapsed_ms": 116,
@@ -150,13 +142,14 @@ fallow flags --production
 
 | Field | Type | Description |
 |:------|:-----|:------------|
+| `kind` | string | Always `feature-flags` |
 | `schema_version` | integer | JSON schema version |
-| `version` | string | Fallow version that produced the output |
+| `version` | string | The fallow version that produced the output |
 | `elapsed_ms` | integer | Analysis duration in milliseconds |
 | `feature_flags` | array | Detected feature flag patterns |
-| `total_flags` | integer | Total number of detected flags |
+| `total_flags` | integer | Total number of detected feature flags |
 
-A run with `--changed-since` also carries a root [`request_outcomes`](/cli/global-flags#request-outcomes) object with the `changed-since` entry. When fallow cannot resolve the ref, the entry says so and the report covers the whole project.
+With `--changed-since`, the output also has a root [`request_outcomes`](/cli/global-flags#request-outcomes) object with the `changed-since` entry. When fallow cannot resolve the ref, the entry says so, and the report covers the whole project.
 
 ## MCP tool
 
@@ -171,15 +164,13 @@ The `feature_flags` MCP tool wraps `fallow flags --format json --quiet --explain
 }
 ```
 
-Returns the same JSON envelope as the CLI.
-
-See [MCP integration](/integrations/mcp) for setup instructions.
+The tool returns the same JSON envelope as the CLI. For setup instructions, see [MCP integration](/integrations/mcp).
 
 ## See also
 
 <CardGroup cols={3}>
   <Card title="Dead code analysis" icon="skull-crossbones" href="/cli/dead-code">
-    Cross-references feature flags with dead code findings.
+    Links feature flags to dead code findings.
   </Card>
   <Card title="Global flags" icon="sliders" href="/cli/global-flags">
     Flags available on every fallow command.
