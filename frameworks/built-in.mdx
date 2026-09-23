@@ -199,17 +199,17 @@ Most plugins activate automatically when the relevant package is in your `packag
   | **tsd** | Declaration test directory from `package.json#tsd.directory` |
   | **Storybook** | Story globs, addon imports from `.storybook/main.ts` |
   | **Tailwind** | Content paths, plugin imports from `tailwind.config.js` |
-  | **Webpack** | Entry points including descriptor/context forms, `resolve.alias` mappings, loader/plugin imports from `webpack.config.js`. An `entry` value that names a package instead of a file credits that dependency, with the resource query included (`webpack-hot-middleware/client?reload=true` credits `webpack-hot-middleware`). A glob-shaped value stays an entry pattern |
+  | **Webpack** | Entry points including descriptor/context forms, `resolve.alias` mappings, loader/plugin imports from `webpack.config.js`. An `entry` value that names a package instead of a file credits that dependency, with the resource query included (`webpack-hot-middleware/client?reload=true` credits `webpack-hot-middleware`). A glob-shaped value stays an entry pattern. Fallow also reads a config under `config/`, `build/` or `webpack/` when it exports a webpack configuration; see [config directories](#webpack-config-directories) |
   | **TypeScript** | Path aliases, project references from `tsconfig.json` |
   | **Babel** | Plugin and preset imports from `babel.config.js` |
   | **Rollup** | Entry points, plugin imports from `rollup.config.js` |
   | **Rolldown** | Entry points, external deps, plugin imports from `rolldown.config.ts` |
   | **PostCSS** | Plugin imports from `postcss.config.js` |
-  | **Nuxt** | Modules, plugins, server routes, `alias`, `imports.dirs`, `components`, `srcDir` from `nuxt.config.ts`. `#layers/<name>/` resolves into the root `layers/` tree. Fallow reads the config of each root separately: the project root and every workspace root. The custom `components:` or `imports:` shape of one app decides the [`autoImports`](/configuration/overview#autoimports) verdict for that root only |
+  | **Nuxt** | Modules, plugins, server routes, `alias`, `imports.dirs`, `components`, `srcDir` from `nuxt.config.ts`. Fallow reads the config of each root separately: the project root and every workspace root. The custom `components:` or `imports:` shape of one app decides the [`autoImports`](/configuration/overview#autoimports) verdict for that root only. See [local layers](#nuxt-local-layers) |
   | **SvelteKit** | `kit.alias` mappings, param matchers from `svelte.config.js` |
   | **Next.js** | App Router convention exports (`page`, `layout`, `loading`, `error`, `route`), route segment config, Pages Router exports, middleware, proxy, instrumentation, `mdx-components`, `transpilePackages` |
-  | **Rsbuild** | Entry points, plugin imports from `rsbuild.config.ts`. A `source.entry` value that names a package credits that dependency, with the resource query included. A glob-shaped value stays an entry pattern |
-  | **Rspack** | Entry points, plugin imports from `rspack.config.js`. An `entry` value that names a package credits that dependency, with the resource query included. A glob-shaped value stays an entry pattern |
+  | **Rsbuild** | Entry points, plugin imports from `rsbuild.config.ts`. A `source.entry` value that names a package credits that dependency, with the resource query included. A glob-shaped value stays an entry pattern. `root` applies to a relative entry, the same way `context` applies for Rspack |
+  | **Rspack** | Entry points, plugin imports from `rspack.config.js`. An `entry` value that names a package credits that dependency, with the resource query included. A glob-shaped value stays an entry pattern. `context` applies to a relative entry. An entry without an extension matches the source file or the directory index |
   | **Remark** | Plugin imports from `.remarkrc.js` |
   | **Angular** | Styles, scripts, main, polyfills from `angular.json` build targets. The ng-packagr `lib.entryFile` in `ng-package.json` or `ng-package.prod.json` (default `src/public_api.ts`, resolved relative to the config directory) becomes a library public API entry point. Fallow also scans nested secondary-entry-point configs in the package subtree. `@Component({ templateUrl, styleUrl })` decorator references create graph edges. Standalone `.html` templates and inline `template:` literals both add synthetic `<template>` complexity findings (`@if`/`@for`/`@switch`/`@defer`, `*ngIf`, bound attributes, interpolations). To suppress them, use `<!-- fallow-ignore-file complexity -->` (external) or `// fallow-ignore-next-line complexity` above the `@Component` decorator (inline) |
   | **Nx** | Executor references, main entry points, tsconfig paths from `project.json` |
@@ -242,6 +242,22 @@ Active plugins:
 If your framework is not in the list, write a [custom plugin](/frameworks/custom-plugins). Custom plugins support any internal or third-party tool, with declarative JSON or TOML.
 </Info>
 
+## Webpack config directories
+
+Fallow also reads a webpack, rspack or rsbuild config that lives under `config/`, `build/` or `webpack/` instead of the package root.
+
+A file under `config/` or `webpack/` counts as a webpack config when it exports a webpack configuration: an object with a webpack config key other than `name` or `dependencies` (also returned from a function), an array of configurations, or a `webpack-merge` call (`merge`, `mergeWithCustomize`, `mergeWithRules`, or the imported package). A helper file such as `config/webpack.paths.js` does not export a configuration, so fallow still reports it as unused when nothing imports it.
+
+`build/` also holds build output, so fallow reads a narrower name there: only `webpack.<target>.{ts,js,mjs,cjs}`, such as `build/webpack.prod.js`, and only when it passes the same export check. Fallow never reads `build/webpack.config.*`, because that name is more likely to be a compiled or stale copy.
+
+Fallow probes these directories beside a root config, so `build/webpack.prod.js` is read together with a root `webpack.config.js`.
+
+Entries resolve like the bundler resolves them:
+
+- Rspack reads `context`, and rsbuild reads `root`. A relative entry, and a Module Federation `exposes` target, resolve against that directory.
+- An entry without an extension, such as `./lib` or `./src/app`, matches the source file (`./lib.ts`) or the directory index (`./lib/index.ts`). This also applies when `context` or `root` is set.
+- A Module Federation `exposes` target and the `remotes` scope of a config in `config/`, `build/` or `webpack/` resolve against the package root, the same as webpack does without `context`.
+
 ## Module Federation
 
 With Module Federation, fallow keeps exposed modules out of the unused-file report and does not report remote imports as unlisted dependencies.
@@ -257,16 +273,25 @@ Fallow reads a plugin call in these positions:
 - A tool-specific key such as `tools.rspack.plugins`.
 - A hook body, such as an rsbuild `appendPlugins` hook or a Next.js `webpack(config)` hook.
 
-Fallow also reads:
+Fallow also reads the plugin options through one step of indirection:
 
-- Options that a `const` in the same file holds. The program must have one binding of that name, and no code may write to the binding or to one of its members.
+- An `export const` in the same file (`export const mfConfig = { ... }`), and a plain `const` (`const mfConfig = { ... }`). The program must have one binding of that name, and no code may write to the binding or to one of its members.
+- A TypeScript non-null assertion on the binding, such as `new ModuleFederationPlugin(mfConfig!)`.
+- A computed callee, such as `new container['ModuleFederationPlugin']({ ... })`.
+- A relative `import` of a sibling config file, including a default import and a named import.
+- A relative `require` of a sibling config file, one step deep. A `require` of a package stays silent.
+- An object spread over a same-file binding (`{ ...base }`) and `Object.assign({}, base)`.
 - The array form of `exposes`. A string element is both the public name and the module request. An object element uses the object reader.
+- `exposes` targets and the `remotes` scope of a config under `config/`, `build/` or `webpack/`, resolved against the package root, as webpack does without `context`. See [config directories](#webpack-config-directories).
+
+Every config reader that resolves an options object, not only Module Federation, follows `export const config = { ... }; export default config` the same way.
 
 Fallow does not read:
 
 - `shared`, and the runtime `registerRemotes` and `loadRemote` calls.
 - The array form of `remotes`. A bundler derives the request scope of an element from the whole container location, so the alias is not a bare specifier.
-- A spread, and a value that is not a static object literal. An array element that holds glob syntax, a nested array, or a value that is not a string.
+- A value that is not a static object literal, an unreadable `require` of a package, and an array element that holds glob syntax, a nested array, or a value that is not a string.
+- A spread over a binding fallow cannot resolve. This records a `plugin-config-unreadable` diagnostic with the `spread` reason for each Federation key the readable part does not declare. When the options declare no Federation key at all, a bare `federation(...)` call records nothing, because other libraries use that name too.
 
 Fallow reads the config syntactically. It fetches no remote container and validates nothing about the remote. Fallow does not check the availability of the remote, its exports, its versions, or its shared singletons.
 
@@ -283,6 +308,31 @@ fallow: Plugin 'webpack': `remotes` in 'webpack.config.js' uses the array form, 
 ```
 
 For an exposed file that fallow cannot see, use [`dynamicallyLoaded`](/configuration/overview#dynamicallyloaded). For a file that is a project entry point of its own, use [`entry`](/configuration/overview#entry). Put a remote alias in [`ignoreDependencies`](/configuration/overview#ignoredependencies). Note that `ignoreDependencies` also hides unused-dependency findings for that name.
+
+## Nuxt local layers
+
+Nuxt lets a project extend other Nuxt codebases, called layers. Fallow scans a local layer the same way it scans the project root.
+
+A directory is a local layer when it holds a `nuxt.config` file (`ts`, `js`, `mjs`, `cjs`, `mts` or `cts`), and either:
+
+- The project root `nuxt.config` names it in `extends`, as a relative path.
+- It sits under `layers/<name>`, beside the root config. Fallow scans every `layers/<name>` directory that has a `nuxt.config`, without an `extends` entry.
+
+A local layer without a `nuxt.config` is not a layer, so its files keep reporting as unused when nothing references them.
+
+For each local layer:
+
+- Its convention files (pages, layouts, components, composables, utils, server, plugins) are entry points, the same as the project root.
+- Its root files (`app.vue`, `app.config.*`) are always used.
+- With [`autoImports`](/configuration/overview#autoimports) on, its components and composables are auto-import sources. An unreferenced layer component then reports as `unused-file`.
+- Its own `nuxt.config` takes part in the `autoImports` surface classification, alongside the root config. The advisory that fallow prints for a custom `components:` or `imports:` shape names the config file that decided that surface.
+
+`#layers/<name>/` resolves to a local layer by its `$meta.name`:
+
+- A `layers/<name>` directory without a `$meta.name` resolves by its directory name.
+- An `extends` layer without a `$meta.name` gets no alias, so an import through `#layers/<name>/` stays unresolved.
+
+A remote layer (a `github:` or `gh:` reference) or a package layer (an npm name) stays a dependency reference only. Fallow does not scan its files.
 
 ## See also
 
