@@ -1,14 +1,19 @@
 ---
 title: "fallow security"
-description: "CLI reference for fallow security. Surface opt-in local security candidates for agent or human verification."
+description: "Find local security candidates for you or a coding agent to verify: server secrets that reach client code, and untrusted values that reach dangerous sinks. CLI reference for the opt-in fallow security command."
 keywords: ["fallow security", "client-server-leak", "process.env", "use client", "Next.js", "React Server Components", "SARIF", "CLI"]
 icon: "shield"
 ---
 
-Surface local security candidates for verification. Two rule families ship: the graph-structural `client-server-leak` (a `"use client"` file that directly reads, or transitively imports a module that reads, a non-public `process.env` secret), and the data-driven `tainted-sink` catalogue (syntactic dangerous-sink candidates across a catalogue of CWE categories). Both default to `off` and run only under `fallow security`, never under bare `fallow` or the `audit` gate.
+`fallow security` finds local security candidates for you or a coding agent to verify. Each candidate comes with a structural trace that shows the reviewer where to look. Two rule families ship:
+
+- `client-server-leak` (graph-structural): a `"use client"` file reads a non-public `process.env` secret, directly or through a module that it imports transitively.
+- `tainted-sink` (a data-driven catalogue): syntactic candidates for dangerous sinks, across a catalogue of CWE categories.
+
+Both families default to `off`. They run only under `fallow security`, never under bare `fallow` or the `audit` gate.
 
 <Note>
-  Findings are candidates, not confirmed vulnerabilities. Fallow reports a structural trace so an agent or human can verify whether the value can actually reach client-bundled code.
+  Findings are candidates, not confirmed vulnerabilities. Fallow reports a structural trace, so an agent or a human can verify if the value can actually reach client-bundled code.
 </Note>
 
 ```bash
@@ -25,8 +30,8 @@ fallow security
 | `-q, --quiet` | Suppress progress output |
 | `--summary` | Show a compact human summary instead of per-finding detail |
 | `--ci` | CI mode: equivalent to `--format sarif --fail-on-issues --quiet` |
-| `--surface` | Include the agent-facing `attack_surface[]` inventory in JSON output |
-| `--fail-on-issues` | Exit with code 1 if security candidates are found |
+| `--surface` | Add the `attack_surface[]` inventory for agents to the JSON output |
+| `--fail-on-issues` | Exit with code 1 if fallow finds security candidates |
 | `--sarif-file <PATH>` | Write SARIF output to a file in addition to the primary output |
 
 ### Scoping
@@ -35,9 +40,9 @@ fallow security
 |:-----|:------------|
 | `-r, --root <PATH>` | Project root directory (default: current working directory) |
 | `-c, --config <PATH>` | Path to config file (default: auto-detected) |
-| `--changed-since <REF>` (alias: `--base`) | Only report candidates whose client anchor or trace hops touch files changed since a git ref |
-| `--file <PATH>` | Only report candidates whose finding anchor or trace hop matches the selected file. Repeat to select multiple files. The full graph is still analyzed |
-| `--diff-file <PATH>` | Narrow candidates to added hunks on the client anchor or import trace. Secret-source hops use file-level retention because member-access spans are not yet stored. Use `-` to read from stdin. |
+| `--changed-since <REF>` (alias: `--base`) | Report only candidates whose client anchor or trace hops touch files changed since a git ref |
+| `--file <PATH>` | Report only candidates whose finding anchor or trace hop matches the selected file. Repeat to select multiple files. Fallow still analyzes the full graph |
+| `--diff-file <PATH>` | Keep only candidates on added hunks of the client anchor or the import trace. Fallow keeps secret-source hops at file level, because it does not yet store member-access spans. Use `-` to read from stdin. |
 | `--diff-stdin` | Read the unified diff from stdin |
 | `-w, --workspace <PATTERNS>` | Scope output to selected workspace packages |
 | `--changed-workspaces <REF>` | Scope output to workspace packages touched since the given git ref |
@@ -53,28 +58,30 @@ fallow security
 
 | Flag | Description |
 |:-----|:------------|
-| `--gate new` | Fail (exit code **8**) only when the change introduces a NEW security-sink candidate in the changed lines, not on the whole candidate backlog. Requires a diff source (`--changed-since`, `--diff-file`, or `--diff-stdin`). |
-| `--gate newly-reachable` | Fail (exit code **8**) when a security candidate that already exists in source becomes reachable from project entry points compared with the base ref. Requires `--changed-since <ref>` because it analyzes the base tree, not only a line diff. |
+| `--gate new` | Fail (exit code **8**) only when the change adds a NEW security-sink candidate on the changed lines. The existing candidate backlog does not fail the gate. Requires a diff source (`--changed-since`, `--diff-file`, or `--diff-stdin`). |
+| `--gate newly-reachable` | Fail (exit code **8**) when an existing security candidate in the source becomes reachable from project entry points, compared with the base ref. Requires `--changed-since <ref>`, because this mode analyzes the base tree and not only a line diff. |
 
-A refactor that merely touches a file already containing a sink passes; a change that adds a
-new sink, or wires a new untrusted source into an existing sink, on a changed line fails.
-Gated findings stay unverified: the human output says `REVIEW REQUIRED` (not
-`FAIL`), SARIF keeps every result at `level: note` with the verdict in
-`run.properties.fallowGate`, and `--format json` carries an additive `gate` block
-(`mode` / `verdict` / `new_count`). `newly-reachable` ignores unreachable candidates in both
-trees; diff-only inputs (`--diff-file` / `--diff-stdin`) exit 2 for this mode.
-When `newly-reachable` cannot map the analysis root into the temporary base
-worktree, it warns on stderr and analyzes the whole worktree.
+A refactor that only touches a file with an existing sink passes. A change fails when, on a changed line, it adds a new sink or connects a new untrusted source to an existing sink.
 
-Exit codes: **8** = a new candidate was introduced in the changed lines; **0** = clean (or a docs-only / empty
-diff); **2** = the gate could not compute the diff (an unfetched ref on a shallow clone, a bad
-ref, not a git repo), loud rather than a silent pass. Exit 8 is dedicated and stable, so a
-pipeline can soft-gate it without allow-listing real errors (GitLab
-`allow_failure: exit_codes: [8]`).
+Gated findings stay unverified:
+
+- The human output says `REVIEW REQUIRED`, not `FAIL`.
+- SARIF keeps every result at `level: note` and puts the verdict in `run.properties.fallowGate`.
+- `--format json` adds a `gate` block (`mode` / `verdict` / `new_count`).
+
+`newly-reachable` ignores candidates that are unreachable in both trees. In this mode, diff-only inputs (`--diff-file` / `--diff-stdin`) exit 2. When `newly-reachable` cannot map the analysis root into the temporary base worktree, it prints a warning on stderr and analyzes the whole worktree.
+
+Exit codes:
+
+- **8**: the change adds a new candidate on the changed lines.
+- **0**: clean (or a docs-only or empty diff).
+- **2**: the gate could not compute the diff, for example because of an unfetched ref on a shallow clone, a bad ref, or a directory that is not a git repo. The gate fails loudly and never passes silently.
+
+Exit 8 is dedicated and stable. A pipeline can soft-gate it without allow-listing real errors (GitLab `allow_failure: exit_codes: [8]`).
 
 <Note>
-On a shallow clone the merge-base may not be fetched. In GitHub Actions set
-`fetch-depth: 0` on `actions/checkout`; in GitLab CI set `GIT_DEPTH: 0`.
+On a shallow clone, the merge-base can be missing. In GitHub Actions, set
+`fetch-depth: 0` on `actions/checkout`. In GitLab CI, set `GIT_DEPTH: 0`.
 </Note>
 
 ```bash CI gate on changed lines
@@ -90,9 +97,9 @@ git diff --cached --unified=0 | fallow security --gate new --diff-stdin
 
 ## Rule: client-server-leak
 
-The detector starts at files with a top-level `"use client"` directive and walks static imports. It reports a candidate when the client boundary can reach a module that reads a non-public `process.env` value.
+This rule finds server secrets that can end up in client code. The detector starts at each file with a top-level `"use client"` directive and follows static imports. It reports a candidate when the client boundary can reach a module that reads a non-public `process.env` value.
 
-Public-by-convention env values are excluded:
+Fallow excludes env values that are public by convention:
 
 | Public prefix | Example |
 |:--------------|:--------|
@@ -106,15 +113,25 @@ Public-by-convention env values are excluded:
 | `EXPO_PUBLIC_*` | `process.env.EXPO_PUBLIC_API_URL` |
 | `STORYBOOK_*` | `process.env.STORYBOOK_THEME` |
 
-Dynamic `import()` edges that the graph cannot follow are counted in the output as unresolved edge files. A clean finding list with a non-zero unresolved count is not a clean bill.
+The output counts dynamic `import()` edges that the graph cannot follow as unresolved edge files. An empty finding list with a non-zero unresolved count does not mean that the code is clean.
 
-The same client cone is checked against a second sink set, reported as the `server-only-import` category: a `"use client"` file that transitively reaches a server-only module. A module counts as server-only when it carries a `"use server"` directive, imports the `server-only` package, `next/server`, `node:fs` / `node:fs/promises`, or `node:child_process` (the `node:` and bare forms both count), or imports a server-only `next/headers` API (`cookies`, `headers`, `draftMode`). The sink set is intentionally narrow to avoid false positives, and a module pulled in only through `next/dynamic(() => import('./x'), { ssr: false })` (the sanctioned client-only escape hatch) is excluded. Findings in this category are labeled distinctly in human output and use the SARIF rule id `security/server-only-import`; the secret-leak and server-only checks are independent, so a client cone that both reads a secret and reaches server-only code produces a finding for each.
+Fallow checks the same client cone (the modules that `"use client"` files reach) against a second sink set. It reports these findings as the `server-only-import` category: a `"use client"` file that transitively reaches a server-only module. A module counts as server-only when one of these is true:
+
+- It has a `"use server"` directive.
+- It imports the `server-only` package, `next/server`, `node:fs` / `node:fs/promises`, or `node:child_process` (the `node:` and bare forms both count).
+- It imports a server-only `next/headers` API (`cookies`, `headers`, `draftMode`).
+
+The sink set is narrow on purpose, to avoid false positives. Fallow excludes a module that comes in only through `next/dynamic(() => import('./x'), { ssr: false })`, the sanctioned client-only escape hatch. The human output gives this category its own label, and SARIF uses the rule id `security/server-only-import`.
+
+The secret-leak check and the server-only check are independent. A client cone that reads a secret and also reaches server-only code produces one finding for each check.
 
 ## Rule: tainted-sink (catalogue)
 
-A data-driven catalogue of syntactic sink candidates. Where `client-server-leak` is a graph-reachability rule, `tainted-sink` flags a call, member assignment, or tagged template that reaches a known dangerous sink. Most rows require a **non-literal** argument; narrowly literal-aware rows flag deterministic unsafe literals such as wildcard `postMessage` origins, weak crypto algorithms, disabled TLS validation, and JWT algorithm issues.
+`tainted-sink` is a data-driven catalogue of syntactic sink candidates. It finds values that go into known dangerous APIs. `client-server-leak` is a graph-reachability rule. `tainted-sink` instead flags a call, a member assignment, or a tagged template that reaches a known dangerous sink.
 
-All catalogue findings carry `kind: "tainted-sink"` plus a `category` (the catalogue id) and a `cwe` number. The catalogue ships these categories:
+Most catalogue rows require a **non-literal** argument. A few narrow rows check literals, and flag deterministic unsafe values such as wildcard `postMessage` origins, weak crypto algorithms, disabled TLS validation, and JWT algorithm issues.
+
+Each catalogue finding has `kind: "tainted-sink"`, a `category` (the catalogue id), and a `cwe` number. The catalogue ships these categories:
 
 | Category | CWE | Sink shape |
 |:---------|:----|:-----------|
@@ -166,18 +183,24 @@ All catalogue findings carry `kind: "tainted-sink"` plus a `category` (the catal
 | `route-send-file` | 22 | Express / Fastify / Hono route `sendFile` (enabler-gated) |
 
 <Note>
-  These are deliberately conservative candidates: a non-literal argument is a signal to verify, not proof of a vulnerability. Fallow does not prove the value is attacker-controlled or reaches the sink unsanitized. Verification is the agent's job.
+  The catalogue is deliberately conservative. A non-literal argument is a signal to verify, not proof of a vulnerability. Fallow does not prove that the value is attacker-controlled or that it reaches the sink unsanitized. The agent does the verification.
 </Note>
 
-Sink-shaped nodes whose callee cannot be resolved to a static path (dynamic dispatch, computed members, aliased bindings) are counted in the output as `unresolved_callee_sites`. When emitted, `unresolved_callee_diagnostics` adds bounded sample locations, top files, and reason counts for follow-up review. As with `client-server-leak`, a clean finding list with a non-zero count is not a clean bill.
+The output counts sink-shaped nodes whose callee fallow cannot resolve to a static path (dynamic dispatch, computed members, aliased bindings) as `unresolved_callee_sites`. When present, `unresolved_callee_diagnostics` adds bounded sample locations, top files, and reason counts for follow-up review. As with `client-server-leak`, an empty finding list with a non-zero count does not mean that the code is clean.
 
 ### Sanitizer-aware suppression
 
-Trusted local sanitizer flows do not report. The detector recognizes syntax-proven local HTML escape helpers, renderer helpers whose dynamic HTML fragments are fully sanitizer-backed, and SQL identifier quoting helpers used in identifier positions. Mixed HTML or SQL templates with unsanitized dynamic fragments still report as candidates, and SQL identifier quoting is not treated as value parameterization.
+Fallow does not report flows through trusted local sanitizers. The detector recognizes:
+
+- local HTML escape helpers that the syntax proves safe
+- renderer helpers whose dynamic HTML fragments all go through a sanitizer
+- SQL identifier quoting helpers in identifier positions
+
+Mixed HTML or SQL templates with unsanitized dynamic fragments still report as candidates. SQL identifier quoting does not count as value parameterization.
 
 ### Enabling categories
 
-Scope which catalogue categories run with `security.categories` in config:
+To choose which catalogue categories run, set `security.categories` in the config:
 
 ```json
 {
@@ -190,11 +213,13 @@ Scope which catalogue categories run with `security.categories` in config:
 }
 ```
 
-With both lists empty, ordinary catalogue categories are active. `hardcoded-secret` and `secret-to-network` are intentionally include-required and only run when listed in `security.categories.include`. `secret-to-network` is opt-in because legitimate auth (sending a bearer token to its own provider) is also a secret reaching a network call; each candidate carries the destination (`candidate.network.destination`, the request URL when it is a literal, or absent when the URL is dynamic) so you can tell exfil from intended auth. Public-by-convention env vars (`NEXT_PUBLIC_`, `VITE_`, `REACT_APP_`, ...) are never treated as secrets.
+When both lists are empty, the ordinary catalogue categories run. `hardcoded-secret` and `secret-to-network` are include-required on purpose. They run only when you list them in `security.categories.include`.
+
+`secret-to-network` is opt-in because legitimate auth also sends a secret in a network call, for example a bearer token to its own provider. Each candidate has the destination in `candidate.network.destination`. It holds the request URL when the URL is a literal, and is absent when the URL is dynamic. Use it to tell exfiltration from intended auth. Fallow never treats public-by-convention env vars (`NEXT_PUBLIC_`, `VITE_`, `REACT_APP_`, ...) as secrets.
 
 ## Suppression
 
-Suppress a known false positive at file level. Each rule has its own token:
+To suppress a known false positive, add a file-level comment. Each rule has its own token:
 
 ```ts
 // fallow-ignore-file security-client-server-leak
@@ -207,11 +232,11 @@ const el = document.querySelector(".out");
 el.innerHTML = render(userInput);
 ```
 
-One `security-sink` token covers every catalogue category. Use suppression only after verifying that the value cannot reach the sink unsanitized, for example because the input is a trusted constant, server-only, or sanitized upstream.
+One `security-sink` token covers every catalogue category. Suppress a finding only after you verify that the value cannot reach the sink unsanitized. For example, the input is a trusted constant, is server-only, or is sanitized upstream.
 
 ## JSON output
 
-`--format json` emits a typed root envelope with `kind: "security"`.
+`--format json` returns a typed root envelope with `kind: "security"`.
 
 ```json
 {
@@ -240,9 +265,9 @@ One `security-sink` token covers every catalogue category. Use suppression only 
 }
 ```
 
-A run that wrote the `--sarif-file` document carries a root [`request_outcomes`](/cli/global-flags#request-outcomes) object. The `sarif-file` entry there is `applied`, and it names the path the run wrote. You can then tell a run that wrote the document from a run that asked for none. A failed write makes the run exit 2 with an error document, so no envelope carries that entry as unapplied.
+When a run writes the `--sarif-file` document, the output has a root [`request_outcomes`](/cli/global-flags#request-outcomes) object. Its `sarif-file` entry is `applied` and names the path that the run wrote. This tells a run that wrote the document apart from a run that did not request one. A failed write makes the run exit 2 with an error document, so no envelope reports that entry as unapplied.
 
-`fallow security --summary --format json --quiet` emits the same `kind`, `schema_version`, `version`, `elapsed_ms`, and `config` metadata, but replaces candidate arrays with `summary` aggregate counts:
+`fallow security --summary --format json --quiet` returns the same `kind`, `schema_version`, `version`, `elapsed_ms`, and `config` metadata. It replaces the candidate arrays with aggregate counts in `summary`:
 
 ```json title="excerpt"
 {
@@ -279,17 +304,33 @@ A run that wrote the `--sarif-file` document carries a root [`request_outcomes`]
 }
 ```
 
-`attack_surface` is present only when you pass `--surface`. Use it when an agent verifier needs source-to-sink path context and defensive-boundary prompts.
+`attack_surface` is present only when you pass `--surface`. Use it when an agent verifier needs the source-to-sink path context and the defensive-boundary prompts.
 
-Each finding includes `kind`, `path`, `line`, `col`, `evidence`, `trace`, `actions`, `severity`, and optional `reachability`. `severity` is a review-priority tier (`high`, `medium`, or `low`) derived from reachability, boundary, source-backed, and runtime-hot signals. It is not a verified vulnerability verdict and does not change gate or exit semantics. SARIF maps high and medium candidates to `warning`, and low candidates to `note`. `tainted-sink` findings additionally carry `category` (the catalogue id, for example `"dangerous-html"`) and `cwe` (the category's CWE number); `client-server-leak` findings omit both. `tainted-sink` findings can also include `reachability.untrusted_source_trace` when a module with a known untrusted source imports the sink module. It is ranking and triage context only, not proof that a specific value reaches the sink.
+Each finding has `kind`, `path`, `line`, `col`, `evidence`, `trace`, `actions`, `severity`, and an optional `reachability`.
 
-When `reachability.reachable_from_untrusted_source` is set, `reachability.taint_confidence` tiers the association: `"arg-level"` means the sink argument traces back to a source read in the same module, directly or through up to three chained local bindings (the stronger candidate), and `"module-level"` means the sink only lives in a module reachable from a source over the import graph (the weaker candidate). Tier candidates from this field rather than parsing the `evidence` text. For arg-level findings the trace's first hop points at the line of the actual source read; module-level source hops use the role `"module-source"` and never imply a proven value path.
+- `severity` is a review-priority tier (`high`, `medium`, or `low`). Fallow derives it from reachability, boundary, source-backed, and runtime-hot signals. It is not a verified vulnerability verdict, and it does not change the gate or the exit codes. SARIF maps high and medium candidates to `warning`, and low candidates to `note`.
+- `tainted-sink` findings also have `category` (the catalogue id, for example `"dangerous-html"`) and `cwe` (the CWE number of the category). `client-server-leak` findings have neither field.
+- `tainted-sink` findings can also include `reachability.untrusted_source_trace` when a module with a known untrusted source imports the sink module. This trace is context for ranking and triage only. It does not prove that a specific value reaches the sink.
 
-When present, `unresolved_callee_diagnostics` adds bounded unresolved-callee metadata for follow-up review: `sampled[]` rows with `path`, `line`, `col`, `reason`, and `expression_kind`, `top_files[]` counts, `by_reason[]` counts, and the emitted sample/top-file limits. It is blind-spot metadata, not a finding list, and follows the same `--file`, `--workspace`, `--changed-since`, and `--gate new` scoping as security candidates.
+When `reachability.reachable_from_untrusted_source` is set, `reachability.taint_confidence` gives the strength of the association:
+
+- `"arg-level"` (the stronger candidate): the sink argument traces back to a source read in the same module, directly or through up to three chained local bindings. The first hop of the trace points at the line of the actual source read.
+- `"module-level"` (the weaker candidate): the sink is only in a module that a source reaches over the import graph. The source hops use the role `"module-source"` and never imply a proven value path.
+
+Rank candidates with this field. Do not parse the `evidence` text.
+
+When present, `unresolved_callee_diagnostics` adds bounded metadata about unresolved callees for follow-up review:
+
+- `sampled[]` rows with `path`, `line`, `col`, `reason`, and `expression_kind`
+- `top_files[]` counts
+- `by_reason[]` counts
+- the sample and top-file limits that fallow applied
+
+This is blind-spot metadata, not a finding list. It follows the same `--file`, `--workspace`, `--changed-since`, and `--gate new` scoping as the security candidates.
 
 ### Agent-actionable candidate record
 
-Every finding also carries a `candidate` record, an optional `taint_flow` triple, and a stable `finding_id`, designed for an agent to act on without re-deriving anything from the evidence string.
+Each finding also has a `candidate` record, an optional `taint_flow` triple, and a stable `finding_id`. An agent can act on these fields without parsing the evidence string.
 
 ```json
 {
@@ -322,25 +363,30 @@ Every finding also carries a `candidate` record, an optional `taint_flow` triple
 
 The `candidate` record has three slots:
 
-- `source_kind`: the kind of untrusted input that reaches the sink, as a stable catalogue source id such as `"http-request-input"`, `"process-env"`, `"process-argv"`, `"message-event-data"`, or `"location-input"`. Absent when no untrusted source matched (always absent for `client-server-leak`). Treat an unknown id as an untrusted source of unknown kind; never drop a candidate on that basis.
-- `sink`: a self-contained description of the sink site (`path`, `line`, `col`, `category`, `cwe`, and the captured `callee`), so you can act on `candidate.sink` without reading the rest of the finding. URL-category sinks (SSRF, open redirect) may add `url_shape` when it is statically visible: `"fixed-origin-dynamic-path"` (fixed origin with dynamic path or query, the lower-alarm shape) or `"dynamic-origin"` (the origin itself is dynamic).
-- `boundary`: whether the flow crosses a `client_server` boundary (a `"use client"` file in the trace) or a `cross_module` boundary (the source reaches the sink across one or more import hops), plus an `architecture_zone` (`from`/`to`) when the anchor also participates in a declared architecture-boundary violation.
+- `source_kind`: the kind of untrusted input that reaches the sink, as a stable catalogue source id such as `"http-request-input"`, `"process-env"`, `"process-argv"`, `"message-event-data"`, or `"location-input"`. Absent when no untrusted source matched (always absent for `client-server-leak`). Treat an unknown id as an untrusted source of unknown kind. Never drop a candidate because its id is unknown.
+- `sink`: a complete description of the sink site (`path`, `line`, `col`, `category`, `cwe`, and the captured `callee`). You can act on `candidate.sink` without reading the rest of the finding. URL-category sinks (SSRF, open redirect) can add `url_shape` when the shape is statically visible: `"fixed-origin-dynamic-path"` (a fixed origin with a dynamic path or query, the less alarming shape) or `"dynamic-origin"` (the origin itself is dynamic).
+- `boundary`: whether the flow crosses a `client_server` boundary (a `"use client"` file in the trace) or a `cross_module` boundary (the source reaches the sink across one or more import hops). It also has an `architecture_zone` (`from`/`to`) when the anchor is part of a declared architecture-boundary violation.
 
-There is no `impact` field. Deciding exploitability is the verifying agent's job, not fallow's; fallow flags candidates with structural evidence and a severity-based review-priority tier.
+There is no `impact` field. The verifying agent decides exploitability. Fallow flags candidates with structural evidence and a review-priority tier from `severity`.
 
-`taint_flow` is present only when an untrusted source is import-reachable to the sink. It is the `{ source, sink, path }` shape agent SAST tooling expects. `path` is a compact summary (`intra_module` and `cross_module_hops`); the full ordered hop list lives in `reachability.untrusted_source_trace` and is not duplicated.
+`taint_flow` is present only when an untrusted source reaches the sink through imports. It has the `{ source, sink, path }` shape that agent SAST tools expect. `path` is a compact summary (`intra_module` and `cross_module_hops`). The full ordered hop list is in `reachability.untrusted_source_trace`, and `taint_flow` does not duplicate it.
 
-`candidate.network` is present only on `secret-to-network` candidates. It carries `destination`: the network call's URL when it is a static string literal (usually intended auth, the credential's own provider) or absent when the destination is dynamic (the higher-signal exfil case). Use it to triage exfil from intended auth without re-reading the code.
+`candidate.network` is present only on `secret-to-network` candidates. Its `destination` field holds the URL of the network call when the URL is a static string literal. That case is usually intended auth to the credential's own provider. `destination` is absent when the destination is dynamic, which is the stronger exfiltration signal. Use this field to tell exfiltration from intended auth without reading the code again.
 
-`finding_id` is a stable correlation id, identical across runs for the same rule, path, and line, and identical to the finding's SARIF `partialFingerprints` value. Use it to track a candidate across runs (for example after a rebase) and to join JSON and SARIF output.
+`finding_id` is a stable correlation id. It is identical across runs for the same rule, path, and line, and it matches the SARIF `partialFingerprints` value of the finding. Use it to track a candidate across runs (for example after a rebase) and to join JSON and SARIF output.
 
 ## Subcommands
 
-Two read-only subcommands support the agent-verification loop. They never re-run analysis assumptions into the candidate output: `survivors` joins existing candidates with an external verifier's verdicts, and `blind-spots` reshapes the unresolved-callee diagnostics fallow already produces. See [Security agent verification](/cli/security-agent-verification) for the end-to-end recipe and the `fallow-security-verdict/v1` verdict schema.
+Two read-only subcommands support the agent verification loop. Neither one feeds analysis assumptions back into the candidate output:
+
+- `survivors` joins existing candidates with the verdicts of an external verifier.
+- `blind-spots` reshapes the unresolved-callee diagnostics that fallow already produces.
+
+See [Security agent verification](/cli/security-agent-verification) for the full recipe and the `fallow-security-verdict/v1` verdict schema.
 
 ### survivors
 
-Join raw `fallow security --format json` candidate output with a verifier's verdict file and render only the candidates the verifier retained as survivors, without rewriting the original candidate fields.
+Show only the candidates that a verifier kept. `survivors` joins the raw candidate output of `fallow security --format json` with the verdict file of the verifier, and renders the survivors. It does not rewrite the original candidate fields.
 
 ```bash
 fallow security --format json --quiet > candidates.json
@@ -352,15 +398,15 @@ fallow security survivors --candidates candidates.json --verdicts verdicts.json
 |:-----|:------------|
 | `--candidates <PATH>` | Raw `fallow security --format json` candidate output (required) |
 | `--verdicts <PATH>` | Verifier verdict JSON file, one `fallow-security-verdict/v1` entry per `finding_id` (required) |
-| `--require-verdict-for-each-candidate` | Fail with a structured exit 2 when any candidate has no matching verdict, for CI that must review every candidate |
+| `--require-verdict-for-each-candidate` | Fail with a structured exit 2 when a candidate has no matching verdict. Use it in CI that must review every candidate |
 | `-f, --format <FORMAT>` | Output format: `human` (default) or `json` |
 | `-o, --output-file <PATH>` | Write the report to a file instead of stdout |
 
-The output reports `summary.unverdicted` so consumers can distinguish reviewed from unreviewed candidates, and the human renderer separates verifier dispositions from candidates that still need review. Without `--require-verdict-for-each-candidate`, an incomplete verdict file is surfaced (via `summary.unverdicted`) rather than failing.
+The output reports `summary.unverdicted`, so you can tell reviewed candidates from unreviewed ones. The human output separates verifier dispositions from candidates that still need review. Without `--require-verdict-for-each-candidate`, an incomplete verdict file does not fail the run. The gap shows in `summary.unverdicted`.
 
 ### blind-spots
 
-Group the unresolved security callees fallow could not resolve (dynamic dispatch, unmodeled framework entry points) into actionable blind-spot output, so a verifier knows where the structural trace stops. `--file` is accepted both before and after the subcommand.
+Show a verifier where the structural trace stops. `blind-spots` groups the security callees that fallow could not resolve (dynamic dispatch, unmodeled framework entry points) into blind-spot output that you can act on. You can pass `--file` before or after the subcommand.
 
 ```bash
 fallow security blind-spots --format json --quiet

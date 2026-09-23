@@ -1,11 +1,11 @@
 ---
 title: "Telemetry & privacy"
-description: "What fallow's opt-in telemetry collects and, more importantly, what it never collects. Off by default, no identifiers, inspect it before you consent."
+description: "Check exactly what fallow telemetry sends before you turn it on. Telemetry is opt-in and off by default, sends no identifiers, and you can print the payload before you consent."
 keywords: ["telemetry", "privacy", "opt-in", "DO_NOT_TRACK", "data collection", "fallow"]
 icon: "shield-halved"
 ---
 
-Fallow telemetry is **opt-in** and **off by default**. It exists to improve agent, CI, JSON, MCP, and editor workflows, not to track individuals or codebases. For the commands and environment controls, see [`fallow telemetry`](/cli/telemetry).
+Fallow telemetry is **opt-in** and **off by default**. This page lists what fallow sends when you turn it on, and what it never sends. The data helps improve agent, CI, JSON, MCP, and editor workflows. Fallow does not use it to track individuals or codebases. For the commands and environment controls, see [`fallow telemetry`](/cli/telemetry).
 
 To keep telemetry off everywhere, set `FALLOW_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`. See [Disabling everywhere](#disabling-everywhere).
 
@@ -22,23 +22,29 @@ Fallow telemetry never includes:
 - raw errors, logs, or serialized exceptions
 - machine, user, project, or repository identifiers
 
-Hashing these values is not used as a workaround.
+Fallow does not send hashed versions of these values either.
 
-The one exception is an anonymous install grouping token: a freshly random value, never derived from your machine, user account, repository, project, file paths, or environment. It is created only when you explicitly opt in (`fallow telemetry enable`, or the first upload after `FALLOW_TELEMETRY=on`), deleted when you run `fallow telemetry disable`, and sent only as a private transport header (`X-Fallow-Install`) for server-side grouping, never as a field inside the event itself. It exists so aggregate dashboards can count distinct workflows per install instead of per run. `fallow telemetry status` reports only whether the token is present, never the token itself.
+The one exception is an anonymous install grouping token. With this token, aggregate dashboards can count distinct workflows per install instead of per run. The token has these properties:
+
+- It is a new random value. Fallow never derives it from your machine, user account, repository, project, file paths, or environment.
+- Fallow creates it only when you explicitly opt in: `fallow telemetry enable`, or the first upload after `FALLOW_TELEMETRY=on`.
+- `fallow telemetry disable` deletes it.
+- Fallow sends it only as a private transport header (`X-Fallow-Install`) for server-side grouping. It is never a field inside the event.
+- `fallow telemetry status` reports only whether the token is present. It never shows the token.
 
 ## Inspect what is sent
 
-Do not take the list on trust. You can print the exact payload any real command would send, without sending it:
+You do not have to trust the list. To print the exact payload that a real command would send, without sending it, run:
 
 ```bash
 FALLOW_TELEMETRY=inspect fallow audit --format json --quiet
 ```
 
-The payload prints to stderr; your command's normal output is untouched.
+Fallow prints the payload to stderr. The normal output of your command does not change.
 
 ## What is collected
 
-When you enable telemetry, Fallow sends one small, high-level event per analysis run:
+When you enable telemetry, fallow sends one small, high-level event per analysis run:
 
 ```json
 {
@@ -64,52 +70,81 @@ When you enable telemetry, Fallow sends one small, high-level event per analysis
 }
 ```
 
-`agent_source`, `findings_present`, `mcp_tool`, and `parent_run` are optional. `agent_source` appears only on agent-driven runs. `findings_present` is omitted by commands that run no analysis (and by older binaries). `mcp_tool` appears only when a run came through the MCP server. `parent_run` appears only when a run is explicitly correlated to a previous one. All are omitted otherwise.
+Four fields are optional:
+
+- `agent_source` appears only on agent-driven runs.
+- `findings_present` is omitted by commands that run no analysis, and by older binaries.
+- `mcp_tool` appears only when a run came through the MCP server.
+- `parent_run` appears only when a run is explicitly correlated to a previous one.
+
+In all other cases, fallow omits these fields.
 
 | Field | Purpose |
 |:------|:--------|
 | `workflow` | Prioritize the audit, dead-code, health, duplication, CI, runtime-coverage setup, impact, security, fix, and explain workflows. |
-| `integration_surface` | Understand whether Fallow is used through human CLI, CLI JSON, MCP, CI, editor, or as a library. |
+| `integration_surface` | Show whether you use fallow through human CLI, CLI JSON, MCP, CI, editor, or as a library. |
 | `invocation_context` | Separate human, CI, editor, and agent-driven use without uploading detection evidence. |
-| `agent_source` | Improve compatibility with specific agent integrations using a documented allowlist. |
+| `agent_source` | Improve compatibility with specific agent integrations. Values come from a documented allowlist. |
 | `output_format` / `quiet` | Protect the output contracts that users and agents rely on most. |
 | `duration_bucket_ms` | Find slow workflow classes without collecting exact timings. |
 | `outcome` / `exit_code_bucket` | Measure clean runs, findings, and failures without uploading raw error text. |
-| `findings_present` | Whether the analysis surfaced any findings, decoupled from the exit-code gate (so informational analyses like default-config `dupes`, which never exits non-zero, are still measurable). |
+| `findings_present` | Whether the analysis found any issues, independent of the exit code. This makes informational analyses measurable, such as default-config `dupes`, which never exits non-zero. |
 | `mcp_tool` | Attribute MCP usage to a specific tool, from a fixed allowlist of tool names. |
-| `parent_run` | Link explicit agent follow-up runs using a short allowlisted token, never a path or free-form string. |
+| `parent_run` | Link explicit agent follow-up runs with a short allowlisted token. It is never a path or a free-form string. |
 
-When Fallow runs through the MCP server, the server tags the CLI process it invokes so the single emitted event is attributed to the `mcp` surface and the specific tool, instead of looking like a plain `cli_json` run. Code Mode snippets can make several read-only host calls; those spawned CLI events are attributed to `code_execute`, not to free-form code text or nested helper names. No extra event is sent and the privacy posture is unchanged. The LSP server, editor extension, and library embeddings run in-process and currently emit no telemetry.
+When fallow runs through the MCP server, the server tags the CLI process that it starts. The one event from that run then counts toward the `mcp` surface and the specific tool, instead of a plain `cli_json` run. Code Mode snippets can make several read-only host calls. Fallow attributes the CLI events from those calls to `code_execute`, not to free-form code text or nested helper names. This tagging sends no extra event and does not change what fallow collects.
 
-The `schema_version` field increments if the collected fields ever change, and this page is updated before any new field ships.
+The LSP server, editor extension, and library embeddings run in-process and currently emit no telemetry.
+
+The `schema_version` field increments if the collected fields change. The fallow team updates this page before any new field ships.
 
 ## Agent source
 
-When telemetry is enabled and a run is classified as agent-driven, Fallow may emit one normalized `agent_source` value from a fixed allowlist:
+When telemetry is enabled and fallow classifies a run as agent-driven, fallow may send one normalized `agent_source` value from a fixed allowlist:
 
 ```text
 none codex claude_code cursor copilot opencode aider roo
 windsurf gemini cline continue zed goose other_known unknown
 ```
 
-`none` appears in the list because it is the internal default before a run is classified, but it is never sent: Fallow only sends `agent_source` for runs it identifies as agent-driven, and those are never `none`. Agents not on the list (for example enterprise IDE assistants) are grouped under `other_known`. Hyphen aliases such as `claude-code`, and CLI aliases such as `gemini_cli` and `antigravity` (both map to `gemini`), are normalized.
+Fallow never sends `none`. It is the internal default before fallow classifies a run, and fallow sends `agent_source` only for agent-driven runs. Fallow groups agents that are not on the list, for example enterprise IDE assistants, under `other_known`. Fallow also normalizes aliases: hyphen aliases such as `claude-code`, and CLI aliases such as `gemini_cli` and `antigravity` (both map to `gemini`).
 
-Fallow does not upload raw MCP client info, process names, parent process paths, editor or extension identifiers, environment variable names, model names, account or organization IDs, prompts, versions, or free-form vendor strings. Agent wrappers should set `FALLOW_AGENT_SOURCE=<allowlisted-value>`; ambiguous sources emit `unknown`. **Setting `FALLOW_AGENT_SOURCE` never enables telemetry by itself and uploads no codebase content.** When more than one agent environment is present at once, attribution is best-effort and can depend on check order; set `FALLOW_AGENT_SOURCE` to name the agent yourself.
+Fallow does not upload any of these:
+
+- raw MCP client info
+- process names or parent process paths
+- editor or extension identifiers
+- environment variable names
+- model names
+- account or organization IDs
+- prompts
+- versions
+- free-form vendor strings
+
+If you write an agent wrapper, set `FALLOW_AGENT_SOURCE=<allowlisted-value>`. An ambiguous source sends `unknown`. **Setting `FALLOW_AGENT_SOURCE` never enables telemetry by itself and uploads no codebase content.** When more than one agent environment is present, attribution is best-effort and can depend on check order. To name the agent yourself, set `FALLOW_AGENT_SOURCE`.
 
 ## Transport and server privacy
 
-- requests are HTTPS POST JSON to `https://api.fallow.cloud/v1/telemetry/events` (override the host with `FALLOW_API_URL`)
-- no cookies are used and no authentication token is sent
-- the upload runs on a background thread, so it does not slow down your command
-- Fallow does not wait for the upload, so the fastest runs and runs on slow networks often drop their event; counts are a rough, biased sample, not an exact usage count
-- network errors are ignored and never affect command output or exit code
-- telemetry is never written to stdout
-- server-side handling does not enrich telemetry with customer, repository, organization, git, package-registry, or license data
-- IP addresses are dropped or truncated as early as practical
-- raw events are retained only for a short window, then deleted
+- Fallow sends each request as an HTTPS POST with a JSON body to `https://api.fallow.cloud/v1/telemetry/events` (override the host with `FALLOW_API_URL`)
+- Fallow uses no cookies and sends no authentication token
+- The upload runs on a background thread and does not slow down your command
+- Fallow does not wait for the upload, so the fastest runs and runs on slow networks often drop their event. The counts are a rough, biased sample, not an exact usage count
+- Fallow ignores network errors, and they never affect command output or the exit code
+- Fallow never writes telemetry to stdout
+- The server does not add customer, repository, organization, git, package-registry, or license data to telemetry
+- The server drops or truncates IP addresses as early as practical
+- The server keeps raw events for a short window only, then deletes them
 
 Public reporting uses only coarse aggregate trends after privacy review.
 
 ## Disabling everywhere
 
-The `DO_NOT_TRACK` and `FALLOW_TELEMETRY_DISABLED` environment variables are top-precedence kill switches: when either is truthy, telemetry stays off and `fallow telemetry enable` is refused. Use `FALLOW_TELEMETRY_DISABLED=1` as the fleet-wide switch in managed and CI environments.
+The `DO_NOT_TRACK` and `FALLOW_TELEMETRY_DISABLED` environment variables are kill switches with top precedence. When either is truthy, telemetry stays off and fallow refuses `fallow telemetry enable`. In managed and CI environments, use `FALLOW_TELEMETRY_DISABLED=1` as the fleet-wide switch.
+
+## See also
+
+<CardGroup cols={1}>
+  <Card title="fallow telemetry" icon="terminal" href="/cli/telemetry">
+    Commands and environment controls for telemetry.
+  </Card>
+</CardGroup>

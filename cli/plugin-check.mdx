@@ -1,14 +1,14 @@
 ---
 title: "fallow plugin-check"
-description: "CLI reference for fallow plugin-check. A read-only dry-run that reports whether each external plugin activated and, for manifestEntries rules, the manifests matched, entries seeded, and typed warnings."
+description: "Find out why a custom plugin does not activate or seeds no entries. Fallow plugin-check is a read-only dry run that reports, for each external plugin, if it activated and what each manifestEntries rule matched and seeded."
 keywords: ["fallow plugin-check", "custom plugins", "external plugins", "manifest entries", "plugin authoring", "CLI", "agent"]
 icon: "terminal"
 ---
 
-Dry-run your external plugins without running a full analysis: per plugin, did it activate, and what did each `manifestEntries` rule match and seed. It is read-only, so it is safe to run in a tight loop while you iterate on a `fallow-plugin-*` file.
+Use `fallow plugin-check` to debug an external plugin while you write it. The command does a dry run of your external plugins and does not run a full analysis. For each plugin, it tells you if the plugin activated, and what each `manifestEntries` rule matched and seeded. The command is read-only, so you can run it again after each change to a `fallow-plugin-*` file.
 
 <Info>
-  `plugin-check` is advisory, never a gate: it always exits 0 and rejects the output-gating flags (`--ci`, `--fail-on-issues`, `--output-file`). Reach for it to debug why a plugin activates or seeds nothing, not to fail CI.
+  `plugin-check` is advisory, and never a gate. It always exits 0, and it rejects the output-gating flags (`--ci`, `--fail-on-issues`, `--output-file`). Use it to debug why a plugin does not activate or seeds nothing. Do not use it to fail CI.
 </Info>
 
 ```bash
@@ -17,49 +17,56 @@ fallow plugin-check --format json
 fallow plugin-check --format json --root packages/app
 ```
 
-It pairs with [`fallow list --plugins`](/cli/list), which answers whether a plugin is active. `plugin-check` goes further: for active plugins it shows exactly what each `manifestEntries` rule matched and seeded. For the plugin file format, the field reference, and how `manifestEntries` interpolation works, see [Custom plugins](/frameworks/custom-plugins).
+[`fallow list --plugins`](/cli/list) tells you if a plugin is active. For an active plugin, `plugin-check` also shows what each `manifestEntries` rule matched and seeded. For the plugin file format, the field reference, and `manifestEntries` interpolation, see [Custom plugins](/frameworks/custom-plugins).
 
 ## What it reports
 
-For every external plugin discovered from the `plugins` config field, the `.fallow/plugins/` directory, or `fallow-plugin-*` files in the project root:
+Fallow finds external plugins in the `plugins` config field, the `.fallow/plugins/` directory, and `fallow-plugin-*` files in the project root. For each of these plugins, it reports:
 
-- `active`, and when inactive an `activation_requirement` string naming the unmet condition, so a plugin whose `detection` fails is no longer silent.
-- For active plugins with `manifestEntries`, a structured per-rule report: the manifests matched by the glob (`manifests_matched`), each matched manifest's `when`-gate result (`when_passed`), the entries seeded (each resolved path with a `path_exists` flag), and any `warnings`.
+- `active`. For an inactive plugin, an `activation_requirement` string names the unmet condition. A plugin with a failing `detection` thus shows why it did not activate.
+- For an active plugin with `manifestEntries`, a report for each rule:
+  - the manifests that the glob matched (`manifests_matched`)
+  - the result of the `when` gate for each matched manifest (`when_passed`)
+  - the seeded entries, each a resolved path with a `path_exists` flag
+  - any `warnings`
 
-Output is deterministic and sorted, so `--format json` is byte-identical across machines and safe to diff in CI or snapshot in tests.
+The output is deterministic and sorted. `--format json` gives the same bytes on each machine, so you can diff it in CI or use it as a test snapshot.
 
 <Note>
-  `path_exists` reports whether a file matches the seeded glob on disk. `false` means the entry is definitely broken. `true` is necessary but not sufficient: it does not prove the entry became reachable, because file discovery still filters gitignored and wrong-extension files.
+  `path_exists` reports if a file on disk matches the seeded glob. `false` means that the entry is broken for certain. `true` is necessary but not sufficient. It does not prove that the entry became reachable, because file discovery still removes gitignored files and files with the wrong extension.
 </Note>
 
 ## Warnings
 
-Each `manifestEntries` rule reports typed `warnings[]`. Agents branch on the kebab-case `kind`; each warning carries only the slot relevant to that kind (`glob`, `field_path`, `manifest`, or `entry`). These are the fastest way to debug a rule that seeds nothing.
+Each `manifestEntries` rule reports typed `warnings[]`. When a rule seeds nothing, read these warnings first. Agents branch on the kebab-case `kind`. Each warning has only the field for its kind: `glob`, `field_path`, `manifest`, or `entry`.
 
 | `kind` | Emitted when |
 |:-------|:-------------|
 | `manifests-matched-none` | The `manifests` glob matched no files. |
 | `when-excluded-all` | The rule's `when` gate excluded every matched manifest. |
-| `field-path-unresolved` | A `${dotted.field}` path resolved in none of the gated manifests (likely a typo). |
+| `field-path-unresolved` | A `${dotted.field}` path did not resolve in any of the gated manifests (probably a typo). |
 | `entries-empty` | The rule's `entries` list is empty, so it seeds nothing. |
-| `manifest-parse-failed` | A matched manifest could not be read or parsed (emitted once per failing manifest). |
-| `entry-outside-root` | A seeded entry resolved outside the project root and was skipped. |
-| `seeded-paths-missing` | The rule seeded entries but none of the seeded paths exist on disk. |
+| `manifest-parse-failed` | Fallow could not read or parse a matched manifest (one warning for each failing manifest). |
+| `entry-outside-root` | A seeded entry resolved outside the project root, and fallow skipped it. |
+| `seeded-paths-missing` | The rule seeded entries, but none of the seeded paths exist on disk. |
 
 ## Options
 
 | Flag | Description |
 |:-----|:------------|
 | `--root <ROOT>` | Project root directory |
-| `--config <CONFIG>` | Path to a config file, which may declare extra plugin paths via `plugins` |
+| `--config <CONFIG>` | Path to a config file. The file can declare extra plugin paths in `plugins` |
 | `--format <FORMAT>` | Output format (`human` default, `json` for agents) |
 | `--quiet` | Suppress progress output |
 
-Global flags such as `--no-cache` and `--threads` still apply; see [global flags](/cli/global-flags).
+Global flags such as `--no-cache` and `--threads` still apply. See [global flags](/cli/global-flags).
 
 ## JSON output
 
-The example below covers both shapes in one run: an inactive plugin with its `activation_requirement`, and an active plugin whose rule seeded an entry that does not yet exist on disk (`path_exists: false`), raising a `seeded-paths-missing` warning.
+This example shows both shapes in one run:
+
+- an inactive plugin, with its `activation_requirement`
+- an active plugin with a rule that seeded an entry that does not exist on disk yet (`path_exists: false`). The rule reports a `seeded-paths-missing` warning.
 
 ```json
 {
@@ -100,7 +107,7 @@ The example below covers both shapes in one run: an inactive plugin with its `ac
 
 A healthy active plugin reports `when_passed: true`, `path_exists: true` for each seeded entry, and an empty `warnings` array.
 
-`plugin-check` is a CLI-only authoring aid; the [MCP server](/integrations/mcp) does not expose it.
+`plugin-check` is a CLI-only tool for plugin authors. The [MCP server](/integrations/mcp) does not expose it.
 
 ## See also
 

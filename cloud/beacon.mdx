@@ -1,22 +1,24 @@
 ---
 title: "Cloud beacon setup"
-description: "Connect a browser or Node service to Fallow Cloud, verify the first ingest, and diagnose a setup that stays empty."
+description: "Send production execution counts from a browser or Node service to Fallow Cloud, so you can see which functions run and which never do. Covers setup, the first-ingest check, and an empty dashboard."
 keywords: ["fallow beacon", "runtime coverage", "browser coverage", "node coverage", "cloud ingest"]
 icon: "tower-broadcast"
 ---
 
-The beacon sends function-level execution counts to Fallow Cloud. HTTP mode needs three values before it can send anything: an API key, a project id, and the Fallow Cloud endpoint.
+The beacon records how often each function runs in production and sends those counts to Fallow Cloud. You use the counts to find hot paths and code that never runs.
+
+In HTTP mode, the beacon sends nothing until you give it three values: an API key, a project id, and the Fallow Cloud endpoint.
 
 ## Browser setup
 
-Install the beacon and an Istanbul-compatible build instrumenter:
+Install the beacon and a build instrumenter that is compatible with Istanbul:
 
 ```bash
 npm install @fallow-cli/beacon
 npm install --save-dev oxc-coverage-instrument
 ```
 
-Configure `oxc-coverage-instrument` in the production build so it populates `window.__coverage__`. Then start the browser beacon from the application entrypoint:
+Add `oxc-coverage-instrument` to the production build so that it fills `window.__coverage__`. Then start the browser beacon from the application entrypoint:
 
 ```ts
 import { createBrowserBeacon } from "@fallow-cli/beacon/browser";
@@ -32,13 +34,17 @@ const beacon = createBrowserBeacon({
 beacon.start();
 ```
 
-Use an ingest-only key with prefix `fallow_pub_k1_` in browser code. It can only call `POST /v1/ingest`. Never embed a full `fallow_live_k1_` key in a browser bundle.
+In browser code, use an ingest-only key with the prefix `fallow_pub_k1_`. This key can only call `POST /v1/ingest`. Never put a full `fallow_live_k1_` key in a browser bundle.
 
-The first browser snapshot can contain only startup code. The beacon intentionally skips that incomplete snapshot. Navigate through at least one real workflow, wait for the 30-second flush, or hide the page to trigger a flush.
+The first browser snapshot can contain only startup code, so the beacon skips it on purpose. To send data, do one of these:
+
+- Go through at least one real workflow in the app.
+- Wait for the 30-second flush.
+- Hide the page, which starts a flush.
 
 ## Node setup
 
-Node can read V8 coverage when `NODE_V8_COVERAGE` is present before process startup. The beacon cannot enable V8 coverage after the process has started.
+Node can read V8 coverage only when `NODE_V8_COVERAGE` is set before the process starts. The beacon cannot turn on V8 coverage after the process has started.
 
 ```bash
 NODE_V8_COVERAGE=./coverage node dist/index.js
@@ -60,17 +66,17 @@ const beacon = createNodeBeacon({
 beacon.start();
 ```
 
-Use a full `fallow_live_k1_` key and keep it server-side. Bun and Deno need build-time Istanbul instrumentation because their V8 capture path is unavailable or incomplete.
+Use a full `fallow_live_k1_` key and keep it on the server. Bun and Deno need Istanbul instrumentation at build time, because their V8 capture is unavailable or incomplete.
 
 ## Verify the first ingest
 
-The beacon is quiet on successful uploads. Verify one of these observable signals:
+The beacon logs nothing when an upload succeeds. To confirm that data arrives, check one of these signals:
 
 1. `POST https://api.fallow.cloud/v1/ingest` returns `202 Accepted` in the browser network panel or server proxy logs.
 2. The onboarding card at [fallow.cloud](https://fallow.cloud) changes to a repository row after aggregation.
 3. The key's `last used` value updates under Settings, API keys.
 
-An accepted ingest is asynchronous. A short delay between the `202` response and the repository row is expected.
+Fallow Cloud processes an accepted ingest asynchronously. Expect a short delay between the `202` response and the repository row.
 
 ## If the dashboard stays empty
 
@@ -84,18 +90,29 @@ Check these in order:
 6. The app exercised real routes or jobs after the beacon started.
 7. The first `/v1/ingest` response is `202`, not `401`, `403`, `402`, `413`, or `429`.
 
-When no coverage source is available, the beacon emits one actionable `onRuntimeMismatch` error and stops. Fix that message before waiting for another batch.
+When no coverage source is available, the beacon emits one `onRuntimeMismatch` error that tells you what to fix, and then stops. Fix that error before you wait for another batch.
 
 ## Add static inventory
 
-Runtime capture tells Fallow what V8 or Istanbul observed. Upload the static inventory in CI to make functions that were never tracked visible as `untracked`:
+Runtime capture tells Fallow Cloud only what V8 or Istanbul observed. To see the functions that were never tracked, upload the static inventory in CI. Fallow Cloud then shows them as `untracked`:
 
 ```bash
 fallow coverage upload-inventory --api-key "$FALLOW_KEY"
 ```
 
-For bundled or minified code, also upload source maps from CI. See [`fallow coverage`](/cli/coverage) for the inventory and source-map commands.
+For bundled or minified code, also upload source maps from CI. [`fallow coverage`](/cli/coverage) documents the inventory and source-map commands.
 
 ## Privacy
 
-The beacon sends function paths, names, positions, hit counts, project metadata, and delivery reports. It does not send arguments, request bodies, environment variables, or source code. See the [network activity disclosure](https://fallow.cloud/coverage/network-activity) for the complete contract.
+The beacon sends function paths, names, positions, hit counts, project metadata, and delivery reports. It does not send arguments, request bodies, environment variables, or source code. The [network activity disclosure](https://fallow.cloud/coverage/network-activity) lists everything the beacon sends.
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="Runtime coverage" icon="chart-network" href="/analysis/runtime-coverage">
+    Use the runtime data in `fallow health` for hot paths, cold paths, and deletion confidence.
+  </Card>
+  <Card title="fallow coverage" icon="terminal" href="/cli/coverage">
+    Commands to upload the static inventory and source maps.
+  </Card>
+</CardGroup>

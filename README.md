@@ -9,18 +9,19 @@
   <a href="https://github.com/fallow-rs/fallow"><img src="https://img.shields.io/badge/fallow-GitHub-orange" alt="fallow"></a>
 </p>
 
-This repository is the canonical source for fallow's public user
-documentation. See [PUBLICATION.md](PUBLICATION.md) for the public-only boundary,
-artifact provenance, and synchronization contract.
+This repository is the canonical source for the public fallow user
+documentation at [docs.fallow.tools](https://docs.fallow.tools).
+[PUBLICATION.md](PUBLICATION.md) defines what content can be public, where
+artifacts come from, and how synchronization works.
 
 ## Structure
 
-Public pages are grouped by user task. See the complete placement map in
+The pages are grouped by user task. The complete placement map is in
 [CONTRIBUTING.md](CONTRIBUTING.md#content-placement). `docs.json` is the source
 of truth for navigation order.
 
 ## Contributing
 
-Edit any `.mdx` file and push to `main`. Mintlify deploys automatically. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for local development and the checks to run
-before pushing.
+Edit any `.mdx` file and push to `main`. Mintlify deploys the change
+automatically. [CONTRIBUTING.md](CONTRIBUTING.md) explains local development
+and the checks to run before you push.

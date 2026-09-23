@@ -1,11 +1,13 @@
 ---
 title: "Security agent verification"
-description: "Turn fallow security candidates into verifier-filtered survivor reports without adding model calls to fallow."
+description: "Cut fallow security candidates down to a short list of survivors that a verifier could not dismiss. Fallow itself makes no model calls."
 keywords: ["fallow security", "security verification", "security_candidates", "attack_surface", "agent workflow"]
 icon: "shield-check"
 ---
 
-`fallow security` produces deterministic candidates. It does not call a model, decide exploitability, or emit verified vulnerabilities. Use this recipe when an agent or external harness should turn raw candidates into a shorter survivor list.
+Use this recipe to turn raw `fallow security` candidates into a shorter list of survivors that you can act on. A coding agent or an external harness checks each candidate and dismisses the ones that the evidence does not support.
+
+`fallow security` produces deterministic candidates only. It does not call a model, it does not decide exploitability, and it does not report verified vulnerabilities.
 
 ## Inputs
 
@@ -25,13 +27,17 @@ Use MCP when an agent is already in an edit loop:
 }
 ```
 
-`surface: true` forwards `--surface` and includes top-level `attack_surface[]` entries. Set `gate` to `new` for changed-line candidates or `newly-reachable` for candidates that became reachable from entry points; `newly-reachable` requires `changed_since`. `paths` forwards repeated `--file` filters and scopes returned candidates to matching anchors, trace hops, source-trace hops, and unresolved-callee diagnostics.
+The MCP parameters work as follows:
 
-Each candidate includes `severity`, a review-priority tier (`high`, `medium`, or `low`). It is not a verified vulnerability verdict. When `reachability.taint_confidence` is present, use it to distinguish `arg-level` source association from weaker `module-level` reachability.
+- `surface: true` forwards `--surface` and adds the top-level `attack_surface[]` entries.
+- `gate` set to `new` returns candidates on changed lines. `gate` set to `newly-reachable` returns candidates that became reachable from entry points. `newly-reachable` requires `changed_since`.
+- `paths` forwards repeated `--file` filters. Fallow returns only candidates whose anchor, trace hops, source-trace hops, or unresolved-callee diagnostics match.
+
+Each candidate has a `severity` field with a review-priority tier (`high`, `medium`, or `low`). The tier is not a verified vulnerability verdict. When `reachability.taint_confidence` is present, use it to tell `arg-level` source association apart from the weaker `module-level` reachability.
 
 ## Verifier packet
 
-For each `security_findings[]` item, build one packet from deterministic fallow evidence plus caller-collected source windows:
+For each `security_findings[]` item, build one packet. The packet holds the deterministic fallow evidence and the source windows that you collect:
 
 ```json
 {
@@ -64,9 +70,9 @@ For each `security_findings[]` item, build one packet from deterministic fallow 
 }
 ```
 
-Collect source windows from disk after the scan. Keep them outside fallow output so the core stays deterministic, compact, and provider-neutral.
+Read the source windows from disk after the scan. Keep them out of the fallow output, so that the fallow output stays deterministic, compact, and independent of any model provider.
 
-`blind_spots.unresolved_callee_diagnostics` can copy the top-level fallow output when a verifier queue wants sample locations for dynamic-dispatch follow-up. It is bounded metadata, not proof of a vulnerability.
+`blind_spots.unresolved_callee_diagnostics` can hold a copy of the top-level diagnostics from the fallow output. Copy it when the verifier needs sample locations to follow up on dynamic dispatch. It is bounded metadata and is not proof of a vulnerability.
 
 ## Prompt contract
 
@@ -89,13 +95,13 @@ Check:
 Return only JSON matching fallow-security-verdict/v1.
 ```
 
-If `attack_surface.defensive_boundary.verification_prompt` is present, include it as an additional question, not as a verdict.
+If `attack_surface.defensive_boundary.verification_prompt` is present, add it to the prompt as an extra question. Do not treat it as a verdict.
 
-`attack_surface.defensive_boundary.controls` lists control patterns observed in files on the import trace. Their presence does not prove that a control executes before the reported sink or protects the same input. Check execution order and value flow in the source windows before using a control to dismiss a candidate.
+`attack_surface.defensive_boundary.controls` lists control patterns that fallow found in files on the import trace. A listed control does not prove that the control runs before the reported sink or that it protects the same input. Before you dismiss a candidate because of a control, check the execution order and the value flow in the source windows.
 
 ## Verdict schema
 
-Require a compact JSON verdict:
+Ask the verifier for a compact JSON verdict:
 
 ```json
 {
@@ -122,19 +128,23 @@ Allowed verdicts:
 - `dismissed`: the candidate is not exploitable from the supplied evidence.
 - `needs-human-review`: the evidence is incomplete, contradictory, or blocked by missing context.
 
-Store verifier output beside the original fallow JSON, keyed by `finding_id`. Do not write verdict fields back into fallow output.
+Store the verifier output next to the original fallow JSON, keyed by `finding_id`. Do not write verdict fields back into the fallow output.
 
 ## Finding identity migration
 
-Finding IDs include the rule, project-relative path, line and column so separate sinks on one line stay distinct. JSON and the visualization share this ID with security SARIF's `partialFingerprints["fallowSecurity/v2"]`. Selecting fewer files does not change the IDs of the findings that remain.
+A finding ID contains the rule, the project-relative path, the line, and the column. Two sinks on the same line therefore get different IDs. The JSON output and the visualization use the same ID as `partialFingerprints["fallowSecurity/v2"]` in the security SARIF output. When you select fewer files, the remaining findings keep their IDs.
 
-When upgrading from line-only IDs, regenerate candidate files and verdicts together. Refresh evaluation labels keyed by `finding_id` too. Every security finding gets a new ID, including findings that did not collide before.
+When you upgrade from line-only IDs, every security finding gets a new ID, including findings that did not collide before. To migrate:
 
-Keep historical candidate/verdict pairs together for replay. Do not match their verdicts to fresh candidates by path and line alone. Stored review history does not transfer automatically, and SARIF consumers may close and reopen security alerts once. The legacy `fallowSecurity/v1` fingerprint is no longer emitted because it could merge distinct sinks again.
+1. Regenerate the candidate files and the verdicts together.
+2. Refresh the evaluation labels that you key by `finding_id`.
+3. Keep old candidate and verdict pairs together for replay. Do not match old verdicts to new candidates by path and line alone.
+
+Stored review history does not transfer automatically. SARIF tools can close and reopen each security alert once. Fallow no longer emits the legacy `fallowSecurity/v1` fingerprint, because that fingerprint can merge separate sinks again.
 
 ## Render survivors
 
-Join the candidates and the verdict file with [`fallow security survivors`](/cli/security#survivors) to render only the candidates the verifier retained:
+To show only the candidates that the verifier kept, join the candidates and the verdict file with [`fallow security survivors`](/cli/security#survivors):
 
 ```bash
 fallow security --format json --quiet > candidates.json
@@ -142,19 +152,26 @@ fallow security --format json --quiet > candidates.json
 fallow security survivors --candidates candidates.json --verdicts verdicts.json
 ```
 
-It reports `summary.unverdicted` so unreviewed candidates stay visible; add `--require-verdict-for-each-candidate` to fail CI when any candidate lacks a verdict. To see where the structural trace stopped (unresolved callees the verifier should inspect by hand), run [`fallow security blind-spots`](/cli/security#blind-spots).
+The command reports `summary.unverdicted`, so candidates without a review stay visible. To fail CI when a candidate has no verdict, add `--require-verdict-for-each-candidate`. To see where the structural trace stopped, run [`fallow security blind-spots`](/cli/security#blind-spots). It lists the unresolved callees that the verifier must inspect by hand.
 
 ## Caveats
 
-Candidate quality depends on source and trace fidelity. HTTP-input source patterns are receiver-gated to avoid broad `*.query` collisions with unrelated APIs, but framework-specific request aliases can still need verifier judgment. `reachability.taint_confidence` distinguishes `arg-level` from `module-level` source association; use `severity` and `taint_confidence` for triage order, then verify source control, value flow, sink behavior, and defensive controls from source windows before reporting a survivor.
+Candidate quality depends on how accurate the source and the trace are. Fallow gates HTTP-input source patterns on the receiver, so a broad `*.query` pattern does not collide with unrelated APIs. Framework-specific request aliases can still need the judgment of the verifier.
+
+`reachability.taint_confidence` tells `arg-level` source association apart from `module-level` source association. Use `severity` and `taint_confidence` to order the triage. Before you report a survivor, use the source windows to verify:
+
+- that an attacker controls the source
+- the value flow
+- the sink behavior
+- the defensive controls
 
 ## See also
 
 <CardGroup cols={2}>
   <Card title="fallow security" icon="shield" href="/cli/security">
-    CLI reference for security candidates.
+    Find security candidates and render the survivors.
   </Card>
   <Card title="MCP integration" icon="plug" href="/integrations/mcp">
-    Agent setup and tool contracts.
+    Set up an agent and see the tool contracts.
   </Card>
 </CardGroup>

@@ -1,13 +1,21 @@
 ---
 title: "fallow doctor"
-description: "CLI reference for fallow doctor. Read-only readiness checks for the project root, config resolution, workspace discovery, external plugins, the optional type-aware companion, installed dependencies, and persisted cache compatibility."
+description: "Find out if fallow can see your project correctly before you trust its results. Fallow doctor runs read-only checks on the project root, config, workspaces, plugins, the optional type-aware companion, dependencies, and caches."
 keywords: ["fallow doctor", "readiness", "diagnostics", "CLI", "onboarding", "troubleshooting", "cache"]
 icon: "terminal"
 ---
 
-Diagnose project readiness without running an analysis. `fallow doctor` checks the things that have to be right before any command produces trustworthy output: whether the root is readable, which config actually resolved, whether workspace discovery found what you expect, whether external plugins load, whether the optional type-aware companion is present, whether dependencies are installed, and whether the persisted caches are compatible with the project.
+A misconfigured project can give output that looks clean but is wrong. `fallow doctor` checks your setup without running an analysis, so you know if you can trust the results of other commands. It checks:
 
-Every check is a local read, which makes this safe as the very first command on a repository you have never analyzed, and cheap enough to leave in a CI preflight step.
+- that the project root is readable
+- which config resolved
+- that workspace discovery found the packages you expect
+- that the external plugins load
+- that the optional type-aware companion is present
+- that the dependencies are installed
+- that the persisted caches are compatible with the project
+
+Each check is a local read. You can safely run `doctor` as the first command on a repository that you have never analyzed. It is also fast enough for a CI preflight step.
 
 ```bash
 fallow doctor
@@ -15,7 +23,7 @@ fallow doctor --format json
 ```
 
 <Info>
-  `doctor` only tells you whether Fallow can see your project properly. Once it reports ready, [`fallow dead-code`](/cli/dead-code) and [`fallow health`](/cli/health) are what actually look at your code.
+  `doctor` only tells you if fallow can see your project correctly. It does not analyze your code. When it reports ready, run [`fallow dead-code`](/cli/dead-code) and [`fallow health`](/cli/health) to analyze the code.
 </Info>
 
 ## Checks
@@ -31,15 +39,22 @@ fallow doctor --format json
 | `cache` | `cache` | No | Can the extraction cache be loaded with the current configuration? |
 | `graph-cache` | `cache` | No | Can the module-graph cache be loaded for this project root? |
 
-A check that is not required reports `skipped` when it cannot run, and a skipped check never fails the command. The `type-aware` check is skipped whenever type-aware analysis is off, which is the default.
+When a check that is not required cannot run, it reports `skipped`. A skipped check never fails the command. The `type-aware` check is skipped when type-aware analysis is off, which is the default.
 
-The last three checks are advisory and cannot fail, so they never change the exit code. `dependencies` warns when the project has no `node_modules` directory and is not a project that runs without one, because package `exports`, plugin activation, and dependency classification all degrade until dependencies are installed. `cache` and `graph-cache` warn when a persisted blob exists but would be discarded, naming the reason and its on-disk size; a project with no cache yet passes, because a first run legitimately has none. A project in one of those states reports the aggregate `warn` and still exits `0`.
+The last three checks can only warn. They cannot fail, so they never change the exit code.
 
-The two cache checks are separate because a run reuses the two blobs independently: the extraction cache can be perfectly reusable while the module graph is rebuilt every time. `graph-cache` checks whether the blob loads and belongs to this project root. A successful check does not establish that a run would reuse it, since the reuse decision also compares resolver options, entry points, and per-file content hashes, and computing those means running the discovery and extraction `doctor` deliberately skips.
+- `dependencies` warns when the project has no `node_modules` directory and needs one. Until you install the dependencies, fallow gives less accurate results for package `exports`, plugin activation, and dependency classification.
+- `cache` and `graph-cache` warn when a persisted blob exists but a run would discard it. The warning gives the reason and the size on disk. A project with no cache yet passes, because a first run has no cache.
 
-The cache location follows `FALLOW_CACHE_DIR` when it is nonempty, ahead of the configured cache directory. Relative paths are resolved against the project root, as they are during analysis.
+A project with one of these warnings reports the aggregate `warn` and still exits `0`.
 
-An absent cache is a normal first-run state. An unreadable cache is reported separately with a path-and-permissions hint. A decoding failure may mean an older cache format or damaged data; it does not establish corruption. Rebuilding the cache restores the current format.
+There are two cache checks because a run reuses the two blobs independently. The extraction cache can be reusable while fallow rebuilds the module graph on every run. `graph-cache` checks that the blob loads and belongs to this project root. A pass does not prove that a run will reuse the blob. The reuse decision also compares resolver options, entry points, and per-file content hashes. To compute those, fallow must run discovery and extraction, and `doctor` does not do that.
+
+When `FALLOW_CACHE_DIR` is nonempty, it sets the cache location and takes priority over the configured cache directory. Fallow resolves relative paths against the project root, the same as during analysis.
+
+- An absent cache is normal on a first run.
+- An unreadable cache gets a separate report with a hint about the path and permissions.
+- A decoding failure can mean an older cache format or damaged data. It does not prove corruption. When you rebuild the cache, it uses the current format.
 
 ## Options
 
@@ -51,7 +66,7 @@ An absent cache is a normal first-run state. An unreadable cache is reported sep
 | `--pretty` | off | Indent JSON output. |
 | `--quiet` | off | Suppress progress output. |
 
-`doctor` reads and never writes, so `--output-file` is rejected rather than honored: the report goes to stdout, keeping the inputs to a diagnosis immutable. Analysis and gate flags such as `--production` and `--fail-on-issues` are rejected too, instead of being silently ignored on a command that runs no analysis.
+`doctor` reads and never writes, so it rejects `--output-file`. The report goes to stdout, and the files that `doctor` checks do not change. `doctor` runs no analysis, so it also rejects analysis and gate flags such as `--production` and `--fail-on-issues`. It does not ignore them silently.
 
 ## Exit codes
 
@@ -60,7 +75,7 @@ An absent cache is a normal first-run state. An unreadable cache is reported sep
 | `0` | Every required check passed. Warnings still exit `0`. |
 | `2` | A required check failed, so the project is not ready to analyze. |
 
-There is no exit `1` here. That code means error-severity findings, and `doctor` looks at your setup rather than your code, so it has no findings to report.
+`doctor` never exits `1`. That code means error-severity findings. `doctor` checks your setup and not your code, so it has no findings.
 
 ## Human output
 
@@ -78,7 +93,7 @@ Fallow doctor (.)
 Status: ready with warnings
 ```
 
-The trailing status line is `ready`, `ready with warnings`, or `not ready`. A check that carries a remediation prints it on an indented `Action` line under the message.
+The last line gives the status: `ready`, `ready with warnings`, or `not ready`. When a check has a remediation, it prints the remediation on an indented `Action` line under the message.
 
 ## JSON output
 
@@ -161,10 +176,15 @@ The trailing status line is `ready`, `ready with warnings`, or `not ready`. A ch
 }
 ```
 
-Top-level `status` is `pass`, `warn`, or `fail`; a check's own `status` adds `skipped` to that set.
+The top-level `status` is `pass`, `warn`, or `fail`. The `status` of a single check can also be `skipped`.
 
-A check can carry a `remediation` object with `command`, `cwd`, and `mutating`. `cwd` is always the project root, and `mutating` says whether running the command writes anything, so an agent can run the read-only ones without asking. When an explicit `--config` was passed and the path is project-relative and safe to render, the remediation repeats it; for an external or unsafe-to-render config path the command is omitted and the message tells the caller to reuse the same `--config` value.
+A check can have a `remediation` object with `command`, `cwd`, and `mutating`:
+
+- `cwd` is always the project root.
+- `mutating` tells you if the command writes anything. An agent can run the read-only commands without asking.
+
+If you pass `--config` with a project-relative path that is safe to render, the remediation command repeats it. For an external config path, or a path that is not safe to render, fallow omits the command. The message then tells the caller to use the same `--config` value again.
 
 ## For agents
 
-Run `fallow doctor --format json --quiet` before the first analysis on an unfamiliar repository. A clean report and a misconfigured project both come back looking empty, and this is the cheapest way to tell them apart. Branch on the top-level `status`, then read `checks[].message` to report what the user needs to fix.
+Run `fallow doctor --format json --quiet` before the first analysis on an unfamiliar repository. A clean project and a misconfigured project can both give empty results, and `doctor` is the fastest way to tell them apart. Branch on the top-level `status`. Then read `checks[].message` to tell the user what to fix.

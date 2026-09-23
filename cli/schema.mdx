@@ -1,36 +1,42 @@
 ---
 title: "fallow schema"
-description: "CLI reference for fallow schema. Dump fallow's complete capability manifest (commands, issue types, MCP tools, plugins, environment variables) as machine-readable JSON for agent introspection."
+description: "Let an agent learn everything fallow can do from one JSON document. Fallow schema prints the complete capability manifest: commands, issue types, MCP tools, plugins, and environment variables."
 keywords: ["fallow schema", "capability manifest", "introspection", "AI agents", "issue types", "MCP tools", "CLI"]
 icon: "terminal"
 ---
 
-Dump fallow's complete capability manifest as machine-readable JSON. This is the single source of truth an AI agent (or doc generator) can read to learn everything fallow can do: every command and flag, every issue type, every MCP tool, the built-in framework plugins, and the user-facing environment variables.
+`fallow schema` prints the complete capability manifest of fallow as JSON. An AI agent or a doc generator reads this one source to learn what fallow can do:
+
+- every command and flag
+- every issue type
+- every MCP tool
+- the built-in framework plugins
+- the user-facing environment variables
 
 ```bash
 fallow schema
 ```
 
 <Note>
-The output is always JSON, regardless of `--format`.
+The output is always JSON, whatever the value of `--format`.
 </Note>
 
-The manifest is also the source the agent-skill tables are generated from (the command, issue-type, and MCP-tool tables in the npm package's bundled SKILL.md regenerate from it at release time), and this docs site serves an auto-generated [llms.txt](https://docs.fallow.tools/llms.txt) index alongside it for agent consumption.
+The agent-skill tables also come from the manifest. At release time, the command, issue-type, and MCP-tool tables in the bundled SKILL.md of the npm package regenerate from it. For agents, this docs site also serves an auto-generated [llms.txt](https://docs.fallow.tools/llms.txt) index.
 
 ## Top-level blocks
 
 | Block | Contents |
 |:------|:---------|
-| `manifest_version` | Manifest shape discriminator (currently `"1"`). Gate on it when generating docs from the output. |
+| `manifest_version` | Version of the manifest shape (currently `"1"`). Check it when you generate docs from the output. |
 | `version` | The fallow CLI version that produced the manifest. |
-| `commands`, `global_flags` | Every CLI command and flag with type, default, and description, derived live from the CLI definition. |
+| `commands`, `global_flags` | Every CLI command and flag, with type, default, and description. Fallow reads these from the live CLI definition. |
 | `issue_types` | One row per reportable issue type across all analyses (see below). |
-| `task_matrix` | The agent task-to-command cheat sheet: one row per common agent intent (`task`) with the read-only command to run (`command`, may contain `<placeholder>` tokens) and an optional `note`. The same matrix renders into `fallow init --agents`, the managed AGENTS.md block, the root `--help`, and the fallow skill. Rows never name mutating commands. |
-| `mcp_tools` | Every MCP server tool with a `kind` grouping (`analysis`, `trace`, `fix`, `introspection`, `runtime-coverage`, `composition`), a one-line description, `key_params` (a curated subset; the live MCP `list_tools` schemas are authoritative), `license` plus `license_note`, and `read_only`. |
-| `mcp_resources` | Every MCP resource and resource template (`uri`, `name`, `title`, `description`, `mime_type`, `template`): the read-only reference channel of `fallow-mcp` (tool manifest, issue-type registry, explain index and template, task matrix, JSON Schemas). Same order as `resources/list`. |
-| `plugins` | Built-in framework plugin count and names, derived live from the plugin registry. |
+| `task_matrix` | The task-to-command table for agents. Each row has a common agent task (`task`), the read-only command to run (`command`, which can contain `<placeholder>` tokens), and an optional `note`. The same matrix appears in `fallow init --agents`, the managed AGENTS.md block, the root `--help`, and the fallow skill. Rows never name commands that change files. |
+| `mcp_tools` | Every MCP server tool, with a `kind` group (`analysis`, `trace`, `fix`, `introspection`, `runtime-coverage`, `composition`), a one-line description, `key_params`, `license` plus `license_note`, and `read_only`. `key_params` is a selected subset. The live MCP `list_tools` schemas are the authority. |
+| `mcp_resources` | Every MCP resource and resource template (`uri`, `name`, `title`, `description`, `mime_type`, `template`). These are the read-only reference data of `fallow-mcp`: tool manifest, issue-type registry, explain index and template, task matrix, and JSON Schemas. Same order as `resources/list`. |
+| `plugins` | Count and names of the built-in framework plugins, from the live plugin registry. |
 | `environment_variables` | Every user-facing `FALLOW_*` variable with a one-line description. |
-| `output_formats`, `exit_codes`, `severity_levels`, `suppression_comments` | Output and exit-code contract reference. Formats include accepted aliases and are derived from the CLI parser; exit codes include the complete public workflow ladder. |
+| `output_formats`, `exit_codes`, `severity_levels`, `suppression_comments` | Reference for the output and exit-code contract. The formats come from the CLI parser and include accepted aliases. The exit codes include the complete public workflow ladder. |
 
 ## Issue type rows
 
@@ -38,18 +44,18 @@ Each `issue_types` entry describes one reportable issue type:
 
 | Field | Meaning |
 |:------|:--------|
-| `id` | Bare issue-type identifier (e.g. `unused-file`, `high-crap-score`). |
-| `rule_id` | The SARIF rule id (e.g. `fallow/unused-file`, `security/sql-injection`). |
+| `id` | Bare issue-type identifier, for example `unused-file` or `high-crap-score`. |
+| `rule_id` | The SARIF rule id, for example `fallow/unused-file` or `security/sql-injection`. |
 | `command` | The subcommand that reports it (`dead-code`, `health`, `dupes`, `flags`, `security`). |
-| `category` | Coarse grouping (Dead code, Dependencies, Architecture, Health, Duplication, Security, ...). |
-| `filter_flag` | CLI flag that scopes output to this issue type, or `null` when none exists. |
-| `fixable` | Whether `fallow fix` can auto-fix it. |
-| `suppressible` / `suppress_comment` | Whether an inline suppression comment applies, and the exact copy-pasteable comment. The token is verified to round-trip through fallow's suppression parser, so a copied comment never silently no-ops. |
-| `note` | Caveats (production-mode-only types, shared filter flags, config prerequisites). |
-| `license` / `license_note` | `free` or `freemium`; runtime-coverage rows carry the nuance that a single local capture is free while continuous monitoring requires a license. |
+| `category` | Broad group, for example Dead code, Dependencies, Architecture, Health, Duplication, or Security. |
+| `filter_flag` | CLI flag that limits output to this issue type, or `null` when no such flag exists. |
+| `fixable` | `true` if `fallow fix` can fix it automatically. |
+| `suppressible` / `suppress_comment` | If an inline suppression comment applies, and the exact comment to copy. Fallow checks that the token round-trips through its suppression parser, so a copied comment is never a silent no-op. |
+| `note` | Caveats, for example types that exist only in production mode, shared filter flags, or config prerequisites. |
+| `license` / `license_note` | `free` or `freemium`. Runtime-coverage rows explain that one local capture is free, and that continuous monitoring requires a license. |
 | `docs_url` | Deep link into these docs. |
 
-Nullable fields are always present (`null` when not applicable), never absent.
+Nullable fields are always present. When a field does not apply, its value is `null`.
 
 ## Examples
 
@@ -85,15 +91,15 @@ fallow schema | jq -r '.mcp_tools.tools[]
 
 <CardGroup cols={2}>
   <Card title="fallow explain" icon="terminal" href="/cli/explain">
-    Rationale, examples, and fix guidance for one issue type.
+    Get the rationale, examples, and fix guidance for one issue type.
   </Card>
   <Card title="MCP server" icon="robot" href="/integrations/mcp">
-    The MCP tools the manifest describes, with full input schemas.
+    See the MCP tools from the manifest, with full input schemas.
   </Card>
   <Card title="Environment variables" icon="gear" href="/configuration/environment">
-    Prose reference for the variables in the manifest.
+    Read about each variable in the manifest.
   </Card>
   <Card title="fallow list" icon="terminal" href="/cli/list">
-    Project-specific introspection: discovered files, entry points, active plugins.
+    See the discovered files, entry points, and active plugins of your project.
   </Card>
 </CardGroup>

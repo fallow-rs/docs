@@ -1,11 +1,11 @@
 ---
 title: "fallow list"
-description: "CLI reference for fallow list. Inspect discovered files, entry points, active plugins, and architecture boundary zones to debug configuration and verify project setup."
+description: "See what fallow found in your project, so you can debug the configuration and check the project setup. Fallow list shows discovered files, entry points, active plugins, boundary zones, and workspaces."
 keywords: ["fallow list", "plugins", "entry points", "files", "boundaries", "CLI", "inspect"]
 icon: "terminal"
 ---
 
-Inspect what fallow discovered in your project. Use this command to debug configuration issues or verify that the right files, entry points, plugins, and boundary zones are being picked up.
+When a result looks wrong, first check what fallow found in your project. `fallow list` shows the files, entry points, plugins, and boundary zones that fallow uses. Use it to debug the configuration, or to confirm that fallow sees the correct project setup.
 
 ```bash
 fallow list
@@ -19,7 +19,7 @@ fallow list
 | `--entry-points` | Show entry point files |
 | `--plugins` | Show active plugins |
 | `--boundaries` | Show architecture boundary zones, rules, and per-zone file counts |
-| `--workspaces` | Show monorepo workspaces and workspace-discovery diagnostics (malformed `package.json`, unreachable glob matches, missing tsconfig references). Available as the `fallow workspaces` alias too. |
+| `--workspaces` | Show monorepo workspaces and workspace-discovery diagnostics, for example a malformed `package.json`, an unreachable glob match, or a missing tsconfig reference. The `fallow workspaces` alias does the same. |
 | `-f, --format <FORMAT>` | Output format: `human` (default), `json` |
 
 ## Examples
@@ -64,7 +64,7 @@ fallow list --workspaces --format json
 
 ### Workspace diagnostics
 
-A malformed declared-workspace `package.json`, a workspace glob that matches a directory without `package.json`, or a tsconfig reference pointing at a missing directory all surface as `workspace_diagnostics[]` entries with a `kind` discriminator:
+Fallow reports workspace-discovery problems as `workspace_diagnostics[]` entries. The `kind` field tells you the type of problem:
 
 | `kind` | When |
 |:-------|:-----|
@@ -73,10 +73,15 @@ A malformed declared-workspace `package.json`, a workspace glob that matches a d
 | `malformed-tsconfig` | `tsconfig.json` exists but failed to parse as JSONC. Includes the parse error. |
 | `tsconfig-reference-dir-missing` | `tsconfig.json` references a `references[].path` that does not exist. |
 | `undeclared-workspace` | A directory contains `package.json` but is not declared as a workspace. |
-| `excluded-by-default-ignore` | A built-in discovery ignore pattern (`**/dist/**`, `**/build/**`, `**/coverage/**` or one of the minified-bundle globs) removed at least one candidate source file from the walk. One entry per pattern, never per file, with the `pattern`, an exact `file_count`, a `directory_count` of the distinct locations the pattern matched at, and `path`, the project-relative matched directory that lost the most files, anchored at the deepest matching segment so `fallow --root <path>` recovers them. `**/node_modules/**` is never reported. Emitted by source discovery, so it appears in `dead-code`, `check`, `audit` and `health` JSON; `--explain-skipped` prints the same counts on stderr, and a run that discovered no source files at all prints one warning without the flag. |
-| `bun-lockb-override-resolution-skipped` | The root `package.json` declares overrides, bun's legacy binary `bun.lockb` sits next to it, and no parseable text lockfile (`bun.lock`, `pnpm-lock.yaml`, `package-lock.json`, `npm-shrinkwrap.json`) was found to use instead, so the `unused-dependency-overrides` check is skipped and reports nothing. A `yarn.lock` or an unparseable `bun.lock` beside the `bun.lockb` does not prevent the skip. Run `bun install --save-text-lockfile` (bun 1.2 or newer) to write a text `bun.lock`, or delete the stale `bun.lockb` if the repository no longer uses bun. Emitted by the override analysis rather than workspace discovery, so it appears in `dead-code`, `check`, and `health` JSON and as one stderr warning. |
+| `excluded-by-default-ignore` | A built-in discovery ignore pattern (`**/dist/**`, `**/build/**`, `**/coverage/**` or one of the minified-bundle globs) removed at least one candidate source file. Fallow reports one entry per pattern, never per file. The entry has the `pattern`, an exact `file_count`, and a `directory_count` of the distinct locations where the pattern matched. `path` is the project-relative matched directory that lost the most files. It is anchored at the deepest matching segment, so `fallow --root <path>` recovers the files. Fallow never reports `**/node_modules/**`. Source discovery emits this entry, so it appears in `dead-code`, `check`, `audit` and `health` JSON. `--explain-skipped` prints the same counts on stderr. A run that found no source files prints one warning without the flag. |
+| `bun-lockb-override-resolution-skipped` | The root `package.json` declares overrides and has the legacy binary `bun.lockb` next to it. Fallow found no parseable text lockfile (`bun.lock`, `pnpm-lock.yaml`, `package-lock.json`, `npm-shrinkwrap.json`) to use instead. As a result, fallow skips the `unused-dependency-overrides` check, and the check reports nothing. A `yarn.lock` or an unparseable `bun.lock` next to the `bun.lockb` does not prevent the skip. To fix it, run `bun install --save-text-lockfile` (bun 1.2 or newer) to write a text `bun.lock`. If the repository no longer uses bun, delete the stale `bun.lockb`. The override analysis emits this entry, not workspace discovery. It appears in `dead-code`, `check`, and `health` JSON and as one stderr warning. |
 
-A malformed ROOT `package.json` is treated as a hard config-load error and exits 2 instead of warning; everything else is warn-and-continue so analysis still runs on the remaining workspaces. The same workspace-discovery diagnostics are emitted on `fallow dead-code`, `fallow dupes`, and `fallow health` JSON envelopes (omitted when empty), so CI consumers can gate on discovery problems without a separate command. Those analysis envelopes can also include source-discovery skip diagnostics: `skipped-large-file` and `skipped-minified-file`, each with `size_bytes`, and `excluded-by-default-ignore` for files a built-in ignore pattern removed.
+A malformed ROOT `package.json` is a hard config-load error, and fallow exits 2. For all other problems, fallow prints a warning and continues, so the analysis still runs on the remaining workspaces.
+
+The JSON output of `fallow dead-code`, `fallow dupes`, and `fallow health` also contains these workspace-discovery diagnostics (omitted when empty). A CI job can fail on discovery problems without a separate command. The same JSON output can also include source-discovery skip diagnostics:
+
+- `skipped-large-file` and `skipped-minified-file`, each with `size_bytes`
+- `excluded-by-default-ignore`, for files that a built-in ignore pattern removed
 
 ## Example output
 
@@ -104,25 +109,33 @@ Logical groups:
     children: features/auth, features/billing
 ```
 
-The `Logical groups:` section appears whenever the config (or a preset) uses
-`autoDiscover` to fan a parent zone out into one zone per child directory.
-Each entry shows the user-authored parent name, the exact `autoDiscover` paths
-as written, the discovered children, and a summed file count. The human output
-puts misconfigured entries (`invalid path`, `empty`) first inside the section
-and splits the file count into `N files (X children + Y fallback)` when the
-parent has both `patterns` and `autoDiscover` (e.g. the Bulletproof preset).
-The `--format json` output mirrors this in a parallel
-`boundaries.logical_groups[]` array, with extra fields for round-trip config
-tooling: `auto_discover` (verbatim user strings), `source_zone_index` (position
-in the pre-expansion `zones[]`), `status` (`ok` / `empty` / `invalid_path`),
-`authored_rule` (the pre-expansion rule keyed on the parent), `fallback_zone` (a
-back-reference when the parent kept its own `patterns` and stayed in `zones[]`),
-`merged_from` (parent zone indices when the same parent name was declared
-twice), `original_zone_root` (echo of the parent's `root` subtree scope), and
-`child_source_indices` (parallel to `children`, attributing each child to a
-specific `auto_discover` entry). The full shape is documented in
+The `Logical groups:` section appears when the config (or a preset) uses
+`autoDiscover` to split a parent zone into one zone per child directory.
+Each entry shows the parent name from your config, the exact `autoDiscover`
+paths as written, the discovered children, and the total file count.
+
+In the human output, misconfigured entries (`invalid path`, `empty`) come first
+in the section. When the parent has both `patterns` and `autoDiscover` (for
+example, the Bulletproof preset), the file count shows as
+`N files (X children + Y fallback)`.
+
+The `--format json` output has the same data in a parallel
+`boundaries.logical_groups[]` array. Tools that write the config back can use
+these extra fields:
+
+| Field | Meaning |
+|:------|:--------|
+| `auto_discover` | The user strings, verbatim. |
+| `source_zone_index` | The position in the `zones[]` array before expansion. |
+| `status` | `ok`, `empty`, or `invalid_path`. |
+| `authored_rule` | The rule on the parent, before expansion. |
+| `fallback_zone` | A back-reference when the parent kept its own `patterns` and stayed in `zones[]`. |
+| `merged_from` | The parent zone indices when the config declares the same parent name twice. |
+| `original_zone_root` | A copy of the `root` subtree scope of the parent. |
+| `child_source_indices` | Parallel to `children`. It links each child to one `auto_discover` entry. |
+
 [`docs/output-schema.json`](https://github.com/fallow-rs/fallow/blob/main/docs/output-schema.json)
-under `ListBoundariesOutput`.
+documents the full shape under `ListBoundariesOutput`.
 
 ```bash title="$ fallow list --plugins"
 Active plugins:
@@ -154,7 +167,7 @@ scripts/db-seed.ts                   (PackageJsonScript)
 ...
 ```
 
-Each entry point shows how it was discovered. The plugin name tells you which framework detected it.
+Each entry point shows how fallow found it. The plugin name tells you which framework plugin detected it.
 
 ## See also
 
@@ -163,6 +176,6 @@ Each entry point shows how it was discovered. The plugin name tells you which fr
     Full list of fallow's built-in framework plugins.
   </Card>
   <Card title="Custom plugins" icon="plug" href="/frameworks/custom-plugins">
-    Create plugins for frameworks fallow doesn't cover yet.
+    Write plugins for frameworks that fallow does not cover yet.
   </Card>
 </CardGroup>

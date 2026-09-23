@@ -1,65 +1,64 @@
 ---
 title: "Dead code explained"
-description: "What each issue type in fallow's dead-code output means, how to interpret the results, and when to act. Covers unused class members with inheritance tracking, circular dependency detection with no depth limits, and CSS/SCSS import resolution."
+description: "Decide which dead-code findings to fix first and which are safe to keep. Learn what each issue type in fallow dead-code output means, including unused class members with inheritance tracking, circular dependencies with no depth limit, and CSS/SCSS import resolution."
 keywords: ["dead code", "unused exports", "unused files", "unused dependencies", "unused class members", "class member detection", "inheritance", "circular dependencies", "cycle detection", "CSS modules", "SCSS", "module graph", "issue types"]
 icon: "skull-crossbones"
 ---
 
-This page covers what `fallow dead-code` reports, how to prioritize findings, and when to act.
-
+Use this page to decide which `fallow dead-code` findings to fix, in which order, and which ones you can keep. For each issue type, it explains what fallow reports, when to act, and the common false positives.
 
 ## Issue types
 
-Fallow reports multiple dead-code issue types. Each type has a default severity that determines whether it causes a non-zero exit code with `--fail-on-issues`.
+Each dead-code issue type has a default severity. The severity decides whether the issue causes a non-zero exit code with `--fail-on-issues`.
 
 ### Unused files
 
-Files not reachable from any entry point. No module in the project imports them, and they are not matched by any framework plugin or entry point pattern.
+Files that no entry point reaches. No module in the project imports them, and no framework plugin or entry point pattern matches them.
 
 | Severity | Default |
 |:---------|:--------|
 | Error | Yes |
 
-**When to act:** Almost always. Unused files add to IDE indexing time and confuse search results.
+**When to act:** Almost always. Unused files make IDE indexing slower and add noise to search results.
 
 **Common false positives:**
-- **Scripts run directly** (e.g., `node scripts/seed.ts`): Add to `entry` in config, or ensure the script is in a `package.json` script field (fallow parses those).
-- **Files loaded by tools fallow doesn't know about**: Add to `entry` or the relevant plugin config.
+- **Scripts run directly** (e.g., `node scripts/seed.ts`): Add the script to `entry` in config, or call it from a `package.json` script field (fallow parses those).
+- **Files loaded by tools that fallow does not know about**: Add them to `entry` or to the relevant plugin config.
 
 ### Unused exports
 
-Exported symbols never imported by any other module. The export exists but nothing references it.
+Exported symbols that no other module imports.
 
-A TypeScript namespace declared without the `export` keyword (`namespace Foo { export const inner = 1 }`, also `declare namespace` and the legacy `module Foo {}` form) is a local binding: its inner `export` declarations are members of that namespace, not exports of the file, so fallow never reports them here or under unused types. Only `export namespace Foo { ... }` contributes a file-level export (`Foo` itself).
+A TypeScript namespace without the `export` keyword is a local binding. This applies to `namespace Foo { export const inner = 1 }`, to `declare namespace`, and to the legacy `module Foo {}` form. The inner `export` declarations are members of that namespace, not exports of the file. Fallow never reports them here or under unused types. Only `export namespace Foo { ... }` adds a file-level export (`Foo` itself).
 
 | Severity | Default |
 |:---------|:--------|
 | Error | Yes |
 
-**When to act:** Most unused exports should be removed or unexported. They inflate the public API surface and confuse consumers about what the module does.
+**When to act:** Remove most unused exports, or remove their `export` keyword. Unused exports make the public API larger and make it unclear what the module is for.
 
 **When it's OK to keep:**
-- **Library public API**: Exports consumed by external users fallow can't see. Mark them with [`/** @public */`](/configuration/suppression#jsdoc-visibility-tags) (or `@internal`, `@beta`, `@alpha`) JSDoc tags, add the library entry point to [`entry`](/configuration/overview), or use [`ignoreExports`](/configuration/overview#ignoreexports) for broad patterns.
-- **Convention-based exports**: Exports consumed by frameworks via naming conventions (e.g., Next.js `getStaticProps`). Fallow's framework plugins handle most of these. If one is missed, configure the plugin or add an ignore pattern.
+- **Library public API**: External users import these exports, and fallow cannot see those users. Mark the exports with the [`/** @public */`](/configuration/suppression#jsdoc-visibility-tags) JSDoc tag (or `@internal`, `@beta`, `@alpha`), add the library entry point to [`entry`](/configuration/overview), or use [`ignoreExports`](/configuration/overview#ignoreexports) for broad patterns.
+- **Convention-based exports**: Frameworks use these exports through naming conventions (e.g., Next.js `getStaticProps`). The fallow framework plugins handle most of them. If a plugin misses one, configure the plugin or add an ignore pattern.
 
 ### Unused types
 
-Type aliases and interfaces never referenced by any module.
+Type aliases and interfaces that no module references.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-**When to act:** Remove unused types. They add noise to auto-import suggestions and inflate the public type surface.
+**When to act:** Remove unused types. They add noise to auto-import suggestions and make the public type API larger.
 
 **When it's OK to keep:**
-- **Shared type packages**: Types exported for external consumers. Mark the package entry point in `entry`.
+- **Shared type packages**: Types that you export for external users. Add the package entry point to `entry`.
 
 ### Private type leaks
 
-Exported values, functions, classes, and types whose public TypeScript signature references a same-file type declaration that is NOT itself exported. Consumers may see the private type's name in generated declarations or API docs but cannot import it, so they end up retyping it or using `Parameters<typeof X>[0]` / `ReturnType<typeof X>` workarounds.
+Exported values, functions, classes, and types whose public TypeScript signature references a type that is declared in the same file but is NOT exported. Users can see the name of the private type in generated declarations or API docs, but they cannot import it. They must then type it again, or use workarounds such as `Parameters<typeof X>[0]` or `ReturnType<typeof X>`.
 
-This is an opt-in API hygiene check, not a default dead-code finding. It is most useful for packages that publish TypeScript declarations or maintain a public API surface. For app-internal exports, private `Props`, `Options`, and `State` helper types are often intentional and should not be exported just to satisfy this rule.
+This is an opt-in API hygiene check. It is not a default dead-code finding. It is most useful for packages that publish TypeScript declarations or have a public API. For exports inside an app, private `Props`, `Options`, and `State` helper types are often intentional. Do not export them only to satisfy this rule.
 
 | Severity | Default |
 |:---------|:--------|
@@ -73,48 +72,48 @@ type Props = { label: string; }; // private to the module
 export function Component(p: Props): void {} // public, but Props leaks
 ```
 
-**When to act:** Enable this check for publishable packages or declaration-emitting modules. For findings on that API surface, export the backing type alongside the exported symbol, or restructure the public signature so it doesn't reference the private type:
+**When to act:** Enable this check for packages that you publish or modules that emit declarations. To fix a finding, export the backing type together with the exported symbol. You can also change the public signature so that it does not reference the private type:
 
 ```typescript
 export type Props = { label: string; };
 export function Component(p: Props): void {}
 ```
 
-**Interaction with unused types:** when you export the backing type to fix a leak, fallow does not turn around and report the new export as `unused-types` even if no other module imports it. Any type whose name is referenced from a public signature in the same file is treated as load-bearing for the public API and is excluded from the unused-types check.
+**Interaction with unused types:** when you export the backing type to fix a leak, fallow does not report the new export as `unused-types`, even if no other module imports it. If a public signature in the same file references a type by name, fallow treats that type as part of the public API. The unused-types check skips it.
 
 **Skipped patterns:**
-- **ECMAScript `#field` private members and TypeScript `private` accessibility**: these are not part of the public signature, so types they reference do not leak. `class Service { #state: InternalState; }` does not flag `InternalState`.
-- **Storybook story files**: `*.stories.{ts,tsx,js,jsx,mts,cts,mjs,cjs}` and `*.story.*` variants are skipped because the canonical `type Story = StoryObj<typeof X>; export const Default: Story = ...` pattern would otherwise generate one finding per story.
-- **Framework routing conventions**: route files where the framework forces multiple exports per file to share a private `Props` / `Params` / `LoaderArgs` type. Coverage:
+- **ECMAScript `#field` private members and TypeScript `private` accessibility**: these are not part of the public signature, so the types they reference do not leak. `class Service { #state: InternalState; }` does not flag `InternalState`.
+- **Storybook story files**: fallow skips `*.stories.{ts,tsx,js,jsx,mts,cts,mjs,cjs}` and the `*.story.*` variants. Without this, the canonical `type Story = StoryObj<typeof X>; export const Default: Story = ...` pattern gives one finding per story.
+- **Framework routing conventions**: route files where the framework forces several exports per file to share a private `Props`, `Params`, or `LoaderArgs` type. Fallow skips these files:
   - **Next.js App Router**: `app/**/{page,layout,template,loading,error,not-found,route,default,global-error,forbidden,unauthorized}.{ts,tsx,js,jsx}` plus the metadata files (`opengraph-image`, `twitter-image`, `icon`, `apple-icon`, `manifest`, `sitemap`, `robots`).
   - **Next.js Pages Router**: any file under `pages/`.
   - **Gatsby**: pages and templates.
-  - **Remix v2 + TanStack Router**: top-level files in `app/routes/` and folder-route entries (`route.tsx`, `_layout.tsx`, `_index.tsx`, `index.tsx`, `__root.tsx`). Subdirectories under `app/routes/<segment>/` are still checked because users co-locate non-route helpers there.
+  - **Remix v2 + TanStack Router**: top-level files in `app/routes/` and folder-route entries (`route.tsx`, `_layout.tsx`, `_index.tsx`, `index.tsx`, `__root.tsx`). Fallow still checks subdirectories under `app/routes/<segment>/`, because users put non-route helpers there.
   - **Expo Router**: `_layout.tsx` and `+*.tsx` special files.
 
-  Patterns match anywhere in the path so monorepo subpackages (`packages/web/src/app/blog/[slug]/page.tsx`) are skipped too.
+  The patterns match anywhere in the path, so fallow also skips monorepo subpackages (`packages/web/src/app/blog/[slug]/page.tsx`).
 
 **Enable:** run `fallow dead-code --private-type-leaks`, or set `private-type-leaks: "warn"` / `"error"` in [`rules`](/configuration/rules).
 
 **Suppression:** add `// fallow-ignore-next-line private-type-leak` above the affected export, or keep `private-type-leaks: "off"` in [`rules`](/configuration/rules).
 
-**Prior art:** Rust's `unreachable_pub` lint, TypeScript's TS4023 / TS4060 errors emitted with `--declaration`. ESLint has no equivalent rule today.
+**Prior art:** the Rust `unreachable_pub` lint, and the TypeScript TS4023 and TS4060 errors that `--declaration` emits. ESLint has no equivalent rule today.
 
 ### Unused dependencies
 
-Packages listed in `dependencies` that are never imported in source code and not used as script binaries in `package.json`.
+Packages in `dependencies` that no source file imports and that no `package.json` script uses as a binary.
 
 | Severity | Default |
 |:---------|:--------|
 | Error | Yes |
 
-**When to act:** Remove from `package.json` when nothing imports it. If the finding says the package is imported in another workspace, move the dependency to that consuming workspace instead. Unused dependencies slow down `npm install`, increase `node_modules` size, and expand the attack surface for supply chain vulnerabilities.
+**When to act:** If nothing imports the package, remove it from `package.json`. If the finding says that another workspace imports the package, move the dependency to that workspace. Unused dependencies slow down `npm install`, make `node_modules` larger, and increase the attack surface for supply chain vulnerabilities.
 
-**Internal workspace packages count too:** in monorepos, workspace package names (e.g., `@repo/ui`) listed in another workspace's `dependencies` are checked the same way as external npm packages. If a workspace declares `@repo/ui` but never imports it, the dependency is reported as unused. A workspace package's own name does not need to be self-listed.
+**Internal workspace packages count too:** in monorepos, fallow checks a workspace package name (e.g., `@repo/ui`) in the `dependencies` of another workspace the same way as an external npm package. If a workspace declares `@repo/ui` but never imports it, fallow reports the dependency as unused. A workspace package does not need to list its own name.
 
 **Common false positives:**
-- **Uninstalled peer dependencies of other packages**: Fallow credits required peers when the package is installed under `node_modules`. If a peer is required only by an environment outside the analyzed install tree, check whether removing it breaks that runtime.
-- **Runtime-only packages** (polyfills, CSS frameworks loaded via `@import`): Add to `ignoreDependencies` in config.
+- **Uninstalled peer dependencies of other packages**: Fallow counts a required peer as used when the package that requires it is installed under `node_modules`. If only an environment outside the analyzed install tree requires the peer, check whether removing it breaks that runtime.
+- **Runtime-only packages** (polyfills, CSS frameworks loaded through `@import`): Add them to `ignoreDependencies` in config.
 
 ### Unused devDependencies
 
@@ -126,7 +125,7 @@ Same as unused dependencies, but for packages in `devDependencies`.
 
 ### Unused optionalDependencies
 
-Same as unused dependencies, but for packages in `optionalDependencies`. Only reported when the `--unused-optional-deps` flag is passed.
+Same as unused dependencies, but for packages in `optionalDependencies`. Fallow reports these only when you pass the `--unused-optional-deps` flag.
 
 | Severity | Default |
 |:---------|:--------|
@@ -134,31 +133,33 @@ Same as unused dependencies, but for packages in `optionalDependencies`. Only re
 
 ### Unused enum members
 
-Enum values declared but never referenced.
+Enum values that no code references.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-**When to act:** Remove the unused member. Unused enum members inflate serialized values and can cause confusion about which values are valid.
+**When to act:** Remove the unused member. Unused enum members add to serialized values and make it unclear which values are valid.
 
 ### Unused class members
 
-Class methods and properties never referenced outside their class body.
+Class methods and properties that no code outside the class body references.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-**What it detects:** Public methods and properties that are never accessed by any module other than the class itself. Internal `this.member` accesses within the class body are tracked separately and do not count as external usage.
+**What it detects:** Public methods and properties that no module other than the class itself accesses. Fallow tracks internal `this.member` accesses in the class body separately. They do not count as external usage.
 
-**Inheritance awareness:** Fallow builds an inheritance map from `extends` clauses and propagates member accesses through the hierarchy. If a parent class method calls `this.getArea()`, that access credits child class overrides (`Circle.getArea()`, `Rectangle.getArea()`). External member accesses on a parent type also propagate to child implementations. This prevents false positives on abstract-like patterns where a base class defines a contract that subclasses fulfill.
+**Inheritance awareness:** Fallow builds an inheritance map from `extends` clauses and passes member accesses through the hierarchy. If a parent class method calls `this.getArea()`, the child class overrides (`Circle.getArea()`, `Rectangle.getArea()`) count as used. External member accesses on a parent type also count for the child implementations. This prevents false positives when a base class defines a contract that subclasses implement.
 
-**Decorator exclusion:** Members with decorators (e.g., `@Get()`, `@Column()`, `@Input()`, `@Inject()`) are automatically excluded from detection. Decorators indicate runtime wiring that static analysis cannot trace, so decorated members are never flagged. The one exception is a Lit `@state()` reactive property on a direct `LitElement` / `ReactiveElement` subclass (when `lit` is a declared dependency): `@state` is internal component state with no external surface, so a `@state` field read nowhere via `this.<name>` (in a method or the `html` template) is flagged as an unused class member. The public `@property()` decorator stays excluded (it is the element's attribute API, settable from HTML, a parent binding, `setAttribute`, or CSS).
+**Decorator exclusion:** Fallow automatically skips members with decorators (e.g., `@Get()`, `@Column()`, `@Input()`, `@Inject()`). A decorator means runtime wiring that static analysis cannot trace, so fallow never flags decorated members.
 
-**Lifecycle method allowlists:** Framework lifecycle methods are never flagged. Fallow has built-in allowlists for React (`componentDidMount`, `render`, `shouldComponentUpdate`, etc.) and Angular (`ngOnInit`, `ngOnDestroy`, `canActivate`, `validate`, etc.). For other frameworks (Web Components, ag-Grid, etc.), the `usedClassMembers` config option lets you extend the allowlist.
+The one exception is a Lit `@state()` reactive property on a direct `LitElement` or `ReactiveElement` subclass, when `lit` is a declared dependency. `@state` is internal component state that no outside code can use. If no method or `html` template reads a `@state` field through `this.<name>`, fallow flags it as an unused class member. The public `@property()` decorator stays excluded. It is the attribute API of the element, and HTML, a parent binding, `setAttribute`, or CSS can set it.
 
-**Whole-object use heuristics:** Patterns like `Object.values(instance)`, `Object.keys(instance)`, rest destructuring (`const { foo, ...rest } = instance`), and `for (const key in obj)` conservatively mark all members as used.
+**Lifecycle method allowlists:** Fallow never flags framework lifecycle methods. It has built-in allowlists for React (`componentDidMount`, `render`, `shouldComponentUpdate`, etc.) and Angular (`ngOnInit`, `ngOnDestroy`, `canActivate`, `validate`, etc.). For other frameworks (Web Components, ag-Grid, etc.), use the `usedClassMembers` config option to extend the allowlist.
+
+**Whole-object use heuristics:** Some patterns mark all members as used, to be safe: `Object.values(instance)`, `Object.keys(instance)`, rest destructuring (`const { foo, ...rest } = instance`), and `for (const key in obj)`.
 
 ```typescript
 class UserService {
@@ -177,25 +178,25 @@ class UserService {
 }
 ```
 
-**When to act:** Remove or mark as `private`. An unreferenced public method is either dead functionality or wired at runtime. Both are worth investigating.
+**When to act:** Remove the member or mark it as `private`. An unreferenced public method is either dead functionality or wired at runtime. Investigate both cases.
 
-**Configuration:** The `usedClassMembers` config option marks specific member names as always-used. This is useful for convention-based methods called by DI frameworks or third-party libraries that invoke methods reflectively (e.g., `agInit`, `connectedCallback`). Plugins can also contribute to this allowlist via the `usedClassMembers` field in custom plugin definitions.
+**Configuration:** The `usedClassMembers` config option marks specific member names as always used. Use it for convention-based methods that DI frameworks or third-party libraries call reflectively (e.g., `agInit`, `connectedCallback`). Custom plugin definitions can also add names to this allowlist through their `usedClassMembers` field.
 
 ### Unused store members
 
-A Pinia store member (a `state` / `getters` / `actions` key, or a setup-store returned key) that is declared but accessed by no consumer anywhere in the project.
+A Pinia store member that no code in the project accesses. A store member is a `state`, `getters`, or `actions` key, or a key that a setup store returns.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-**What it detects:** The store binding is imported (so the module is reachable), yet a specific state property, getter, or action is never read. This is the cross-graph "declared but never used by any file" direction that single-file linters (eslint-plugin-vue, eslint-plugin-svelte, eslint-plugin-pinia) and type-checkers (vue-tsc, svelte-check) do not cover. Defaults to `warn`, not `error` like the closed-set class and enum member rules: a store has an open declaration surface (plugins, dynamic dispatch), so confidence is lower.
+**What it detects:** Code imports the store binding (so the module is reachable), but never reads a specific state property, getter, or action. Single-file linters (eslint-plugin-vue, eslint-plugin-svelte, eslint-plugin-pinia) and type-checkers (vue-tsc, svelte-check) cannot find members that no file uses, because that needs the project graph. The rule defaults to `warn`, not `error` like the class and enum member rules. Plugins and dynamic dispatch can add to a store, so the confidence is lower.
 
-**Activation:** Runs only when `pinia` or `@pinia/nuxt` is a declared dependency, so it never fires on an unrelated `defineStore`-named helper in a non-Pinia project.
+**Activation:** The rule runs only when `pinia` or `@pinia/nuxt` is a declared dependency. It never fires on an unrelated helper named `defineStore` in a non-Pinia project.
 
-**Consumption it credits:** `const s = useStore(); s.member`, destructures (`const { count } = useStore()`, `const { count } = storeToRefs(store)`), template `store.member` in `.vue` / `.svelte` files, and intra-store `this.member` usage between getters and actions.
+**Usage it counts:** `const s = useStore(); s.member`, destructures (`const { count } = useStore()`, `const { count } = storeToRefs(store)`), template `store.member` in `.vue` and `.svelte` files, and `this.member` usage between getters and actions in the same store.
 
-**Abstain heuristics (false-positive safe):** Whole-object usage (`{ ...store }`, `Object.keys(store)`, dynamic `store[key]`) and the Options-API `mapState` / `mapGetters` / `mapActions` helpers conservatively mark the whole store as used, so no member is flagged. The Pinia `$`-prefixed API (`$patch`, `$reset`, `$subscribe`, etc.) is never reported, and a setup store whose returned object spreads (`return { ...base, x }`) abstains entirely.
+**Abstain heuristics (false-positive safe):** Whole-object usage (`{ ...store }`, `Object.keys(store)`, dynamic `store[key]`) marks the whole store as used, so fallow flags no member. The Options-API `mapState`, `mapGetters`, and `mapActions` helpers do the same. Fallow never reports the Pinia `$`-prefixed API (`$patch`, `$reset`, `$subscribe`, etc.). It skips a setup store completely when the returned object uses a spread (`return { ...base, x }`).
 
 ```typescript
 export const useCartStore = defineStore('cart', {
@@ -213,72 +214,72 @@ export const useCartStore = defineStore('cart', {
 })
 ```
 
-**When to act:** Remove the unused state property, getter, or action. There is no auto-fix, because a store member can be accessed reflectively through a Pinia plugin or dynamic dispatch; suppress with `// fallow-ignore-next-line unused-store-member` if a member is consumed in a way fallow cannot see.
+**When to act:** Remove the unused state property, getter, or action. There is no auto-fix, because a Pinia plugin or dynamic dispatch can access a store member reflectively. If code uses a member in a way that fallow cannot see, suppress it with `// fallow-ignore-next-line unused-store-member`.
 
-**Scope:** Pinia only. Svelte stores and Vuex are not yet covered (a Svelte `writable` is opaque and its value shape is reshaped at runtime, so member-level detection would be false-positive-prone; an entirely unused store export is already caught by the unused-export check).
+**Scope:** Pinia only. The rule does not cover Svelte stores and Vuex yet. A Svelte `writable` is opaque and its value shape changes at runtime, so member-level detection would give false positives. The unused-export check already finds a store export that no code uses.
 
 ### Unresolved imports
 
-Import specifiers that cannot be resolved to a file on disk or a `node_modules` package.
+Import specifiers that fallow cannot resolve to a file on disk or a `node_modules` package.
 
 | Severity | Default |
 |:---------|:--------|
 | Error | Yes |
 
-**When to act:** Always investigate. An unresolved import usually means the code will fail at runtime. Common causes:
+**When to act:** Always investigate. An unresolved import usually means that the code will fail at runtime. Common causes:
 - Typo in the import path
 - Missing dependency (not installed or not in `package.json`)
 - Path alias not configured in `tsconfig.json` paths
 
 ### Unlisted dependencies
 
-Packages imported in source code but not declared in `package.json`.
+Packages that source code imports but `package.json` does not declare.
 
 | Severity | Default |
 |:---------|:--------|
 | Error | Yes |
 
-**When to act:** Add the package to `dependencies` or `devDependencies`. Unlisted dependencies work by accident (hoisted from another package) and will break in environments with strict `node_modules` resolution (pnpm, Yarn Plug'n'Play).
+**When to act:** Add the package to `dependencies` or `devDependencies`. An unlisted dependency works by accident, because it is hoisted from another package. It will break in environments with strict `node_modules` resolution (pnpm, Yarn Plug'n'Play).
 
-**Internal workspace packages count too:** in monorepos, importing a workspace package (e.g., `import { x } from '@repo/utils'`) from a workspace whose own `package.json` does not list `@repo/utils` is reported as unlisted. Add the workspace package to that workspace's `dependencies` (or move the import). Self-references stay allowed without requiring a package to depend on itself.
+**Internal workspace packages count too:** in monorepos, a workspace can import a workspace package (e.g., `import { x } from '@repo/utils'`) while its own `package.json` does not list `@repo/utils`. Fallow reports that import as unlisted. Add the workspace package to the `dependencies` of that workspace, or move the import. Self-references stay allowed, and a package does not need to depend on itself.
 
 ### Duplicate exports
 
-The same symbol name exported from multiple modules. This causes ambiguous auto-imports and makes it unclear which module is the canonical source.
+The same symbol name exported from more than one module. Auto-imports become ambiguous, and it is unclear which module is the canonical source.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-**When to act:** Consolidate to a single canonical export. Re-export from one location if multiple modules need to expose it.
+**When to act:** Keep one canonical export. If more than one module must expose the symbol, re-export it from that one location.
 
 ### Circular dependencies
 
-Modules that import each other directly or transitively, forming a cycle.
+Modules that import each other, directly or transitively, and so form a cycle.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-**Detection during graph construction:** Circular dependencies are detected as a natural byproduct of building the module graph using Tarjan's strongly connected components algorithm (O(V + E)). There is no separate analysis pass, so cycle detection adds zero meaningful cost to the analysis.
+**Detection during graph construction:** Fallow finds circular dependencies while it builds the module graph, with Tarjan's strongly connected components algorithm (O(V + E)). There is no separate analysis pass, so cycle detection adds almost no cost.
 
-**No depth limits:** Fallow detects cycles of any length. The graph algorithm processes all strongly connected components regardless of size, then enumerates individual elementary cycles within each component. There is no cap on cycle depth.
+**No depth limits:** Fallow detects cycles of any length. The graph algorithm processes all strongly connected components of any size. Then it lists the individual elementary cycles in each component.
 
-**Type-only cycle filtering:** Cycles where every edge consists exclusively of `import type` imports are filtered out automatically. Type imports are erased at compile time and cannot cause runtime initialization issues. Fallow distinguishes these from runtime cycles by tracking the `is_type_only` flag on each import symbol through the graph.
+**Type-only cycle filtering:** Fallow automatically removes cycles where every edge is an `import type` import. The compiler erases type imports, so they cannot cause runtime initialization issues. Fallow tells these apart from runtime cycles with the `is_type_only` flag on each import symbol in the graph.
 
-**Cycle path reporting:** Fallow reports the full path of each cycle, so you can see exactly which files are involved:
+**Cycle path reporting:** Fallow reports the full path of each cycle, so you can see which files are part of it:
 
 ```
 src/auth.ts → src/user.ts → src/permissions.ts → src/auth.ts
 ```
 
-This makes it straightforward to identify the weakest edge to break.
+With the full path, you can find the weakest edge to break.
 
 **Why circular dependencies are risky:**
-- Module evaluation order becomes unpredictable. JavaScript evaluates modules depth-first, and a cycle forces at least one module to receive an incomplete namespace object.
-- Accessing an export before the module finishes evaluating returns `undefined`, causing subtle runtime errors that are hard to trace.
-- Bundlers may produce incorrect output or larger bundles when they cannot determine a clean evaluation order.
-- Refactoring becomes dangerous because moving code between cycle members can break initialization order in ways that only manifest at runtime.
+- The module evaluation order becomes unpredictable. JavaScript evaluates modules depth-first, and a cycle forces at least one module to get an incomplete namespace object.
+- An export that you access before its module finishes evaluating returns `undefined`. This causes runtime errors that are hard to trace.
+- When bundlers cannot find a clean evaluation order, they can produce incorrect output or larger bundles.
+- Refactoring becomes dangerous. When you move code between modules in the cycle, you can break the initialization order, and you see the error only at runtime.
 
 | Cycle length | Risk | Action |
 |:-------------|:-----|:-------|
@@ -287,23 +288,23 @@ This makes it straightforward to identify the weakest edge to break.
 | 5+ | Architectural issue | Refactor module boundaries |
 
 **When it's OK to keep:**
-- **Type-only cycles**: If the cycle only involves `import type`, there is no runtime initialization risk. These are filtered from circular dependency reports automatically.
+- **Type-only cycles**: If the cycle uses only `import type`, there is no runtime initialization risk. Fallow automatically removes these from circular dependency reports.
 
 ### Re-export cycles {#re-export-cycles}
 
-Two or more barrel files that re-export from each other in a loop, or a single barrel file that re-exports from itself. Distinct from circular dependencies: circular deps describe runtime import loops; re-export cycles describe **declarative** loops in the `export * from` graph where chain propagation has no terminating module to resolve names against.
+Two or more barrel files that re-export from each other in a loop, or one barrel file that re-exports from itself. This is different from a circular dependency. A circular dependency is a runtime import loop. A re-export cycle is a **declarative** loop in the `export * from` graph, with no final module that declares the names.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-**Why this is its own category:** Circular dependencies in the runtime import graph are sometimes intentional (mutual recursion between application modules). Re-export cycles are essentially always bugs. When `src/api/index.ts` does `export * from './internal'` and `src/api/internal/index.ts` does `export * from '../index'`, neither file actually declares anything; the chain has no terminating source. Any consumer doing `import { foo } from './api'` is asking the chain to resolve `foo` against a graph with no leaf, and the import silently comes up `undefined` at runtime.
+**Why this is its own category:** Circular dependencies in the runtime import graph are sometimes intentional (mutual recursion between application modules). Re-export cycles are almost always bugs. Take `src/api/index.ts` with `export * from './internal'`, and `src/api/internal/index.ts` with `export * from '../index'`. Neither file declares anything, so the chain has no source. An `import { foo } from './api'` cannot resolve `foo`, and the import silently gives `undefined` at runtime.
 
 **Two structural shapes:**
-- **`multi-node`** -- a strongly connected component of two or more files in the re-export edge subgraph. Example: `barrel-a.ts` re-exports from `barrel-b.ts` and `barrel-b.ts` re-exports back from `barrel-a.ts`.
-- **`self-loop`** -- a single file that re-exports from itself. Almost always a rename leftover where `barrel.ts` ended up doing `export * from './'` or `export * from './barrel'`. Surfaces under the same rule with a distinct `kind` discriminator so consumers can tell the two shapes apart.
+- **`multi-node`**: a strongly connected component of two or more files in the re-export graph. Example: `barrel-a.ts` re-exports from `barrel-b.ts`, and `barrel-b.ts` re-exports back from `barrel-a.ts`.
+- **`self-loop`**: one file that re-exports from itself. This is almost always a leftover from a rename, where `barrel.ts` now has `export * from './'` or `export * from './barrel'`. It shows up under the same rule, with a different `kind` value so that tools can tell the two shapes apart.
 
-**Type-only cycles still fire:** `export type * from './b'` paired symmetrically with `export type * from './a'` is also a re-export cycle. Chain propagation through a type-only loop is the same no-op as through a value loop; the cycle is reported regardless.
+**Type-only cycles still fire:** `export type * from './b'` together with `export type * from './a'` is also a re-export cycle. A type-only loop resolves no names, the same as a value loop, so fallow reports it too.
 
 **Human output:**
 
@@ -325,306 +326,351 @@ Re-Export Cycles (Architecture)
 **How to fix it:**
 1. Pick any one file in the loop.
 2. Remove the `export * from` (or `export { ... } from`) statement that points back into the cycle.
-3. Any single removal breaks the cycle and restores working re-exports. You do not need to touch every member.
+3. One removal breaks the cycle and makes the re-exports work again. You do not need to change every file in the loop.
 
-For a self-loop, the fix is unambiguous: open the offending file and delete the stray `export * from './'` (or `export * from './<this-file>'` after a rename).
+For a self-loop, the fix is clear. Open the file and delete the stray `export * from './'` (or `export * from './<this-file>'` after a rename).
 
-**Suppression:** the finding is file-scoped (the cycle spans multiple files; there is no single line to anchor at). Suppress with a file-level comment on any member:
+**Suppression:** the finding is file-scoped, because the cycle spans more than one file and has no single line. Suppress it with a file-level comment in any file of the loop:
 
 ```ts
 // fallow-ignore-file re-export-cycle
 export * from "./internal";
 ```
 
-The four spellings `re-export-cycle`, `re-export-cycles`, `reexport-cycle`, and `reexport-cycles` are all accepted. Per-file `overrides.rules.re-export-cycle` is a **no-op** because the rule's severity is project-wide and the finding spans multiple files; configure it at the top-level `rules` block instead, or use the file-level `fallow-ignore-file` suppression above.
+Fallow accepts four spellings: `re-export-cycle`, `re-export-cycles`, `reexport-cycle`, and `reexport-cycles`. A per-file `overrides.rules.re-export-cycle` is a **no-op**, because the severity of the rule is project-wide and the finding spans more than one file. Configure the rule in the top-level `rules` block instead, or use the file-level `fallow-ignore-file` suppression above.
 
-**When to keep it as a warning:** legacy projects with hand-written barrels predating ESM strictness may have benign-looking cycles that no consumer actually relies on. Leaving the rule at `warn` keeps the diagnostic visible without breaking CI; promote to `error` once the cycles are cleaned up. On upgrade, expect `total_issues` to step up on the first run because cycles that existed before this rule shipped now appear as findings.
+**When to keep it as a warning:** legacy projects with hand-written barrels from before ESM strictness can have harmless cycles that no code relies on. At `warn`, the diagnostic stays visible and CI does not break. Change the rule to `error` after you remove the cycles. After an upgrade, expect `total_issues` to go up on the first run. Cycles that existed before this rule shipped now show up as findings.
 
 ### Boundary violations
 
-Imports that cross user-defined architecture zone boundaries. Zones are defined in the `boundaries` config section and map file path patterns to named architecture zones. A boundary violation occurs when a file in one zone imports from a file in another zone that the boundary rules disallow.
+Imports that cross the architecture zone boundaries that you define. You define zones in the `boundaries` config section. Each zone maps file path patterns to a name. A boundary violation is an import from a file in one zone to a file in another zone that the boundary rules do not allow.
 
 | Severity | Default |
 |:---------|:--------|
 | Error | Yes |
 
-**When to act:** Always. Boundary violations indicate that code is breaking the intended architecture. Fix by restructuring imports to respect zone boundaries, or update the boundary config to allow the import if it's an accepted exception.
+**When to act:** Always. A boundary violation means that the code breaks the intended architecture. Change the imports so that they respect the zone boundaries. If the import is an accepted exception, update the boundary config to allow it.
 
 **Common false positives:**
-- **Shared utilities**: Code in a shared/common zone may need to be accessible from multiple zones. Adjust boundary rules to allow these imports.
-- **Newly created zones**: When introducing boundaries to an existing codebase, expect violations. Use `warn` severity initially.
+- **Shared utilities**: Code in a shared or common zone can need access from more than one zone. Change the boundary rules to allow these imports.
+- **New zones**: When you add boundaries to an existing codebase, expect violations. Start with `warn` severity.
 
 ### Policy violations {#policy-violations}
 
-Calls, imports, or catalogue-derived effects matching a `banned-call`, `banned-import`, or `banned-effect` rule from a configured rule pack (the `rulePacks` config key). Rule packs are standalone JSON or JSONC files of pure declarative policy data; loading a pack never executes project code. Findings are identified as `<pack>/<rule-id>` across every output format.
+Calls, imports, or catalogue-derived effects that match a `banned-call`, `banned-import`, or `banned-effect` rule from a configured rule pack (the `rulePacks` config key). A rule pack is a standalone JSON or JSONC file with declarative policy data only. Loading a pack never executes project code. Every output format identifies a finding as `<pack>/<rule-id>`.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-The `rules."policy-violation"` master defaults to `warn` so a new pack never hard-fails CI on its first run. A per-rule `severity` in the pack overrides the master per finding, and the exit-code gate reads the effective per-finding severity, so one `error` rule fails the run even under a warn master. `off` on the master is a kill switch for the whole evaluator. Invalid or missing packs fail config load with exit code 2 instead of silently enforcing nothing.
+The `rules."policy-violation"` master setting defaults to `warn`, so a new pack never fails CI on its first run. A per-rule `severity` in the pack overrides the master setting for each finding. The exit code uses the effective severity of each finding, so one `error` rule fails the run even when the master setting is `warn`. `off` on the master setting turns off the whole evaluator. An invalid or missing pack makes the config load fail with exit code 2, so fallow never silently enforces nothing.
 
-**When to act:** Replace the banned call or import with the alternative named in the rule's message. Scope a rule with `files` / `exclude` globs if it fires in directories where the usage is sanctioned, or suppress one rule with `// fallow-ignore-next-line policy-violation:<pack>/<rule-id>`. Use bare `policy-violation` only when you intend to suppress every rule-pack finding at that line or file scope.
+**When to act:** Replace the banned call or import with the alternative that the rule message names. If a rule fires in directories where the usage is allowed, limit the rule with `files` and `exclude` globs. To suppress one rule, use `// fallow-ignore-next-line policy-violation:<pack>/<rule-id>`. Use bare `policy-violation` only when you want to suppress every rule-pack finding at that line or file scope.
 
-**Limitations:** Matching is syntactic. `banned-call` does not follow aliased or re-bound callees (`const run = cp.exec; run()`), and `banned-import` matches the raw specifier only, so rewritten forms such as `npm:moment` are not matched; `require()` calls and dynamic `import()` are not checked.
+**Limitations:** Matching is syntactic. `banned-call` does not follow aliased or re-bound callees (`const run = cp.exec; run()`). `banned-import` matches only the raw specifier, so it does not match rewritten forms such as `npm:moment`. Fallow does not check `require()` calls and dynamic `import()`.
 
-Run `fallow rule-pack-schema` to print the pack JSON Schema for editor autocomplete. See the [`rulePacks` config key](/configuration/overview#config-fields) for the pack file format.
+To print the pack JSON Schema for editor autocomplete, run `fallow rule-pack-schema`. For the pack file format, see the [`rulePacks` config key](/configuration/overview#config-fields).
 
 ### Invalid client exports {#invalid-client-exports}
 
-A file carrying the `"use client"` directive that also exports a Next.js server-only or route-segment-config name. Next.js rejects these at build time: a client module cannot export `metadata`, `generateMetadata`, `viewport`, `generateViewport`, `generateStaticParams`, `dynamic`, `dynamicParams`, `revalidate`, `fetchCache`, `runtime`, `preferredRegion`, `maxDuration`, the Pages Router data functions (`getServerSideProps`, `getStaticProps`, `getStaticPaths`), or a route HTTP method handler (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`). fallow catches it statically, before a build, in the same pass as the rest of dead-code analysis. The component's `default` export is never flagged.
+A file with the `"use client"` directive that also exports a Next.js server-only or route-segment-config name. Next.js rejects these files at build time. A client module cannot export `metadata`, `generateMetadata`, `viewport`, `generateViewport`, `generateStaticParams`, `dynamic`, `dynamicParams`, `revalidate`, `fetchCache`, `runtime`, `preferredRegion`, `maxDuration`, the Pages Router data functions (`getServerSideProps`, `getStaticProps`, `getStaticPaths`), or a route HTTP method handler (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`). Fallow finds the problem statically, before a build, in the same pass as the rest of the dead-code analysis. Fallow never flags the `default` export of the component.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-The rule only runs when `next` is a declared dependency, so it cannot false-positive on non-Next projects. There is no auto-fix, because removing a legitimate client export would break the component.
+The rule runs only when `next` is a declared dependency, so it cannot give false positives in other projects. There is no auto-fix, because the removal of a valid client export would break the component.
 
-**When to act:** Move the offending export out of the `"use client"` file into a server module (or a shared module without the directive). Suppress with `// fallow-ignore-next-line invalid-client-export` if the export is intentional and you handle the boundary another way.
+**When to act:** Move the export out of the `"use client"` file into a server module, or into a shared module without the directive. If the export is intentional and you handle the boundary another way, suppress it with `// fallow-ignore-next-line invalid-client-export`.
 
 ### Mixed client/server barrels {#mixed-client-server-barrels}
 
-A barrel file (one with at least one `export ... from` re-export) that re-exports both a `"use client"` module and a server-only module. Importing any single name from such a barrel can drag the other origin's directive context across the React Server Components boundary, a common Next.js App Router footgun that surfaces as confusing build or hydration errors far from the barrel.
+A barrel file (a file with at least one `export ... from` re-export) that re-exports both a `"use client"` module and a server-only module. When you import one name from such a barrel, the directive context of the other module can cross the React Server Components boundary. This is a common Next.js App Router mistake. It shows up as confusing build or hydration errors far from the barrel.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-A module counts as server-only when it carries a `"use server"` directive, imports the `server-only` package, `next/server`, `node:fs`, or `node:child_process` (the `node:` and bare forms both count), or imports a server-only `next/headers` API (`cookies`, `headers`, `draftMode`). The check classifies only direct re-export origins (it does not walk transitive chains), skips type-only re-exports (which carry no runtime directive context), and never flags a barrel that mixes a client module with an ordinary utility, so it stays false-positive-safe. It runs only when `next` is a declared dependency.
+A module counts as server-only when it does one of these:
 
-**When to act:** Split the barrel so client and server-only modules are re-exported from separate entry points. There is no auto-fix (splitting a barrel is a design decision); suppress with `// fallow-ignore-next-line mixed-client-server-barrel` if the grouping is intentional.
+- has a `"use server"` directive
+- imports the `server-only` package, `next/server`, `node:fs`, or `node:child_process` (the `node:` and bare forms both count)
+- imports a server-only `next/headers` API (`cookies`, `headers`, `draftMode`)
+
+To stay false-positive-safe, the check classifies only the direct re-export origins and does not walk transitive chains. It skips type-only re-exports, because they have no runtime directive context. It never flags a barrel that mixes a client module with an ordinary utility. The rule runs only when `next` is a declared dependency.
+
+**When to act:** Split the barrel, so that separate entry points re-export the client modules and the server-only modules. There is no auto-fix, because the split of a barrel is a design decision. If the grouping is intentional, suppress it with `// fallow-ignore-next-line mixed-client-server-barrel`.
 
 ### Misplaced directives {#misplaced-directives}
 
-A `"use client"` or `"use server"` directive written as a bare string-literal statement below an import (or any other statement) instead of at the very top of the file. A directive is only honored in the file's leading prologue; once any statement precedes it, the parser treats the string as an ordinary expression and the bundler silently ignores it, so a file you intended as a client component is treated as a server module. Nothing errors, which is what makes it dangerous.
+A `"use client"` or `"use server"` directive that is a bare string-literal statement below an import (or any other statement), instead of at the very top of the file. A directive works only in the leading prologue of the file. When a statement comes before it, the parser treats the string as an ordinary expression, and the bundler silently ignores it. A file that you meant as a client component then becomes a server module. Nothing shows an error, and that makes it dangerous.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-The fix is always the same: move the directive above every `import`. The rule runs only when `next` is a declared dependency. There is no auto-fix (fallow does not reorder your source); the finding points at the misplaced directive so you can move it by hand.
+The fix is always the same: move the directive above every `import`. The rule runs only when `next` is a declared dependency. There is no auto-fix, because fallow does not reorder your source. The finding points at the misplaced directive, so you can move it by hand.
 
-**When to act:** Move the `"use client"` / `"use server"` line to the top of the file, before all imports. Suppress with `// fallow-ignore-next-line misplaced-directive` only if the bare string is intentional and not meant as a directive (rare).
+**When to act:** Move the `"use client"` or `"use server"` line to the top of the file, before all imports. Suppress it with `// fallow-ignore-next-line misplaced-directive` only if the bare string is intentional and is not a directive (rare).
 
 ### Route collisions {#route-collisions}
 
-Two or more App Router route files (a `page` or a `route` handler) that resolve to the same URL within one app-root. Route groups `(name)` and parallel slots `@name` do not change the URL, so `app/(marketing)/about/page.tsx` and `app/(shop)/about/page.tsx` both own `/about`. Next.js fails the build with "You cannot have two parallel pages that resolve to the same path" because a URL can have at most one owner, whether a Page or a Route Handler. fallow catches it statically, before a build, and surfaces every colliding file at once (the build error names only one and aborts).
+Two or more App Router route files (a `page` or a `route` handler) that resolve to the same URL in one app-root. Route groups `(name)` and parallel slots `@name` do not change the URL, so `app/(marketing)/about/page.tsx` and `app/(shop)/about/page.tsx` both own `/about`. A URL can have only one owner, a Page or a Route Handler. Next.js fails the build with "You cannot have two parallel pages that resolve to the same path". Fallow finds the problem statically, before a build, and reports all colliding files at once. The build error names only one file and stops.
 
 | Severity | Default |
 |:---------|:--------|
 | Error | Yes |
 
-It defaults to `error` because it mirrors a `next build` failure: a project hitting it was already red, so erroring aligns fallow's exit code with the build it mirrors.
+The rule defaults to `error` because it matches a `next build` failure. A project with this issue already fails its build, so the fallow exit code agrees with the build.
 
-Collision buckets are scoped per app-root using your workspace package roots, so a monorepo with several independent Next apps that happen to share a path (`apps/web/app/about` and `apps/admin/app/about`) is not flagged. Files under a private `_folder` and files under an intercepting marker (`(.)`, `(..)`, `(...)`) are excluded. Two dynamic segments that differ only by name (`[id]` vs `[slug]`) are reported by [dynamic segment name conflicts](#dynamic-segment-name-conflicts), not here. The rule runs only when `next` is a declared dependency.
+Fallow compares routes per app-root, based on your workspace package roots. A monorepo with several independent Next apps that share a path (`apps/web/app/about` and `apps/admin/app/about`) is not flagged. Fallow excludes files under a private `_folder` and files under an intercepting marker (`(.)`, `(..)`, `(...)`). Two dynamic segments that differ only by name (`[id]` vs `[slug]`) show up under [dynamic segment name conflicts](#dynamic-segment-name-conflicts), not here. The rule runs only when `next` is a declared dependency.
 
-**When to act:** Move or merge one of the colliding files so each URL has a single owner. Suppressing a guaranteed build error does not make the build pass, so the primary action is the fix; `// fallow-ignore-file route-collision` exists only as an escape hatch.
+**When to act:** Move or merge one of the colliding files, so that each URL has one owner. A suppression does not make the build pass, so fix the files. `// fallow-ignore-file route-collision` is only an escape hatch.
 
 ### Dynamic segment name conflicts {#dynamic-segment-name-conflicts}
 
-Two or more sibling dynamic route segments at the same App Router tree position using different param spellings (`[id]` vs `[slug]`, or a catch-all `[...x]` vs an optional catch-all `[[...x]]`). Next.js throws "You cannot use different slug names for the same dynamic path" at dev and production runtime when the position is hit, because one position must resolve to a single param name. Note that `next build` does NOT catch this (the build succeeds), so CI stays green while the route crashes the first time it is requested; fallow's static catch closes that gap. Route groups are transparent to the position and parallel slots fork it, so only genuinely-sibling segments conflict.
+Two or more sibling dynamic route segments at the same App Router tree position that use different param names (`[id]` vs `[slug]`, or a catch-all `[...x]` vs an optional catch-all `[[...x]]`). One position must resolve to one param name. When a request hits the position, Next.js throws "You cannot use different slug names for the same dynamic path" at dev and production runtime. `next build` does NOT catch this, and the build succeeds. CI stays green, and the route crashes on its first request. Fallow finds the conflict statically. Route groups do not change the position, and parallel slots create a new position, so only true sibling segments conflict.
 
 | Severity | Default |
 |:---------|:--------|
 | Error | Yes |
 
-It defaults to `error` because it is a deterministic runtime crash on first request that `next build` lets through, so fallow is the only gate that fails on it. The detector is pure path arithmetic on the same primitive as `route-collision`, so there is no heuristic to misfire.
+The rule defaults to `error`. The issue is a deterministic runtime crash on the first request, and `next build` does not stop it, so fallow is the only check that fails on it. The detector only compares paths, with the same logic as `route-collision`, so no heuristic can misfire.
 
 The rule runs only when `next` is a declared dependency.
 
-**When to act:** Rename the dynamic segments at the position to one consistent slug name (pick `[id]` or `[slug]` for both). Suppress with `// fallow-ignore-file dynamic-segment-name-conflict` only as an escape hatch.
+**When to act:** Give the dynamic segments at the position one slug name (use `[id]` or `[slug]` for both). Use `// fallow-ignore-file dynamic-segment-name-conflict` only as an escape hatch.
 
 ### Unused server actions {#unused-server-actions}
 
-A Next.js Server Action (an export of a `"use server"` file) that no code in the project references: no import-and-call, no `action={fn}` binding, and no `<form action={fn}>`. This is the cross-graph "exported but wired to nothing" direction, exactly where dead server actions accumulate as a page is refactored, and `eslint-plugin-next` cannot see it because it is single-file. It does not mean the endpoint is unreachable: Next still registers a generated action id, so it stays POST-able; it means no project code calls it, so it is a strong delete candidate.
+A Next.js Server Action (an export of a `"use server"` file) that no code in the project references: no import-and-call, no `action={fn}` binding, and no `<form action={fn}>`. Dead server actions build up when you refactor a page. `eslint-plugin-next` checks one file at a time, so it cannot see them. The finding does not mean that the endpoint is unreachable. Next still registers a generated action id, so clients can still POST to it. The finding means that no project code calls the action, so it is a strong delete candidate.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-This is a more specific re-classification of `unused-export` for `"use server"` files. It reuses fallow's whole-project reference graph, so the `action={fn}` and `<form action={fn}>` bindings, plain import-and-call, and component-prop forwarding all count as real uses, and wrapped action factories (`authenticatedActionClient.action(...)`, `withAuditLogging(...)`) are credited by the wrapped const's references; only a genuinely orphaned action is flagged. The rule runs only when `next` is a declared dependency. Inline `"use server"` body directives (`export async function f() { "use server" }` in a non-`"use server"` file) are not covered yet; such dead actions still surface as `unused-export`.
+This rule is a more specific version of `unused-export` for `"use server"` files. It uses the fallow reference graph of the whole project. The `action={fn}` and `<form action={fn}>` bindings, plain import-and-call, and component-prop forwarding all count as real uses. A wrapped action factory (`authenticatedActionClient.action(...)`, `withAuditLogging(...)`) counts as used when code references the wrapped const. Fallow flags only an action that nothing uses. The rule runs only when `next` is a declared dependency. It does not cover inline `"use server"` body directives yet (`export async function f() { "use server" }` in a file without `"use server"`). Such dead actions still show up as `unused-export`.
 
-**When to act:** Wire the action to a consumer or delete it. There is no auto-fix. Suppress with `// fallow-ignore-next-line unused-server-action`, or set the rule to `off`. If you gate CI on dead server actions, note the action now reports as `unused-server-action` (default `warn`) instead of `unused-export` (default `error`); set this rule to `error` to keep failing on it, and re-save any `--save-baseline` snapshot once.
+**When to act:** Connect the action to code that calls it, or delete it. There is no auto-fix. Suppress it with `// fallow-ignore-next-line unused-server-action`, or set the rule to `off`. If CI fails on dead server actions, note that the action now shows up as `unused-server-action` (default `warn`) instead of `unused-export` (default `error`). To keep CI failing on it, set this rule to `error`, and save any `--save-baseline` snapshot again once.
 
 ### Unprovided injects {#unprovided-injects}
 
-A Vue `inject(KEY)` or Svelte `getContext(KEY)` whose symbol key is `provide()` / `setContext()`'d nowhere in the project. At runtime a dead inject silently returns `undefined`, surfaced only when the affected path renders; no static tool in the Vue / Svelte / Nuxt ecosystems catches it (Vue and Nuxt emit a runtime-only warning, Svelte's eslint proposal is unimplemented).
+A Vue `inject(KEY)` or Svelte `getContext(KEY)` whose symbol key no code passes to `provide()` or `setContext()`. At runtime, a dead inject silently returns `undefined`, and you see it only when the affected path renders. No static tool in the Vue, Svelte, or Nuxt ecosystems catches it. Vue and Nuxt emit only a runtime warning, and the Svelte eslint proposal is not implemented.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-The key must be a symbol with cross-file identity (an imported const or a module-local symbol), which makes the check false-positive-safe by construction: a key imported from a package abstains (the provider may live inside that package), a key bound to a string literal abstains (string identity, a literal provider matches it), a key that is part of your package's public API abstains (a "bring-your-own-provider" library exports the key for the consumer to provide), and any dynamic-keyed provide (`keys.forEach(k => provide(k))`) abstains project-wide. App-level `app.provide(KEY, value)` is credited, and a provide imported directly while the inject reaches the same key through a barrel re-export are matched. The rule runs only when `vue`, `@vue/runtime-core`, or `svelte` is a declared dependency. Nuxt's string-keyed `nuxtApp.provide` / `$x` API and the inverse provided-never-injected direction are not covered yet.
+The key must be a symbol with cross-file identity (an imported const or a module-local symbol). This keeps the check false-positive-safe. Fallow skips these cases:
 
-**When to act:** Provide the key (`provide(KEY, value)` / `setContext(KEY, value)` in an ancestor) or remove the dead inject. There is no auto-fix. Suppress with `// fallow-ignore-next-line unprovided-inject`, or set the rule to `off`.
+- a key imported from a package, because the provider can be inside that package
+- a key bound to a string literal, because a literal provider matches it by string identity
+- a key that is part of the public API of your package, because a "bring-your-own-provider" library exports the key for its users to provide
+- any provide with a dynamic key (`keys.forEach(k => provide(k))`), which makes fallow skip the whole project
+
+App-level `app.provide(KEY, value)` counts as a provide. Fallow also matches a provide that imports the key directly with an inject that gets the same key through a barrel re-export. The rule runs only when `vue`, `@vue/runtime-core`, or `svelte` is a declared dependency. It does not cover the string-keyed Nuxt `nuxtApp.provide` / `$x` API yet, or the inverse case of a key that is provided but never injected.
+
+**When to act:** Provide the key (`provide(KEY, value)` or `setContext(KEY, value)` in an ancestor), or remove the dead inject. There is no auto-fix. Suppress it with `// fallow-ignore-next-line unprovided-inject`, or set the rule to `off`.
 
 ### Unrendered components {#unrendered-components}
 
-A single-file component (the default export of a `.vue` / `.svelte` / `.astro` file) that is kept reachable by a barrel re-export but instantiated by no file in the project: no `<Tag>`, no `:is` / `this=` binding, no `components` / `app.component` registration, no `h()` / Nuxt auto-import, and no script value-read. This is the common rot where a component is refactored out of every template but its barrel re-export keeps it alive, so `unused-file` (the file is reachable) and `unused-export` (the re-export counts as a use) both miss it; `eslint`'s `vue/no-unused-components` is single-file and cannot see a barrel-reexported component rendered by a sibling.
+A single-file component (the default export of a `.vue`, `.svelte`, or `.astro` file) that a barrel re-export keeps reachable, but that no file in the project renders. There is no `<Tag>`, no `:is` or `this=` binding, no `components` or `app.component` registration, no `h()` or Nuxt auto-import, and no script value-read. This happens often: a refactor removes a component from every template, but its barrel re-export keeps it alive. `unused-file` misses it because the file is reachable. `unused-export` misses it because the re-export counts as a use. The `eslint` rule `vue/no-unused-components` checks one file at a time, so it cannot see a barrel-reexported component that a sibling renders.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-The render set is built liberally across barrel chains, Nuxt auto-imports, and dynamic / side-effect imports, so over-crediting only suppresses a finding (never creates one). A component that is itself an entry point (route page, layout, `App.vue`, Nuxt `app.vue` / `error.vue`) and a component re-exported through any chain from a non-private package entry point (a library exporting components for its consumers to render) are both abstained, so component libraries are not false-flagged. The rule runs only when `vue` / `@vue/runtime-core` / `nuxt` (for `.vue`), `svelte` / `@sveltejs/kit` (for `.svelte`), or `astro` (for `.astro`) is a declared dependency.
+Fallow counts renders generously across barrel chains, Nuxt auto-imports, and dynamic and side-effect imports. Extra credit can only hide a finding, never create one. Fallow skips a component that is itself an entry point (route page, layout, `App.vue`, Nuxt `app.vue` or `error.vue`). It also skips a component that a non-private package entry point re-exports through any chain, for example a library that exports components for its users to render. So fallow does not flag component libraries by mistake. The rule runs only when one of these is a declared dependency: `vue`, `@vue/runtime-core`, or `nuxt` (for `.vue`), `svelte` or `@sveltejs/kit` (for `.svelte`), or `astro` (for `.astro`).
 
-The same rule has two non-SFC arms. An **Angular arm** (`framework: "angular"`, gated on `@angular/core`) flags an `@Component` whose element selector appears in no template project-wide, with route / `bootstrapApplication` / lazy-`loadComponent` and dynamic-render (`ViewContainerRef.createComponent`, `*ngComponentOutlet`) abstains. A **Lit arm** (`framework: "lit"`, gated on `lit` / `lit-element` / `@lit/reactive-element`) flags a registered custom element (`@customElement('x-foo')`, or `customElements.define('x-foo', C)` on any receiver) whose tag is rendered in no `html` template, no standalone `.html` document, and via no imperative `createElement` / `customElements.get` / `whenDefined`; it abstains on published elements (public API) and on elements defined under a docs / dev / demo directory (rendered by site or dev tooling that fallow cannot parse).
+The same rule also covers two cases outside single-file components:
 
-**When to act:** Render the component where it belongs, or delete it and its barrel re-export. There is no auto-fix (a component can be rendered reflectively through a dynamic `<component :is>` resolved from a non-literal value, or a Lit element created from a computed tag). Suppress with `// fallow-ignore-next-line unrendered-component`, or set the rule to `off`.
+- **Angular** (`framework: "angular"`, runs only with `@angular/core`): flags an `@Component` whose element selector appears in no template in the project. Fallow skips components used in routes, `bootstrapApplication`, lazy `loadComponent`, and dynamic renders (`ViewContainerRef.createComponent`, `*ngComponentOutlet`).
+- **Lit** (`framework: "lit"`, runs only with `lit`, `lit-element`, or `@lit/reactive-element`): flags a registered custom element (`@customElement('x-foo')`, or `customElements.define('x-foo', C)` on any receiver) whose tag no `html` template and no standalone `.html` document renders, and that no imperative `createElement`, `customElements.get`, or `whenDefined` call uses. Fallow skips published elements (public API) and elements defined under a docs, dev, or demo directory, because site or dev tooling that fallow cannot parse renders them.
+
+**When to act:** Render the component where it belongs, or delete it and its barrel re-export. There is no auto-fix. Code can render a component reflectively, through a dynamic `<component :is>` with a non-literal value, or create a Lit element from a computed tag. Suppress the finding with `// fallow-ignore-next-line unrendered-component`, or set the rule to `off`.
 
 ### Unused component props {#unused-component-props}
 
-A Vue `<script setup>` `defineProps` declared prop that is referenced by no code in its own single-file component, neither in `<script>` nor in `<template>`. This is the in-component dead-input direction that `vue-tsc` / Volar do not cover (they check caller-side prop correctness, not "this declared prop is wired to nothing"); eslint's `vue/no-unused-properties` is opt-in, off by default, and historically unreliable on `<script setup>` reactive destructure.
+A prop declared with `defineProps` in Vue `<script setup>` that no code in its own single-file component references, in `<script>` or in `<template>`. `vue-tsc` and Volar do not find this. They check that callers pass correct props, not that the component uses each declared prop. The eslint rule `vue/no-unused-properties` is opt-in, off by default, and historically unreliable with `<script setup>` reactive destructure.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-Prop names are harvested from the inline TS form (`defineProps<{ foo: T }>()`), the runtime object form (`defineProps({ foo: {...} })`), and `withDefaults(...)`; usage is credited from both script (the destructured binding or `props.foo`) and template (`{{ foo }}`, `:x="foo"`, `props.foo`, `$props.foo`). It stays false-positive-safe by abstaining on the whole component when it cannot see all consumption: a `v-bind="$attrs"` / `v-bind="props"` fallthrough, a whole-object props use (`toRefs(props)`, `{...props}`), a `defineExpose` or `defineModel` call, or a prop type from an imported alias (`defineProps<ImportedProps>()`, names not statically resolvable). The rule runs only when `vue` / `@vue/runtime-core` / `nuxt` is a declared dependency and covers Vue `<script setup>` and Options API props.
+Fallow reads prop names from the inline TS form (`defineProps<{ foo: T }>()`), the runtime object form (`defineProps({ foo: {...} })`), and `withDefaults(...)`. It counts usage in the script (the destructured binding or `props.foo`) and in the template (`{{ foo }}`, `:x="foo"`, `props.foo`, `$props.foo`). To stay false-positive-safe, fallow skips the whole component when it cannot see all usage: a `v-bind="$attrs"` or `v-bind="props"` fallthrough, a whole-object props use (`toRefs(props)`, `{...props}`), a `defineExpose` or `defineModel` call, or a prop type from an imported alias (`defineProps<ImportedProps>()`, where the names cannot be resolved statically). The rule runs only when `vue`, `@vue/runtime-core`, or `nuxt` is a declared dependency. It covers Vue `<script setup>` and Options API props.
 
-A **React / Preact arm** shares this rule key and emits the same finding for a prop that is destructured from a component's first parameter and read nowhere in the component body. It is dep-gated on `react` / `react-dom` / `next` / `preact`, covers inline-destructured literal props, and stays false-positive-safe by abstaining on rest spread (`{...rest}`), props forwarded by spread, props passed wholesale to a hook, a `forwardRef` / `memo` component whose props come from an imported interface (not statically resolvable), and exported public-API component props.
+For **React and Preact**, the same rule key reports a prop that code destructures from the first parameter of a component but never reads in the component body. This check runs only when `react`, `react-dom`, `next`, or `preact` is a declared dependency. It covers inline-destructured literal props. To stay false-positive-safe, it skips rest spread (`{...rest}`), props forwarded by spread, props passed as a whole to a hook, a `forwardRef` or `memo` component whose props come from an imported interface (not statically resolvable), and the props of exported public-API components.
 
-An **Astro arm** shares this rule key for a `.astro` `interface Props` (or `type Props`) field read nowhere: not through an `Astro.props` destructure (including a nested destructure such as `const { post: { id } } = Astro.props`), not via `Astro.props.<name>`, not in a `{expr}` template position, and not through a `<style>` / `<script>` `define:vars={{ prop }}` binding. It is dep-gated on `astro` and abstains on the whole component for a `{...Astro.props}` template spread, a whole-object `Astro.props` use, an `interface Props extends ...` or imported-type alias (names not statically resolvable), or an array destructure of `Astro.props`.
+For **Astro**, the same rule key reports a field of a `.astro` `interface Props` (or `type Props`) that no code reads. That means no `Astro.props` destructure (also a nested destructure such as `const { post: { id } } = Astro.props`), no `Astro.props.<name>`, no `{expr}` template position, and no `<style>` or `<script>` `define:vars={{ prop }}` binding reads it. This check runs only when `astro` is a declared dependency. It skips the whole component for a `{...Astro.props}` template spread, a whole-object `Astro.props` use, an `interface Props extends ...` or imported-type alias (names not statically resolvable), or an array destructure of `Astro.props`.
 
-**When to act:** Wire the prop where it is meant to be used, or remove it from `defineProps` (Vue) / the destructure (React). There is no auto-fix. Suppress with `// fallow-ignore-next-line unused-component-prop`, or set the rule to `off`.
+**When to act:** Use the prop where it belongs, or remove it from `defineProps` (Vue) or from the destructure (React). There is no auto-fix. Suppress the finding with `// fallow-ignore-next-line unused-component-prop`, or set the rule to `off`.
 
 ### Unused component emits {#unused-component-emits}
 
-A Vue `<script setup>` `defineEmits` declared event that is emitted by no code in its own single-file component, neither through `emit('name')` in `<script>` nor `emit('name')` / `$emit('name')` in `<template>`. This is the emit-side sibling of unused component props: the in-component dead-output direction that `vue-tsc` / Volar do not cover (they check caller-side listener correctness, not "this declared event is never emitted").
+An event declared with `defineEmits` in Vue `<script setup>` that no code in its own single-file component emits: no `emit('name')` in `<script>`, and no `emit('name')` or `$emit('name')` in `<template>`. This is the emit-side version of unused component props. `vue-tsc` and Volar do not find it. They check that callers use correct listeners, not that the component emits each declared event.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-Event names are harvested from the array form (`defineEmits(['save', 'close'])`), the type / object form (`defineEmits<{ save: [] }>()`), and the bound form (`const emit = defineEmits(...)`, tracking the actual local binding name so a renamed `const notify = defineEmits(...)` is still credited); usage is credited from both the script call walk and the template (`@click="$emit('save')"`). It stays false-positive-safe by abstaining on the whole component when it cannot see all emission: a dynamic `emit(eventName)` whose event name is not a literal, the emit function passed or returned or spread elsewhere, a `defineModel` call (which generates implicit `update:x` emits), or an emit type from an imported alias (`defineEmits<ImportedEmits>()`, names not statically resolvable). The rule runs only when `vue` / `@vue/runtime-core` / `nuxt` is a declared dependency and covers Vue `<script setup>` and Options API emits.
+Fallow reads event names from the array form (`defineEmits(['save', 'close'])`), the type or object form (`defineEmits<{ save: [] }>()`), and the bound form (`const emit = defineEmits(...)`). For the bound form, fallow tracks the real local binding name, so a renamed `const notify = defineEmits(...)` still counts. Fallow counts usage in the script calls and in the template (`@click="$emit('save')"`). To stay false-positive-safe, fallow skips the whole component when it cannot see all emits: a dynamic `emit(eventName)` without a literal event name, an emit function that code passes, returns, or spreads, a `defineModel` call (which generates implicit `update:x` emits), or an emit type from an imported alias (`defineEmits<ImportedEmits>()`, names not statically resolvable). The rule runs only when `vue`, `@vue/runtime-core`, or `nuxt` is a declared dependency. It covers Vue `<script setup>` and Options API emits.
 
-**When to act:** Emit the event where it is meant to fire, or remove it from `defineEmits`. There is no auto-fix (removing an emit can break a deliberately-stable public component API). Suppress with `// fallow-ignore-next-line unused-component-emit`, or set the rule to `off`.
+**When to act:** Emit the event where it must fire, or remove it from `defineEmits`. There is no auto-fix, because the removal of an emit can break a public component API that you keep stable on purpose. Suppress the finding with `// fallow-ignore-next-line unused-component-emit`, or set the rule to `off`.
 
 ### Unused Svelte events {#unused-svelte-events}
 
-A Svelte component dispatches a custom event through `createEventDispatcher`, but no reachable Svelte consumer listens for that event name.
+A Svelte component dispatches a custom event through `createEventDispatcher`, but no reachable Svelte component listens for that event name.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-Event names are harvested from literal dispatcher calls such as `dispatch('save')` after tracking the local binding returned by `createEventDispatcher()`. Listeners are credited from Svelte component usage with `on:event` syntax and forwarded listener attributes. The rule stays false-positive-safe by abstaining from dynamic event names, dispatcher values that escape the component, and projects without a declared Svelte dependency.
+Fallow tracks the local binding that `createEventDispatcher()` returns, and reads event names from literal dispatcher calls such as `dispatch('save')`. It counts listeners from Svelte component usage with `on:event` syntax and from forwarded listener attributes. To stay false-positive-safe, the rule skips dynamic event names, dispatcher values that leave the component, and projects without a declared Svelte dependency.
 
-**When to act:** Add the intended listener, forward the event intentionally, or remove the dispatch. There is no auto-fix. Suppress with `// fallow-ignore-next-line unused-svelte-event`, or set the rule to `off`.
+**When to act:** Add the intended listener, forward the event on purpose, or remove the dispatch. There is no auto-fix. Suppress the finding with `// fallow-ignore-next-line unused-svelte-event`, or set the rule to `off`.
 
 ### Unused component inputs {#unused-component-inputs}
 
-An Angular component input (`@Input()`, the signal `input()` / `input.required()`, or `model()`) declared on a component that is read by no code in its own component, neither in the class body nor in its template (inline `template` or an external `templateUrl` file). This is the Angular analogue of unused component props: the in-component dead-input direction that no Angular tooling covers. There is no `@angular-eslint` rule for it, and the Angular compiler only checks caller-side binding correctness (that a parent's `[input]="..."` matches a declared input), never "this declared input is wired to nothing inside the component." An input consumed only by a parent's template binding but read nowhere in its own component IS flagged, because the parent binding is satisfied while the component never uses the value.
+An Angular component input (`@Input()`, the signal `input()` or `input.required()`, or `model()`) that no code in its own component reads. Neither the class body nor the template (inline `template` or an external `templateUrl` file) uses it. This is the Angular version of unused component props, and no Angular tooling finds it. There is no `@angular-eslint` rule for it. The Angular compiler checks only that a parent binding such as `[input]="..."` matches a declared input. It never checks that the component uses the input. Fallow DOES flag an input that only a parent template binding sets, if its own component never reads it. The parent binding is valid, but the component never uses the value.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-Input names are harvested from the decorator form (`@Input() foo`, including the aliased `@Input('alias')` and the metadata `inputs: ['foo']` on the `@Component` decorator) and the signal form (`foo = input<T>()`, `input.required<T>()`, `model<T>()`); `model()` is treated as input-only (its two-way write half is not an emit). Usage is credited from the class body (`this.foo`) and from the component's template (interpolation, property and attribute bindings, structural directives, and template references). It stays false-positive-safe by abstaining on the whole component whenever it cannot see all consumption: any `extends` clause (an inherited template or base class may read the input), a `{...this}` spread, a JS-reserved-word input name, an accessor input (a `get` / `set` pair, where the setter side effect is the consumption), and `host:` decorator-metadata members are credited as used. The rule runs only when `@angular/core` is a declared dependency.
+Fallow reads input names from the decorator form and the signal form. The decorator form is `@Input() foo`, the aliased `@Input('alias')`, and the metadata `inputs: ['foo']` on the `@Component` decorator. The signal form is `foo = input<T>()`, `input.required<T>()`, and `model<T>()`. Fallow treats `model()` as input-only, and its two-way write half does not count as an emit. Fallow counts usage in the class body (`this.foo`) and in the template of the component (interpolation, property and attribute bindings, structural directives, and template references). To stay false-positive-safe, fallow skips the whole component when it cannot see all usage: any `extends` clause (an inherited template or base class can read the input), a `{...this}` spread, an input name that is a JS reserved word, or an accessor input (a `get` and `set` pair, where the side effect of the setter is the usage). Fallow counts members in `host:` decorator metadata as used. The rule runs only when `@angular/core` is a declared dependency.
 
-**When to act:** Read the input where it is meant to be used, or remove the `@Input()` / `input()` / `model()` declaration. There is no auto-fix. Suppress with `// fallow-ignore-next-line unused-component-input`, or set the rule to `off`.
+**When to act:** Read the input where it belongs, or remove the `@Input()`, `input()`, or `model()` declaration. There is no auto-fix. Suppress the finding with `// fallow-ignore-next-line unused-component-input`, or set the rule to `off`.
 
 ### Unused component outputs {#unused-component-outputs}
 
-An Angular component output (`@Output()` or the signal `output()`) that is emitted (`.emit(...)`) by no code in its own component. This is the emit-side sibling of unused component inputs: the in-component dead-output direction that no Angular tooling covers (the compiler checks caller-side listener correctness, that a parent's `(output)="..."` matches a declared output, never "this declared output is never emitted").
+An Angular component output (`@Output()` or the signal `output()`) that no code in its own component emits with `.emit(...)`. This is the emit-side version of unused component inputs, and no Angular tooling finds it. The compiler checks only that a parent listener such as `(output)="..."` matches a declared output. It never checks that the component emits the output.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-Output names are harvested from the decorator form (`@Output() saved = new EventEmitter()`, including the aliased `@Output('alias')` and the metadata `outputs: ['saved']` on the `@Component` decorator) and the signal form (`saved = output<T>()`); only `new EventEmitter()` initializers are harvested, so an observable-stream `@Output` (one wired to a `Subject` / `Observable` whose emissions fallow cannot follow) is left alone. Usage is credited from any `this.saved.emit(...)` call in the component. It stays false-positive-safe by abstaining on the whole component whenever it cannot see all emission: any `extends` clause, a `{...this}` spread, or a JS-reserved-word output name. The rule runs only when `@angular/core` is a declared dependency.
+Fallow reads output names from the decorator form (`@Output() saved = new EventEmitter()`, the aliased `@Output('alias')`, and the metadata `outputs: ['saved']` on the `@Component` decorator) and from the signal form (`saved = output<T>()`). Fallow reads only `new EventEmitter()` initializers. It ignores an observable-stream `@Output`, which uses a `Subject` or `Observable` whose emits fallow cannot follow. Fallow counts any `this.saved.emit(...)` call in the component as usage. To stay false-positive-safe, fallow skips the whole component when it cannot see all emits: any `extends` clause, a `{...this}` spread, or an output name that is a JS reserved word. The rule runs only when `@angular/core` is a declared dependency.
 
-**When to act:** Emit the output where it is meant to fire, or remove the `@Output()` / `output()` declaration. There is no auto-fix (removing an output can break a deliberately-stable public component API). Suppress with `// fallow-ignore-next-line unused-component-output`, or set the rule to `off`.
+**When to act:** Emit the output where it must fire, or remove the `@Output()` or `output()` declaration. There is no auto-fix, because the removal of an output can break a public component API that you keep stable on purpose. Suppress the finding with `// fallow-ignore-next-line unused-component-output`, or set the rule to `off`.
 
 ### Prop drilling {#prop-drilling}
 
-A React / Preact prop that is forwarded unused through two or more intermediate components before a component finally consumes it. "Forwarded unused" means a receiving component reads the prop's identifier only as the root of a child-JSX attribute value (so `<Child userName={user.name} />` counts: the `user` prop is projected straight through), never substantively. This is a cross-file graph signal that per-file linters (eslint-plugin-react) structurally cannot see.
+A React or Preact prop that two or more intermediate components pass on without using it, before a component finally uses it. "Pass on without using" means that a component reads the prop identifier only as the root of a child JSX attribute value, and never for anything else. For example, `<Child userName={user.name} />` counts, because the `user` prop goes straight through. This finding needs the cross-file graph, so per-file linters (eslint-plugin-react) cannot see it.
 
 | Severity | Default |
 |:---------|:--------|
 | Off (opt-in) | Yes |
 
-This rule is off by default; enable it with `prop-drilling: "warn"` (or `"error"`) under `rules`. When enabled it reports one located chain per drilled prop, with the source component that owns the value, each pass-through hop, and the consumer, each with file, line, and component name, so you or an agent can act. It stays false-positive-safe by abstaining on the whole chain whenever it cannot prove a clean pass-through: any `{...props}` / `{...rest}` spread, a `cloneElement` call, a component passed as a prop or render prop or function-as-children, a matching context `*.Provider` in the subtree (where drilling may be a deliberate choice), or any dynamic or unresolvable hop. The rule runs only when `react` / `react-dom` / `next` / `preact` is a declared dependency. When enabled it also contributes a small, capped penalty to the health score (one point per chain, capped at five); with the rule off the health score is unchanged.
+This rule is off by default. To enable it, set `prop-drilling: "warn"` (or `"error"`) under `rules`. Fallow then reports one chain per drilled prop. The chain shows the source component that owns the value, each pass-through hop, and the component that uses the prop, each with file, line, and component name. To stay false-positive-safe, fallow skips the whole chain when it cannot prove a clean pass-through: any `{...props}` or `{...rest}` spread, a `cloneElement` call, a component passed as a prop, render prop, or function-as-children, a matching context `*.Provider` in the subtree (where drilling can be a deliberate choice), or any dynamic or unresolvable hop. The rule runs only when `react`, `react-dom`, `next`, or `preact` is a declared dependency. When you enable it, it also adds a small, capped penalty to the health score: one point per chain, with a cap of five. With the rule off, the health score does not change.
 
-**When to act:** Colocate the consumer with the data, lift the value to a React context / provider at a mid-chain hop, or compose the components so the intermediates no longer thread the prop. There is no auto-fix (the right refactor is a design choice). Suppress an individual chain with `// fallow-ignore-next-line prop-drilling`, or set the rule to `off`.
+**When to act:** Move the component that uses the prop next to the data, move the value to a React context or provider at a hop in the middle of the chain, or compose the components so that the intermediate components no longer pass the prop. There is no auto-fix, because the right refactor is a design choice. To suppress one chain, use `// fallow-ignore-next-line prop-drilling`, or set the rule to `off`.
 
 ### Thin wrapper {#thin-wrapper}
 
-A React / Preact component whose entire body is `return <Child {...props} />`: it renders a single child component, forwards all of its props through a spread, and adds no markup, no hooks, and no logic of its own. It is pure structural indirection: every call site could render the child directly. This is a cross-component graph signal that per-file linters cannot see.
+A React or Preact component whose entire body is `return <Child {...props} />`. It renders one child component, passes all of its props on through a spread, and adds no markup, hooks, or logic. Every call site could render the child directly. This finding needs the graph across components, so per-file linters cannot see it.
 
 | Severity | Default |
 |:---------|:--------|
 | Off (opt-in) | Yes |
 
-This rule is off by default; enable it with `thin-wrapper: "warn"` (or `"error"`) under `rules`. It reports the wrapper component (at its definition) and the child it forwards to. It stays false-positive-safe by abstaining on wrappers that are intentional indirection: a `forwardRef` or `memo` wrapper (the sanctioned way to make a child ref-able or to set a perf boundary), an exported (public-API) component (a library re-branding a child under its own name), a context-provider wrapper, a `cloneElement` call, a render-prop / function-as-children, or any wrapper whose body is more than the single spread-forwarded child (a host element, sibling, hook, or branch). The rule runs only when `react` / `react-dom` / `next` / `preact` is a declared dependency.
+This rule is off by default. To enable it, set `thin-wrapper: "warn"` (or `"error"`) under `rules`. Fallow reports the wrapper component (at its definition) and the child that it passes props to. To stay false-positive-safe, fallow skips wrappers that are intentional:
 
-**When to act:** Inline the wrapper at its call sites and delete it, or give it a real responsibility (markup, defaults, logic). There is no auto-fix. Suppress with `// fallow-ignore-next-line thin-wrapper`, or set the rule to `off`.
+- a `forwardRef` or `memo` wrapper (the standard way to make a child ref-able or to set a performance boundary)
+- an exported (public-API) component, for example a library that gives a child its own name
+- a context-provider wrapper
+- a `cloneElement` call
+- a render prop or function-as-children
+- any wrapper whose body has more than the single spread-forwarded child (a host element, sibling, hook, or branch)
+
+The rule runs only when `react`, `react-dom`, `next`, or `preact` is a declared dependency.
+
+**When to act:** Inline the wrapper at its call sites and delete it, or give it a real job (markup, defaults, logic). There is no auto-fix. Suppress the finding with `// fallow-ignore-next-line thin-wrapper`, or set the rule to `off`.
 
 ### Duplicate prop shape {#duplicate-prop-shape}
 
-Three or more React / Preact components, across two or more files, that declare an identical set of prop names, suggesting a shared `Props` type (or a base component) should be extracted. Cross-graph, which per-file linters cannot see.
+Three or more React or Preact components, in two or more files, that declare the same set of prop names. This suggests that you can extract a shared `Props` type or a base component. The finding needs the project graph, so per-file linters cannot see it.
 
 | Severity | Default |
 |:---------|:--------|
 | Off (opt-in) | Yes |
 
-This rule is off by default; enable it with `duplicate-prop-shape: "warn"` (or `"error"`) under `rules`. It reports one finding per member of a group, naming the other components that share the shape. It stays noise-free by requiring an exact full-set match (a superset or subset does not group), a minimum of four significant prop names after stripping ubiquitous DOM-passthrough names (`id`, `className`, `children`, `style`, ...), and at least three components in at least two files, so two buttons that merely share `{label, onClick}` are never grouped. The rule runs only when `react` / `react-dom` / `next` / `preact` is a declared dependency, and abstains on components whose props are not statically harvestable (rest spread, imported-interface generics).
+This rule is off by default. To enable it, set `duplicate-prop-shape: "warn"` (or `"error"`) under `rules`. Fallow reports one finding per member of a group and names the other components with the same shape. To keep noise low, a group needs all of these:
 
-**When to act:** Extract a shared `Props` type or a base component the group can reuse. There is no auto-fix (the right abstraction is a design choice). Suppress with `// fallow-ignore-next-line duplicate-prop-shape`, or set the rule to `off`.
+- an exact match of the full set (a superset or subset does not group)
+- at least four significant prop names, after fallow removes common DOM-passthrough names (`id`, `className`, `children`, `style`, ...)
+- at least three components in at least two files
+
+So two buttons that only share `{label, onClick}` never form a group. The rule runs only when `react`, `react-dom`, `next`, or `preact` is a declared dependency. It skips components whose props fallow cannot read statically (rest spread, imported-interface generics).
+
+**When to act:** Extract a shared `Props` type or a base component that the group can reuse. There is no auto-fix, because the right abstraction is a design choice. Suppress the finding with `// fallow-ignore-next-line duplicate-prop-shape`, or set the rule to `off`.
 
 ### Unused load data keys {#unused-load-data-keys}
 
-A SvelteKit `load()` return-object key (in `+page.ts` / `+page.server.ts` and the `.js` variants) that is read by no consumer: not the sibling `+page.svelte`'s `data.<key>`, and not any project-wide `page.data.<key>` (Svelte 5 `$app/state`) or `$page.data.<key>` (Svelte 4 `$app/stores`). A dead returned key still runs its real server-side fetch / DB cost on every request for data nothing renders, and no other static tool catches it: `svelte-check` types `data` through the generated `$types` but never flags an unread returned key (the unused-input direction).
+A key of the object that a SvelteKit `load()` returns (in `+page.ts` or `+page.server.ts` and the `.js` variants) that no code reads. The sibling `+page.svelte` does not read `data.<key>`, and no file in the project reads `page.data.<key>` (Svelte 5 `$app/state`) or `$page.data.<key>` (Svelte 4 `$app/stores`). A dead returned key still costs a real server-side fetch or DB query on every request, for data that nothing renders. No other static tool finds it. `svelte-check` types `data` through the generated `$types`, but it never flags a returned key that no code reads.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-It stays false-positive-safe by abstaining whenever it cannot see all consumption: an unharvestable `load` body (a spread return, a non-literal or multi-branch return, a computed key, a wrapped / re-exported `load`), a sibling component that passes the whole `data` object opaquely (`data={data}`, `{...data}`, `fn(data)`, `const x = data`), a `+page.server.ts` whose universal `+page.ts` sibling reads or forwards its `data` param, and any project-wide reflective whole-object read of the page-data store (`Object.values(page.data)`), which abstains every route. Page-load data reaches only the sibling `+page.svelte`, so a `data.<key>` read in a `+layout.svelte` (which receives layout-load data, not page-load data) does not credit a page key. The rule runs only when `@sveltejs/kit` is a declared dependency. Layout loads (`+layout.ts` / `+layout.server.ts`) are not covered yet.
+To stay false-positive-safe, fallow skips a case when it cannot see all usage:
 
-**When to act:** Read the key where the data is meant to be used, or remove it from the `load()` return (and drop the fetch that produced it if nothing else needs it). There is no auto-fix (a load fetch can have side effects, so removing a key is a human decision). Suppress with `// fallow-ignore-next-line unused-load-data-key`, or set the rule to `off`.
+- a `load` body that fallow cannot read: a spread return, a non-literal or multi-branch return, a computed key, or a wrapped or re-exported `load`
+- a sibling component that passes the whole `data` object on (`data={data}`, `{...data}`, `fn(data)`, `const x = data`)
+- a `+page.server.ts` whose universal `+page.ts` sibling reads or forwards its `data` param
+- a reflective whole-object read of the page-data store anywhere in the project (`Object.values(page.data)`), which makes fallow skip every route
+
+Page-load data goes only to the sibling `+page.svelte`. A `+layout.svelte` gets layout-load data, not page-load data, so a `data.<key>` read there does not count for a page key. The rule runs only when `@sveltejs/kit` is a declared dependency. It does not cover layout loads (`+layout.ts`, `+layout.server.ts`) yet.
+
+**When to act:** Read the key where you need the data, or remove it from the `load()` return. If nothing else needs the fetch that produced the key, remove the fetch too. There is no auto-fix, because a load fetch can have side effects and a person must decide. Suppress the finding with `// fallow-ignore-next-line unused-load-data-key`, or set the rule to `off`.
 
 ### Type-only dependencies
 
-Production dependencies (`dependencies`) that are only ever imported via `import type`. Since type imports are erased at compile time, these packages are never loaded at runtime and should be moved to `devDependencies`.
+Production dependencies (`dependencies`) that code imports only through `import type`. The compiler erases type imports, so these packages never load at runtime. Move them to `devDependencies`.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-**When to act:** Move to `devDependencies`. This reduces the production install size and clearly communicates that the package is only needed for type checking.
+**When to act:** Move the package to `devDependencies`. This makes the production install smaller and shows that you need the package only for type checking.
 
 ### Test-only dependencies
 
-Production dependencies (`dependencies`) that are only ever imported by test files (files matching test patterns like `*.test.ts`, `*.spec.ts`, test directories). Since they are never used in production code, they should be moved to `devDependencies`.
+Production dependencies (`dependencies`) that only test files import. Test files match test patterns such as `*.test.ts`, `*.spec.ts`, and test directories. Production code never uses these packages, so move them to `devDependencies`.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-**When to act:** Move to `devDependencies`. This reduces the production install size and makes it clear the package is only needed for testing.
+**When to act:** Move the package to `devDependencies`. This makes the production install smaller and shows that you need the package only for tests.
 
 ### Dev dependencies in production {#dev-dependencies-in-production}
 
-A package in `devDependencies` that is imported by production source code via a runtime (value) import. This is the promote-side mirror of `type-only-dependencies` and `test-only-dependencies`: where those rules demote a production dependency that only tests or types need, this rule catches the opposite drift. A production-only install (`npm install --omit=dev`, `pnpm install --prod`, `yarn workspaces focus --production`) omits `devDependencies`, so the import breaks at runtime; the package belongs in `dependencies`.
+A package in `devDependencies` that production source code imports with a runtime (value) import. `type-only-dependencies` and `test-only-dependencies` find a production dependency that only tests or types need. This rule finds the opposite problem. A production-only install (`npm install --omit=dev`, `pnpm install --prod`, `yarn workspaces focus --production`) leaves out `devDependencies`, so the import breaks at runtime. The package belongs in `dependencies`.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-**What counts as a production import.** An import is production evidence only when all of the following hold:
+**What counts as a production import.** An import counts only when all of these are true:
 
-- The importing file is reachable from a runtime entry point. Repo tooling that is not part of the shipped artifact (`scripts/`, benchmarks, playgrounds, files reachable only through a config-file chain such as a Rollup config importing helpers) does not count.
-- The importing file is not a test, story, or fixture file (patterns like `*.test.*`, `*.spec.*`, `*.e2e.*`, `*.bench.*`, `*.stories.*`, `__tests__/`, `__mocks__/`, `test/`, `tests/`, the same exclusion set `--production` mode uses) and not a config file.
-- The import is a runtime (value) import. A production file that imports the package only via `import type` does not trigger the rule, because type imports are erased at build time; this mirrors the import-kind analysis behind `type-only-dependencies`.
+- A runtime entry point reaches the importing file. Repo tooling that you do not ship does not count: `scripts/`, benchmarks, playgrounds, and files that only a config-file chain reaches (such as a Rollup config that imports helpers).
+- The importing file is not a test, story, or fixture file, and not a config file. Fallow uses the same exclusion set as `--production` mode: `*.test.*`, `*.spec.*`, `*.e2e.*`, `*.bench.*`, `*.stories.*`, `__tests__/`, `__mocks__/`, `test/`, `tests/`.
+- The import is a runtime (value) import. A production file that imports the package only through `import type` does not trigger the rule, because the build erases type imports. `type-only-dependencies` uses the same import-kind analysis.
 
-**What is never flagged.** A `devDependency` is skipped when another manifest section already provides it at runtime (it is also listed in `dependencies`, `peerDependencies`, or `optionalDependencies`), when it is a workspace package, when it is known dev tooling (`@types/*`, `typescript`, and similar), or when it is listed in `ignoreDependencies`. The rule currently checks the root `package.json` against the project-wide import graph; imports from files owned by a workspace package are skipped because the workspace's own manifest governs their runtime resolution (per-workspace detection is a shared follow-up with the sibling dependency rules).
+**What is never flagged.** Fallow skips a `devDependency` in these cases:
 
-**Interaction with `--production` mode.** Unlike `test-only-dependencies`, which needs test files in the graph to answer its question, this rule stays on in `--production` mode. Production mode only makes the signal cleaner: every discovered file is production code, and a production CI run is exactly where a prod-only install breakage matters.
+- another manifest section already provides it at runtime (it is also in `dependencies`, `peerDependencies`, or `optionalDependencies`)
+- it is a workspace package
+- it is known dev tooling (`@types/*`, `typescript`, and similar)
+- it is in `ignoreDependencies`
 
-**Known limitation.** A file referenced from a `package.json` `scripts` command counts as a runtime entry point, so a dev-only helper script that value-imports a `devDependency` can still be flagged. Suppress such a package via `ignoreDependencies`.
+The rule currently checks the root `package.json` against the import graph of the whole project. Fallow skips imports from files that belong to a workspace package, because the manifest of that workspace controls their runtime resolution. Per-workspace detection is a shared follow-up with the related dependency rules.
 
-**Configuration and suppression.** The config key is `dev-dependencies-in-production` under `rules`; set it to `"error"`, `"warn"` (the default), or `"off"`:
+**Interaction with `--production` mode.** This rule stays on in `--production` mode. `test-only-dependencies` needs test files in the graph, but this rule does not. Production mode makes the result cleaner, because every file that fallow finds is production code. A production CI run is also where a broken production-only install matters most.
+
+**Known limitation.** A file that a `package.json` `scripts` command references counts as a runtime entry point. So fallow can still flag a dev-only helper script that value-imports a `devDependency`. To suppress such a package, add it to `ignoreDependencies`.
+
+**Configuration and suppression.** The config key is `dev-dependencies-in-production` under `rules`. Set it to `"error"`, `"warn"` (the default), or `"off"`:
 
 ```json fallow.json
 {
@@ -634,23 +680,23 @@ A package in `devDependencies` that is imported by production source code via a 
 }
 ```
 
-There is no inline suppression comment for this rule (`suppressible: false` in the capability manifest). That is intentional: the finding anchors on the package's line in `package.json`, and JSON cannot carry comments. To silence a specific package, add it to `ignoreDependencies`; to silence the rule entirely, set it to `off`.
+This rule has no inline suppression comment (`suppressible: false` in the capability manifest). That is intentional. The finding points at the line of the package in `package.json`, and JSON cannot have comments. To silence one package, add it to `ignoreDependencies`. To silence the whole rule, set it to `off`.
 
-**When to act:** Move the package from `devDependencies` to `dependencies`. If the flagged import is genuinely dev-only tooling (the script-entry limitation above), add the package to `ignoreDependencies` instead.
+**When to act:** Move the package from `devDependencies` to `dependencies`. If the flagged import is really dev-only tooling (the script-entry limitation above), add the package to `ignoreDependencies` instead.
 
 ### Unused pnpm catalog entries {#unused-catalog-entries}
 
-Packages declared in `pnpm-workspace.yaml` under `catalog:` or `catalogs.<name>:` that no workspace `package.json` references with the `catalog:` protocol.
+Packages in `pnpm-workspace.yaml` under `catalog:` or `catalogs.<name>:` that no workspace `package.json` references with the `catalog:` protocol.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-**When to act:** Remove the catalog entry, or switch consumers that still pin a hardcoded version to `catalog:` first.
+**When to act:** Remove the catalog entry. If a workspace still pins a hardcoded version of the package, switch it to `catalog:` first.
 
 ### Empty pnpm catalog groups {#empty-catalog-groups}
 
-Named `catalogs.<name>:` groups in `pnpm-workspace.yaml` that contain no package entries. The top-level `catalog:` map is not reported when empty because it can be a harmless default-catalog placeholder.
+Named `catalogs.<name>:` groups in `pnpm-workspace.yaml` that have no package entries. Fallow does not report an empty top-level `catalog:` map, because it can be a harmless placeholder for the default catalog.
 
 | Severity | Default |
 |:---------|:--------|
@@ -660,7 +706,7 @@ Named `catalogs.<name>:` groups in `pnpm-workspace.yaml` that contain no package
 
 ### Unresolved pnpm catalog references {#unresolved-catalog-references}
 
-Workspace `package.json` dependencies using `catalog:` or `catalog:<name>` where the selected catalog does not declare the requested package.
+Workspace `package.json` dependencies that use `catalog:` or `catalog:<name>`, where the selected catalog does not declare the package.
 
 | Severity | Default |
 |:---------|:--------|
@@ -670,20 +716,26 @@ Workspace `package.json` dependencies using `catalog:` or `catalog:<name>` where
 
 ### pnpm dependency overrides {#pnpm-dependency-overrides}
 
-`unused-dependency-overrides` reports override entries whose target package is not declared by any workspace `package.json` and is not present in the lockfile (`pnpm-lock.yaml`, `package-lock.json`, `npm-shrinkwrap.json`, or bun's text `bun.lock`). Overrides that target transitive dependencies resolved in the lockfile (the common CVE-pin pattern) are treated as used. When no lockfile is present, fallow falls back to a package.json-only check and keeps a `hint` on each finding so transitive pins can be reviewed before removal. When the only lockfile next to the root `package.json` is bun's legacy binary `bun.lockb` (no parseable text lockfile beside it; a `yarn.lock` is never consulted), resolution ground truth is unreadable, so the check is skipped rather than degraded, and fallow says so through the `bun-lockb-override-resolution-skipped` workspace diagnostic, which names the lockfiles it looked for and hints `bun install --save-text-lockfile` (bun 1.2 or newer) or deleting a stale `bun.lockb`. `misconfigured-dependency-overrides` reports malformed override keys or empty values that pnpm rejects.
+`unused-dependency-overrides` reports override entries for a package that no workspace `package.json` declares and that is not in the lockfile (`pnpm-lock.yaml`, `package-lock.json`, `npm-shrinkwrap.json`, or the bun text lockfile `bun.lock`). Fallow treats an override as used when it targets a transitive dependency in the lockfile. This is the common pattern to pin a version for a CVE.
+
+When there is no lockfile, fallow checks only `package.json`. It adds a `hint` to each finding, so you can review transitive pins before you remove them.
+
+Sometimes the only lockfile next to the root `package.json` is the legacy bun binary `bun.lockb`, with no text lockfile that fallow can parse next to it. Fallow never reads a `yarn.lock`. In this case, fallow cannot read the resolved versions, so it skips the check instead of running a weaker one. The `bun-lockb-override-resolution-skipped` workspace diagnostic tells you this. It names the lockfiles that fallow looked for and suggests `bun install --save-text-lockfile` (bun 1.2 or newer), or the removal of a stale `bun.lockb`.
+
+`misconfigured-dependency-overrides` reports malformed override keys or empty values that pnpm rejects.
 
 ### Stale suppressions {#stale-suppressions}
 
-`// fallow-ignore` comments and `/** @expected-unused */` JSDoc tags that no longer match any issue. Suppression comments accumulate as codebases evolve. A suppression that once silenced a real finding may become stale when the underlying issue is fixed, the code is moved, or another module starts importing a previously unused export.
+`// fallow-ignore` comments and `/** @expected-unused */` JSDoc tags that no longer match any issue. Suppression comments build up as a codebase changes. A suppression that once silenced a real finding can become stale when you fix the issue, move the code, or when another module starts to import an export that was unused.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-**Two origins are tracked:**
+**Fallow tracks two origins:**
 
-- **Inline comments** (`// fallow-ignore-next-line`, `// fallow-ignore-file`): reported as stale when the target line or file no longer has a matching issue.
-- **`@expected-unused` JSDoc tags**: reported as stale when the tagged export is now imported by another module. Use `/** @expected-unused */` to mark exports that are intentionally dead code but should be flagged if they become used again.
+- **Inline comments** (`// fallow-ignore-next-line`, `// fallow-ignore-file`): stale when the target line or file no longer has a matching issue.
+- **`@expected-unused` JSDoc tags**: stale when another module now imports the tagged export. Use `/** @expected-unused */` to mark exports that are dead code on purpose, so that fallow flags them if code starts to use them again.
 
 ```typescript
 // STALE: this suppression no longer matches any issue
@@ -696,7 +748,7 @@ export const deprecatedApi = () => {};
 // ^ reported as stale if something starts importing deprecatedApi
 ```
 
-**Unknown issue-kind tokens (typos, obsolete names):** fallow accepts the recognized tokens on a multi-kind marker even when one of the tokens does not match any known issue kind, and reports each unknown token as a stale suppression. This guards against the silent-failure case where a typo (`unused_export` instead of `unused-export`) or a kind renamed in a newer release would otherwise discard every suppression on the same line. The diagnostic's explanation surfaces the verbatim token plus a "Did you mean ...?" suggestion when a known kind is within Levenshtein distance 2.
+**Unknown issue-kind tokens (typos, obsolete names):** a marker can list more than one issue kind. When one token matches no known issue kind, fallow still applies the recognized tokens, and reports each unknown token as a stale suppression. Without this, a typo (`unused_export` instead of `unused-export`) or a kind that a newer release renamed would silently discard every suppression on the same line. The explanation of the diagnostic shows the exact token. When a known kind is within Levenshtein distance 2, it also shows a "Did you mean ...?" suggestion.
 
 ```typescript
 // Recognized + unknown on the same marker:
@@ -706,9 +758,9 @@ export const foo = 1;
 // suppression so you can fix the typo or drop the unknown token.
 ```
 
-JSON consumers can distinguish unknown-kind tokens from stale-but-known tokens via the additive `origin.kind_known` field on `stale_suppressions[].origin` (present and `false` only in the unknown-kind case; absent when the kind is recognized).
+In JSON output, the additive `origin.kind_known` field on `stale_suppressions[].origin` separates unknown-kind tokens from known tokens that are stale. The field is present and `false` only for an unknown kind. It is absent when fallow recognizes the kind.
 
-**When to act:** Remove the stale suppression comment or JSDoc tag. For unknown-kind reports, fix the typo or drop the unknown token; the rest of the marker continues to apply. Stale suppressions add noise and may hide future issues if the code changes again.
+**When to act:** Remove the stale suppression comment or JSDoc tag. For an unknown kind, fix the typo or remove the unknown token. The rest of the marker still applies. Stale suppressions add noise and can hide future issues when the code changes again.
 
 **Configuration:**
 
@@ -720,12 +772,12 @@ JSON consumers can distinguish unknown-kind tokens from stale-but-known tokens v
 }
 ```
 
-Use `--stale-suppressions` as a filter flag to show only stale suppression findings.
+To show only stale suppression findings, use the `--stale-suppressions` filter flag.
 
 
 ## Prioritizing findings
 
-Not all findings are equally important. Use this priority order:
+Fix findings in this order:
 
 1. **Unresolved imports**: potential runtime failures
 2. **Unlisted dependencies**: breaks in strict environments
@@ -741,20 +793,20 @@ Not all findings are equally important. Use this priority order:
 12. **Unused types / enum members / class members**: code hygiene
 
 <Info>
-The first two categories indicate correctness issues that may cause runtime failures. Everything else is maintenance and hygiene.
+The first two categories are correctness issues that can cause runtime failures. The others are maintenance and hygiene.
 </Info>
 
 
 ## Incremental adoption
 
-Most projects have existing dead code. Baselines, `--changed-since`, and enabling one issue type at a time let you adopt gradually; see [Adopting fallow](/adoption).
+Most projects already have dead code. To adopt fallow step by step, use baselines, `--changed-since`, or enable one issue type at a time. See [Adopting fallow](/adoption).
 
 
 ## Common false positive patterns
 
-Fallow auto-detects frameworks and tools via `package.json` and config files, so most convention-based exports (Next.js pages, Storybook stories, Jest configs, tap suites, tsd declaration tests, and Contentlayer content roots) are handled out of the box. Run `fallow list` to see which plugins are active and what entry points they add.
+Fallow detects frameworks and tools from `package.json` and config files. So it handles most convention-based exports with no setup, for example Next.js pages, Storybook stories, Jest configs, tap suites, tsd declaration tests, and Contentlayer content roots. To see which plugins are active and which entry points they add, run `fallow list`.
 
-False positives that do occur are typically in these categories:
+The false positives that remain usually fall in these categories:
 
 | Pattern | Why fallow flags it | Fix |
 |:--------|:-------------------|:----|
@@ -762,10 +814,10 @@ False positives that do occur are typically in these categories:
 | Dependency injection / runtime wiring | Registered via DI container, not `import` | Add to `entry` or use `/** @public */` (or `@internal`, `@beta`, `@alpha`) |
 | Dynamic `require()` with variables | Path not statically resolvable | Add the directory to `entry` |
 | Environment-specific files | Only imported behind `process.env` checks | Add to `entry` if always needed |
-| Unsupported framework conventions | Plugin doesn't exist for this framework | Add entry points manually or [write a custom plugin](/frameworks/custom-plugins) |
+| Unsupported framework conventions | No plugin exists for this framework | Add entry points manually or [write a custom plugin](/frameworks/custom-plugins) |
 
 <Warning>
-Before acting on a finding, verify with `--trace`. A finding is only as good as fallow's module graph. If an export is used via a dynamic pattern fallow can't resolve, use `--trace` to confirm.
+Before you act on a finding, check it with `--trace`. A finding is only as correct as the fallow module graph. If code uses an export through a dynamic pattern that fallow cannot resolve, `--trace` shows it.
 </Warning>
 
 ```bash
@@ -782,18 +834,18 @@ fallow dead-code --trace-dependency lodash
 
 ## Limitations
 
-- **Fully runtime-computed paths**: `import(variable)` or `require(variable)` where the argument has no static structure cannot be resolved. Template literals with partial paths (`` import(`./locales/${lang}.json`) ``) and `import.meta.glob` *are* resolved. Only completely opaque variables are a limitation. Mark those directories in `entry`.
-- **Syntactic analysis only**: fallow doesn't invoke the TypeScript compiler. Conditional types or dead code behind generic constraints require type resolution to detect. See [known limitations](/analysis/limitations) for details.
-- **Side-effect imports** (`import './polyfill'`) are tracked as file-level edges. The imported file won't be flagged as unused, but individual exports within it are still analyzed.
+- **Fully runtime-computed paths**: fallow cannot resolve `import(variable)` or `require(variable)` when the argument has no static structure. Fallow *does* resolve template literals with partial paths (`` import(`./locales/${lang}.json`) ``) and `import.meta.glob`. Only fully opaque variables are a limitation. Add those directories to `entry`.
+- **Syntactic analysis only**: fallow does not run the TypeScript compiler. Conditional types, and dead code behind generic constraints, need type resolution to detect. For details, see [known limitations](/analysis/limitations).
+- **Side-effect imports** (`import './polyfill'`): fallow tracks these as file-level edges. It does not flag the imported file as unused, but it still analyzes the individual exports in the file.
 
 <Info>
-Monorepo workspaces, framework conventions (Next.js, NestJS, Angular, etc.), and decorator-driven wiring are handled automatically via [auto-detected plugins](/frameworks/built-in) and [workspace detection](/configuration/workspaces). See [known limitations](/analysis/limitations) for edge cases.
+Fallow handles monorepo workspaces, framework conventions (Next.js, NestJS, Angular, etc.), and decorator-driven wiring automatically, with [auto-detected plugins](/frameworks/built-in) and [workspace detection](/configuration/workspaces). For edge cases, see [known limitations](/analysis/limitations).
 </Info>
 
 
 ## JSON `_meta` object
 
-When `--explain` is passed (or via MCP), the JSON output includes a `_meta` object:
+When you pass `--explain`, or run through MCP, the JSON output includes a `_meta` object:
 
 ```json
 {
@@ -830,4 +882,18 @@ When `--explain` is passed (or via MCP), the JSON output includes a `_meta` obje
 }
 ```
 
-AI agents and CI systems can use this to interpret issue types without consulting external documentation.
+With `_meta`, AI agents and CI systems can interpret issue types without external documentation.
+
+## See also
+
+<CardGroup cols={3}>
+  <Card title="fallow dead-code" icon="terminal" href="/cli/dead-code">
+    All flags for the dead-code command.
+  </Card>
+  <Card title="Inline suppression" icon="comment-slash" href="/configuration/suppression">
+    Suppress one false positive at a time in source code.
+  </Card>
+  <Card title="Adopting fallow" icon="flag-checkered" href="/adoption">
+    Use baselines and `--changed-since` to adopt fallow step by step.
+  </Card>
+</CardGroup>

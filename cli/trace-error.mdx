@@ -1,11 +1,17 @@
 ---
 title: "fallow trace-error"
-description: "CLI reference for fallow trace-error. Resolve the frames of a runtime stack trace to the definitions they name, without reading source maps."
+description: "Go from a runtime stack trace to the definitions in your code that its frames name. Fallow trace-error resolves each frame against the module graph, without reading source maps."
 keywords: ["fallow trace-error", "stack trace", "runtime error", "frames", "debugging", "CLI"]
 icon: "bug"
 ---
 
-Read a runtime stack trace and ask the module graph which definitions its frames name. `trace-error` classifies reported frames as in-project, inside an installed dependency, or outside the analyzed corpus, then resolves the in-project ones against the definitions fallow already extracted.
+Give `fallow trace-error` a runtime stack trace, and it tells you which definitions in your project the frames name. First, it sorts each reported frame into one of three origins:
+
+- in the project
+- inside an installed dependency
+- outside the analyzed corpus
+
+Then it resolves the in-project frames against the definitions that fallow already extracted.
 
 ```bash
 fallow trace-error crash.txt
@@ -13,30 +19,30 @@ cat crash.txt | fallow trace-error
 fallow trace-error - --format json --quiet
 ```
 
-The trace comes from a file argument, from `-`, or from stdin when no argument is given. A relative path is resolved against the project root, matching `--diff-file`. V8 and Node traces are supported, as are SpiderMonkey and JavaScriptCore traces.
+Fallow reads the trace from a file argument, from `-`, or from stdin when you give no argument. Fallow resolves a relative path against the project root, the same as `--diff-file`. Fallow supports V8, Node, SpiderMonkey, and JavaScriptCore traces.
 
 <Note>
-  `trace-error` is a standalone, best-effort surface. It is not folded into the ranked [review brief](/cli/audit#review-brief-and-decision-surface) and is never an input to the focus map or its ranking.
+  `trace-error` is a standalone, best-effort command. Its results are not part of the ranked [review brief](/cli/audit#review-brief-and-decision-surface), and they never change the focus map or its ranking.
 </Note>
 
 ## What it refuses to do
 
-The command reports what it could not answer instead of guessing.
+When the command cannot answer, it says so, and it does not guess.
 
-- A frame matching several definitions reports `ambiguous`. It lists bounded candidates and records additional matches in `candidates_omitted`.
-- A frame matching nothing reports `not_found` rather than disappearing from the output.
-- A frame the graph was never asked about reports `not_attempted`, with the reason.
-- Reported frames stay in `frames[]` in input order. `counts` publishes their per-outcome totals, while `frames_omitted` records frames beyond the report limit.
+- A frame that matches several definitions reports `ambiguous`. It lists a limited number of candidates, and `candidates_omitted` counts the other matches.
+- A frame that matches nothing reports `not_found`. It stays in the output.
+- A frame that fallow did not try to resolve reports `not_attempted`, with the reason.
+- Reported frames stay in `frames[]` in input order. `counts` has the total for each outcome. `frames_omitted` counts the frames beyond the report limit.
 
-Exact project-relative or absolute file paths take priority over abbreviated suffix matches. If an abbreviated path matches multiple modules, the result preserves that ambiguity.
+An exact project-relative or absolute file path wins over an abbreviated suffix match. If an abbreviated path matches more than one module, the result reports that ambiguity.
 
-No source maps are read. A frame inside generated build output is reported as such, because a stale map rebinds silently to the wrong line and a wrong line is worse than no line.
+Fallow does not read source maps. It reports a frame inside generated build output as generated output. A stale source map can point to the wrong line without a warning, and a wrong line is worse than no line.
 
 ## Options
 
 `trace-error` takes the project, output, and performance [global flags](/cli/global-flags): `--root`, `--config`, `--format` with `human` or `json`, `--pretty`, `--quiet`, `--no-cache`, and `--threads`.
 
-Input is limited to 1 MiB. The report includes up to 256 frames and up to 10 candidate definitions per frame; omitted counts remain explicit. Oversized input exits with code `2`.
+The input limit is 1 MiB. The report includes up to 256 frames, and up to 10 candidate definitions for each frame. The report always counts what it omits. Input over the limit exits with code `2`.
 
 ## Human output
 
@@ -56,7 +62,7 @@ Stack-trace frames (syntactic; OFF the ranked path)
   frames 3 | resolved 0 | ambiguous 0 | not found 1 | not attempted 2
 ```
 
-Each frame prints its origin and resolution as a `[origin/resolution]` pair, with the reason on the indented line below.
+Each frame shows its origin and resolution as an `[origin/resolution]` pair. The indented line below gives the reason.
 
 ## JSON output
 
@@ -109,23 +115,23 @@ Each frame prints its origin and resolution as a `[origin/resolution]` pair, wit
 | Field | Type | Description |
 |:------|:-----|:------------|
 | `source` | string | `stdin`, or the path exactly as you wrote it. |
-| `header` | string | The first non-blank line before any frame, verbatim and unparsed. Omitted when the input began with a frame. |
+| `header` | string | The first non-blank line before any frame, as written and not parsed. Omitted when the input starts with a frame. |
 | `frames[].index` | integer | Position in the input trace. Frames keep input order. |
 | `frames[].raw` | string | The frame line as it was read. |
-| `frames[].origin` | `"in_project"` \| `"node_modules"` \| `"out_of_corpus"` | Where the frame's file sits relative to the analyzed corpus. |
+| `frames[].origin` | `"in_project"` \| `"node_modules"` \| `"out_of_corpus"` | Where the file of the frame is, relative to the analyzed corpus. |
 | `frames[].resolution` | `"resolved"` \| `"ambiguous"` \| `"not_found"` \| `"not_attempted"` | What the graph could say about the frame. |
 | `frames[].candidates[]` | array | Definitions the frame may name, each with `file`, `symbol`, `kind`, and an optional `line` and `member`. Empty unless the resolution is `resolved` or `ambiguous`. |
-| `frames[].candidates_omitted` | integer | Candidates withheld from the array by a cap. `0` when nothing was withheld. |
-| `frames[].line_mismatch` | boolean | Set on a `resolved` frame whose line sits far from the declaration it matched, so the runtime may have run a same-named definition elsewhere. Omitted when false. |
+| `frames[].candidates_omitted` | integer | Candidates that the cap kept out of the array. `0` when the cap kept nothing out. |
+| `frames[].line_mismatch` | boolean | Set on a `resolved` frame when its line is far from the matched declaration. The runtime may have run a different definition with the same name. Omitted when false. |
 | `frames[].reason` | string | Why this frame has the resolution it has. |
 | `counts.unparsed_lines` | integer | Input lines that did not parse as a frame. |
-| `counts.frames_omitted` | integer | Frames withheld from the array by a cap. |
+| `counts.frames_omitted` | integer | Frames that the cap kept out of the array. |
 
-`counts.frames` is the number of reported frames. Both `resolved + ambiguous + not_found + not_attempted` and `in_project + node_modules + out_of_corpus` equal that number. Add `counts.frames_omitted` to recover the total number of recognized input frames. A trace that is entirely unrecognised reports zero frames and a non-zero `unparsed_lines`, rather than looking like an empty trace.
+`counts.frames` is the number of reported frames. `resolved + ambiguous + not_found + not_attempted` equals that number, and so does `in_project + node_modules + out_of_corpus`. To get the total number of recognized input frames, add `counts.frames_omitted`. If fallow recognizes no line in a trace, it reports zero frames and a non-zero `unparsed_lines`. You can thus tell it apart from an empty trace.
 
 ## For agents
 
-The `trace_error` MCP tool wraps this command. Feed it the stack trace from a failing test or a production error, then read `frames[].candidates[]` for the files worth opening. A `not_found` result on an in-project frame means the graph could not match its name. The function may be module-local, or the runtime name may differ from the extracted definition.
+The `trace_error` MCP tool runs this command. Give it the stack trace from a failing test or a production error. Then read `frames[].candidates[]` to find the files to open. A `not_found` result on an in-project frame means that fallow could not match the frame name to a definition. The function may be module-local, or the runtime name may differ from the extracted definition.
 
 ## See also
 
@@ -134,7 +140,7 @@ The `trace_error` MCP tool wraps this command. Feed it the stack trace from a fa
     Walk a symbol's call chain, or find the shortest import path between two modules.
   </Card>
   <Card title="Inspect a target" icon="search-code" href="/cli/inspect">
-    Compose one evidence bundle for a file or exported symbol.
+    Get one evidence bundle for a file or exported symbol.
   </Card>
   <Card title="MCP integration" icon="robot" href="/integrations/mcp">
     Use fallow tools from AI coding agents.

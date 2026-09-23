@@ -1,15 +1,15 @@
 ---
 title: "Debugging & troubleshooting"
-description: "Trace export usage, diagnose false positives, and debug fallow's analysis pipeline with built-in tracing and performance profiling tools."
+description: "Find out why fallow reports a finding, or why it misses one. Trace exports, files, dependencies, and clones, profile slow runs, and fix common false positives."
 keywords: ["debugging", "troubleshooting", "false positives", "trace", "performance", "cache"]
 icon: "bug"
 ---
 
-When fallow reports something unexpected, built-in tracing and performance tools help you understand *why*.
+When fallow reports something you did not expect, or misses something you did expect, this page shows you how to find the cause. Trace flags show how fallow reached a result, and `--performance` shows where the run spends its time.
 
 ## Tracing export usage
 
-Use `--trace FILE:EXPORT` to see the full usage chain for a specific export.
+To see the full usage chain for one export, pass `--trace FILE:EXPORT`.
 
 ```bash
 fallow dead-code --trace src/utils/format.ts:formatCurrency
@@ -22,29 +22,29 @@ fallow dead-code --trace src/utils/format.ts:formatCurrency
   Reason: No references found, export is unused
 ```
 
-Prints every file that imports `formatCurrency`, including indirect usage through barrel re-exports. Use this when:
+Fallow prints every file that imports `formatCurrency`, including indirect imports through barrel re-exports. Use it when:
 
-- An export you expected to be used is reported as unused.
-- You want to understand which consumers depend on a symbol before removing it.
-- A re-export chain is not being resolved as expected.
+- Fallow reports an export as unused, and you expected it to be used.
+- You want to know which files depend on a symbol before you remove it.
+- Fallow does not resolve a re-export chain the way you expect.
 
 ## Tracing file edges
 
-Use `--trace-file PATH` to see all incoming and outgoing edges for a file in the module graph.
+To see all incoming and outgoing module graph edges for one file, pass `--trace-file PATH`.
 
 ```bash
 fallow dead-code --trace-file src/components/Button.tsx
 ```
 
-Shows every import the file makes and every file that imports from it. Use this when:
+Fallow shows every import in the file and every file that imports from it. Use it when:
 
-- A file is reported as unused but you believe something should reference it.
-- You want to verify that a file is reachable from entry points.
-- You're investigating why a file's exports are all marked unused (maybe the file itself is unreachable).
+- Fallow reports a file as unused, and you think something references it.
+- You want to check that an entry point reaches the file.
+- Fallow marks all exports of a file as unused. The cause can be that no entry point reaches the file.
 
 ## Tracing dependency usage
 
-Use `--trace-dependency PACKAGE` to find everywhere a package is used: imports, script binaries, and plugin detection.
+To find every place that uses a package, pass `--trace-dependency PACKAGE`. This covers imports, script binaries, and plugin detection.
 
 ```bash
 fallow dead-code --trace-dependency lodash
@@ -54,29 +54,29 @@ fallow dead-code --trace-dependency lodash
   UNUSED moment (0 import(s))
 ```
 
-Reports all import sites, `package.json` script binary usage, and plugin-based detection for the given package. Use this when:
+Fallow reports all import sites, the `package.json` scripts that use a binary of the package, and the plugins that detect it. Use it when:
 
-- A dependency is reported as unused but you believe it's used in scripts or config files.
-- You want to audit which parts of your codebase depend on a specific package.
-- You're evaluating whether a dependency can be removed.
+- Fallow reports a dependency as unused, and you think a script or a config file uses it.
+- You want to know which parts of your codebase depend on a package.
+- You want to know if you can remove a dependency.
 
 ## Tracing duplication clones
 
-Use `dupes --trace FILE:LINE` to see all clone instances at a specific source location.
+To see all clone instances for one source location, pass `dupes --trace FILE:LINE`.
 
 ```bash
 fallow dupes --trace src/utils/validate.ts:42
 ```
 
-Shows every other location that shares the same clone group as the code at the given line. Use this when:
+Fallow shows every other location in the same clone group as the code at that line. Use it when:
 
-- You want to find all copies of a duplicated block before refactoring.
-- You're deciding whether to extract a shared function or module.
-- A duplication finding seems incorrect and you want to inspect the matched instances.
+- You want to find all copies of a duplicated block before you refactor.
+- You must decide whether to extract a shared function or module.
+- A duplication finding looks wrong, and you want to see the matched instances.
 
 ## Performance profiling
 
-Use `--performance` to get a timing breakdown of each pipeline stage.
+To see how long each pipeline stage takes, pass `--performance`.
 
 ```bash
 fallow dead-code --performance
@@ -111,33 +111,35 @@ fallow dupes --performance
 └───────────────────────────────────────────────────
 ```
 
-The indented rows under `entry points` partition that stage rather than add to it, so they are not part of the `TOTAL` sum. They appear only when the stage cost at least 5ms, which keeps a fast project's box short. Use them when entry-point discovery is the expensive stage and you want to know whether the cost is plugin glob compilation, workspace traversal, or something else.
+The indented rows under `entry points` split that stage into parts. They are not added to the `TOTAL` sum. Fallow shows them only when the stage takes 5ms or more, so the box stays short for a fast project. When entry-point discovery is the slow stage, these rows show if the cost is plugin glob compilation, workspace traversal, or something else.
 
-The `(other)` row is the time inside `TOTAL` not attributed to a named stage (report assembly and inter-stage glue), so the sequential stages plus `(other)` sum to `TOTAL`. In combined mode (`fallow` with no subcommand) the `duplication` stage runs concurrently with the rest of the pipeline and is marked `(concurrent)`; it is shown for reference but is not part of the `TOTAL` sum, so it can legitimately exceed `TOTAL` when duplication detection runs longer than the dead-code pass.
+The `(other)` row is the time inside `TOTAL` that belongs to no named stage, such as report assembly and the steps between stages. The sequential stages plus `(other)` add up to `TOTAL`.
 
-Use this when:
+In combined mode (`fallow` with no subcommand), the `duplication` stage runs at the same time as the rest of the pipeline. Fallow marks it `(concurrent)` and does not add it to `TOTAL`. When duplication detection takes longer than the dead-code pass, this stage can be larger than `TOTAL`.
 
-- Analysis is slower than expected and you want to find the bottleneck.
-- You want to verify the cache is working (high hit rate means incremental runs are fast).
-- You're comparing performance across different configuration options.
+Use `--performance` when:
+
+- The analysis is slower than you expect, and you want to find the slow stage.
+- You want to check that the cache works. A high hit rate means that incremental runs are fast.
+- You want to compare the speed of different configuration options.
 
 ### Parallel parse timing
 
-`parse/extract` runs across all cores. When the parse work was substantial and genuinely parallel, the line gains a `(parallel: ~Nms CPU)` suffix reporting the summed parse CPU across workers:
+`parse/extract` runs on all cores. When the run parses many files in parallel, the line gets a `(parallel: ~Nms CPU)` suffix. The suffix is the total parse CPU time of all workers:
 
 ```bash title="$ fallow dead-code --performance (cold cache)"
 │  parse/extract:       382.4ms  (21033 modules, 0 cached, 21033 parsed)  (parallel: ~594ms CPU)
 ```
 
-Here the stage finished in 382ms of wall-clock but spent ~594ms of CPU across cores. When that figure is much larger than the wall-clock the stage is CPU-bound and benefits from more cores; when it is close to the wall-clock the stage is I/O-bound and extra threads will not help. The suffix is omitted on warm or trivial runs where there is little real parse work to report.
+Here the stage took 382ms of wall-clock time and ~594ms of CPU time across cores. If the CPU time is much larger than the wall-clock time, the stage is CPU-bound and more cores make it faster. If the two are close, the stage is I/O-bound and more threads do not help. Fallow omits the suffix on warm or small runs, where there is little parse work.
 
-In combined mode (`fallow` with no subcommand), the health breakdown reuses the discovered and parsed files from the dead-code pass, so its `discover files` and `parse/extract` rows read `(measured above)` and point you at the Pipeline Performance box where that cost is attributed.
+In combined mode (`fallow` with no subcommand), the health breakdown reuses the files that the dead-code pass discovered and parsed. Its `discover files` and `parse/extract` rows therefore show `(measured above)`. You find that cost in the Pipeline Performance box.
 
-In `--format json`, the timings carry `parse_cpu_ms` (summed parse CPU) alongside the wall-clock fields, and the health timings carry `shared_parse`. These are observational and vary run to run, so do not gate CI on them.
+With `--format json`, the timings include `parse_cpu_ms` (total parse CPU time) next to the wall-clock fields. The health timings include `shared_parse`. These values change from run to run, so do not use them as a CI gate.
 
 ## Cache behavior
 
-Fallow caches parsed AST data using bincode serialization with xxh3 hashing. On later runs, unchanged files load from cache instead of being re-parsed.
+Fallow caches the parse result of each file, so later runs parse only the files that changed. The cache uses bincode serialization and xxh3 hashing.
 
 ```bash
 # Run with caching (default)
@@ -149,28 +151,28 @@ fallow dead-code --no-cache
 
 Use `--no-cache` when:
 
-- You suspect stale cache entries are causing incorrect results.
-- You've changed fallow versions and want a clean analysis.
-- You're benchmarking full parse performance.
+- You think that stale cache entries cause incorrect results.
+- You changed the fallow version and want a clean analysis.
+- You want to benchmark a full parse.
 
-The `--performance` flag shows cache statistics, including how many files were cache hits vs. misses. A high hit rate on incremental runs is expected. Only modified files need re-parsing.
+`--performance` shows cache statistics, including the number of cache hits and misses. On incremental runs, expect a high hit rate, because fallow parses only the changed files again.
 
 ### A refused cache says so
 
-A run that had a cache but could not reuse it prints the reason under the stage that paid for it, so a refusal never reads like a first run:
+When a run has a cache but cannot reuse it, fallow prints the reason under the stage that did the extra work. You can therefore tell a refused cache from a first run:
 
 ```bash title="$ fallow dead-code --performance"
 │  parse/extract:        16.2ms  (335 modules, 0 cached, 335 parsed)  (parallel: ~98ms CPU)
 │  parse cache not reused: cache format version changed
 ```
 
-The module-graph cache reports the same way on its own line, `graph cache not reused`, under `build graph`. Neither line appears when the cache was reused, and neither appears under `--no-cache`, where you asked for the cold path. [`fallow doctor`](/cli/doctor) reports the same two states before you run an analysis.
+The module-graph cache reports a refusal on its own line, `graph cache not reused`, under `build graph`. Neither line appears when fallow reuses the cache. Neither line appears with `--no-cache` either, because you asked for a cold run. [`fallow doctor`](/cli/doctor) reports the same two states before you run an analysis.
 
 ## Common false positives
 
 ### Dynamic imports with runtime values
 
-Fallow resolves template literals and `import.meta.glob`, but fully dynamic imports like `import(variable)` can't be resolved statically.
+Fallow resolves template literals and `import.meta.glob`. It cannot resolve a fully dynamic import such as `import(variable)`.
 
 **Fix**: Add the target directory to `entry` in your config:
 
@@ -182,9 +184,9 @@ Fallow resolves template literals and `import.meta.glob`, but fully dynamic impo
 
 ### Convention-based exports
 
-Some frameworks consume exports by naming convention rather than explicit imports. For example, Next.js `generateStaticParams` or Remix `loader` functions.
+Some frameworks use exports by their name, with no import. Examples are Next.js `generateStaticParams` and Remix `loader` functions.
 
-**Fix**: Fallow's built-in plugins already handle most frameworks. If you're using a niche framework, create a [custom plugin](/frameworks/custom-plugins) or use `ignoreExports`:
+**Fix**: The built-in plugins handle most frameworks. For a less common framework, create a [custom plugin](/frameworks/custom-plugins) or use `ignoreExports`:
 
 ```jsonc
 {
@@ -196,7 +198,7 @@ Some frameworks consume exports by naming convention rather than explicit import
 
 ### Dependency injection frameworks
 
-DI containers (NestJS, Angular, InversifyJS) resolve dependencies at runtime via decorators and metadata. Fallow skips decorated class members by default, but injected services may look unused if they're only referenced via DI tokens.
+DI containers (NestJS, Angular, InversifyJS) resolve dependencies at runtime through decorators and metadata. Fallow skips decorated class members by default. An injected service can still look unused if only DI tokens reference it.
 
 **Fix**: Add the DI-registered files as entry points, or suppress specific findings:
 
@@ -205,20 +207,20 @@ DI containers (NestJS, Angular, InversifyJS) resolve dependencies at runtime via
 export class UserService { /* ... */ }
 ```
 
-If your codebase uses utility decorators that DO NOT imply reflective use (Playwright `@step`, internal `@measure`, `@log`, etc.), opt them out of the skip via `ignoreDecorators` so methods carrying ONLY those names are checked for usage normally:
+Some decorators do NOT mean that a framework calls the method, for example Playwright `@step` or your own `@measure` and `@log`. List them in `ignoreDecorators`. Fallow then checks a method that has ONLY those decorators like any other method:
 
 ```jsonc
 // .fallowrc.json
 { "ignoreDecorators": ["@step"] }
 ```
 
-A method carrying any decorator NOT in the list stays skipped, so `@step + @Inject` keeps the conservative DI-friendly behavior.
+Fallow still skips a method that has any decorator NOT in the list. A method with `@step + @Inject` is still skipped, as DI code needs.
 
 ### Peer dependencies and optional dependencies
 
-Packages listed in `peerDependencies` or `optionalDependencies` are not analyzed by default since they may be provided by the consuming project.
+By default, fallow does not analyze packages in `peerDependencies` or `optionalDependencies`, because the project that installs your package can supply them.
 
-**Fix**: If fallow incorrectly flags these, add them to `ignoreDependencies`:
+**Fix**: If fallow reports these packages by mistake, add them to `ignoreDependencies`:
 
 ```jsonc
 {
@@ -228,9 +230,9 @@ Packages listed in `peerDependencies` or `optionalDependencies` are not analyzed
 
 ### Config files not recognized as entry points
 
-If a config file (e.g., `tailwind.config.ts`) is reported as unused, its framework plugin may not be active.
+If fallow reports a config file (for example `tailwind.config.ts`) as unused, its framework plugin is possibly not active.
 
-**Fix**: Run `fallow list` to check which plugins are active. If the relevant plugin isn't detected, add the config file to `entry`:
+**Fix**: Run `fallow list` to see the active plugins. If fallow does not detect the plugin, add the config file to `entry`:
 
 ```jsonc
 {
@@ -242,25 +244,27 @@ If a config file (e.g., `tailwind.config.ts`) is reported as unused, its framewo
 
 ### Files in a hidden directory are missing
 
-If a file under a dot-prefixed directory never appears in any finding, discovery
-did not traverse it. Hidden directories are skipped apart from a few conventional
-names and the ones an active framework plugin owns. Check the run's diagnostics:
+If a file in a dot-prefixed directory never appears in a finding, fallow did not
+look in that directory. Fallow skips hidden directories, except for a few
+conventional names and the directories that an active framework plugin owns.
+Check the diagnostics of the run:
 
 ```bash
 fallow dead-code --format json --quiet | jq '.workspace_diagnostics[] | select(.kind == "skipped-source-dotdir")'
 ```
 
-**Fix**: No config field adds a directory to traversal. Analyze it on its own
-with `fallow dead-code --root .claude`, or add it to `ignorePatterns` if it is
-tool state you never want analyzed. See
-[Known limitations](/analysis/limitations) for the full behavior.
+**Fix**: No config field adds a hidden directory to discovery. Analyze the
+directory on its own with `fallow dead-code --root .claude`. If it holds tool
+state that you never want to analyze, add it to `ignorePatterns`. For the full
+behavior, see [Known limitations](/analysis/limitations).
 
 ### A health section reports nothing
 
-When a health input does not load, the section that needed it reports nothing
-instead of zero, and the run records why. Every entry carries a `message` that
-ends with a next step. Fallow records the entry with or without `--quiet`. Select
-on `degrades_analysis` rather than on a list of kinds:
+When a health input does not load, the section that needs it reports nothing,
+not zero. The run records the reason as a diagnostic entry. Each entry has a
+`message` that ends with a next step. Fallow records the entry with or without
+`--quiet`. To find these entries, select on `degrades_analysis`, not on a list
+of kinds:
 
 ```bash
 fallow health --format json --quiet | jq '.workspace_diagnostics[] | select(.degrades_analysis)'
@@ -278,28 +282,27 @@ fallow health --format json --quiet | jq '.workspace_diagnostics[] | select(.deg
 | `plugin-config-unreadable` | A framework plugin could not read a config key in full, so what the key declares never reached the analysis. `plugin`, `key` and `reason` name the plugin, the config key and the cause, with the config file in `path`. `reason` is `not-object-literal`, `array-form`, `spread` or `unreadable-entries` | Yes |
 | `plugin-effect-not-modeled` | A framework plugin read a config key whose effect fallow does not model, so the convention remains. The same payload, with `reason` `key-effect-not-modeled` or `config-property-unreadable` | No, the field is absent |
 
-The two plugin kinds come from a config rather than from a health input, so any
-run with a dead-code pass carries them: `dead-code` / `check`, `health`, `flags`,
-`audit` and the bare combined run. A standalone `fallow dupes` carries neither.
-The `reason` token sets are open as well. See
-[Module Federation](/frameworks/built-in#module-federation) for the keys that
-report one.
+The two plugin kinds come from a config file, not from a health input. Every
+run with a dead-code pass can include them: `dead-code` / `check`, `health`,
+`flags`, `audit` and the bare combined run. A standalone `fallow dupes` includes
+neither. The `reason` token sets are open too. For the keys that report one,
+see [Module Federation](/frameworks/built-in#module-federation).
 
-**Fix**: read the entry's `message`. [`fallow health`](/cli/health) tells you
+**Fix**: Read the `message` of the entry. [`fallow health`](/cli/health) shows
 which sections report nothing, and what a section reports when it measured zero.
-The kind set is open, so read a kind you do not recognize as one more diagnostic
-rather than as an error.
+The kind set is open. Treat a kind that you do not recognize as one more
+diagnostic, not as an error.
 
 ## See also
 
 <CardGroup cols={3}>
   <Card title="Dead Code Analysis" icon="skull-crossbones" href="/analysis/dead-code">
-    Overview of how fallow detects unused code.
+    How fallow finds unused code.
   </Card>
   <Card title="CLI: dead-code" icon="terminal" href="/cli/dead-code">
-    Full reference for the `fallow dead-code` command and all its flags.
+    Full reference for the `fallow dead-code` command and its flags.
   </Card>
   <Card title="Inline Suppression" icon="comment-slash" href="/configuration/suppression">
-    Suppress individual findings with inline comments.
+    Suppress single findings with inline comments.
   </Card>
 </CardGroup>

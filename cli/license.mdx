@@ -1,17 +1,17 @@
 ---
 title: "fallow license"
-description: "CLI reference for fallow license. Activate a trial or JWT, inspect status, refresh a license, or deactivate the local token for paid runtime coverage."
+description: "Turn on paid runtime coverage on your machine or CI runner. Fallow license activates a trial or JWT, shows status, refreshes a license, or deactivates the local token."
 keywords: ["fallow license", "trial", "license activate", "license refresh", "runtime coverage", "JWT", "CLI"]
 icon: "key"
 ---
 
-Manage the local license used for paid runtime-coverage features.
+Use `fallow license` to manage the local license that turns on the paid runtime-coverage features.
 
 ```bash
 fallow license status
 ```
 
-Verification is offline against an Ed25519 public key compiled into the binary. Only the trial and refresh flows make network requests to `api.fallow.cloud`.
+Fallow verifies the license offline, against an Ed25519 public key in the binary. Only the trial and refresh flows send network requests to `api.fallow.cloud`.
 
 ## Subcommands
 
@@ -26,20 +26,20 @@ fallow license activate --from-file ./license.jwt
 cat ./license.jwt | fallow license activate --stdin
 ```
 
-JWT input precedence is:
+Fallow reads the JWT from the first source that is present:
 
 1. positional JWT argument
 2. `--from-file <path>`
 3. `--stdin`
 
-Whitespace is normalized before verification, so copied multiline tokens still work.
+Fallow normalizes whitespace before verification, so a copied multiline token still works.
 
 #### Flags
 
 | Flag | Description |
 |:-----|:------------|
-| `--trial` | Start a 30-day email-gated trial instead of reading a JWT locally. Requires `--email`. Rate-limited to **5 requests per hour per IP**; in CI or behind a shared NAT, start the trial from a developer machine and set `FALLOW_LICENSE` on the runner. |
-| `--email <ADDR>` | Email address for the trial flow. On success, fallow also prints the server-reported `trialEndsAt` ISO timestamp so you do not need to decode the JWT. |
+| `--trial` | Start a 30-day email-gated trial, and do not read a local JWT. Requires `--email`. Rate-limited to **5 requests per hour per IP**. In CI or behind a shared NAT, start the trial on a developer machine and set `FALLOW_LICENSE` on the runner. |
+| `--email <ADDR>` | Email address for the trial flow. On success, fallow also prints the `trialEndsAt` ISO timestamp from the server, so you do not need to decode the JWT. |
 | `--from-file <PATH>` | Read a JWT from a file. |
 | `--stdin` | Read a JWT from standard input. |
 
@@ -58,9 +58,9 @@ license: VALID, tier=trial seats=1 features=runtime_coverage days_until_expiry=2
   → runtime_coverage: ENABLED
 ```
 
-If the token is expired but still in the grace window, fallow reports that explicitly and tells you to refresh it. If no token is present, the command suggests starting a trial.
+If the token is expired but still in the grace window, fallow says so and tells you to refresh it. If no token is present, the command suggests a trial.
 
-If the JWT includes a `refresh_after` claim (issued at `iat + 15 days` by `api.fallow.cloud`) and that timestamp has already passed, `status` appends a one-line refresh hint. This is a proactive nudge while the license is still valid, not an error.
+`api.fallow.cloud` can set a `refresh_after` claim in the JWT, at `iat + 15 days`. When that time has passed, `status` adds a one-line refresh hint. The hint is not an error. It comes while the license is still valid, so you can refresh early.
 
 ### `refresh`
 
@@ -70,7 +70,7 @@ Fetch a fresh JWT for the currently active license.
 fallow license refresh
 ```
 
-This is the preferred way to renew a token before the hard-fail window is reached.
+Use `refresh` to renew a token before it reaches the hard-fail window.
 
 ### `deactivate`
 
@@ -82,15 +82,15 @@ fallow license deactivate
 
 ## Storage and precedence
 
-By default, the local token is stored at `~/.fallow/license.jwt`. On Unix, fallow writes the file with mode `0600` (owner read/write only) so other users on the same host cannot read the bearer token. Windows relies on the ACL of the containing directory.
+By default, fallow stores the local token at `~/.fallow/license.jwt`. On Unix, fallow writes the file with mode `0600` (only the owner can read and write). Other users on the same host thus cannot read the bearer token. On Windows, the ACL of the parent directory controls access.
 
-Lookup precedence is:
+Fallow looks for the license in this order:
 
 1. `FALLOW_LICENSE`
 2. `FALLOW_LICENSE_PATH`
 3. `~/.fallow/license.jwt`
 
-Use `FALLOW_LICENSE` on shared CI runners where writing to a user home directory is not desirable.
+On a shared CI runner where you do not want to write to a home directory, use `FALLOW_LICENSE`.
 
 ## Exit behavior
 
@@ -105,7 +105,7 @@ Common outcomes:
 
 ### Actionable error messages
 
-When the backend returns a structured error envelope, fallow maps known `code` values to targeted hints instead of printing the raw HTTP body:
+When the backend returns a structured error envelope, fallow shows a specific hint for each known `code` value. It does not print the raw HTTP body:
 
 | Operation + code | Message |
 |:-----------------|:--------|
@@ -114,27 +114,32 @@ When the backend returns a structured error envelope, fallow maps known `code` v
 | `refresh` or `trial` + `unauthorized` | `authentication failed. Reactivate with: fallow license activate --trial --email <addr>` |
 | `trial` + `rate_limit_exceeded` | `trial creation is rate-limited to 5 per hour per IP. Wait an hour or retry from a different network (in CI, start the trial locally and set FALLOW_LICENSE on the runner).` |
 
-For unknown codes, fallow surfaces the backend's `message` field if present, otherwise the raw body.
+For an unknown code, fallow prints the `message` field from the backend. If that field is missing, fallow prints the raw body.
 
 ## Clock skew
 
-License verification rejects JWTs whose `iat` (issued-at) claim is more than 24 hours in the future relative to the local system clock. The same check catches both directions of skew: a JWT signed against a forward-shifted clock and a local machine whose clock is behind reality. Rejection surfaces as a `license appears to be issued <duration> in the future` error and exits non-zero so paid features fail closed instead of silently honoring a license the local clock cannot validate against.
+License verification rejects a JWT when its `iat` (issued-at) claim is more than 24 hours in the future, relative to the local system clock. The same check finds skew in both directions:
 
-Common non-user causes:
+- a JWT signed with a clock that is ahead
+- a local machine with a clock that is behind
+
+On rejection, fallow prints a `license appears to be issued <duration> in the future` error and exits non-zero. Paid features thus fail closed. Fallow does not accept a license that the local clock cannot validate.
+
+Common causes that are not user errors:
 
 - CI containers booted without NTP.
 - Machines with a dead BIOS battery.
-- A laptop's clock drifting after a long sleep.
+- A laptop clock that drifts after a long sleep.
 
-After confirming the system clock is correct, the default 24h window can be overridden via `FALLOW_LICENSE_SKEW_TOLERANCE_SECONDS=<seconds>` for environments with predictable drift. Parsing is lenient: unset, empty, unparsable, or negative values all fall back to the default so a typo in a runner env block cannot fail license verification on its own.
+For an environment with predictable drift, first make sure that the system clock is correct. Then set `FALLOW_LICENSE_SKEW_TOLERANCE_SECONDS=<seconds>` to change the default 24h window. Fallow parses this value leniently. An unset, empty, unparsable, or negative value falls back to the default, so a typo in a runner env block cannot cause a license verification failure by itself.
 
 ## See also
 
 <CardGroup cols={2}>
   <Card title="Runtime coverage" icon="chart-network" href="/analysis/runtime-coverage">
-    Understand what the paid runtime-coverage layer adds on top of health analysis.
+    See what paid runtime coverage adds to health analysis.
   </Card>
   <Card title="Coverage setup" icon="wand-magic-sparkles" href="/cli/coverage">
-    Guided first-run workflow that bootstraps the sidecar and writes a collection recipe.
+    Run the guided first-run setup. It sets up the sidecar and writes a collection recipe.
   </Card>
 </CardGroup>

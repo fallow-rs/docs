@@ -1,11 +1,11 @@
 ---
 title: "fallow dupes"
-description: "CLI reference for fallow dupes. Detect duplicated code blocks across your codebase using suffix-array analysis with configurable thresholds."
+description: "Find copy-pasted code that you can merge into one shared function. Fallow dupes detects duplicated code blocks across your codebase with suffix-array analysis and configurable thresholds."
 keywords: ["fallow dupes", "duplication", "CLI", "clone detection", "semantic", "threshold"]
 icon: "terminal"
 ---
 
-Detect copy-pasted code blocks across your entire codebase using suffix-array analysis.
+`fallow dupes` finds copy-pasted code blocks across your whole codebase. Each clone group shows you code that you can extract into one shared function. You can also fail CI when duplication is more than a threshold. Fallow uses suffix-array analysis to find the clones.
 
 ```bash
 fallow dupes
@@ -18,13 +18,13 @@ fallow dupes
 | Flag | Description |
 |:-----|:------------|
 | `--mode <MODE>` | Detection mode: `strict`, `mild` (default), `weak`, `semantic` |
-| `--near` | Include function-scoped near-miss clones with small structural edits. Uses semantic normalization and reports groups with at least 80% all-pairs similarity. |
+| `--near` | Include function-scoped near-miss clones with small structural edits. Uses semantic normalization. Reports groups with at least 80% all-pairs similarity. |
 | `--min-tokens <N>` | Minimum tokens per clone (default: 50) |
 | `--min-lines <N>` | Minimum lines per clone (default: 5) |
-| `--min-occurrences <N>` | Minimum number of occurrences before a clone group is reported (default: 2, must be ≥ 2). Raise to skip pair-only clones and focus on widespread copy-paste worth refactoring. |
-| `--skip-local` | Only report cross-directory duplicates |
-| `--cross-language` | Strip TS types for TS to JS matching |
-| `--ignore-imports` | Exclude module wiring from clone detection (default). ES imports, re-export declarations, and top-level static `require()` binding declarations are stripped from the token stream. Runtime code, local exports, side-effect `require()` calls, nested `require()` calls, dynamic require arguments, and mixed declarations are still counted. |
+| `--min-occurrences <N>` | Minimum number of occurrences for fallow to report a clone group (default: 2, must be ≥ 2). Raise it to skip clones that occur only twice and find the widespread copy-paste that is worth a refactor. |
+| `--skip-local` | Report only cross-directory duplicates |
+| `--cross-language` | Remove TS types so that TS code can match JS code |
+| `--ignore-imports` | Exclude module wiring from clone detection (default). Fallow removes ES imports, re-export declarations, and top-level static `require()` binding declarations from the token stream. It still counts runtime code, local exports, side-effect `require()` calls, nested `require()` calls, dynamic require arguments, and mixed declarations. |
 | `--no-ignore-imports` | Count module wiring as clone candidates (opt out of the default exclusion). Conflicts with `--ignore-imports`. |
 
 ### Output
@@ -32,45 +32,60 @@ fallow dupes
 | Flag | Description |
 |:-----|:------------|
 | `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab` |
-| `--top <N>` | Show only the N highest-ranked clone groups (see [Ranking and JSON fields](#ranking-and-json-fields)). `clone_families[]` is rebuilt from the groups that survive, so it narrows with them. Every `stats` counter keeps describing the whole scoped corpus; `clone_groups_shown` / `clone_groups_omitted` and `clone_families_shown` / `clone_families_omitted` report the split. Refused with exit code `2` alongside `--group-by`. |
+| `--top <N>` | Show only the N highest-ranked clone groups (see [Ranking and JSON fields](#ranking-and-json-fields)). Fallow rebuilds `clone_families[]` from the groups it shows, so the families shrink too. The `stats` counters still describe the whole scoped corpus. `clone_groups_shown`, `clone_groups_omitted`, `clone_families_shown`, and `clone_families_omitted` report the split. With `--group-by`, fallow refuses the run with exit code `2`. |
 | `--quiet` | Suppress progress output |
-| `--threshold <N>` | Fail if duplication exceeds N% |
-| `--group-by <MODE>` | Partition the report into per-group sections. `MODE`: `owner` (CODEOWNERS), `directory` (first path component), `package` (workspace), or `section` (GitLab `[Section]` headers). Each clone group is attributed to its largest owner (most instances; alphabetical tiebreak), so a group split 2 src / 1 lib appears under `src`. JSON adds `grouped_by` plus a `groups` array of per-bucket dedup-aware `stats`, attributed `clone_groups` (each carrying `primary_owner` and per-instance `owner`), and `clone_families`. SARIF results carry `properties.group` and CodeClimate issues carry a top-level `group` field. Compact and markdown fall back to ungrouped output with a stderr note. Cannot be combined with `--top`: per-bucket stats are computed over every clone group in the bucket, so a global top-N truncation would leave them describing groups the output no longer lists. |
+| `--threshold <N>` | Fail if duplication is more than N% |
+| `--group-by <MODE>` | Split the report into one section per group. `MODE`: `owner` (CODEOWNERS), `directory` (first path component), `package` (workspace), or `section` (GitLab `[Section]` headers). Fallow assigns each clone group to its largest owner (most instances, alphabetical tiebreak). A group with 2 instances in `src` and 1 in `lib` appears under `src`. JSON adds `grouped_by` and a `groups` array. Each group has dedup-aware `stats`, its `clone_groups` (each with `primary_owner` and a per-instance `owner`), and `clone_families`. SARIF results have `properties.group`, and CodeClimate issues have a top-level `group` field. Compact and markdown print ungrouped output with a note on stderr. You cannot combine it with `--top`: fallow computes the stats of each group over all its clone groups, and a global top-N cut would make the stats describe groups that the output does not list. |
 | `--explain` | Add metric explanations. In human format, prints a `Description:` line under each section header. In JSON format, adds a `_meta` object with metric descriptions and docs links. |
-| `--explain-skipped` | In human/markdown output, show the per-pattern breakdown for files skipped by default duplicates ignores. Machine formats suppress this note. |
-| `--summary` | Print a one-line summary of duplication counts at the end of the run. In JSON format, adds a `summary` counts object. |
-| `--no-fragments` | Omit the verbatim source text from `clone_groups[].instances[].fragment` in `--format json`. Each instance still carries `file`, `start_line`, `end_line`, `start_col`, and `end_col`, which address the same code, and the text is most of the payload on a duplicated codebase. Fingerprints, suggested names, refactoring suggestions, and `actions[]` are computed before serialization, so nothing else changes. |
+| `--explain-skipped` | In human and markdown output, show a per-pattern count of the files that the default duplicates ignores skipped. Machine formats do not show this note. |
+| `--summary` | Print a one-line summary of the duplication counts at the end of the run. In JSON format, adds a `summary` counts object. |
+| `--no-fragments` | Omit the verbatim source text from `clone_groups[].instances[].fragment` in `--format json`. On a codebase with much duplication, this text is most of the payload. Each instance still has `file`, `start_line`, `end_line`, `start_col`, and `end_col`, which point to the same code. Nothing else changes, because fallow computes fingerprints, suggested names, refactoring suggestions, and `actions[]` before serialization. |
 
 ### Incremental
 
 | Flag | Description |
 |:-----|:------------|
-| `--changed-since <REF>` | Only report duplication in files changed since a git ref |
+| `--changed-since <REF>` | Report only duplication in files changed since a git ref |
 | `--baseline <PATH>` | Compare against a previously saved baseline file |
-| `--save-baseline <PATH>` | Save current duplication as a baseline file. Fallow refuses the save with exit 2 when the destination holds a baseline of another `kind`. A destination with no `kind` gains one on the next save. |
+| `--save-baseline <PATH>` | Save the current duplication as a baseline file. If the destination has a baseline of another `kind`, fallow refuses the save with exit 2. A destination with no `kind` gets one on the next save. |
 | `--fail-on-stale-baseline` | Exit 1 when the loaded baseline has any entry that matched no current clone group; see [global flags](/cli/global-flags) |
 
-When a quarter or more of the saved entries match no current clone group, the run warns on stderr and gives the re-save command. A run narrowed by `--changed-since` or `--production` stays silent, because it cannot judge a whole-project baseline. `--workspace`, `--changed-workspaces`, `--diff-file` and a positional path narrow the rendered report only. The comparison, and a re-save, still cover the whole project. The JSON output of an analysis run carries `baseline_staleness` whenever the run loaded a baseline. It holds the counts, `current_findings`, `change_scoped`, the advisory verdict as `warning`, and `gate_trips`. `gate_trips` is this flag's own rule, so a CI integration reads one boolean instead of the rule. `fallow report --from` re-renders a saved envelope, and it carries the object only when that envelope already had it. Read `change_scoped` before you divide the counts, because a narrowed run can report `matched_entries: 0` on a healthy baseline.
+When a quarter or more of the saved entries match no current clone group, the run prints a warning on stderr with the command to save the baseline again. A run narrowed by `--changed-since` or `--production` prints no warning, because it cannot judge a whole-project baseline. `--workspace`, `--changed-workspaces`, `--diff-file` and a positional path narrow only the rendered report. The comparison, and a new save, still cover the whole project.
 
-`scope_reasons` names what narrowed the run, so you do not have to guess which of your inputs is responsible. It is present and not empty exactly when `change_scoped` is true. `dupes` compares before the report filters run, so it reports only the channels that narrow the analysis: `changed-files` for a resolved changed-file set, and `production`. Each command reports what it can see, so the names differ per command. Read the set as open.
+When the run loaded a baseline, the JSON output of an analysis run has a `baseline_staleness` object. It contains:
 
-A run can load a baseline with entries and use only `--changed-since`. Such a run also gains a `recheck-baseline` entry in `next_steps[]` with the unscoped command. That command re-reads the baseline and reports. It never re-saves the baseline. A run in production mode gains no entry. Production mode resolves from config and from the environment as well as from a flag. The command in the entry would then be just as narrow.
+- the counts
+- `current_findings`
+- `change_scoped`
+- the advisory result as `warning`
+- `gate_trips`, which applies the rule of `--fail-on-stale-baseline`, so a CI integration reads one boolean and does not need to know the rule
 
-Each command writes its own baseline format, and a saved baseline names that format. Every file `--save-baseline` writes carries a top-level `kind` of `dead-code`, `dupes` or `health`. A baseline that an earlier release saved carries no `kind` and still loads. For such a file the keys it carries decide the format.
+`fallow report --from` renders a saved envelope again, and it includes the object only when that envelope already had it. Read `change_scoped` before you divide the counts: a narrowed run can report `matched_entries: 0` on a healthy baseline.
 
-`fallow dupes --baseline` loads a baseline of another kind as zero clone groups, so no entry stays unmatched. Such a run warns on stderr, with or without `--quiet`, and names both kinds and the path. It reports `baseline_staleness.unrecognised_format: true` and suppresses nothing. The member is present only when it is true, and an absent member means false. Read the member rather than `baseline_entries == 0`, because a baseline from a project with no duplication is correctly empty. The baseline gate trips on such a file, so `--fail-on-stale-baseline` exits 1 there. A run that armed no gate keeps its exit code.
+`scope_reasons` names what narrowed the run, so you do not have to guess which input caused it. It is present and not empty exactly when `change_scoped` is true. `dupes` compares before the report filters run, so it reports only the inputs that narrow the analysis: `changed-files` for a resolved changed-file set, and `production`. Each command reports what it can see, so the names differ per command. Expect new names in the set.
+
+A run can load a baseline with entries and use only `--changed-since`. Such a run also adds a `recheck-baseline` entry to `next_steps[]` with the unscoped command. That command reads the baseline again and reports. It never saves the baseline again. A run in production mode adds no entry. Production mode can come from the config and the environment as well as from a flag, so the command in the entry would be just as narrow.
+
+Each command writes its own baseline format, and a saved baseline names that format. Every file that `--save-baseline` writes has a top-level `kind` of `dead-code`, `dupes` or `health`. A baseline from an earlier release has no `kind` and still loads. For such a file, its keys decide the format.
+
+`fallow dupes --baseline` loads a baseline of another kind as zero clone groups, so no entry stays unmatched. Such a run prints a warning on stderr, with or without `--quiet`, that names both kinds and the path. It reports `baseline_staleness.unrecognised_format: true` and suppresses nothing. The field is present only when it is true. An absent field means false. Read this field and not `baseline_entries == 0`, because a baseline from a project with no duplication is correctly empty. The baseline gate trips on such a file, so `--fail-on-stale-baseline` exits 1. A run with no gate turned on keeps its exit code.
 
 #### Token cache
 
-For projects with at least `duplicates.minCorpusSizeForTokenCache` source files (default `5000`), `fallow dupes` keeps a per-project tokenized-source cache under `<root>/.fallow/cache/dupes-tokens-vN/` so warm runs skip re-tokenizing unchanged files. The cache writes a sibling `.gitignore` containing `*` on first save, so its contents stay out of `git status`. Pass `--no-cache` to disable the cache for one run, or set a higher `minCorpusSizeForTokenCache` to keep it disabled even on larger projects. Below the threshold the cache stays off because the load/save overhead exceeds the tokenize savings on small corpora.
+On large projects, `fallow dupes` caches tokenized source, so later runs do not tokenize unchanged files again. The cache is on for projects with at least `duplicates.minCorpusSizeForTokenCache` source files (default `5000`). It is stored per project under `<root>/.fallow/cache/dupes-tokens-vN/`. On the first save, the cache writes a `.gitignore` file with `*` next to it, so `git status` does not show its contents.
 
-When `--changed-since` is set on a project at or above `duplicates.minCorpusSizeForShingleFilter` files (default `1024`), the detector additionally drops unchanged files whose k-token shingles do not overlap any changed file before building the suffix array. Both knobs are scoped to `[duplicates]` in `.fallowrc.json` / `.fallowrc.jsonc` / `fallow.toml` / `.fallow.toml`.
+- To disable the cache for one run, pass `--no-cache`.
+- To keep the cache off on larger projects, set a higher `minCorpusSizeForTokenCache`.
+
+Below the threshold, the cache stays off: on small projects, loading and saving the cache costs more time than it saves.
+
+With `--changed-since`, on a project with at least `duplicates.minCorpusSizeForShingleFilter` files (default `1024`), fallow also drops some unchanged files before it builds the suffix array. It drops each unchanged file whose k-token shingles do not overlap any changed file. You set both options in the `[duplicates]` section of `.fallowrc.json`, `.fallowrc.jsonc`, `fallow.toml`, or `.fallow.toml`.
 
 #### Default generated-output ignores
 
-`fallow dupes` skips common framework output by default: `.next`, `.nuxt`, `.svelte-kit`, `.turbo`, `.parcel-cache`, `.vite`, `.cache`, `out`, and `storybook-static`. These defaults merge with `duplicates.ignore`; they do not replace your configured ignores.
+By default, `fallow dupes` skips common framework output: `.next`, `.nuxt`, `.svelte-kit`, `.turbo`, `.parcel-cache`, `.vite`, `.cache`, `out`, and `storybook-static`. Fallow adds these defaults to `duplicates.ignore`. They do not replace your configured ignores.
 
-Test and mock files are also ignored by default: `*.test.*`, `*.spec.*`, `__tests__/`, and `__mocks__/` paths are skipped, since intentionally repetitive test setup is a common source of first-run noise on hand-coded projects. This is part of the same `ignoreDefaults` set as the generated-output ignores above.
+By default, fallow also skips test and mock files: `*.test.*`, `*.spec.*`, `__tests__/`, and `__mocks__/` paths. Test setup is often repetitive on purpose, and it causes much noise on the first run of a hand-coded project. These patterns are part of the same `ignoreDefaults` set as the generated-output ignores.
 
 ```jsonc
 {
@@ -81,11 +96,11 @@ Test and mock files are also ignored by default: `*.test.*`, `*.spec.*`, `__test
 }
 ```
 
-Set `ignoreDefaults` to `false` to opt out and use only your `duplicates.ignore` list.
+To opt out and use only your `duplicates.ignore` list, set `ignoreDefaults` to `false`.
 
 #### Reviewed clone groups
 
-Add an intentional clone group to `duplicates.ignoredClones` without hiding other duplication findings:
+To accept one clone group and keep all other duplication findings, add the group to `duplicates.ignoredClones`:
 
 ```jsonc
 {
@@ -95,30 +110,35 @@ Add an intentional clone group to `duplicates.ignoredClones` without hiding othe
 }
 ```
 
-The key is `<fingerprint>:<instance_count>`. Copy the fingerprint from the human listing or `clone_groups[].fingerprint` in JSON. Token changes and new occurrences make the group reportable again, while formatting-only edits keep the same fingerprint.
+The key is `<fingerprint>:<instance_count>`. Copy the fingerprint from the human listing or from `clone_groups[].fingerprint` in JSON. When the tokens change or a new occurrence appears, fallow reports the group again. An edit that changes only the formatting keeps the same fingerprint.
 
-Collision handles use `dup:<16hex>-rN`; ordinary short and widened handles are unchanged. Older `dup:<16hex>-N` handles no longer select or suppress a group. Re-run `fallow dupes` and review the reported group before replacing a saved key, rather than inserting `r` into the old handle. Upgrade all runners before adding `-rN` keys to a shared `ignoredClones` configuration. See [migrating collision handles](/analysis/duplication#migrating-collision-handles) for baseline behavior.
+Collision handles use `dup:<16hex>-rN`. Ordinary short and widened handles do not change. Older `dup:<16hex>-N` handles no longer select or suppress a group.
+
+- To replace a saved key, run `fallow dupes` again and review the reported group. Do not insert `r` into the old handle.
+- Upgrade all runners before you add `-rN` keys to a shared `ignoredClones` configuration.
+
+For the baseline behavior, see [migrating collision handles](/analysis/duplication#migrating-collision-handles).
 
 ### Monorepo scoping
 
-Both flags retain only clone groups where at least one instance is under a selected workspace root. The full cross-workspace index is still built; reported groups and the `duplication_percentage` stat are recomputed from the scoped slice.
+Both flags keep only the clone groups with at least one instance under a selected workspace root. Fallow still builds the full cross-workspace index. It then computes the reported groups and the `duplication_percentage` stat again from the scoped part.
 
 | Flag | Description |
 |:-----|:------------|
-| `-w, --workspace <PATTERNS>` | Scope output to one or more workspaces. Supports exact package names, globs (`apps/*`, `@scope/*`) matched against both the package name and the workspace path, and `!`-prefixed negation. Comma-separated values or repeated flag. |
-| `--changed-workspaces <REF>` | Git-derived monorepo CI scoping: scope to workspaces containing any file changed since `REF` (e.g. `origin/main`). Mutually exclusive with `--workspace`. Missing ref is a hard error (exit 2), not silent full-scope fallback. |
+| `-w, --workspace <PATTERNS>` | Scope output to one or more workspaces. Accepts exact package names, globs (`apps/*`, `@scope/*`) matched against the package name and the workspace path, and `!`-prefixed negation. Pass comma-separated values or repeat the flag. |
+| `--changed-workspaces <REF>` | Monorepo CI scoping from git: scope to the workspaces that contain a file changed since `REF` (for example, `origin/main`). Cannot be combined with `--workspace`. A missing ref is a hard error (exit 2). Fallow does not fall back to the full scope. |
 
 ### Debugging
 
 | Flag | Description |
 |:-----|:------------|
-| `--trace <FILE:LINE \| dup:<fp>>` | Deep-dive clones. `FILE:LINE` shows all clones at a source location; `dup:<id>` deep-dives a clone group by the stable fingerprint shown in the listing (and on `clone_groups[].fingerprint` in JSON). Fingerprints are usually `dup:<8hex>` and widen only on rare report collisions. The trace shows each group's fingerprint, an extract-function suggestion with estimated savings, and a best-effort proposed name. |
-| `--performance` | Show pipeline timing breakdown |
+| `--trace <FILE:LINE \| dup:<fp>>` | Show clone details. `FILE:LINE` shows all clones at a source location. `dup:<id>` shows one clone group by the stable fingerprint from the listing (and from `clone_groups[].fingerprint` in JSON). Fingerprints are usually `dup:<8hex>`, and become longer only on rare report collisions. The trace shows the fingerprint of each group, an extract-function suggestion with estimated savings, and a best-effort proposed name. |
+| `--performance` | Show the time of each pipeline stage |
 
 ## Detection modes
 
 <Accordion title="Detection mode details">
-  Each mode progressively normalizes more syntax before comparing, trading precision for recall.
+  Each mode normalizes more syntax than the previous one before it compares code. You find more clones, with less precision.
 
   | Mode | What it normalizes | Best for |
   |:-----|:-------------------|:---------|
@@ -127,21 +147,21 @@ Both flags retain only clone groups where at least one instance is under a selec
   | **weak** | + string literal values | Catching copies with different messages |
   | **semantic** | + variable names and numeric values | Finding structural clones after renaming |
 
-  As you move from `strict` to `semantic`, you'll find more clones but also more potential false positives. Start with `mild` and increase sensitivity as needed.
+  From `strict` to `semantic`, you find more clones and also more possible false positives. Start with `mild`, and increase the sensitivity when you need to.
 </Accordion>
 
 ## Ranking and JSON fields
 
-The default report and `--top` multiply duplicated token count by occurrence count, then apply a spread boost. `spread` is the maximum directory-tree distance between instances. Same-file groups count one spread step per 250 lines of separation. The boost is capped at 15%.
+The default report and `--top` rank clone groups by duplicated token count times occurrence count, with a spread boost. `spread` is the maximum directory-tree distance between instances. In a same-file group, each 250 lines between instances count as one spread step. The boost is at most 15%.
 
-Each JSON `clone_groups[]` entry includes:
+Each JSON `clone_groups[]` entry has these fields:
 
 - `spread`: maximum directory or same-file line distance
 - `similarity`: lowest all-pairs similarity for near-miss groups, omitted for exact groups
 
 ### Shown versus measured
 
-`stats` always describes the corpus the run measured. A presentation cap such as `--top` truncates the arrays without touching it, and four envelope-level counters report the split:
+`stats` always describes the corpus that the run measured. A presentation cap such as `--top` shortens the arrays and does not change `stats`. Four counters on the envelope report the split:
 
 | Field | Meaning |
 |:------|:--------|
@@ -150,18 +170,18 @@ Each JSON `clone_groups[]` entry includes:
 | `clone_families_shown` | Length of `clone_families[]`. |
 | `clone_families_omitted` | Families a presentation cap withheld. `0` on an untruncated run. |
 
-`clone_groups_shown + clone_groups_omitted` always equals `stats.clone_groups`, and the same identity holds for families against `stats.clone_families`. Read `clone_groups_shown` when you want "how many groups are in this array" and `stats.clone_groups` when you want "how many the project has".
+`clone_groups_shown + clone_groups_omitted` always equals `stats.clone_groups`. In the same way, the family counters add up to `stats.clone_families`. Read `clone_groups_shown` for the number of groups in the array. Read `stats.clone_groups` for the number of groups in the project.
 
-Scope filters are different from presentation caps. `--changed-since`, `--workspace`, and a duplication baseline narrow the corpus itself, so `stats` is recomputed against the narrowed corpus and nothing is reported as omitted.
+Scope filters work differently from presentation caps. `--changed-since`, `--workspace`, and a duplication baseline narrow the corpus itself. Fallow computes `stats` again for the narrowed corpus, and reports nothing as omitted.
 
-Human output says the same thing in words. A capped run closes the listing with the counts it withheld:
+The human output gives the same information in words. A capped run ends the listing with the counts that it withheld:
 
 ```text
   ... and 63 more clone groups
   ... and 52 more clone families withheld by the same display limit
 ```
 
-Under `--summary`, the counts block names the corpus totals beside the shown ones, so the four numbers in it can never read as one scope when they are two:
+With `--summary`, the counts block shows the corpus totals next to the shown counts. This makes it clear that the numbers cover two scopes:
 
 ```text
        2  Clone families
@@ -172,7 +192,10 @@ Under `--summary`, the counts block names the corpus totals beside the shown one
   Corpus totals: 65 clone groups, 54 clone families; duplicated lines and rate cover all of it
 ```
 
-The `stats` object can also include `clone_groups_ignored` when `duplicates.ignoredClones` hides groups, and `near_candidates_skipped` when bounded-work limits skip near-miss comparisons. Zero values are omitted.
+The `stats` object can also include these fields. Fallow omits them when they are zero.
+
+- `clone_groups_ignored`, when `duplicates.ignoredClones` hides groups
+- `near_candidates_skipped`, when bounded-work limits skip near-miss comparisons
 
 ## Examples
 
@@ -265,7 +288,7 @@ Duplication (19.4%) exceeds threshold (15%)
 
 ### `mirrored_directories`
 
-When fallow detects directory pairs that are largely duplicated (e.g., a `deno/` mirror of `src/`), the JSON output includes a `mirrored_directories` array:
+When fallow detects two directories that are mostly duplicates (for example, a `deno/` mirror of `src/`), the JSON output includes a `mirrored_directories` array:
 
 ```json
 {
@@ -280,13 +303,13 @@ When fallow detects directory pairs that are largely duplicated (e.g., a `deno/`
 }
 ```
 
-Each entry identifies two directories with significant overlap, the shared filenames, and the total duplicated lines across those files.
+Each entry names the two directories, the shared filenames, and the total duplicated lines in those files.
 
 ## See also
 
 <CardGroup cols={3}>
   <Card title="Duplication analysis" icon="clone" href="/analysis/duplication">
-    How fallow's detection engine works.
+    How fallow detects duplication.
   </Card>
   <Card title="Configuration" icon="gear" href="/configuration/overview">
     Set default modes and thresholds in your config.

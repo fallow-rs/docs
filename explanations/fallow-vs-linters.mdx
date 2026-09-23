@@ -1,35 +1,35 @@
 ---
 title: "Fallow vs linters"
-description: "Why fallow and linters (ESLint, Biome, oxlint) are complementary, not competing. Linters work at the file level. Fallow is codebase intelligence that works at the project graph level. They find fundamentally different things."
+description: "Find the issues your linter cannot see, and decide which tool runs which check in CI. Linters such as ESLint, Biome, and oxlint check one file at a time. Fallow checks the project graph, so you run both."
 keywords: ["fallow vs eslint", "fallow vs biome", "linter vs codebase intelligence", "static analysis", "dead code", "unused exports", "module graph", "CI pipeline"]
 icon: "scale-balanced"
 ---
 
-Linters check files. TypeScript checks types. Fallow checks the codebase.
+Linters check files. TypeScript checks types. Fallow checks the codebase, so it finds project-level issues that a linter misses. Use this page to see which tool finds which issue, and how to run them together in CI.
+
+Each tool answers a different question:
 
 - **Formatter**: "Does this file look consistent?"
 - **Linter**: "Does this file follow the rules?"
 - **Fallow**: "Is this codebase structurally sound?"
 
-What fallow provides is graph-level codebase intelligence: static by default, with an optional runtime intelligence layer (see [static vs runtime](/explanations/static-vs-runtime)) for teams that want to ground dead code decisions in production evidence.
-
-This page explains the conceptual difference, what each tool category finds, and how to combine them in CI.
+Fallow analyzes the module graph of the whole project. The analysis is static by default. Teams that want production evidence for dead code decisions can add the optional runtime intelligence layer (see [static vs runtime](/explanations/static-vs-runtime)).
 
 ## Three pillars of code quality
 
 <CardGroup cols={3}>
   <Card title="Formatter" icon="paintbrush">
-    Prettier, Biome, dprint. Enforces consistent formatting across all files: indentation, quotes, trailing commas. Works on a single file. No understanding of imports or project structure.
+    Prettier, Biome, dprint. Makes formatting consistent in all files, for example indentation, quotes, and trailing commas. Works on one file at a time and does not know about imports or project structure.
   </Card>
   <Card title="Linter" icon="list-check">
-    ESLint, Biome, oxlint. Enforces coding rules and detects local code smells: undefined variables, missing dependencies in `useEffect`, suspicious patterns. Works on a single file, with optional type context from `tsc`.
+    ESLint, Biome, oxlint. Enforces coding rules and finds local code smells, for example undefined variables, missing dependencies in `useEffect`, and suspicious patterns. Works on one file at a time, with optional type context from `tsc`.
   </Card>
   <Card title="Codebase intelligence" icon="diagram-project">
-    Fallow. Finds issues that only exist at the project level: unused files, orphaned exports, circular dependencies, dependency graph violations. Requires building and traversing the full module graph.
+    Fallow. Finds issues that exist only at the project level, for example unused files, orphaned exports, circular dependencies, and dependency graph violations. To find them, fallow builds and walks the full module graph.
   </Card>
 </CardGroup>
 
-The key distinction: **linters read files**. Fallow **builds the import graph** across the entire project and reasons about relationships between modules.
+**Linters read files.** Fallow **builds the import graph** of the whole project and checks the relationships between modules.
 
 ## What each tool finds
 
@@ -50,22 +50,32 @@ The key distinction: **linters read files**. Fallow **builds the import graph** 
 | Per-function cognitive complexity | No | Yes | No | Yes |
 | Complexity + git churn hotspot correlation | No | No | No | Yes |
 
-**\[1\] Unused exports.** `eslint-plugin-import/no-unused-modules` rebuilds the full import graph on every lint run. On projects with 20-30K LOC this adds ~320 seconds to total lint time ([#1487](https://github.com/import-js/eslint-plugin-import/issues/1487)). Produces incorrect results with `import { name as alias }` ([#1339](https://github.com/import-js/eslint-plugin-import/issues/1339)). Does not follow barrel file re-export chains. Neither Biome nor oxlint have an equivalent rule.
+**\[1\] Unused exports.** `eslint-plugin-import/no-unused-modules` rebuilds the full import graph on every lint run. On projects with 20-30K LOC, this adds ~320 seconds to total lint time ([#1487](https://github.com/import-js/eslint-plugin-import/issues/1487)). The rule gives incorrect results with `import { name as alias }` ([#1339](https://github.com/import-js/eslint-plugin-import/issues/1339)), and it does not follow barrel file re-export chains. Biome and oxlint have no equivalent rule.
 
-**\[2\] Circular imports.** ESLint: `eslint-plugin-import/no-cycle` takes 45-305 seconds on large projects with known OOM failures ([#2348](https://github.com/import-js/eslint-plugin-import/issues/2348), [#2076](https://github.com/import-js/eslint-plugin-import/issues/2076)). Teams commonly set `maxDepth: 1` to stay fast, missing longer cycles. Only covers ES `import`, not `require()`. Biome v2: `noImportCycles` is Rust-based and graph-aware, but Biome documents it as computationally expensive. oxlint: `no-cycle` in Rust, faster than the JS version. Fallow: builds and caches the graph once, no depth cap, covers both `import` and `require()`.
+**\[2\] Circular imports.**
 
-**\[3\] Unused vs unlisted deps.** `no-extraneous-dependencies` (ESLint) and `noUndeclaredDependencies` (Biome) catch imports of packages missing from `package.json`. That is the opposite problem. No linter detects packages listed in `package.json` that are never imported. Fallow finds both.
+- ESLint: `eslint-plugin-import/no-cycle` takes 45-305 seconds on large projects and has known OOM failures ([#2348](https://github.com/import-js/eslint-plugin-import/issues/2348), [#2076](https://github.com/import-js/eslint-plugin-import/issues/2076)). Teams often set `maxDepth: 1` to keep it fast, and then miss longer cycles. The rule covers only ES `import`, not `require()`.
+- Biome v2: `noImportCycles` is written in Rust and is graph-aware, but Biome documents it as computationally expensive.
+- oxlint: `no-cycle` is written in Rust and is faster than the JS version.
+- Fallow: builds and caches the graph once, has no depth cap, and covers both `import` and `require()`.
 
-**\[4\] Boundaries.** ESLint: `eslint-plugin-boundaries` enforces import rules between element types with capture groups and templates. `no-restricted-paths` enforces directory-level restrictions but requires enumerating every forbidden pair. Neither follows re-export chains, so a boundary can be bypassed via a barrel file. Biome: `noRestrictedImports` accepts plain string paths only, no globs or patterns. oxlint: no boundary rules. Fallow: [zone presets](/configuration/boundaries) (`bulletproof`, `layered`, `hexagonal`, `feature-sliced`) with re-export chain tracking.
+**\[3\] Unused vs unlisted deps.** `no-extraneous-dependencies` (ESLint) and `noUndeclaredDependencies` (Biome) find imports of packages that are missing from `package.json`. That is the opposite problem. No linter finds packages that `package.json` lists but no file imports. Fallow finds both.
+
+**\[4\] Boundaries.**
+
+- ESLint: `eslint-plugin-boundaries` enforces import rules between element types with capture groups and templates. `no-restricted-paths` enforces directory-level restrictions, but you must list every forbidden pair. Neither rule follows re-export chains, so an import through a barrel file can bypass a boundary.
+- Biome: `noRestrictedImports` accepts plain string paths only. It has no globs or patterns.
+- oxlint: has no boundary rules.
+- Fallow: has [zone presets](/configuration/boundaries) (`bulletproof`, `layered`, `hexagonal`, `feature-sliced`) and follows re-export chains.
 
 ## Detailed comparison
 
 ### Unused exports
 
-Fallow builds a persistent module graph, resolves re-export chains iteratively, and handles TypeScript path aliases.
+Fallow builds a persistent module graph, resolves re-export chains iteratively, and resolves TypeScript path aliases.
 
 <Info>
-If you're building a library, your public API exports are intentionally consumed externally. Mark them with `/** @public */` (or `@internal`, `@beta`, `@alpha`) JSDoc tags or configure your [entry points](/configuration/overview#entry) so fallow doesn't flag them.
+In a library, external code imports your public API exports on purpose. To stop fallow from flagging them, mark them with the `/** @public */` JSDoc tag (or `@internal`, `@beta`, `@alpha`), or configure your [entry points](/configuration/overview#entry).
 </Info>
 
 ```bash
@@ -83,9 +93,9 @@ fallow dead-code --unused-exports
 
 ### Unused files
 
-`no-unused-modules` detects exports with no importers, but does not detect files that are never imported at all. A file with no exports and no importers (an orphaned utility, a deleted component's leftover test file) does not trigger any ESLint rule.
+`no-unused-modules` finds exports with no importers. It does not find files that no file imports. A file with no exports and no importers does not trigger any ESLint rule. Examples are an orphaned utility, or the leftover test file of a deleted component.
 
-Detecting unreachable files requires starting from entry points and walking the full import graph. ESLint has no concept of entry points. It lints files; it does not traverse graphs from roots. Fallow reads entry points from `package.json` fields and framework conventions (Next.js pages, Vite entry, etc.), then marks every file not reachable from those roots.
+To find unreachable files, a tool must start from the entry points and walk the full import graph. ESLint has no concept of entry points. It lints files, and it does not walk a graph from its roots. Fallow reads entry points from `package.json` fields and framework conventions (Next.js pages, Vite entry, etc.). Then it marks every file that those roots do not reach.
 
 ### Circular dependencies
 
@@ -93,11 +103,11 @@ Detecting unreachable files requires starting from entry points and walking the 
 src/auth.ts → src/user.ts → src/permissions.ts → src/auth.ts
 ```
 
-Not all cycles are bugs. Dependency injection frameworks (NestJS, InversifyJS) create intentional cycles. Use `// fallow-ignore-next-line circular-dep` to suppress them, the same way you'd use an ESLint disable comment. No tool automatically distinguishes intentional from accidental cycles.
+Some cycles are not bugs. Dependency injection frameworks (NestJS, InversifyJS) create intentional cycles. To suppress one, use `// fallow-ignore-next-line circular-dependency`, the same way you use an ESLint disable comment. No tool automatically tells an intentional cycle from an accidental one.
 
 ### Architecture boundary violations
 
-Fallow tracks re-export chains when evaluating boundaries. If `shared/index.ts` re-exports a symbol from `core/`, an import of that symbol is attributed to `core/`, not `shared/`, when checking boundary rules. [Zone presets](/configuration/boundaries) (`bulletproof`, `layered`, `hexagonal`, `feature-sliced`) cover common architecture patterns. Zones use glob patterns, and rules are expressed as allowlists ("this zone can only import from these zones") rather than enumerating forbidden paths.
+Fallow follows re-export chains when it checks boundaries. If `shared/index.ts` re-exports a symbol from `core/`, fallow treats an import of that symbol as an import from `core/`, not `shared/`. [Zone presets](/configuration/boundaries) (`bulletproof`, `layered`, `hexagonal`, `feature-sliced`) cover common architecture patterns. Zones use glob patterns. You write rules as allowlists ("this zone can only import from these zones"), so you do not have to list every forbidden path.
 
 ```jsonc
 {
@@ -115,7 +125,7 @@ Fallow tracks re-export chains when evaluating boundaries. If `shared/index.ts` 
 
 ## Recommended CI pipeline
 
-Run all three in parallel. Some linter plugins (`no-cycle`, `no-unused-modules`) overlap with fallow on a subset of issues. If you already have those enabled, fallow covers the same ground faster and adds the issues linters cannot detect (unused files, unused deps, duplication, churn hotspots). If you don't have them enabled, fallow covers everything in one pass:
+Run the formatter, the linter, and fallow in parallel. Some linter plugins (`no-cycle`, `no-unused-modules`) find a subset of the issues that fallow finds. If you already use those plugins, fallow finds the same issues faster. It also finds the issues that linters cannot find: unused files, unused deps, duplication, and churn hotspots. If you do not use those plugins, fallow covers all of these in one pass:
 
 ```yaml
 jobs:
@@ -139,7 +149,7 @@ jobs:
 ```
 
 <Info>
-Fallow's GitHub Action automatically uploads SARIF results to GitHub Code Scanning, giving you inline annotations on PR diffs. Linter results typically appear via separate status checks or linter-review actions. For GitLab CI and other runners, see [CI integration](/integrations/ci).
+The fallow GitHub Action automatically uploads SARIF results to GitHub Code Scanning, so you get inline annotations on PR diffs. Linter results usually show up as separate status checks or linter-review actions. For GitLab CI and other runners, see [CI integration](/integrations/ci).
 </Info>
 
 ## What to use when
@@ -158,11 +168,11 @@ Fallow's GitHub Action automatically uploads SARIF results to GitHub Code Scanni
 | Library export consumed by external consumers | Fallow (configure [entry points](/configuration/overview#entry) or `/** @public */` / `@internal` / `@beta` / `@alpha`) |
 
 <Tip>
-Existing codebase already has unused exports and files? Use `--save-baseline` to snapshot current issues, then run CI with `--baseline` to fail only on regressions. See the [CI integration guide](/integrations/ci) for incremental adoption.
+If your codebase already has unused exports and files, use `--save-baseline` to save the current issues. Then run CI with `--baseline` so that it fails only on new issues. For incremental adoption, see the [CI integration guide](/integrations/ci).
 </Tip>
 
 <Info>
-For a comparison with knip, which operates at the same graph level as fallow, see [Fallow vs Knip](/migration/comparison).
+Knip also works at the project graph level. For a comparison, see [Fallow vs Knip](/migration/comparison).
 </Info>
 
 <CardGroup cols={2}>

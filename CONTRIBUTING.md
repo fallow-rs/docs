@@ -2,7 +2,7 @@
 
 ## Quick edits
 
-Every page on [docs.fallow.tools](https://docs.fallow.tools) has "Suggest edits" and "Raise issue" links at the bottom. Use those for quick fixes.
+For a quick fix, use the "Suggest edits" or "Raise issue" link at the bottom of each page on [docs.fallow.tools](https://docs.fallow.tools).
 
 ## Local development
 
@@ -14,7 +14,7 @@ git config core.hooksPath .githooks    # refreshes the content manifest on commi
 npm run docs:dev
 ```
 
-Preview at `http://localhost:3000`.
+The preview runs at `http://localhost:3000`.
 
 ## Before submitting
 
@@ -22,21 +22,27 @@ Preview at `http://localhost:3000`.
 npm run check
 ```
 
-With the hook enabled, `public-content-manifest.json` is refreshed and staged
-for you whenever a commit changes public content, so `npm run content:manifest`
-is only needed if you skipped the hook setup above. The manifest is fully
-derived from the content, so the hook can never make an editorial decision on
-your behalf.
+When a commit changes public content, the hook refreshes and stages
+`public-content-manifest.json` for you. You need `npm run content:manifest` only
+if you skipped the hook setup above. The hook derives the manifest from the
+content only, so it never makes an editorial decision for you.
 
-Review the manifest diff before submitting. It is the exact public content set.
-Do not add private implementation notes, operations material, security
-runbooks, roadmap details, or content copied from a private repository. See
-[PUBLICATION.md](PUBLICATION.md) for ownership and synchronization rules.
+Before you submit, review the manifest diff. It lists exactly the content that
+becomes public. Do not add any of this content:
+
+- private implementation notes
+- operations material
+- security runbooks
+- roadmap details
+- content copied from a private repository
+
+[PUBLICATION.md](PUBLICATION.md) has the ownership and synchronization rules.
 
 ## Writing guidelines
 
-Follow the writing conventions in [AGENTS.md](AGENTS.md#writing-conventions):
-tone, terminology, volatile facts, page structure, and Mintlify components.
+Follow the [writing conventions in AGENTS.md](AGENTS.md#writing-conventions).
+They cover tone, terminology, volatile facts, page structure, and Mintlify
+components.
 
 ## Content placement
 
@@ -53,5 +59,5 @@ tone, terminology, volatile facts, page structure, and Mintlify components.
 | `migration/` | From knip and jscpd |
 | `images/`, `logo/` | Public visual assets |
 
-Add every user-facing page to `docs.json`. That file is the source of truth for
-navigation order, while this table defines where new content belongs.
+Add every user-facing page to `docs.json`. `docs.json` is the source of truth
+for navigation order. This table defines where new content belongs.

@@ -1,105 +1,167 @@
 ---
 title: "React & Next.js analysis"
-description: "Fallow's cross-file React and Next.js analysis: React Server Components directive rules, App Router route checks, component health signals, and what counts as a used component or server action."
+description: "Catch React and Next.js bugs that per-file linters cannot see, before the build: wrong client and server directives, colliding routes, dead server actions, and unused or drilled props."
 keywords: ["React", "Next.js", "React Server Components", "App Router", "use client", "use server", "server actions", "route collision", "prop drilling", "component props", "JSX", "Remix", "TanStack Router", "React Router"]
 icon: "atom"
 ---
 
-React is fallow's largest-ecosystem surface, and Next.js is its most deeply parsed framework. Because fallow builds a whole-project module graph instead of linting one file at a time, it catches React and Next.js problems that per-file tools (`eslint-plugin-react`, `eslint-plugin-next`, `vue-tsc`-style checkers) structurally cannot see: a `"use client"` file exporting a server-only name, two route files that resolve to the same URL, a prop drilled through three components, a server action wired to nothing.
+Fallow finds React and Next.js problems that per-file tools (`eslint-plugin-react`, `eslint-plugin-next`, `vue-tsc`-style checkers) cannot see, often before the build fails. It builds a module graph of the whole project, so it can find:
 
-This page consolidates the React and Next.js rules. Each rule has a fuller definition (with severities, suppression syntax, and abstain heuristics) on the [dead-code explanation page](/explanations/dead-code); this page is the React-focused index and cross-links into it.
+- A `"use client"` file that exports a server-only name.
+- Two route files that resolve to the same URL.
+- A prop drilled through three components.
+- A server action that no code uses.
+
+React is the largest ecosystem that fallow supports, and Next.js is the framework that fallow parses in the most depth.
+
+This page is the index of the React and Next.js rules. The [dead-code explanation page](/explanations/dead-code) has the full definition of each rule, with severities, suppression syntax, and the cases where the rule abstains.
 
 <Info>
-The Next.js and React rules are dependency-gated. Each one runs only when the relevant package (`next`, or `react` / `react-dom` / `preact`) is a declared dependency, so they never fire on an unrelated project.
+The Next.js and React rules are gated on dependencies. Each rule runs only when the relevant package (`next`, or `react`, `react-dom`, or `preact`) is a declared dependency. They never fire on an unrelated project.
 </Info>
 
 ## React Server Components directive rules
 
-These four rules check the `"use client"` / `"use server"` boundary across the whole project, in the same pass as the rest of dead-code analysis, before a build runs. They run only when `next` is a declared dependency.
+These four rules check the boundary between `"use client"` and `"use server"` across the whole project. They run in the same pass as the rest of dead-code analysis, before a build runs, and only when `next` is a declared dependency.
 
 ### invalid-client-export
 
-A file carrying `"use client"` that also exports a server-only or route-segment-config name (`metadata`, `generateMetadata`, `viewport`, `generateStaticParams`, `dynamic`, `revalidate`, `runtime`, the Pages Router data functions, a route HTTP method handler, and the rest of the reserved set). Next.js rejects these at build time. Fallow catches it statically, and the component's `default` export is never flagged. Default `warn`.
+A file with `"use client"` that also exports a server-only or route-segment-config name. Examples are `metadata`, `generateMetadata`, `viewport`, `generateStaticParams`, `dynamic`, `revalidate`, `runtime`, the Pages Router data functions, a route HTTP method handler, and the rest of the reserved set.
+
+Next.js rejects these files at build time. Fallow finds them statically and never flags the `default` export of the component. Default `warn`.
 
 See [invalid client exports](/explanations/dead-code#invalid-client-exports).
 
 ### mixed-client-server-barrel
 
-A barrel file (one with at least one `export ... from` re-export) that re-exports both a `"use client"` module and a server-only module. Importing any single name from such a barrel can drag the other origin's directive context across the React Server Components boundary, which surfaces as confusing build or hydration errors far from the barrel. This is a cross-file shape that a single-file linter cannot reason about. The check classifies only direct re-export origins, skips type-only re-exports, and never flags a barrel that merely mixes a client module with an ordinary utility. Default `warn`.
+A barrel file (a file with at least one `export ... from` re-export) that re-exports both a `"use client"` module and a server-only module. An import of one name from this barrel can pull the directive context of the other module across the React Server Components boundary. The result is a confusing build or hydration error far from the barrel. A single-file linter cannot detect this pattern, because it spans files.
+
+The check classifies only direct re-export origins and skips type-only re-exports. It never flags a barrel that only mixes a client module with an ordinary utility. Default `warn`.
 
 See [mixed client/server barrels](/explanations/dead-code#mixed-client-server-barrels).
 
 ### misplaced-directive
 
-A `"use client"` or `"use server"` directive written below an import (or any other statement) instead of in the file's leading prologue. Once any statement precedes it, the bundler treats the string as an ordinary expression and silently ignores it, so a file you intended as a client component is treated as a server module. Nothing errors, which is what makes it dangerous. The fix is always to move the directive above every `import`. Default `warn`.
+A `"use client"` or `"use server"` directive below an import (or any other statement), not in the prologue at the top of the file. When a statement comes before the directive, the bundler treats the string as an ordinary expression and ignores it without a message. A file that you wrote as a client component then becomes a server module, and nothing reports an error. To fix it, move the directive above every `import`. Default `warn`.
 
 See [misplaced directives](/explanations/dead-code#misplaced-directives).
 
 ### unused-server-action
 
-A Next.js Server Action (an export of a `"use server"` file) that no code in the project references: no import-and-call, no `action={fn}` binding, no `<form action={fn}>`. This is the cross-graph "exported but wired to nothing" direction where dead actions accumulate as a page is refactored, and `eslint-plugin-next` cannot see it because it is single-file. It is a more specific re-classification of `unused-export` for `"use server"` files, reusing fallow's whole-project reference graph, so prop forwarding and wrapped action factories (`withAuditLogging(...)`) are credited as real uses. Default `warn`.
+A Next.js Server Action (an export of a `"use server"` file) that no code in the project references. There is no import-and-call, no `action={fn}` binding, and no `<form action={fn}>`. Dead actions of this kind build up when you refactor a page. `eslint-plugin-next` checks one file at a time, so it cannot see them.
+
+The rule is a more specific version of `unused-export` for `"use server"` files. It uses the fallow reference graph for the whole project, so prop forwarding and wrapped action factories (`withAuditLogging(...)`) count as real uses. Default `warn`.
 
 <Note>
-Because this reclassifies a subset of `unused-export` (default `error`) into `unused-server-action` (default `warn`), a dead action that previously failed CI as `unused-export` now reports as a warning. Set `unused-server-action: "error"` to keep failing on it, and re-save any baseline snapshot once.
+This rule moves some findings from `unused-export` (default `error`) to `unused-server-action` (default `warn`). A dead action that failed CI as `unused-export` before is now a warning. To keep CI failing on it, set `unused-server-action: "error"`, and save any baseline snapshot again once.
 </Note>
 
 See [unused server actions](/explanations/dead-code#unused-server-actions).
 
 ## Next.js App Router route rules
 
-Both route rules are pure path arithmetic over your App Router tree (so there is no heuristic to misfire), are scoped per app-root using your workspace package roots (so a monorepo with several independent Next apps sharing a path is not flagged), and run only when `next` is a declared dependency. Route groups `(name)` are transparent to the URL, parallel slots `@name` fork the position, and intercepting markers / private `_folders` are excluded.
+Both route rules only compute paths over your App Router tree, so no heuristic can misfire. They run only when `next` is a declared dependency.
+
+The rules check each app root separately, based on your workspace package roots. A monorepo with several independent Next apps that share a path is not flagged. Fallow treats the tree as follows:
+
+- Route groups `(name)` do not change the URL.
+- Parallel slots `@name` fork the position.
+- Intercepting markers and private `_folders` are excluded.
 
 ### route-collision
 
-Two or more App Router route files (a `page` or a `route` handler) that resolve to the same URL within one app-root. Because route groups and parallel slots do not change the URL, `app/(marketing)/about/page.tsx` and `app/(shop)/about/page.tsx` both own `/about`. Next.js fails the build here, but it names only one colliding file and aborts; fallow surfaces every colliding file at once, before the build. Default `error`, because it mirrors a `next build` failure: a project hitting it was already red.
+Two or more App Router route files (a `page` or a `route` handler) that resolve to the same URL in one app root. Route groups and parallel slots do not change the URL, so `app/(marketing)/about/page.tsx` and `app/(shop)/about/page.tsx` both own `/about`.
+
+Next.js fails the build here, but it names only one colliding file and stops. Fallow lists every colliding file at once, before the build. Default `error`, because the rule matches a `next build` failure: a project with this problem already fails.
 
 See [route collisions](/explanations/dead-code#route-collisions).
 
 ### dynamic-segment-name-conflict
 
-Two or more sibling dynamic route segments at the same tree position using different param spellings (`[id]` vs `[slug]`, or a catch-all `[...x]` vs an optional catch-all `[[...x]]`). Next.js throws "You cannot use different slug names for the same dynamic path" at runtime when the position is hit.
+Two or more sibling dynamic route segments at the same tree position with different param names (`[id]` vs `[slug]`, or a catch-all `[...x]` vs an optional catch-all `[[...x]]`). When a request reaches that position, Next.js throws "You cannot use different slug names for the same dynamic path" at runtime.
 
 <Warning>
-`next build` does NOT catch this. The build succeeds and CI stays green, then the route crashes the first time it is requested. Fallow's static catch is the only gate that fails on it, which is why it defaults to `error`.
+`next build` does NOT catch this. The build succeeds and CI passes, and then the route crashes on the first request. The fallow static check is the only gate that fails on it, so it defaults to `error`.
 </Warning>
 
 See [dynamic segment name conflicts](/explanations/dead-code#dynamic-segment-name-conflicts).
 
 ## React component health
 
-The component-health signals look at React and Preact components as a graph: how many places render a component, whether a prop is dead inside a live component, and whether a component is pure structural indirection. Three of these are opt-in and default to `off`; the prop and fan-in signals are on by default.
+The component-health signals treat React and Preact components as a graph. They show how many places render a component, whether a live component has a dead prop, and whether a component only adds a layer with no function. Three signals are opt-in and default to `off`. The prop and fan-in signals are on by default.
 
 ### Component render fan-in
 
-Fan-in is the number of files that import a given file, and it doubles as a component blast-radius metric: a component rendered in many places is high fan-in, so any change to it ripples widely. Fallow already computes fan-in for every file as part of its health analysis, surfaces it in hotspot and refactoring-target output, and feeds high fan-in into the coupling penalty in the health score.
+Fan-in is the number of files that import a given file. For a component, it also measures blast radius. A component that many places render has high fan-in, so a change to it affects many files.
 
-See [fan-in / fan-out](/explanations/health) on the health page for how the metric is computed and where the effective threshold comes from.
+The fallow health analysis computes fan-in for every file. It shows fan-in in the hotspot and refactoring-target output, and adds high fan-in to the coupling penalty in the health score.
+
+The health page explains how fallow computes [fan-in / fan-out](/explanations/health) and where the effective threshold comes from.
 
 ### unused-component-prop (React arm)
 
-A prop that is destructured from a component's first parameter and read nowhere in the component body. This is the in-component dead-input direction on a live component: the component is rendered, but one of its declared props is wired to nothing. `unused-component-prop` shares one rule key across frameworks; the React / Preact arm is dep-gated on `react` / `react-dom` / `next` / `preact`, covers inline-destructured literal props, and stays false-positive-safe by abstaining on rest spread (`{...rest}`), props forwarded by spread, props passed wholesale to a hook, a `forwardRef` / `memo` component whose props come from an imported interface, and exported public-API component props. Default `warn`.
+A prop that the component destructures from its first parameter and never reads in its body. The component is live and rendered, but it does not use one of its declared props.
+
+`unused-component-prop` is one rule key for all frameworks. The React and Preact part runs only when `react`, `react-dom`, `next`, or `preact` is a dependency. It covers inline-destructured literal props. To avoid false positives, it abstains on:
+
+- Rest spread (`{...rest}`).
+- Props forwarded by spread.
+- Props passed as a whole object to a hook.
+- A `forwardRef` or `memo` component whose props come from an imported interface.
+- Exported public-API component props.
+
+Default `warn`.
 
 See [unused component props](/explanations/dead-code#unused-component-props).
 
 ### prop-drilling (opt-in, default off)
 
-A prop forwarded unused through two or more intermediate components before a component finally consumes it. "Forwarded unused" means an intermediate reads the prop only as the root of a child-JSX attribute value (`<Child userName={user.name} />` passes `user` straight through), never substantively. This is a cross-file graph signal that per-file linters structurally cannot see. When enabled it reports one located chain per drilled prop (the owning source, each pass-through hop, and the consumer, each with file, line, and component name) and abstains whenever it cannot prove a clean pass-through: any `{...props}` / `{...rest}` spread, a `cloneElement`, a component passed as a prop / render prop / function-as-children, a matching context `*.Provider` in the subtree, or any dynamic hop. Off by default.
+A prop that passes unused through two or more intermediate components before a component uses it. "Passes unused" means that an intermediate component reads the prop only as the root of a child JSX attribute value, and never uses it in another way. For example, `<Child userName={user.name} />` passes `user` straight through. Per-file linters cannot see this signal, because it spans files.
+
+When you enable the rule, it reports one chain for each drilled prop. The chain has the owning source, each pass-through hop, and the consumer, each with file, line, and component name. The rule abstains when it cannot prove a clean pass-through:
+
+- A `{...props}` or `{...rest}` spread.
+- A `cloneElement`.
+- A component passed as a prop, a render prop, or function-as-children.
+- A matching context `*.Provider` in the subtree.
+- A dynamic hop.
+
+Off by default.
 
 <Note>
-Enable with `prop-drilling: "warn"` (or `"error"`) under `rules`. When enabled it also contributes a small, capped penalty to the health score (one point per chain, capped at five); with the rule off the health score is unchanged.
+To enable it, set `prop-drilling: "warn"` (or `"error"`) under `rules`. The enabled rule also adds a small penalty to the health score: one point for each chain, with a maximum of five. When the rule is off, the health score does not change.
 </Note>
 
 See [prop drilling](/explanations/dead-code#prop-drilling).
 
 ### thin-wrapper (opt-in, default off)
 
-A component whose entire body is `return <Child {...props} />`: it renders a single child, forwards all props through a spread, and adds no markup, no hooks, and no logic of its own. It is pure structural indirection that every call site could render directly. It abstains on intentional indirection: a `forwardRef` / `memo` wrapper, an exported (public-API) component, a context-provider wrapper, a `cloneElement`, a render-prop / function-as-children, or any wrapper whose body is more than the single spread-forwarded child. Off by default; enable with `thin-wrapper: "warn"` (or `"error"`) under `rules`.
+A component whose entire body is `return <Child {...props} />`. It renders a single child, forwards all props through a spread, and adds no markup, hooks, or logic of its own. Every call site could render the child directly.
+
+The rule abstains on intentional wrappers:
+
+- A `forwardRef` or `memo` wrapper.
+- An exported (public-API) component.
+- A context-provider wrapper.
+- A `cloneElement`.
+- A render prop or function-as-children.
+- A wrapper whose body is more than the single spread-forwarded child.
+
+Off by default. To enable it, set `thin-wrapper: "warn"` (or `"error"`) under `rules`.
 
 See [thin wrapper](/explanations/dead-code#thin-wrapper).
 
 ### duplicate-prop-shape (opt-in, default off)
 
-Three or more components, across two or more files, that declare an identical set of prop names, suggesting a shared `Props` type (or a base component) should be extracted. It stays noise-free by requiring an exact full-set match, a minimum of four significant prop names after stripping ubiquitous DOM-passthrough names (`id`, `className`, `children`, `style`, ...), and at least three components in at least two files, so two buttons that merely share `{label, onClick}` are never grouped. Off by default; enable with `duplicate-prop-shape: "warn"` (or `"error"`) under `rules`.
+Three or more components, in two or more files, that declare an identical set of prop names. This suggests that you extract a shared `Props` type (or a base component).
+
+To avoid noise, the rule requires all of these:
+
+- An exact match of the full set.
+- At least four significant prop names, after it removes common DOM-passthrough names (`id`, `className`, `children`, `style`, ...).
+- At least three components in at least two files.
+
+Two buttons that only share `{label, onClick}` are never grouped. Off by default. To enable it, set `duplicate-prop-shape: "warn"` (or `"error"`) under `rules`.
 
 See [duplicate prop shape](/explanations/dead-code#duplicate-prop-shape).
 
@@ -119,24 +181,24 @@ See [duplicate prop shape](/explanations/dead-code#duplicate-prop-shape).
 
 ## Reachability: what counts as used
 
-A correctly wired-up component or server action is never flagged, because fallow's framework plugins credit the conventions each router uses to reach code. Coverage includes:
+Fallow never flags a component or server action that is used correctly. The fallow framework plugins know the conventions that each router uses to reach code, and count them as uses. They cover:
 
-- **Next.js App Router**: convention exports (`page`, `layout`, `loading`, `error`, `route`, and the metadata files), route segment config, `middleware`, `proxy`, and `instrumentation` are credited as entry points.
-- **Next.js Pages Router**: any file under `pages/`, plus the data functions Next consumes by name (`getStaticProps`, `getServerSideProps`, `getStaticPaths`).
+- **Next.js App Router**: convention exports (`page`, `layout`, `loading`, `error`, `route`, and the metadata files), route segment config, `middleware`, `proxy`, and `instrumentation` count as entry points.
+- **Next.js Pages Router**: any file under `pages/`, and the data functions that Next calls by name (`getStaticProps`, `getServerSideProps`, `getStaticPaths`).
 - **Server-action bindings**: `action={fn}`, `<form action={fn}>`, plain import-and-call, component-prop forwarding, and wrapped action factories all count as real uses of a `"use server"` export.
-- **React Router** (`react-router`, `@react-router/dev`), **Remix** (`@remix-run/dev`), and **TanStack Router** (`@tanstack/react-router`, `@tanstack/start`, `@tanstack/react-start`): their route conventions are recognized so route modules are not flagged as unused.
+- **React Router** (`react-router`, `@react-router/dev`), **Remix** (`@remix-run/dev`), and **TanStack Router** (`@tanstack/react-router`, `@tanstack/start`, `@tanstack/react-start`): fallow recognizes their route conventions, so it does not flag route modules as unused.
 
-Because these conventions are credited automatically, the component and server-action rules only fire on genuinely orphaned code. See [built-in plugins](/frameworks/built-in) for the full enabler-package list and what each plugin extracts, and run `fallow list --plugins` to see which are active in your project.
+Fallow counts these conventions automatically, so the component and server-action rules fire only on code that nothing uses. [Built-in plugins](/frameworks/built-in) lists the enabler packages and what each plugin extracts. To see the active plugins in your project, run `fallow list --plugins`.
 
 <Info>
-Don't see a convention credited? Add the file to [`entry`](/configuration/overview) or write a [custom plugin](/frameworks/custom-plugins). Verify any specific finding with `fallow dead-code --trace <file>:<symbol>` before acting on it.
+If fallow does not count a convention, add the file to [`entry`](/configuration/overview) or write a [custom plugin](/frameworks/custom-plugins). Before you act on a finding, verify it with `fallow dead-code --trace <file>:<symbol>`.
 </Info>
 
 ## See also
 
 <CardGroup cols={2}>
   <Card title="Dead code explained" icon="skull-crossbones" href="/explanations/dead-code">
-    Full definitions, severities, and suppression syntax for every rule above.
+    Definitions, severities, and suppression syntax for every rule on this page.
   </Card>
   <Card title="Rules & severity" icon="scale-balanced" href="/configuration/rules">
     Set each rule to error, warn, or off, and enable the opt-in component signals.

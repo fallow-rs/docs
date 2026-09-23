@@ -1,14 +1,14 @@
 ---
 title: "Custom plugins"
-description: "Create custom fallow plugins for internal frameworks using declarative JSON or TOML files. Define entry points, config files, and used exports."
+description: "Stop false positives from an internal framework or a tool that fallow does not know. A custom plugin is a JSON or TOML file that declares entry points, config files, and used exports."
 keywords: ["custom plugins", "external plugins", "framework support", "entry points", "plugin schema"]
 icon: "screwdriver-wrench"
 ---
 
-Create a declarative plugin file for any internal framework or tool fallow doesn't cover. Plugins are JSON or TOML files that tell fallow about your framework's conventions.
+When fallow does not know an internal framework or tool, it can report the files and exports that the framework uses as unused. A custom plugin fixes this. It is a declarative JSON or TOML file that tells fallow the conventions of your framework.
 
 <Tip>
-Start with JSONC format for `$schema` support and IDE autocomplete.
+Start with the JSONC format. It supports `$schema` and IDE autocomplete.
 </Tip>
 
 ## Quick start
@@ -31,10 +31,10 @@ Start with JSONC format for `$schema` support and IDE autocomplete.
     }
     ```
 
-    Fallow auto-discovers `fallow-plugin-*` files in your project root.
+    Fallow discovers `fallow-plugin-*` files in your project root automatically.
   </Step>
   <Step title="Configure the fields">
-    Customize the plugin fields for your framework. Only `name` is required. Add the fields relevant to your use case.
+    Set the plugin fields for your framework. Only `name` is required. Add the fields that you need.
 
     ### Required
 
@@ -48,23 +48,28 @@ Start with JSONC format for `$schema` support and IDE autocomplete.
     |:------|:-----|:------------|
     | `enablers` | string[] | Package names that activate this plugin |
     | `entryPoints` | string[] | Glob patterns for entry point files |
-    | `configPatterns` | string[] | Glob patterns for config files (always-used) |
-    | `alwaysUsed` | string[] | Files always considered used |
-    | `toolingDependencies` | string[] | Packages used via CLI, not imports |
-    | `detection` | object | Rich activation logic (see below) |
-    | `usedExports` | object[] | Exports always considered used |
-    | `usedClassMembers` | (string \| object)[] | Class method/property names the framework invokes at runtime; scoped objects `{ extends?, implements?, members }` match only classes with matching heritage |
-    | `manifestEntries` | object[] | Entry points derived from framework manifest files (see [Manifest-derived entries](#manifest-derived-entries)) |
+    | `configPatterns` | string[] | Glob patterns for config files (always used) |
+    | `alwaysUsed` | string[] | Files that fallow always treats as used |
+    | `toolingDependencies` | string[] | Packages that you use through a CLI, not through imports |
+    | `detection` | object | Activation logic with conditions (see below) |
+    | `usedExports` | object[] | Exports that fallow always treats as used |
+    | `usedClassMembers` | (string \| object)[] | Class method or property names that the framework calls at runtime. A scoped object `{ extends?, implements?, members }` matches only classes with matching heritage |
+    | `manifestEntries` | object[] | Entry points that come from framework manifest files (see [Manifest-derived entries](#manifest-derived-entries)) |
   </Step>
   <Step title="Verify the plugin">
-    Confirm fallow picks up your plugin, and (for `manifestEntries`) see exactly what it matched and seeded:
+    Make sure that fallow loads your plugin. For `manifestEntries`, also see what the plugin matched and seeded:
 
     ```bash
     fallow list --plugins            # is the plugin active?
     fallow plugin-check --format json  # what did each rule match, seed, and warn about?
     ```
 
-    `fallow plugin-check` is a read-only dry-run. It reports whether each plugin activated (with the unmet requirement when it did not), and for `manifestEntries` rules the manifests matched, each manifest's `when`-gate result, the entries seeded (with a `path_exists` flag), and typed `warnings[]`. It always exits 0.
+    `fallow plugin-check` is a read-only dry run. It always exits 0. It reports whether each plugin activated, and the unmet requirement when a plugin did not. For `manifestEntries` rules, it also reports:
+
+    - The manifests that matched.
+    - The `when`-gate result for each manifest.
+    - The entries seeded, with a `path_exists` flag.
+    - Typed `warnings[]`.
   </Step>
 </Steps>
 
@@ -78,10 +83,10 @@ Start with JSONC format for `$schema` support and IDE autocomplete.
 
 ## Detection strategies
 
-Plugins can use simple enablers or rich detection logic with boolean combinators.
+A plugin activates through simple enablers, or through detection logic with boolean combinators.
 
 <Accordion title="Simple detection (enablers)">
-  The simplest way to activate a plugin. Package names are checked against `package.json`. The plugin activates if any enabler matches:
+  This is the simplest way to activate a plugin. Fallow checks each package name against `package.json`. The plugin activates if any enabler matches:
 
   ```jsonc
   {
@@ -89,7 +94,7 @@ Plugins can use simple enablers or rich detection logic with boolean combinators
   }
   ```
 
-  A trailing `/` enables prefix matching, so `@myorg/` matches any package in the `@myorg` scope.
+  A trailing `/` turns on prefix matching, so `@myorg/` matches any package in the `@myorg` scope.
 </Accordion>
 
 <Accordion title="File-based detection">
@@ -103,7 +108,7 @@ Plugins can use simple enablers or rich detection logic with boolean combinators
 </Accordion>
 
 <Accordion title="Combined detection (boolean logic)">
-  Combine multiple conditions with `all` (AND), `any` (OR), or `not`:
+  Combine conditions with `all` (AND), `any` (OR), or `not`:
 
   ```jsonc
   {
@@ -117,12 +122,12 @@ Plugins can use simple enablers or rich detection logic with boolean combinators
   }
   ```
 
-  This plugin only activates when both `@my-org/core` is installed **and** a `my-org.config.*` file exists.
+  This plugin activates only when `@my-org/core` is installed **and** a `my-org.config.*` file exists.
 </Accordion>
 
 ## Used exports
 
-Mark specific exports as always-used for convention-based frameworks. These are exports consumed by name at runtime:
+In a framework that works by convention, the framework uses some exports by name at runtime. Mark these exports as always used:
 
 ```jsonc
 {
@@ -134,9 +139,12 @@ Mark specific exports as always-used for convention-based frameworks. These are 
 
 ## Used class members
 
-Mark class method or property names that the framework invokes at runtime via an interface or contract pattern. Listed names extend fallow's built-in Angular and React lifecycle allowlist, so members implementing these contracts are never flagged as unused class members.
+List the class method or property names that the framework calls at runtime through an interface or contract. Fallow adds these names to its built-in Angular and React lifecycle allowlist. It then never flags members that implement these contracts as unused class members.
 
-Each entry is either a plain member name (global suppression) or a scoped object that only matches classes whose heritage clause includes the configured `extends` or `implements` identifier:
+Each entry is one of these:
+
+- A plain member name, which suppresses the name everywhere.
+- A scoped object, which matches only classes whose heritage clause includes the configured `extends` or `implements` identifier.
 
 ```jsonc
 {
@@ -149,19 +157,28 @@ Each entry is either a plain member name (global suppression) or a scoped object
 }
 ```
 
-Plain names like `agInit` are unique enough to suppress globally. Common names like `refresh` or `execute` would produce false negatives on unrelated classes, so scope them with `implements` or `extends`. A scoped rule requires at least one of `extends` or `implements`; an unconstrained object rule is rejected at load time.
+A plain name like `agInit` is unique enough to suppress everywhere. A common name like `refresh` or `execute` would cause false negatives on unrelated classes, so scope it with `implements` or `extends`. A scoped rule needs at least one of `extends` or `implements`. Fallow rejects an object rule without either at load time.
 
-This is the right tool for libraries that call methods on consumer classes reflectively: ag-Grid's `AgFrameworkComponent<T>`, TypeORM's `MigrationInterface` (`up`, `down`), Web Components (`connectedCallback`, `disconnectedCallback`, `attributeChangedCallback`), or any strategy/plugin pattern where the library invokes your methods rather than your code doing so directly.
+Use `usedClassMembers` for libraries that call methods on your classes through reflection. Examples:
 
-The allowlist only applies to class methods and properties. Enum members with the same names are still checked.
+- The ag-Grid `AgFrameworkComponent<T>`.
+- The TypeORM `MigrationInterface` (`up`, `down`).
+- Web Components (`connectedCallback`, `disconnectedCallback`, `attributeChangedCallback`).
+- Any strategy or plugin pattern in which the library calls your methods, and your own code does not.
 
-For project-wide allowlists that apply regardless of which packages are installed, use the top-level `usedClassMembers` field in your fallow config instead. See [Configuration overview](/configuration/overview).
+The allowlist applies only to class methods and properties. Fallow still checks enum members with the same names.
+
+For a project-wide allowlist that applies whatever packages are installed, use the top-level `usedClassMembers` field in your fallow config. See [Configuration overview](/configuration/overview).
 
 ## Manifest-derived entries
 
-Some frameworks declare their entry points inside per-package manifest files rather than in `package.json` `main`/`exports` or a single app entry. A large monorepo can have hundreds of these, and the entry file for each is conditional on the manifest's own fields. Static `entryPoints` globs cannot read those fields, so `manifestEntries` lets a plugin derive entries from the manifests themselves.
+Some frameworks declare their entry points in a manifest file in each package, not in `package.json` `main`/`exports` or a single app entry. A large monorepo can have hundreds of these manifests, and the fields of each manifest decide its entry file. Static `entryPoints` globs cannot read those fields. With `manifestEntries`, a plugin gets its entries from the manifests.
 
-Each rule finds manifest files by a recursive glob, parses them (JSON or JSONC), and for every manifest that passes the rule's `when` gate, resolves each `entries[].path` **relative to that manifest's directory** into an entry point (using the plugin's `entryPointRole`).
+Each rule does these steps:
+
+1. Finds manifest files with a recursive glob.
+2. Parses them (JSON or JSONC).
+3. For every manifest that passes the `when` gate of the rule, resolves each `entries[].path` **relative to the directory of that manifest** into an entry point. The entry point gets the `entryPointRole` of the plugin.
 
 ```jsonc
 // fallow-plugin-kibana.jsonc
@@ -185,17 +202,29 @@ Each rule finds manifest files by a recursive glob, parses them (JSON or JSONC),
 
 | Field | Type | Description |
 |:------|:-----|:------------|
-| `manifests` | string | Recursive glob selecting the manifest files to read |
+| `manifests` | string | Recursive glob that selects the manifest files to read |
 | `format` | `"jsonc"` \| `"json"` | Manifest format. Defaults to `jsonc`, which also parses plain JSON |
-| `when` | object | Manifest-level gate: a map of dotted field path to an expected value. ALL must match by strict equality for the manifest to be processed. Empty matches every manifest |
-| `entries` | object[] | The entries to seed per matching manifest (each `{ path, when? }`) |
+| `when` | object | Gate for the manifest: a map from dotted field path to an expected value. Fallow processes the manifest only when ALL values match by strict equality. An empty map matches every manifest |
+| `entries` | object[] | The entries to seed for each matching manifest (each `{ path, when? }`) |
 
-**`entries[].path`** is a glob relative to the manifest's directory. It must encode its own extension (`public/index.{ts,tsx}`), because entry-point globs are matched literally against discovered files (there is no source-extension probing). It may contain **`${dotted.field}` interpolation** that fans out over the named manifest field: a string field yields one entry, an array field yields one entry per element, and a missing or empty field yields none. Each entry may carry its own `when` gate.
+**`entries[].path`** is a glob relative to the directory of the manifest. It must include its own extension (`public/index.{ts,tsx}`). Fallow matches entry-point globs literally against discovered files and does not try other source extensions.
 
-`when` matching is **strict equality**: `{ "plugin.browser": true }` matches a manifest whose `plugin.browser` is literally `true`, and a manifest with `plugin.browser: false` is skipped for that entry.
+The path can contain **`${dotted.field}` interpolation**, which expands over the named manifest field:
+
+- A string field gives one entry.
+- An array field gives one entry for each element.
+- A missing or empty field gives no entry.
+
+Each entry can have its own `when` gate.
+
+`when` matching uses **strict equality**. `{ "plugin.browser": true }` matches a manifest whose `plugin.browser` is literally `true`. Fallow skips that entry for a manifest with `plugin.browser: false`.
 
 <Note>
-  Manifest discovery respects `.gitignore` and skips `node_modules`, so manifests under ignored directories are not seen (their entries would not be analyzed anyway). Fallow emits a warning when a `manifests` glob matches nothing, when a `when` gate excludes every manifest, or when a field path resolves in none of the matched manifests (a likely typo). Run `fallow plugin-check --format json` to see, per rule, which manifests matched, which passed the `when` gate, the entries seeded (with `path_exists`), and any warnings; those warnings (`manifests-matched-none`, `when-excluded-all`, `field-path-unresolved`, `entries-empty`, `manifest-parse-failed`, `entry-outside-root`, `seeded-paths-missing`) are the fastest way to debug a rule that seeds nothing.
+  Manifest discovery respects `.gitignore` and skips `node_modules`. Fallow does not see manifests in ignored directories, and it would not analyze their entries anyway.
+
+  Fallow emits a warning when a `manifests` glob matches nothing, when a `when` gate excludes every manifest, or when a field path resolves in none of the matched manifests (probably a typo).
+
+  To debug a rule that seeds nothing, run `fallow plugin-check --format json`. For each rule, it shows which manifests matched, which passed the `when` gate, the entries seeded (with `path_exists`), and any warnings. The warnings are `manifests-matched-none`, `when-excluded-all`, `field-path-unresolved`, `entries-empty`, `manifest-parse-failed`, `entry-outside-root`, and `seeded-paths-missing`.
 </Note>
 
 ## Discovery order
@@ -250,12 +279,12 @@ Fallow searches for plugin files in this order:
 ```
 
 <Info>
-External plugins cover most use cases. AST-based config parsing (like the built-in ESLint or Vite plugins do) requires a built-in Rust plugin.
+External plugins cover most use cases. To parse config files with an AST, as the built-in ESLint and Vite plugins do, you need a built-in Rust plugin.
 </Info>
 
 ## JSON Schema
 
-Generate the schema locally for IDE autocomplete. The schema is generated dynamically and doesn't exist at a remote URL:
+For IDE autocomplete, generate the schema locally. Fallow generates the schema on demand, and it is not available at a remote URL:
 
 ```bash
 fallow plugin-schema > plugin-schema.json
@@ -273,9 +302,9 @@ Then reference it in your plugin file:
 
 <CardGroup cols={2}>
   <Card title="Built-in plugins" icon="puzzle-piece" href="/frameworks/built-in">
-    Browse the built-in framework and tooling plugins.
+    The built-in framework and tooling plugins.
   </Card>
   <Card title="fallow list" icon="list" href="/cli/list">
-    Verify active plugins and inspect project metadata.
+    Check the active plugins and inspect project metadata.
   </Card>
 </CardGroup>

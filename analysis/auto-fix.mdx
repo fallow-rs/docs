@@ -1,23 +1,23 @@
 ---
 title: "Auto-fix"
-description: "Automatically remove unused exports and dependencies from your TypeScript and JavaScript codebase. Supports dry-run preview and non-interactive agent workflows."
+description: "Remove unused exports, dependencies, enum members, and catalog entries with one command, and preview each change first. Works interactively, in CI, and in agent workflows."
 keywords: ["auto-fix", "remove unused exports", "remove unused dependencies", "dry run", "cleanup"]
 icon: "wand-magic-sparkles"
 ---
 
-`fallow fix` removes unused exports and unused dependencies from your codebase.
+`fallow fix` removes unused exports and unused dependencies from your codebase, so you do not have to delete them by hand.
 
-In agent workflows, `fallow fix --yes --format json` cleans up dead code non-interactively after code generation.
+In agent workflows, `fallow fix --yes --format json` removes dead code after code generation, with no prompt.
 
 <Tip>
-Always commit your changes before running `fallow fix`. Git lets you undo if needed.
+Always commit your changes before you run `fallow fix`. Then you can undo the fix with Git.
 </Tip>
 
 ## Recommended workflow
 
 <Steps>
   <Step title="Preview changes">
-    Run a dry run to see exactly what would be removed without making any changes.
+    Run a dry run. It shows each removal and changes no files.
 
     ```bash
     fallow fix --dry-run
@@ -35,31 +35,31 @@ Always commit your changes before running `fallow fix`. Git lets you undo if nee
     ```
   </Step>
   <Step title="Review the output">
-    Check that every proposed removal is safe. Pay attention to exports consumed by external packages or dynamic imports that fallow can't detect statically.
+    Make sure that each proposed removal is safe. Look for exports that external packages use, and for dynamic imports that fallow cannot detect statically.
 
     ```bash
     fallow fix --dry-run --format json
     ```
   </Step>
   <Step title="Apply fixes">
-    After reviewing the preview, apply the changes. In interactive terminals, fallow asks for confirmation before writing.
+    When the preview is correct, apply the changes. In an interactive terminal, fallow asks for confirmation before it writes.
 
     ```bash
     fallow fix
     ```
 
-    In CI or non-TTY environments, use `--yes` to skip confirmation:
+    In CI or another non-TTY environment, use `--yes` to skip the confirmation:
 
     ```bash
     fallow fix --yes
     ```
 
     <Info>
-    Agents typically use `fallow fix --yes --format json` to apply fixes non-interactively. The JSON output confirms exactly what was changed, so the agent can verify the result.
+    Agents usually apply fixes with `fallow fix --yes --format json`, which does not prompt. The JSON output lists each change, so the agent can verify the result.
     </Info>
   </Step>
   <Step title="Verify the result">
-    Run your build and tests to confirm nothing broke.
+    Run your build and tests to make sure that nothing broke.
 
     ```bash
     npm run build && npm test
@@ -69,39 +69,52 @@ Always commit your changes before running `fallow fix`. Git lets you undo if nee
 
 ## What gets fixed
 
-- **Unused exports**: the `export` keyword is removed, keeping the declaration. For exported enums where the enum itself is never referenced outside its body in the file, the entire `enum` block is deleted.
-- **Unused dependencies**: removed from `package.json` when they are not imported by another workspace
-- **Unused enum members**: removed from the enum declaration. When every member of an exported enum is unused, the whole declaration is deleted in one pass instead of leaving behind an empty `export enum X {}` shell. Importers in other files now reference a name that no longer exists, so run your TypeScript build to find and clean them up.
-- **Unused pnpm catalog entries**: removed from `pnpm-workspace.yaml` by line-aware deletion. Object-form entries are removed as one block. By default, fallow also removes a contiguous YAML comment block immediately above the entry when it clearly belongs to that entry; configure this with [`fix.catalog.deletePrecedingComments`](/configuration/overview) (`"auto"`, `"always"`, or `"never"`). Other comments and stylistic choices in the file are preserved. When the last entry of a catalog group is removed, the header is rewritten to `catalog: {}` (or `<name>: {}`) instead of leaving bare `catalog:`, because pnpm rejects null-valued catalogs with `Cannot convert undefined or null to object` at install time. After a successful catalog edit fallow reminds you to run `pnpm install` so `pnpm-lock.yaml` stays in sync.
+- **Unused exports**: fallow removes the `export` keyword and keeps the declaration. An exported enum that the file never references outside its own body is different: fallow deletes the entire `enum` block.
+- **Unused dependencies**: fallow removes them from `package.json` when no other workspace imports them.
+- **Unused enum members**: fallow removes them from the enum declaration. When every member of an exported enum is unused, fallow deletes the whole declaration in one pass, so no empty `export enum X {}` shell stays behind. Importers in other files then reference a name that no longer exists. Run your TypeScript build to find and fix them.
+- **Unused pnpm catalog entries**: fallow removes them from `pnpm-workspace.yaml` line by line. It removes an object-form entry as one block. Fallow keeps the other comments and the style of the file, with these exceptions:
+  - By default, fallow also removes a contiguous YAML comment block directly above the entry when that block clearly belongs to the entry. Set this with [`fix.catalog.deletePrecedingComments`](/configuration/overview) (`"auto"`, `"always"`, or `"never"`).
+  - When fallow removes the last entry of a catalog group, it rewrites the header to `catalog: {}` (or `<name>: {}`), not to a bare `catalog:`. pnpm rejects a null-valued catalog at install time with `Cannot convert undefined or null to object`.
+
+  After a successful catalog edit, fallow reminds you to run `pnpm install`, so that `pnpm-lock.yaml` stays in sync.
 
 <Warning>
-Auto-fix does not delete entire files. Class methods are eligible only when type-aware analysis supplies complete evidence that they are unused and the declaration still matches the analyzed source. Other class members require manual review.
+Auto-fix does not delete entire files. It removes a class method only when two conditions are true: type-aware analysis gives complete evidence that the method is unused, and the declaration still matches the analyzed source. Review other class members manually.
 </Warning>
 
 ## Incomplete analysis
 
-If source files could not be read or parsed completely, or discovery skipped source files, affected findings carry `reachability_caveats`. Read `workspace_diagnostics` for the files and reasons. The finding remains visible, but its removal is withheld from `fallow fix`, editor quick fixes, MCP fixes, and one-click review suggestions.
+Sometimes fallow cannot read or fully parse a source file, or discovery skips source files. The affected findings then have `reachability_caveats`, and `workspace_diagnostics` lists the files and the reasons. You still see the finding, but fallow does not offer its removal in these places:
 
-Caveats can apply to unused files, exports, types, dependencies, enum members, and class members. An unseen import can point outside the affected file, so a caveat may apply across the project. Resolve the diagnostic and rerun the analysis before applying the proposed removal. A type-aware result does not override incomplete source evidence.
+- `fallow fix`
+- Editor quick fixes
+- MCP fixes
+- One-click review suggestions
 
-## `auto_fixable` is per-finding, not per action type
+Caveats can apply to unused files, exports, types, dependencies, enum members, and class members. An import that fallow did not see can point outside the affected file, so a caveat can apply across the project. Fix the cause of the diagnostic and run the analysis again before you apply the proposed removal. A type-aware result does not override incomplete source evidence.
 
-Every action in a finding's `actions[]` array carries an `auto_fixable` bool. The value is evaluated **per finding**, not per action type: the same action type may appear with `auto_fixable: true` on one finding and `auto_fixable: false` on another, depending on per-instance guards in the `fallow fix` applier.
+## `auto_fixable` is per-finding, not per action type {#auto-fixable-is-per-finding-not-per-action-type}
 
-Agents that filter on `auto_fixable: true` to decide what is safe to apply blindly must branch on the bool of each individual action, not on the action `type` alone.
+Each action in the `actions[]` array of a finding has an `auto_fixable` bool. Fallow sets the value **per finding**. The same action type can have `auto_fixable: true` on one finding and `auto_fixable: false` on another. The guards that the `fallow fix` applier runs on each instance decide the value.
 
-Per-instance flips today:
+An agent that uses `auto_fixable: true` to find actions that are safe to apply without review must check the bool of each action. The action `type` alone is not enough.
 
-- **`remove-catalog-entry`** (unused-catalog-entries): `true` only when the finding's `hardcoded_consumers` array is empty. When a workspace package still pins a hardcoded version of the same package, `fallow fix` skips the entry to avoid breaking `pnpm install`, and the action is emitted with `auto_fixable: false`.
-- **`remove-dependency` vs `move-dependency`** (dependency findings): when the finding's `used_in_workspaces` array is non-empty, the primary action flips to `move-dependency` with `auto_fixable: false` because `fallow fix` will not remove a dependency that another workspace imports. On findings without cross-workspace consumers the action stays `remove-dependency` with `auto_fixable: true`.
-- **`add-to-config` for `ignoreExports`** (duplicate-exports): `true` when `fallow fix` can safely apply the action, which today means EITHER a fallow config file already exists OR no config exists and the working directory is NOT inside a monorepo subpackage. In the second case the applier creates `.fallowrc.json` using the same scaffolding `fallow init` emits and layers the new rules on top. `false` inside a monorepo subpackage with no workspace-root config, because the applier refuses to fragment per-package configs across the monorepo and points at the workspace root instead. Pass `--no-create-config` to `fallow fix` from pre-commit hooks, CI bots, and `fallow watch` to opt out of the create-fallback; the action then surfaces with `auto_fixable: false` and is skipped at apply time.
-- **`update-catalog-reference`** (unresolved-catalog-references): always `false` today. The catalog-switching applier is not yet wired; the field is non-singleton so future enablement does not require a schema change.
+These actions can change per instance:
 
-All `suppress-line` and `suppress-file` actions are uniformly `auto_fixable: false`.
+- **`remove-catalog-entry`** (unused-catalog-entries): `true` only when the `hardcoded_consumers` array of the finding is empty. When a workspace package still pins a hardcoded version of the same package, `fallow fix` skips the entry so that `pnpm install` does not break. The action then has `auto_fixable: false`.
+- **`remove-dependency` vs `move-dependency`** (dependency findings): when the `used_in_workspaces` array of the finding is not empty, the primary action changes to `move-dependency` with `auto_fixable: false`. `fallow fix` does not remove a dependency that another workspace imports. When no other workspace uses the dependency, the action stays `remove-dependency` with `auto_fixable: true`.
+- **`add-to-config` for `ignoreExports`** (duplicate-exports): `true` when `fallow fix` can safely apply the action. Today that means one of these:
+  - A fallow config file already exists.
+  - No config exists, and the working directory is NOT inside a monorepo subpackage. The applier then creates `.fallowrc.json` with the same content that `fallow init` writes, and adds the new rules to it.
+
+  The value is `false` inside a monorepo subpackage that has no config at the workspace root. The applier does not split the configuration into one file for each package. It points you to the workspace root instead. From pre-commit hooks, CI bots, and `fallow watch`, pass `--no-create-config` to `fallow fix` to turn off config creation. The action then has `auto_fixable: false`, and fallow skips it when it applies fixes.
+- **`update-catalog-reference`** (unresolved-catalog-references): always `false` today. The applier that switches catalogs does not exist yet. The field can vary per finding, so a later release can enable it without a schema change.
+
+All `suppress-line` and `suppress-file` actions have `auto_fixable: false`.
 
 ## JSON output
 
-For scripting, CI, and agent workflows:
+For scripts, CI, and agent workflows, use JSON output:
 
 ```bash
 fallow fix --dry-run --format json
@@ -128,15 +141,15 @@ fallow fix --dry-run --format json
 }
 ```
 
-`fixes` lists the proposed actions. During a dry run, `total_fixed` stays at `0` because no files were changed. Paths are relative to the project root.
+`fixes` lists the proposed actions. In a dry run, `total_fixed` stays at `0` because fallow changes no files. Paths are relative to the project root.
 
 ## See also
 
 <CardGroup cols={2}>
   <Card title="CLI: fix" icon="terminal" href="/cli/fix">
-    Full reference for the `fallow fix` command and its flags.
+    Reference for the `fallow fix` command and its flags.
   </Card>
   <Card title="Dead Code Analysis" icon="skull-crossbones" href="/analysis/dead-code">
-    Understand what fallow detects before auto-fixing.
+    What fallow detects, before you auto-fix.
   </Card>
 </CardGroup>

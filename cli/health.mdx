@@ -1,13 +1,28 @@
 ---
 title: "fallow health"
-description: "CLI reference for fallow health. Analyze function complexity, per-file maintainability, git-churn hotspots, refactoring targets, static coverage gaps, and runtime coverage."
+description: "Find the functions and files that are hardest to maintain and the best places to refactor first, from complexity, git churn, and coverage. CLI reference for fallow health."
 keywords: ["fallow health", "complexity", "cyclomatic", "cognitive", "CLI", "code health", "refactoring", "maintainability", "file scores", "hotspots", "churn", "git history", "refactoring targets", "coverage gaps", "runtime coverage", "fallow-cov"]
 icon: "terminal"
 ---
 
-Analyze function complexity and file-level health across your codebase. By default, fallow reports all standard health sections: health score, complexity findings, file health scores, hotspot analysis, and refactoring targets. Coverage layers are opt-in: static reachability via `--coverage-gaps`, exact CRAP scoring via `--coverage`, and runtime production evidence via `--runtime-coverage`.
+`fallow health` shows where your codebase is hard to maintain and where a refactor pays off first. It measures function complexity and file-level health, and combines them with git churn and coverage.
 
-Angular templates are scanned alongside JavaScript and TypeScript functions. External `templateUrl` files and inline `@Component({ template })` literals contribute synthetic `&lt;template&gt;` findings, and a component whose class and template both score emits a `&lt;component&gt;` rollup whose totals drive ranking and `--targets`. Inline-template findings and the rollup are suppressible with `// fallow-ignore-next-line complexity` above the decorator or the worst class method; external-template findings with `&lt;!-- fallow-ignore-file complexity --&gt;` at the top of the template. See [Complexity metrics](/explanations/health#complexity-metrics) for what each shape counts and how to act on it.
+By default, fallow reports all standard health sections:
+
+- health score
+- complexity findings
+- file health scores
+- hotspot analysis
+- refactoring targets
+
+The coverage layers are opt-in: static reachability with `--coverage-gaps`, exact CRAP scores with `--coverage`, and runtime production evidence with `--runtime-coverage`.
+
+Fallow also scans Angular templates, together with JavaScript and TypeScript functions. External `templateUrl` files and inline `@Component({ template })` literals produce synthetic `&lt;template&gt;` findings. When the class and the template of a component both score, fallow adds a `&lt;component&gt;` rollup. The totals of the rollup drive the ranking and `--targets`.
+
+- To suppress inline-template findings and the rollup, put `// fallow-ignore-next-line complexity` above the decorator or above the worst class method.
+- To suppress external-template findings, put `&lt;!-- fallow-ignore-file complexity --&gt;` at the top of the template.
+
+See [Complexity metrics](/explanations/health#complexity-metrics) for what each shape counts and how to act on it.
 
 ```bash
 fallow health
@@ -21,10 +36,16 @@ fallow health
 |:-----|:------------|
 | `--max-cyclomatic <N>` | Maximum cyclomatic complexity before reporting (default: 20) |
 | `--max-cognitive <N>` | Maximum cognitive complexity before reporting (default: 15) |
-| `--max-crap <N>` | Maximum [CRAP](/explanations/health#crap-score) score before reporting (default: 30.0). Functions meeting or exceeding this score appear alongside complexity findings. Pair with [`--coverage`](#coverage-istanbul) for accurate per-function CRAP; without it fallow estimates coverage from the module graph. |
-| `--effort <LEVEL>` | Filter refactoring targets by effort level: `low`, `medium`, or `high`. Only targets at or below the specified effort are shown. Implies `--targets`. |
+| `--max-crap <N>` | Maximum [CRAP](/explanations/health#untested-complexity-risk) score before reporting (default: 30.0). Functions at or above this score appear together with the complexity findings. Pair with [`--coverage`](#section-selection) for accurate per-function CRAP. Without it, fallow estimates coverage from the module graph. |
+| `--effort <LEVEL>` | Filter refactoring targets by effort level: `low`, `medium`, or `high`. Fallow shows only targets at or below this effort. Implies `--targets`. |
 
-Use `health.thresholdOverrides[]` in config for documented local ceilings on known legacy functions. Overrides match `files` globs and optional exact `functions`, can set `maxCyclomatic`, `maxCognitive`, `maxCrap`, and `maxUnitSize`, and can include a `reason`. They keep exceptions visible in output instead of hiding them with suppression comments.
+To give known legacy functions a documented local ceiling, use `health.thresholdOverrides[]` in config. An override:
+
+- matches `files` globs and, optionally, exact `functions`
+- can set `maxCyclomatic`, `maxCognitive`, `maxCrap`, and `maxUnitSize`
+- can include a `reason`
+
+Overrides keep the exceptions visible in the output. Suppression comments hide them.
 
 ### Output
 
@@ -33,81 +54,81 @@ Use `health.thresholdOverrides[]` in config for documented local ceilings on kno
 | `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`, [`badge`](/integrations/badges) |
 | `--top <N>` | Show only the top N results per section (findings, file scores, hotspots, targets) |
 | `--sort <METRIC>` | Sort complexity findings by: `cyclomatic` (default), `cognitive`, `lines`, `severity` |
-| `--explain` | Add metric explanations. In human format, prints a `Description:` line under each section header. In JSON format, adds a `_meta` object with metric descriptions and docs links. |
-| `--summary` | Print a one-line summary of counts at the end of the run. In JSON format, adds a `summary` counts object. |
+| `--explain` | Add metric explanations. In human format, print a `Description:` line under each section header. In JSON format, add a `_meta` object with metric descriptions and docs links. |
+| `--summary` | Print a one-line summary of counts at the end of the run. In JSON format, add a `summary` counts object. |
 
-For every `--sort` mode, tied complexity findings are ordered by file path, line, column, then function name. This keeps their order and `--top` selection stable across checkout locations and thread settings without changing the metric's priority.
+For every `--sort` mode, fallow orders tied complexity findings by file path, line, column, and then function name. The order and the `--top` selection then stay the same across checkout locations and thread settings. The metric keeps its priority.
 
 ### Section selection
 
-By default, all standard sections are included. Use these flags to select individual sections:
+By default, fallow includes all standard sections. To select individual sections, use these flags:
 
 | Flag | Description |
 |:-----|:------------|
-| `--complexity` | Show only complexity findings (functions exceeding thresholds). |
-| `--complexity-breakdown` | Add a per-decision-point `contributions[]` array to each complexity finding in `--format json`, explaining which constructs drove the score. Each entry names the construct (`if`, `else-if`, `ternary`, `&&` / `\|\|` / `??`, loop, `case`, `catch`, `optional-chain`, ...) and carries its source line, the metric it adds to (`cyclomatic` or `cognitive`), its weight, and the nesting depth. Off by default to keep CLI/CI output lean; used by the VS Code inline editor breakdown and the MCP `check_health` tool. |
-| `--css` | Add a structural CSS analytics section (`css_analytics` in JSON, `CSS health` in human, `## CSS Health` in markdown): specificity hotspots, `!important` density, over-complex selectors, deep nesting, empty rules, design-token sprawl, and cleanup candidates such as unreferenced custom properties, `@keyframes`, `@theme` tokens, and `@font-face` families. Each candidate carries a read-only verification step, because a token can still be used from JavaScript, inline HTML, Tailwind plugins, or external templates. Rule-backed styling issues are emitted separately as `styling_findings`. Opt-in because it reads project stylesheets and cross-checks source files; Sass/Less sources are scanned conservatively. Also derives the descriptive, never-gating `styling_health` grade. See [CSS analysis](/analysis/css-analysis) for the candidate types and the [styling health grade](/analysis/css-analysis#styling-health-grade). |
-| `--file-scores` | Show only per-file health scores. Requires the full analysis pipeline (graph + dead code detection). File scores are sorted by risk-aware triage concern: lower maintainability index and higher CRAP risk first. `--sort` and `--baseline` apply to complexity findings only, not file scores. |
-| `--hotspots` | Show only hotspot analysis: files that are both complex and frequently changing. Combines git churn history with complexity data. Uses git history; outside a git repository the section degrades to empty (with a stderr note) and exits 0 instead of erroring, so combined-mode `--format json` always emits a single document. |
-| `--targets` | Show only refactoring targets: ranked recommendations with priority scores, effort estimates, contributing factors, and evidence for AI agents. Each target's JSON can include `direct_callers[]` (direct importers with the symbols they import) and `clone_siblings[]` (duplicate-code siblings with stable `dup:<8hex>` fingerprints, ready for `fallow dupes --trace`); both arrays are omitted when empty. Human output adds `importers:` and `clones:` lines only when that evidence is present. |
-| `--score` | Show only the project health score (0-100) with letter grade (A/B/C/D/F). The score is included by default when no section flags are set. Plain `--score` skips the churn-backed hotspot penalty so the score doesn't run a `git log` shell-out per invocation. Pass `--hotspots` (or `--targets` with `--score`) to include the hotspot penalty; snapshot (`--save-snapshot`) and trend (`--trend`) flows still trigger hotspot vital signs so saved data stays complete. |
-| `--coverage-gaps` | Show runtime files and exports that no test dependency path reaches. Mock-aware; see [With coverage gaps](#with-coverage-gaps). Opt-in (default off). Configure severity via the `coverage-gaps` rule. |
-| `--coverage <PATH>` | Path to Istanbul-format coverage data (`coverage-final.json`) for accurate per-function CRAP scores. Produced by Jest, Vitest, c8, nyc. When provided, uses the canonical formula `CC^2 * (1-cov/100)^3 + CC` instead of the static binary model. Relative paths resolve against `--root`. Falls back to `FALLOW_COVERAGE`, then `health.coverage`, then auto-detection; [`fallow audit`](/cli/audit) uses the same chain. Statement coverage is computed per function over the statements in its own body: a nested function's statements belong to the nested function, not to the one that contains it. |
-| `--coverage-root <PATH>` | Absolute prefix to strip from file paths in coverage data before prepending the project root. Use when coverage was generated in a different environment (CI runner, Docker), for example `/home/runner/work/myapp`. Falls back to `FALLOW_COVERAGE_ROOT`, then `health.coverageRoot`; `fallow audit` uses the same chain. |
-| `--runtime-coverage <PATH>` | Merge runtime coverage into the health report. Accepts a V8 coverage directory, a single V8 JSON file, or a single Istanbul coverage map JSON file. A single local capture is free and does not require a license; continuous or multi-capture runtime monitoring requires a valid license or trial. |
+| `--complexity` | Show only complexity findings (functions above the thresholds). |
+| `--complexity-breakdown` | Add a `contributions[]` array to each complexity finding in `--format json`, with one entry per decision point. It shows which constructs drove the score. Each entry names the construct (`if`, `else-if`, `ternary`, `&&` / `\|\|` / `??`, loop, `case`, `catch`, `optional-chain`, ...) and has its source line, the metric it adds to (`cyclomatic` or `cognitive`), its weight, and the nesting depth. Off by default to keep CLI and CI output small. The VS Code inline editor breakdown and the MCP `check_health` tool use it. |
+| `--css` | Add a structural CSS analytics section (`css_analytics` in JSON, `CSS health` in human, `## CSS Health` in markdown). It covers specificity hotspots, `!important` density, over-complex selectors, deep nesting, empty rules, design-token sprawl, and cleanup candidates such as unreferenced custom properties, `@keyframes`, `@theme` tokens, and `@font-face` families. Each candidate has a read-only verification step, because JavaScript, inline HTML, Tailwind plugins, or external templates can still use a token. Fallow reports rule-backed styling issues separately as `styling_findings`. Opt-in, because it reads project stylesheets and cross-checks source files. Fallow scans Sass and Less sources conservatively. The flag also derives the descriptive `styling_health` grade, which never gates. See [CSS analysis](/analysis/css-analysis) for the candidate types and the [styling health grade](/analysis/css-analysis#styling-health-grade). |
+| `--file-scores` | Show only per-file health scores. Requires the full analysis pipeline (graph + dead code detection). Fallow sorts file scores by risk-aware triage concern: lower maintainability index and higher CRAP risk first. `--sort` and `--baseline` apply only to complexity findings, not to file scores. |
+| `--hotspots` | Show only hotspot analysis: files that are complex and also change often. Combines git churn history with complexity data. Outside a git repository, the section is empty (with a note on stderr) and the run exits 0 without an error. Combined-mode `--format json` therefore always prints a single document. |
+| `--targets` | Show only refactoring targets: ranked recommendations with priority scores, effort estimates, contributing factors, and evidence for AI agents. The JSON of each target can include `direct_callers[]` (direct importers with the symbols they import) and `clone_siblings[]` (duplicate-code siblings with stable `dup:<8hex>` fingerprints for `fallow dupes --trace`). Fallow omits both arrays when they are empty. Human output adds `importers:` and `clones:` lines only when that evidence is present. |
+| `--score` | Show only the project health score (0-100) with a letter grade (A/B/C/D/F). The output includes the score by default when you set no section flags. Plain `--score` skips the churn-backed hotspot penalty, so the score does not run `git log` on each run. To include the hotspot penalty, pass `--hotspots` (or `--targets` with `--score`). Snapshot (`--save-snapshot`) and trend (`--trend`) runs still compute hotspot vital signs, so the saved data stays complete. |
+| `--coverage-gaps` | Show runtime files and exports that no test dependency path reaches. Mock-aware. See [With coverage gaps](#with-coverage-gaps). Opt-in (default off). Set the severity with the `coverage-gaps` rule. |
+| `--coverage <PATH>` | Path to Istanbul-format coverage data (`coverage-final.json`) for accurate per-function CRAP scores. Jest, Vitest, c8, and nyc produce this format. With this flag, fallow uses the canonical formula `CC^2 * (1-cov/100)^3 + CC` instead of the static binary model. Relative paths resolve against `--root`. Fallbacks: `FALLOW_COVERAGE`, then `health.coverage`, then auto-detection. [`fallow audit`](/cli/audit) uses the same chain. Fallow computes statement coverage per function, over the statements in the body of that function. The statements of a nested function belong to the nested function, not to the function that contains it. |
+| `--coverage-root <PATH>` | Absolute prefix to strip from file paths in coverage data before fallow prepends the project root. Use it when a different environment (CI runner, Docker) generated the coverage, for example `/home/runner/work/myapp`. Fallbacks: `FALLOW_COVERAGE_ROOT`, then `health.coverageRoot`. `fallow audit` uses the same chain. |
+| `--runtime-coverage <PATH>` | Merge runtime coverage into the health report. Accepts a V8 coverage directory, a single V8 JSON file, or a single Istanbul coverage map JSON file. A single local capture is free and needs no license. Continuous or multi-capture runtime monitoring requires a valid license or trial. |
 | `--min-invocations-hot <N>` | Threshold for hot-path classification when `--runtime-coverage` is active (default: `100`). |
-| `--min-observation-volume <N>` | Minimum total trace volume before the sidecar may emit high-confidence `safe_to_delete` / `review_required` verdicts. Below this, confidence is capped at `medium` (default: `5000`). |
-| `--low-traffic-threshold <RATIO>` | Fraction of total trace count below which an invoked function is classified `low_traffic` rather than `active` (default: `0.001` = 0.1%). |
+| `--min-observation-volume <N>` | Minimum total trace volume before the sidecar can report high-confidence `safe_to_delete` / `review_required` verdicts. Below this volume, confidence is at most `medium` (default: `5000`). |
+| `--low-traffic-threshold <RATIO>` | Fraction of the total trace count. An invoked function below this fraction is `low_traffic`, not `active` (default: `0.001` = 0.1%). |
 
-Multiple section flags can be combined (e.g., `--complexity --hotspots`).
+You can combine section flags (for example `--complexity --hotspots`).
 
 ### Type-aware coupling
 
-Use `--type-aware --type-coupling` to add advisory public-signature type
-coupling. It reports exact type edges and cycles without changing the health
-score.
+To see how public signatures couple modules through types, add
+`--type-aware --type-coupling`. The output is advisory. It reports exact type
+edges and cycles, and does not change the health score.
 
 ```bash
 fallow health --type-aware --type-coupling --format json --quiet
 ```
 
-Add repeatable `--type-aware-project <PATH>` flags when automatic project
-selection misses a consumer project. Use `--type-aware-require complete` when
-partial or unavailable checker evidence must fail CI. See
+When automatic project selection misses a consumer project, add repeatable
+`--type-aware-project <PATH>` flags. To fail CI when checker evidence is
+partial or unavailable, use `--type-aware-require complete`. See
 [Type-aware TypeScript analysis](/analysis/type-aware).
 
 ### Health score options
 
 | Flag | Description |
 |:-----|:------------|
-| `--min-score <N>` | Fail (exit code 1) only when the health score is below this threshold. Implies `--score`. The authoritative CI quality gate: when set, complexity findings are demoted to informational and the exit code is driven solely by the score, so `--min-score 0` always exits 0. Composes with `--min-severity` (the run fails if either gate trips). |
-| `--min-severity <LEVEL>` | Only exit with an error for findings at or above this severity (`moderate`, `high`, `critical`). Composes with `--min-score`. |
-| `--report-only` | Print the score and findings but never fail CI (always exit 0). Advisory mode for surfacing health in logs without blocking. Mutually exclusive with `--min-score` and `--min-severity`. |
+| `--min-score <N>` | Fail (exit code 1) only when the health score is below this threshold. Implies `--score`. This is the authoritative CI quality gate. With this flag, complexity findings become informational and only the score sets the exit code, so `--min-score 0` always exits 0. Works together with `--min-severity`: the run fails if either gate trips. |
+| `--min-severity <LEVEL>` | Exit with an error only for findings at or above this severity (`moderate`, `high`, `critical`). Works together with `--min-score`. |
+| `--report-only` | Print the score and findings, but never fail CI (always exit 0). Use it to show health in logs without blocking. Cannot be combined with `--min-score` or `--min-severity`. |
 
 ### Hotspot options
 
 | Flag | Description |
 |:-----|:------------|
-| `--since <DURATION>` | Git history window for hotspot analysis (default: `6m`). Accepts durations (`6m`, `90d`, `1y`, `2w`) or ISO dates (`2025-06-01`). Ignored when `--churn-file` is set (the file is authoritative for the window). |
-| `--min-commits <N>` | Minimum number of commits for a file to be included in hotspot ranking (default: 3). |
+| `--since <DURATION>` | Git history window for hotspot analysis (default: `6m`). Accepts durations (`6m`, `90d`, `1y`, `2w`) or ISO dates (`2025-06-01`). Ignored when `--churn-file` is set, because the file sets the window. |
+| `--min-commits <N>` | Minimum number of commits before a file enters the hotspot ranking (default: 3). |
 | `--churn-file <PATH>` | Import change history from a `fallow-churn/v1` JSON file instead of `git log`. See [Importing churn from a non-git VCS](#importing-churn-from-a-non-git-vcs). |
-| `--ownership` | Attach ownership signals to each hotspot entry: bus factor (Avelino truck factor), contributor count, top contributor with stale-days, recent contributors (top-3), `suggested_reviewers`, declared CODEOWNERS owner, `ownership_state`, ownership drift, and unowned-hotspot detection. Human output gains a project-level summary line above the hotspot list. Test paths get a `[test]` tag. Implies `--hotspots`. Uses git history; outside a git repository the hotspot/ownership section degrades to empty. |
+| `--ownership` | Add ownership signals to each hotspot entry: bus factor (Avelino truck factor), contributor count, top contributor with stale-days, recent contributors (top-3), `suggested_reviewers`, declared CODEOWNERS owner, `ownership_state`, ownership drift, and unowned-hotspot detection. Human output adds a project-level summary line above the hotspot list. Test paths get a `[test]` tag. Implies `--hotspots`. Uses git history. Outside a git repository, the hotspot and ownership section is empty. |
 | `--ownership-emails <MODE>` | Privacy mode for author emails: `handle` (default), `anonymized`, legacy `hash`, or `raw`. Implies `--ownership`. See [Email privacy](#email-privacy). |
 
 ### Scoping
 
 | Flag | Description |
 |:-----|:------------|
-| `-w, --workspace <NAME>` | Scope output to one or more workspace packages while keeping the full cross-workspace graph. Comma-separated values, globs (`apps/*`, `@scope/*`), and `!`-prefixed negation are supported. Vital signs, health score, hotspots, file scores, findings, and `summary.files_analyzed` are all recomputed against the scoped subset. |
-| `--changed-since <REF>` | Only analyze functions in files changed since the given git ref (e.g., `main`, `HEAD~5`). Also applies to hotspot analysis. |
-| `--group-by <owner\|directory\|package\|section>` | Partition the report into per-group sections. JSON output adds `grouped_by` plus a `groups` array; each group contains its own `vital_signs`, `health_score`, `findings`, `file_scores`, `hotspots`, `large_functions`, and `targets` recomputed against the group's files. The top-level metrics stay project-wide so consumers that ignore grouping still see the project headline. Human output adds a per-group score / files / hot / p90 summary block (sorted worst-first when `--score`). SARIF tags every result with `properties.group` and CodeClimate adds a top-level `group` field per issue, so GitHub Code Scanning and GitLab Code Quality can partition findings per team / package. Compact, markdown, and badge fall back to ungrouped output with a stderr note pointing at `--format json`. |
+| `-w, --workspace <NAME>` | Scope output to one or more workspace packages while keeping the full cross-workspace graph. Comma-separated values, globs (`apps/*`, `@scope/*`), and `!`-prefixed negation are supported. Fallow recomputes vital signs, health score, hotspots, file scores, findings, and `summary.files_analyzed` for the scoped subset. |
+| `--changed-since <REF>` | Analyze only functions in files changed since the given git ref (for example `main`, `HEAD~5`). Also applies to hotspot analysis. |
+| `--group-by <owner\|directory\|package\|section>` | Split the report into one section per group. JSON output adds `grouped_by` and a `groups` array. Each group has its own `vital_signs`, `health_score`, `findings`, `file_scores`, `hotspots`, `large_functions`, and `targets`, computed for the files of that group. The top-level metrics stay project-wide, so a tool that ignores grouping still sees the project headline. Human output adds a summary block per group with score, files, hot, and p90 (worst first with `--score`). SARIF tags every result with `properties.group`, and CodeClimate adds a top-level `group` field per issue. GitHub Code Scanning and GitLab Code Quality can then split findings per team or package. Compact, markdown, and badge output ignore grouping and print a note on stderr that points to `--format json`. |
 
 ### Snapshots & trends
 
 | Flag | Description |
 |:-----|:------------|
-| `--save-snapshot [PATH]` | Save a vital signs snapshot for trend tracking. Default path: `.fallow/snapshots/<timestamp>.json`. Forces file-scores and hotspot computation for complete metrics. |
-| `--trend` | Compare current metrics against the most recent saved snapshot. Reads from `.fallow/snapshots/` and shows per-metric deltas with directional indicators (improving/declining/stable). Implies `--score`. |
+| `--save-snapshot [PATH]` | Save a vital signs snapshot for trend tracking. Default path: `.fallow/snapshots/<timestamp>.json`. Forces file-score and hotspot computation, so the metrics are complete. |
+| `--trend` | Compare current metrics against the most recent saved snapshot. Reads from `.fallow/snapshots/` and shows the delta per metric with a direction (improving/declining/stable). Implies `--score`. |
 
 <Tip>
   `--score`, `--trend`, and `--save-snapshot` also work on bare `fallow` (all analyses combined). See [global flags](/cli/global-flags) for details.
@@ -117,25 +138,32 @@ partial or unavailable checker evidence must fail CI. See
 
 | Flag | Description |
 |:-----|:------------|
-| `--save-baseline` | Save current complexity findings as a baseline for future comparison. Fallow refuses the save with exit 2 when the destination holds a baseline of another `kind`. A destination with no `kind` gains one on the next save. |
-| `--baseline` | Compare against a saved baseline and only report new findings. Applies to complexity findings only, not file scores. |
-| `--fail-on-stale-baseline` | Exit 1 when the loaded baseline has any entry that matched no current finding; see [global flags](/cli/global-flags). Stands down on `--report-only`, which is an explicit request never to fail. |
+| `--save-baseline` | Save the current complexity findings as a baseline for later comparison. Fallow refuses the save with exit 2 when the destination holds a baseline of another `kind`. A destination with no `kind` gets one on the next save. |
+| `--baseline` | Compare against a saved baseline and report only new findings. Applies only to complexity findings, not to file scores. |
+| `--fail-on-stale-baseline` | Exit 1 when the loaded baseline has an entry that matches no current finding. See [global flags](/cli/global-flags). Has no effect with `--report-only`, which is an explicit request to never fail. |
 
-When a quarter or more of the saved entries match no current finding, the run warns on stderr and gives the re-save command. A run narrowed by `--changed-since`, `--diff-file`, `--workspace`, `--changed-workspaces` or `--production` stays silent, because it cannot judge a whole-project baseline.
+When a quarter or more of the saved entries match no current finding, the run prints a warning on stderr with the command to save the baseline again. A run narrowed by `--changed-since`, `--diff-file`, `--workspace`, `--changed-workspaces` or `--production` prints no warning, because it cannot judge a whole-project baseline.
 
-On an analysis run, `summary.baseline_staleness` reports how much of the baseline still matches (`fallow report --from` re-renders a saved envelope and carries it only if that envelope already had it): the counts, `moved_entries`, `current_findings`, `change_scoped`, the advisory verdict as `warning`, and `gate_trips`, which is the flag's own rule. Read `change_scoped` before dividing the counts: a narrowed run can report `matched_entries: 0` on a healthy baseline.
+On an analysis run, `summary.baseline_staleness` reports how much of the baseline still matches. `fallow report --from` renders a saved envelope again, and includes this object only if that envelope already had it. The object has:
 
-`scope_reasons` names what narrowed the run, so you do not have to guess which of your inputs is responsible. It is present and not empty exactly when `change_scoped` is true. `health` compares after the flags resolve, so it reports `diff`, `changed-files` for a resolved changed-file set, `workspace` for both `--workspace` and `--changed-workspaces`, and `production`. Each command reports what it can see, so the names differ per command. Read the set as open.
+- the counts, `moved_entries`, and `current_findings`
+- `change_scoped`
+- the advisory verdict as `warning`
+- `gate_trips`, which follows the rule of the `--fail-on-stale-baseline` flag
 
-A run can load a baseline with entries and use only a diff or `--changed-since`. Such a run also gains a `recheck-baseline` entry in `next_steps[]` with the unscoped command. That command re-reads the baseline and reports. It never re-saves the baseline. A run in production mode, or a run scoped to workspaces, gains no entry. Those channels resolve from config and from the environment as well as from a flag. The command in the entry would then be just as narrow. A diff-scoped run gains no entry while you export `FALLOW_DIFF_FILE`, for the same reason.
+Read `change_scoped` before you divide the counts. A narrowed run can report `matched_entries: 0` on a healthy baseline.
 
-Each command writes its own baseline format, and a saved baseline names that format. Every file `--save-baseline` writes carries a top-level `kind` of `dead-code`, `dupes` or `health`. A baseline that an earlier release saved carries no `kind` and still loads. For such a file the keys it carries decide the format.
+`scope_reasons` names what narrowed the run, so you can see which input is responsible. It is present and not empty exactly when `change_scoped` is true. `health` compares after the flags resolve. It reports `diff`, `changed-files` for a resolved changed-file set, `workspace` for both `--workspace` and `--changed-workspaces`, and `production`. Each command reports what it can see, so the names differ per command. Treat the set as open.
 
-`fallow health --baseline` loads a baseline of another kind as zero entries, so no entry stays unmatched. Such a run warns on stderr, with or without `--quiet`, and names both kinds and the path. It reports `summary.baseline_staleness.unrecognised_format: true` and suppresses nothing. The member is present only when it is true, and an absent member means false. Read the member rather than `baseline_entries == 0`, because a baseline from a project with nothing above threshold is correctly empty. The baseline gate trips on such a file, so `--fail-on-stale-baseline` exits 1 there. A run that armed no gate keeps its exit code.
+When a run loads a baseline with entries and is narrowed only by a diff or `--changed-since`, it adds a `recheck-baseline` entry to `next_steps[]` with the unscoped command. That command reads the baseline again and reports. It never saves the baseline again. A run in production mode, or a run scoped to workspaces, gets no entry. Those scopes also come from config and from the environment, not only from a flag, so the command in the entry would be just as narrow. For the same reason, a diff-scoped run gets no entry while you export `FALLOW_DIFF_FILE`.
+
+Each command writes its own baseline format, and a saved baseline names that format. Every file that `--save-baseline` writes has a top-level `kind` of `dead-code`, `dupes` or `health`. A baseline from an earlier release has no `kind` and still loads. For such a file, its keys decide the format.
+
+`fallow health --baseline` loads a baseline of another kind as zero entries, so no entry stays unmatched. Such a run prints a warning on stderr, with or without `--quiet`, that names both kinds and the path. It reports `summary.baseline_staleness.unrecognised_format: true` and suppresses nothing. The field is present only when it is true. An absent field means false. Read this field, not `baseline_entries == 0`, because a baseline from a project with nothing above the threshold is correctly empty. The baseline gate trips on such a file, so `--fail-on-stale-baseline` exits 1. A run without a gate keeps its exit code.
 
 ## Exit codes
 
-The default `fallow health` (no gate flag) is advisory-by-default for plain visibility but still fails on any finding, for back-compatibility. The gate flags change what drives the exit code:
+Plain `fallow health` (no gate flag) is advisory by default, for visibility. For backward compatibility, it still fails on any finding. The gate flags change what sets the exit code:
 
 | Invocation | Exit 0 when | Exit 1 when |
 |:-----------|:------------|:------------|
@@ -145,11 +173,11 @@ The default `fallow health` (no gate flag) is advisory-by-default for plain visi
 | `fallow health --min-score N --min-severity LEVEL` | score >= N AND no finding at or above LEVEL | score < N OR a finding at or above LEVEL |
 | `fallow health --report-only` | always | never |
 
-`--report-only` cannot be combined with `--min-score` or `--min-severity` (exit code 2). The runtime-coverage gate (`--runtime-coverage`) and coverage-gap gate remain independent explicit opt-ins and are not demoted by `--min-score`. For a gate on newly-introduced complexity only, use [`fallow audit --gate new-only`](/cli/audit).
+`--report-only` cannot be combined with `--min-score` or `--min-severity` (exit code 2). The runtime-coverage gate (`--runtime-coverage`) and the coverage-gap gate stay independent, explicit opt-ins. `--min-score` does not demote them. To gate only on complexity that a change introduces, use [`fallow audit --gate new-only`](/cli/audit).
 
 ## File score metrics
 
-File scores are ordered by risk-aware triage concern: the larger of low-MI concern and CRAP risk. This keeps files with very high untested complexity near the top even when their Maintainability Index is not the lowest. The formula and its components are documented under [File health scores](/explanations/health#file-health-scores).
+Fallow orders file scores by risk-aware triage concern: the larger of low-MI concern and CRAP risk. Files with very high untested complexity then stay near the top, even when their Maintainability Index is not the lowest. [File health scores](/explanations/health#file-health-scores) documents the formula and its components.
 
 Each file score reports these metrics (informational, not in the formula):
 
@@ -160,12 +188,12 @@ Each file score reports these metrics (informational, not in the formula):
 | `total_cognitive` | Sum of cognitive complexity across all functions |
 | `function_count` | Number of functions in the file |
 | `lines` | Total lines of code |
-| `crap_max` | Highest CRAP score among the file's functions. Combines cyclomatic complexity with test coverage to estimate untested risk. See [CRAP metric](/explanations/health#crap-metric) for details. |
+| `crap_max` | Highest CRAP score of the functions in the file. Combines cyclomatic complexity with test coverage to estimate untested risk. See [CRAP metric](/explanations/health#untested-complexity-risk). |
 | `crap_above_threshold` | Number of functions in the file with a CRAP score at or above the threshold (default: 30). |
 
 ## Hotspot metrics
 
-The hotspot score identifies files that are both complex and frequently changed; the formula, the recency weighting, and the trend rules are documented under [Hotspot metrics](/explanations/health#hotspot-metrics).
+The hotspot score finds files that are complex and also change often. [Hotspot metrics](/explanations/health#hotspot-metrics) documents the formula, the recency weighting, and the trend rules.
 
 ### Per-file hotspot metrics
 
@@ -185,19 +213,19 @@ Each hotspot entry includes:
 
 ### Hotspot summary
 
-The hotspot summary (included in JSON output) provides context about the analysis:
+The hotspot summary in the JSON output gives context about the analysis:
 
 | Field | Description |
 |:------|:------------|
-| `since` | Display string for the analysis window (e.g., "6 months") |
+| `since` | Display string for the analysis window (for example "6 months") |
 | `min_commits` | Minimum commit threshold used |
-| `files_analyzed` | Files meeting the `min_commits` threshold |
+| `files_analyzed` | Files at or above the `min_commits` threshold |
 | `files_excluded` | Files below the `min_commits` threshold |
-| `shallow_clone` | Whether a shallow clone was detected. Shallow history produces incomplete results; run `git fetch --unshallow` for a full clone. |
+| `shallow_clone` | Whether fallow detected a shallow clone. Shallow history gives incomplete results. Run `git fetch --unshallow` for a full clone. |
 
 ## Ownership analysis
 
-Pass `--ownership` (alongside or instead of `--hotspots`) to enrich each hotspot entry with ownership signals derived from git author history and the repository's CODEOWNERS file. Useful for surfacing knowledge-loss risk, finding unowned high-churn files, and routing review requests.
+Ownership analysis shows where knowledge can get lost, which high-churn files have no owner, and who should review a change. Pass `--ownership` (with or instead of `--hotspots`) to add ownership signals to each hotspot entry. Fallow derives the signals from git author history and the CODEOWNERS file of the repository.
 
 ```bash
 fallow health --hotspots --ownership
@@ -206,7 +234,7 @@ fallow health --hotspots --ownership --ownership-emails anonymized --format json
 
 ### Project-level summary
 
-Human output prepends a summary line above the hotspot list showing how many hotspots depend on a single recent contributor and the top authors across the set:
+Human output adds a summary line above the hotspot list. It shows how many hotspots depend on a single recent contributor, and the top authors across the set:
 
 ```
 ● Hotspots (10 files, since 6 months)
@@ -218,58 +246,58 @@ Human output prepends a summary line above the hotspot list showing how many hot
 
 | Field | Description |
 |:------|:------------|
-| `bus_factor` | Avelino truck factor: minimum contributors covering at least 50% of recency-weighted commits. `1` is the canonical "single point of failure" signal. |
-| `contributor_count` | Distinct authors after bot-pattern filtering. |
-| `top_contributor` | Object with `identifier`, `format` (`raw`/`handle`/`anonymized`/`hash`), `share` (0..1), `stale_days`, and `commits` for the highest-share contributor. The `identifier` is rendered per the configured `ownership.emailMode`; do not assume it is an email address. |
+| `bus_factor` | Avelino truck factor: the minimum number of contributors who cover at least 50% of recency-weighted commits. `1` is the standard "single point of failure" signal. |
+| `contributor_count` | Distinct authors after fallow filters out bot patterns. |
+| `top_contributor` | Object with `identifier`, `format` (`raw`/`handle`/`anonymized`/`hash`), `share` (0..1), `stale_days`, and `commits` for the contributor with the highest share. Fallow renders the `identifier` in the configured `ownership.emailMode`. Do not assume that it is an email address. |
 | `recent_contributors` | Up to three additional contributors by share (top-3 excluding the top contributor). |
-| `suggested_reviewers` | Subset of `recent_contributors` whose `stale_days` is below 90. First-class field so AI agents can route "Request review from @X, @Y" without re-filtering. Omitted when empty. |
-| `declared_owner` | The CODEOWNERS-resolved primary owner for this file, when a rule matches. |
-| `ownership_state` | Stable discriminator for ownership routing: `active`, `unowned`, `declared_inactive`, or `drifting`. Declared owners suppress vague git-history drift only when fallow can match them to an active contributor offline. |
+| `suggested_reviewers` | Subset of `recent_contributors` whose `stale_days` is below 90. AI agents can use it to request a review from the right people without filtering again. Omitted when empty. |
+| `declared_owner` | The primary owner of this file from CODEOWNERS, when a rule matches. |
+| `ownership_state` | Stable value for ownership routing: `active`, `unowned`, `declared_inactive`, or `drifting`. A declared owner suppresses vague drift from git history only when fallow can match that owner to an active contributor offline. |
 | `unowned` | Tristate: `true` = a CODEOWNERS file exists but no rule matches; `false` = a rule matches; `null` = no CODEOWNERS file was discovered (cannot determine). |
-| `drift` | True when the file's original author no longer maintains it. Fires only when file age >= 30 days AND the original author's recency-weighted share is below 10%. |
-| `drift_reason` | Human-readable explanation of the drift, populated only when `drift` is `true`. |
+| `drift` | True when the original author of the file no longer maintains it. Set only when the file age is >= 30 days AND the recency-weighted share of the original author is below 10%. |
+| `drift_reason` | Explanation of the drift for humans. Set only when `drift` is `true`. |
 
 ### Severity in human output
 
-The `bus=` marker is color-coded proportional to the actual risk:
+The color of the `bus=` marker follows the actual risk:
 
 - `bus=1 (sole author)`: **red + bold** when share is 100% (one person, no co-authors)
 - `bus=1 (at risk)`: **red + bold** when bus=1 AND trend is accelerating (active, high-concentration file)
 - `bus=1`: **yellow** for the common case (bus=1 without extreme share or acceleration)
 - `bus=2` / `bus=N`: dimmed (healthy)
 
-This keeps red reserved for the strongest signals so it stays meaningful on repos where most hotspots are single-contributor.
+Red is only for the strongest signals. It keeps its meaning on repos where most hotspots have a single contributor.
 
 ### Test-path tag
 
-Files matching common test conventions (`**/__tests__/**`, `**/__mocks__/**`, `**/*.test.*`, `**/*.spec.*`, `**/test/**`, `**/tests/**`) are intentionally kept in the hotspot ranking (test maintenance IS real work) but tagged with `[test]` so readers can distinguish them from production code. JSON consumers see an `is_test_path: true` field.
+Fallow keeps files that match common test conventions (`**/__tests__/**`, `**/__mocks__/**`, `**/*.test.*`, `**/*.spec.*`, `**/test/**`, `**/tests/**`) in the hotspot ranking on purpose, because test maintenance IS real work. It tags them with `[test]`, so you can tell them apart from production code. In JSON, these files have an `is_test_path: true` field.
 
 ### Ownership-derived JSON actions
 
-When `--ownership` is enabled, the `actions` array on hotspot entries gains up to three additional action types so AI agents can act on ownership signals:
+With `--ownership`, the `actions` array on hotspot entries can have up to three more action types. AI agents can use them to act on ownership signals:
 
 | Action type | When emitted | Suggested follow-up |
 |:------------|:-------------|:--------------------|
-| `low-bus-factor` | `bus_factor == 1` | Add a second reviewer to the file. The `note` names specific candidate reviewers (from `suggested_reviewers`) when they exist, softens for low-commit files, or is omitted to avoid boilerplate. |
-| `unowned-hotspot` | `unowned == true` (CODEOWNERS exists, no rule matches) | Add a CODEOWNERS entry. The action's `suggested_pattern` field offers a sensible default (the deepest directory containing the file, e.g. `/src/api/users/`), and a `heuristic: "directory-deepest"` field discriminates the strategy. |
+| `low-bus-factor` | `bus_factor == 1` | Add a second reviewer to the file. The `note` names candidate reviewers (from `suggested_reviewers`) when they exist. It is milder for files with few commits, and fallow omits it when it would only be boilerplate. |
+| `unowned-hotspot` | `unowned == true` (CODEOWNERS exists, no rule matches) | Add a CODEOWNERS entry. The `suggested_pattern` field of the action gives a default: the deepest directory that contains the file (for example `/src/api/users/`). The `heuristic: "directory-deepest"` field names the strategy. |
 | `ownership-drift` | `ownership_state == "drifting"` and `drift == true` | Update CODEOWNERS to the new top contributor. |
 
 ### Email privacy
 
-By default, fallow renders author emails as their local-part (e.g. `alice@example.com` shows as `alice`). GitHub-style noreply prefixes are unwrapped (`12345+alice@users.noreply.github.com` shows as `alice`). Override with `--ownership-emails`:
+By default, fallow shows only the local part of an author email (for example `alice@example.com` shows as `alice`). Fallow also removes GitHub-style noreply prefixes (`12345+alice@users.noreply.github.com` shows as `alice`). To change this, use `--ownership-emails`:
 
 | Mode | Output | When to use |
 |:-----|:-------|:------------|
-| `handle` (default) | Local-part only, with deterministic domain suffixes for same-handle collisions on the same file | Most projects. Balances readability and privacy. |
+| `handle` (default) | Local part only. When two authors of the same file share a handle, fallow adds a deterministic domain suffix | Most projects. Readable, with some privacy. |
 | `anonymized` | `xxh3:<16hex>` non-cryptographic pseudonym | Regulated environments where author identities are sensitive. |
 | `hash` | Same as `anonymized` | Legacy configs and scripts. |
 | `raw` | Full email address | Public OSS repositories where git history is already exposed. |
 
-The anonymized/hash mode uses `xxh3` for stable pseudonyms across runs but is **not** a cryptographic primitive: a known list of org emails can be brute-forced into a rainbow table. The intent is to keep raw PII out of CI artifacts (SARIF, code-scanning uploads), not to provide strong privacy.
+The `anonymized` and `hash` modes use `xxh3` for pseudonyms that stay the same across runs. `xxh3` is **not** a cryptographic hash. Anyone with a list of the email addresses in an organization can brute-force a rainbow table. These modes keep raw PII out of CI artifacts (SARIF, code-scanning uploads). They do not give strong privacy.
 
 ### Configuration
 
-Configure ownership defaults under `health.ownership`:
+Set ownership defaults under `health.ownership`:
 
 ```json
 {
@@ -282,17 +310,21 @@ Configure ownership defaults under `health.ownership`:
 }
 ```
 
-`botPatterns` are glob patterns matched against the raw author email. The default list covers `*\[bot\]*` (escaped brackets, since `[abc]` is a glob character class), `dependabot*`, `renovate*`, `github-actions*`, `svc-*`, and `*-service-account*`. `*noreply*` is intentionally NOT a default: most human GitHub contributors commit from `<id>+<handle>@users.noreply.github.com` (GitHub's privacy default), so filtering on `noreply` would silently exclude the majority of real authors. The actual bot accounts already match via `\[bot\]`.
+`botPatterns` are glob patterns that fallow matches against the raw author email. The default list covers `*\[bot\]*` (with escaped brackets, because `[abc]` is a glob character class), `dependabot*`, `renovate*`, `github-actions*`, `svc-*`, and `*-service-account*`.
+
+`*noreply*` is NOT a default, on purpose. Most human GitHub contributors commit from `<id>+<handle>@users.noreply.github.com` (the GitHub privacy default). A `noreply` filter would silently exclude most real authors. The actual bot accounts already match `\[bot\]`.
 
 <Note>
-  Ownership signals are computed only when `--hotspots` runs and a file passes the `min_commits` threshold (default 3). This gates the analysis on enough history to be meaningful. Squash-merged commits inflate single-author dominance, and shallow clones distort the picture further; fallow warns about both when `--ownership` is active.
+  fallow computes ownership signals only when `--hotspots` runs and a file passes the `min_commits` threshold (default 3). The analysis then runs only on files with enough history. Squash-merged commits make single authors look more dominant, and shallow clones distort the result more. Fallow warns about both when `--ownership` is active.
 </Note>
 
 ## Importing churn from a non-git VCS
 
-`--hotspots`, `--ownership`, and `--targets` read change history from `git log`. On a project with no git repository (Yandex Arc, Mercurial, Perforce) they would otherwise print `note: hotspot analysis skipped: no git repository found` and exit 0.
+Use `--churn-file` to get hotspots, ownership, and refactoring targets on a project that does not use git.
 
-`--churn-file <PATH>` lets you feed history from a normalized JSON file instead. A small wrapper translates your VCS log into the contract; fallow then runs all the same recency-weighting, trend, and ownership logic on the imported events. The file is resolved relative to `--root` and wins over git when both are present.
+`--hotspots`, `--ownership`, and `--targets` read change history from `git log`. On a project with no git repository (Yandex Arc, Mercurial, Perforce), they print `note: hotspot analysis skipped: no git repository found` and exit 0.
+
+`--churn-file <PATH>` reads the history from a normalized JSON file instead. A small wrapper translates your VCS log into the contract. Fallow then runs the same recency weighting, trend, and ownership logic on the imported events. Fallow resolves the file relative to `--root`. When a git repository is also present, the file wins.
 
 ```bash
 fallow health --hotspots --ownership --churn-file churn.json
@@ -309,34 +341,34 @@ fallow health --hotspots --ownership --churn-file churn.json
 }
 ```
 
-One entry per `(commit, file)` touched, the natural shape of a `<vcs> log --numstat`.
+Add one entry per `(commit, file)` pair, the same shape as the output of `<vcs> log --numstat`.
 
 | Field | Required | Meaning |
 |:------|:---------|:--------|
 | `path` | yes | Repo-root-relative, forward-slash. Joined to `--root`. |
-| `timestamp` | yes | Commit time, unix **seconds** UTC (not milliseconds). Drives the recency half-life and the accelerating/stable/cooling trend. |
-| `author` | no | Opaque identity, email recommended. Drives ownership and bus-factor. Absent leaves the event counting toward churn/trend but contributing no author signal. |
-| `added` / `deleted` | yes | Lines changed in that file in that commit. Best-effort: the hotspot score keys on commit-event count, not lines, so imprecise counts still rank correctly; lines feed display only. |
+| `timestamp` | yes | Commit time, unix **seconds** UTC (not milliseconds). Sets the recency half-life and the accelerating/stable/cooling trend. |
+| `author` | no | Opaque identity. An email is recommended. Used for ownership and bus-factor. Without it, the event still counts toward churn and trend, but gives no author signal. |
+| `added` / `deleted` | yes | Lines changed in that file in that commit. Best effort: the hotspot score uses the number of commit events, not lines, so inexact counts still rank correctly. Fallow uses the line counts only for display. |
 
-Extra fields are ignored, so a wrapper may carry additional metadata (a `commit` id, a timezone) without breaking.
+Fallow ignores extra fields, so a wrapper can add metadata (a `commit` id, a timezone) safely.
 
 ### Producer requirements
 
-fallow's git path runs `git log --numstat --no-merges --no-renames --use-mailmap`. A wrapper should reproduce these four behaviors or hotspots and ownership skew:
+For git, fallow runs `git log --numstat --no-merges --no-renames --use-mailmap`. A wrapper should copy these four behaviors. If it does not, hotspots and ownership are skewed:
 
-1. **Omit merge commits.** Otherwise the merge author looks like a contributor to every merged file, inflating bus-factor and skewing the trend.
+1. **Omit merge commits.** Otherwise the merge author looks like a contributor to every merged file. That makes the bus-factor too high and skews the trend.
 2. **Omit binary-file rows entirely** (do not emit `0`/`0`). git skips binary `-`/`-` numstat rows.
-3. **Renames: emit under the new path only**, with the real add/delete count; do not emit a delete-of-old row. (Perforce models a move as delete-old + add-new full-size rows, which would create fake hotspots.)
+3. **Renames: emit under the new path only**, with the real add/delete count. Do not emit a row that deletes the old path. (Perforce models a move as a full-size delete of the old file and a full-size add of the new file, which would create fake hotspots.)
 4. **One row per `(commit, file)`**, with `timestamp` in UTC **seconds**.
 
 Two more notes:
 
-- **Author identity is an opaque key.** fallow does NOT apply mailmap to imported authors, so emit a single canonical form per person (email preferred). If your VCS commits land under a merge/CI bot identity, add it to `health.ownership.botPatterns` in config or bus-factor collapses to 1 everywhere.
-- **Validation is strict where the math depends on it.** A `timestamp` more than a year in the future (almost always a millisecond value mistaken for seconds) is rejected with exit 2; an empty `events` array is valid (no hotspots), not an error; a malformed file is a loud hard error, not a silent skip.
+- **Author identity is an opaque key.** fallow does NOT apply mailmap to imported authors, so emit one canonical form per person (preferably the email). If your VCS records commits under a merge or CI bot identity, add that identity to `health.ownership.botPatterns` in config. Otherwise the bus-factor drops to 1 everywhere.
+- **Validation is strict where the math depends on it.** fallow rejects a `timestamp` more than a year in the future with exit 2. Such a value is almost always milliseconds instead of seconds. An empty `events` array is valid (no hotspots), not an error. A malformed file stops the run with a clear error, and fallow never skips it silently.
 
 ### Reference wrapper (Mercurial)
 
-This Mercurial example pulls the last six months, excludes merges, and emits one event per file per commit:
+This Mercurial example reads the last six months, excludes merges, and emits one event per file per commit:
 
 ```bash
 # hg-churn.sh: emit fallow-churn/v1 for the last 6 months (no merges).
@@ -358,27 +390,27 @@ print(json.dumps({"schema": "fallow-churn/v1", "events": events}))
 ' > churn.json
 ```
 
-The hg template separates fields with tabs (`\t`), which never appear in paths or emails. Per-file `added`/`deleted` are left `0`; fill them in if your VCS exposes line counts cheaply. The hotspot score is driven by commit-event count rather than line totals, so ranking stays correct either way. For Yandex Arc, drive the same shape from `arc log`; for Perforce, from `p4 changes` + `p4 describe`.
+The hg template separates fields with tabs (`\t`), which never appear in paths or emails. The script sets the per-file `added`/`deleted` to `0`. Fill them in if your VCS gives line counts at low cost. The hotspot score uses the number of commit events, not line totals, so the ranking is correct either way. For Yandex Arc, build the same shape from `arc log`. For Perforce, build it from `p4 changes` + `p4 describe`.
 
 ### Scope
 
-`--churn-file` powers the churn-backed health signals only: `--hotspots`, `--ownership`, and `--targets`. The diff-based commands stay git-only because they need the base revision's tree, not just history:
+`--churn-file` feeds only the churn-backed health signals: `--hotspots`, `--ownership`, and `--targets`. The diff-based commands need git, because they need the tree of the base revision, not only the history:
 
-- `--changed-since` line/file filtering already has a file-based equivalent: `--diff-file` / `--diff-stdin` accept a unified diff. If your VCS can emit a git-format patch, point those at it.
-- `fallow audit` and `fallow impact` check out the base revision into a temporary git worktree and re-analyze it, which needs real base-tree contents. They require git.
+- For the line and file filters of `--changed-since`, use the file-based equivalent: `--diff-file` / `--diff-stdin` accept a unified diff. If your VCS can emit a git-format patch, pass that patch.
+- `fallow audit` and `fallow impact` check out the base revision into a temporary git worktree and analyze it again. That needs the real contents of the base tree, so they require git.
 
 ## Vital signs
 
-When file-scores are enabled (either explicitly via `--file-scores` or implicitly via `--save-snapshot`), the JSON output includes a `vital_signs` object with high-level codebase health metrics.
+Vital signs give you a few top-level numbers for the health of the codebase. When file scores are on (with `--file-scores`, or implicitly with `--save-snapshot`), the JSON output has a `vital_signs` object.
 
 | Metric | Description |
 |:-------|:------------|
 | `dead_file_pct` | Percentage of files with zero inbound references |
 | `dead_export_pct` | Percentage of value exports with zero references |
 | `avg_cyclomatic` | Average cyclomatic complexity across all functions |
-| `critical_complexity_pct` | Percentage of functions at or above the critical cyclomatic threshold. Used by health score formula v2. |
+| `critical_complexity_pct` | Percentage of functions at or above the critical cyclomatic threshold. Health score formula v2 uses it. |
 | `p90_cyclomatic` | 90th percentile cyclomatic complexity |
-| `duplication_pct` | Percentage of duplicated code. Populated automatically when `--score` is used; null otherwise. |
+| `duplication_pct` | Percentage of duplicated code. Set automatically with `--score`, otherwise null. |
 | `hotspot_count` | Number of files with a hotspot score >= 50 |
 | `hotspot_top_pct_count` | Number of positive-score files in the top 1% of the within-project hotspot ranking |
 | `maintainability_avg` | Average maintainability index across all scored files |
@@ -391,12 +423,12 @@ When file-scores are enabled (either explicitly via `--file-scores` or implicitl
 | `functions_over_60_loc_per_k` | Functions above 60 LOC per 1,000 functions |
 | `unit_interfacing_profile` | Per-function risk distribution by parameter count (percentage per bin) |
 | `p95_fan_in` | 95th percentile fan-in across files |
-| `coupling_high_pct` | Percentage of files exceeding the fan-in threshold |
-| `counts` | Raw numerator/denominator counts behind the percentage metrics (e.g. `dead_files`, `total_files`, `dead_exports`, `total_exports`, `unused_deps`, `circular_deps`) |
+| `coupling_high_pct` | Percentage of files above the fan-in threshold |
+| `counts` | The raw numerator and denominator counts behind the percentage metrics (for example `dead_files`, `total_files`, `dead_exports`, `total_exports`, `unused_deps`, `circular_deps`) |
 
 ## Snapshots
 
-Use `--save-snapshot` to capture a point-in-time record of your codebase's vital signs. Snapshots enable trend tracking across builds, sprints, or releases.
+Snapshots let you track the health of your codebase across builds, sprints, or releases. Use `--save-snapshot` to record the vital signs at one point in time.
 
 ### Snapshot format
 
@@ -453,18 +485,18 @@ Use `--save-snapshot` to capture a point-in-time record of your codebase's vital
 | Field | Description |
 |:------|:------------|
 | `snapshot_schema_version` | Schema version for forward compatibility (currently v10) |
-| `version` | Fallow version that produced the snapshot |
+| `version` | The fallow version that produced the snapshot |
 | `timestamp` | ISO 8601 timestamp of the snapshot |
 | `git_sha` | Current git commit SHA (if in a git repo) |
 | `git_branch` | Current git branch name |
-| `shallow_clone` | Whether a shallow clone was detected |
+| `shallow_clone` | Whether fallow detected a shallow clone |
 | `vital_signs` | High-level health metrics (see [Vital signs](#vital-signs)) |
 | `counts` | Raw numerators and denominators behind the percentage metrics |
 | `score` | Project health score (0-100). |
 | `grade` | Letter grade (A/B/C/D/F). |
 
 <Tip>
-  Store snapshots in CI artifacts or commit them to your repo to build a history of codebase health over time.
+  To build a history of codebase health, store snapshots as CI artifacts or commit them to your repo.
 </Tip>
 
 ## Examples
@@ -677,13 +709,13 @@ fallow health --coverage-gaps --file-scores
 
 ## JSON output
 
-Each section's fields appear only when that section is enabled; a disabled section is absent from the envelope, not empty.
+The fields of a section appear only when that section is on. A section that is off is absent from the envelope, not empty.
 
 ### Degraded inputs
 
-A health input that failed to load contributes zeros, and a zero reads like a clean measurement. To tell a measured zero from a missing measurement, read the number together with `workspace_diagnostics[]`. A diagnostic with `degrades_analysis: true` beside a zero means fallow measured nothing.
+A health input that failed to load gives zeros, and such a zero looks like a clean measurement. To tell a measured zero from a missing measurement, read the number together with `workspace_diagnostics[]`. A diagnostic with `degrades_analysis: true` next to a zero means that fallow measured nothing.
 
-These inputs report that way:
+These inputs report in this way:
 
 - A failed score pass.
 - A project with no git repository.
@@ -694,9 +726,9 @@ These inputs report that way:
 - An unparsable CODEOWNERS file.
 - An unreadable trend snapshot.
 
-The inputs that stop churn share one kind, `hotspots-skipped`, and its `cause` names the input: `not-a-repository`, `invalid-since` or `churn-file-unreadable`. `coverage-auto-detected` is the exception. It names the coverage file that fed the CRAP scores, so it reports provenance for an input that did load, and it leaves `degrades_analysis` unset. [Debugging](/analysis/debugging#a-health-section-reports-nothing) lists every kind, and which numbers each kind leaves at zero.
+The inputs that stop churn share one kind, `hotspots-skipped`. Its `cause` names the input: `not-a-repository`, `invalid-since` or `churn-file-unreadable`. `coverage-auto-detected` is the exception. It names the coverage file that fed the CRAP scores, so it reports the source of an input that did load. It leaves `degrades_analysis` unset. [Debugging](/analysis/debugging#a-health-section-reports-nothing) lists every kind, and which numbers each kind leaves at zero.
 
-Select on `degrades_analysis`, not on a list of kinds, so a kind added later reaches your consumer unchanged:
+Select on `degrades_analysis`, not on a list of kinds. A kind that fallow adds later then reaches your tool without a change:
 
 ```bash
 fallow health --format json --quiet | jq '.workspace_diagnostics[] | select(.degrades_analysis)'
@@ -733,26 +765,31 @@ Fallow writes every entry with or without `--quiet`, so a CI job that drops stde
 }
 ```
 
-Complexity findings evaluated with local ceilings include `effective_thresholds` and `threshold_source: "override"`. When configured threshold overrides affect a run, JSON also includes a top-level `threshold_overrides[]` array; see [Threshold overrides](#threshold-overrides) below.
+A complexity finding that fallow evaluated with a local ceiling includes `effective_thresholds` and `threshold_source: "override"`. When configured threshold overrides affect a run, JSON also includes a top-level `threshold_overrides[]` array. See [Threshold overrides](#threshold-overrides) below.
 
-When `--css` is active, JSON also includes `css_analytics` for descriptive CSS evidence and `styling_findings` for first-class styling issues. Each styling finding has `code`, `sub_kind`, `effective_severity`, location, evidence value, and read-only actions, and can be configured through the styling rules.
+With `--css`, JSON also includes `css_analytics` for descriptive CSS evidence and `styling_findings` for first-class styling issues. Each styling finding has `code`, `sub_kind`, `effective_severity`, location, evidence value, and read-only actions. You configure styling findings through the styling rules.
 
 ### Threshold overrides
 
-When configured `health.thresholdOverrides[]` entries affect a run, JSON includes a `threshold_overrides[]` array with one row per threshold dimension each entry participates in: `complexity` covers the `maxCyclomatic`, `maxCognitive`, and `maxUnitSize` ceilings, and `crap` covers `maxCrap` alone. An entry that configures both a structural ceiling and `maxCrap` therefore produces two rows sharing one `override_index`; group on `override_index` to count configured entries rather than rows.
+Use `threshold_overrides[]` to find overrides that no longer do anything or do not go far enough. When configured `health.thresholdOverrides[]` entries affect a run, JSON includes this array. It has one row per entry per threshold dimension that the entry uses:
+
+- `complexity` covers the `maxCyclomatic`, `maxCognitive`, and `maxUnitSize` ceilings.
+- `crap` covers only `maxCrap`.
+
+An entry that configures a structural ceiling and also `maxCrap` produces two rows with the same `override_index`. To count configured entries and not rows, group on `override_index`.
 
 | Field | Description |
 |:------|:------------|
-| `status` | `active` (the override matches a finding that still needs the raised ceiling), `stale` (the override is not what keeps the matched unit quiet: it passes the global thresholds on its own, or an inline suppression already covers it), `insufficient` (the override raises a ceiling the matched code still exceeds, so the finding survives), or `no_match` (the entry matches no analyzed file or function). |
-| `override_index` | Position of the entry in the configured `thresholdOverrides` array. Shared by every row the entry produces. |
-| `dimension` | Threshold dimension this row describes: `complexity` or `crap`. |
-| `outstanding` | Dimensions the matched unit still breaches despite the override, whether or not the entry configures their ceilings. Omitted when empty. |
+| `status` | `active`: the override matches a finding that still needs the raised ceiling. `stale`: the override does not keep the matched unit quiet, because the unit passes the global thresholds on its own or an inline suppression already covers it. `insufficient`: the matched code still exceeds the raised ceiling, so the finding stays. `no_match`: the entry matches no analyzed file or function. |
+| `override_index` | Position of the entry in the configured `thresholdOverrides` array. Every row of the entry has the same value. |
+| `dimension` | The threshold dimension of this row: `complexity` or `crap`. |
+| `outstanding` | Dimensions that the matched unit still breaches with the override, whether or not the entry configures their ceilings. Omitted when empty. |
 | `path`, `function` | Matched file, and matched function for function-scoped entries. |
-| `line`, `col` | 1-based line and 0-based column of the matched unit. Absent on `no_match` rows. Several units in one file can share a name; the position keeps their rows distinct. |
-| `configured_thresholds` | Ceilings the entry itself configures. |
-| `effective_thresholds` | Ceilings in effect for the matched unit after applying every matching entry on top of the defaults. |
-| `metrics` | Current `cyclomatic` and `cognitive` of the matched code, plus `crap` when coverage data exists. Absent on `no_match` rows. |
-| `reason` | The entry's configured `reason`, when set. |
+| `line`, `col` | 1-based line and 0-based column of the matched unit. Absent on `no_match` rows. Several units in one file can have the same name. The position keeps their rows separate. |
+| `configured_thresholds` | Ceilings that the entry itself configures. |
+| `effective_thresholds` | Ceilings for the matched unit after fallow applies every matching entry on top of the defaults. |
+| `metrics` | Current `cyclomatic` and `cognitive` of the matched code, and `crap` when coverage data exists. Absent on `no_match` rows. |
+| `reason` | The configured `reason` of the entry, when set. |
 
 ```json title="threshold_overrides[] row (crap dimension)"
 {
@@ -786,11 +823,11 @@ When configured `health.thresholdOverrides[]` entries affect a run, JSON include
 }
 ```
 
-This row reads: the first configured entry raised the CRAP ceiling to 40, but `legacyFlow` scores 56, so the CRAP finding survives the override; `outstanding` shows the unit also still breaches the complexity dimension. An `insufficient` row means the override applied but did not settle the finding, so either raise the ceiling further or fix the function.
+In this row, the first configured entry raised the CRAP ceiling to 40. `legacyFlow` scores 56, so the CRAP finding stays. `outstanding` shows that the unit also still breaches the complexity dimension. An `insufficient` row means that the override applied but did not resolve the finding. Raise the ceiling more or fix the function.
 
 ### With file scores
 
-When `--file-scores` is used, the JSON output includes additional fields:
+With `--file-scores`, the JSON output has more fields:
 
 ```json title="$ fallow health --file-scores --format json --top 2"
 {
@@ -839,12 +876,17 @@ When `--file-scores` is used, the JSON output includes additional fields:
 ```
 
 <Note>
-  `--file-scores` adds the `file_scores` array and the `summary.files_scored` / `summary.average_maintainability` / `summary.coverage_model` fields. The `coverage_model` field indicates how CRAP coverage was determined: `static_estimated` (default, per-function estimation from export references: 85% direct, 40% indirect, 0% untested) or `istanbul` (real per-function statement coverage from `--coverage` flag or auto-detected `coverage-final.json`). CRAP findings carry `coverage_source`; when such findings are emitted, `summary.coverage_source_consistency` reports `uniform` or `mixed` even if `summary.coverage_model` is omitted.
+  `--file-scores` adds the `file_scores` array and the `summary.files_scored` / `summary.average_maintainability` / `summary.coverage_model` fields. The `coverage_model` field shows how fallow got the CRAP coverage:
+
+  - `static_estimated` (default): a per-function estimate from export references (85% direct, 40% indirect, 0% untested).
+  - `istanbul`: real per-function statement coverage from the `--coverage` flag or an auto-detected `coverage-final.json`.
+
+  CRAP findings have a `coverage_source` field. When the output has such findings, `summary.coverage_source_consistency` reports `uniform` or `mixed`, even when `summary.coverage_model` is absent.
 </Note>
 
 ### With hotspots
 
-When `--hotspots` is used, the JSON output includes a `hotspots` array and `hotspot_summary`:
+With `--hotspots`, the JSON output has a `hotspots` array and a `hotspot_summary`:
 
 ```json title="$ fallow health --hotspots --format json --top 2"
 {
@@ -907,7 +949,7 @@ When `--hotspots` is used, the JSON output includes a `hotspots` array and `hots
 
 ### With refactoring targets
 
-When `--targets` is used, the JSON output includes a `targets` array:
+With `--targets`, the JSON output has a `targets` array:
 
 ```json title="$ fallow health --targets --format json --top 2"
 {
@@ -969,31 +1011,38 @@ When `--targets` is used, the JSON output includes a `targets` array:
 }
 ```
 
-Targets are sorted by `efficiency` (priority / effort) descending, surfacing quick wins first. Each target includes `efficiency`, `effort` (`low`/`medium`/`high`), `confidence` (`high`/`medium`/`low`, based on data source reliability), and `factors` with raw `value`/`threshold` for programmatic use. The `target_thresholds` object exposes the adaptive percentile-based thresholds used for scoring, so consumers can interpret scores in context. The `evidence` field provides actionable detail for supported categories (`remove_dead_code`, `extract_complex_functions`, `break_circular_dependency`, `add_test_coverage`); omitted for other categories.
+Fallow sorts targets by `efficiency` (priority / effort), highest first, so the quick wins come first. Each target has:
+
+- `efficiency`
+- `effort` (`low`/`medium`/`high`)
+- `confidence` (`high`/`medium`/`low`, from the reliability of the data source)
+- `factors`, with the raw `value`/`threshold` for use in scripts
+
+The `target_thresholds` object shows the adaptive, percentile-based thresholds that the scoring used, so you can read the scores in context. The `evidence` field gives details that you can act on for the supported categories (`remove_dead_code`, `extract_complex_functions`, `break_circular_dependency`, `add_test_coverage`). Other categories omit it.
 
 ### Target categories
 
 | Category | Label | Description |
 |:---------|:------|:------------|
-| `urgent_churn_complexity` | churn+complexity | Actively-changing file with growing complexity |
-| `break_circular_dependency` | circular dependency | File participates in a dependency cycle |
-| `split_high_impact` | high impact | High fan-in with high complexity; changes ripple widely |
-| `remove_dead_code` | dead code | Majority of exports are unused |
+| `urgent_churn_complexity` | churn+complexity | File that changes often and grows in complexity |
+| `break_circular_dependency` | circular dependency | File is part of a dependency cycle |
+| `split_high_impact` | high impact | High fan-in with high complexity. A change affects many files |
+| `remove_dead_code` | dead code | Most exports are unused |
 | `extract_complex_functions` | complexity | Contains functions with very high cognitive complexity |
-| `extract_dependencies` | coupling | Excessive imports reduce testability and increase coupling |
-| `add_test_coverage` | untested risk | Multiple complex functions lack test dependency path. Fires when a file has 2+ functions above the CRAP threshold and complexity density > 0.3. The `crap_max` contributing factor appears on these targets. |
+| `extract_dependencies` | coupling | Too many imports make the file harder to test and increase coupling |
+| `add_test_coverage` | untested risk | Several complex functions have no test dependency path. Applies when a file has 2+ functions above the CRAP threshold and complexity density > 0.3. These targets show the `crap_max` contributing factor. |
 
 ### With vital signs
 
-When file-scores are enabled (via `--file-scores` or implicitly via `--save-snapshot`), the JSON output includes a top-level `vital_signs` object with the metrics listed under [Vital signs](#vital-signs), plus the nested `counts` object. The [snapshot format](#snapshot-format) shows a complete example.
+When file scores are on (with `--file-scores`, or implicitly with `--save-snapshot`), the JSON output has a top-level `vital_signs` object with the metrics in [Vital signs](#vital-signs), and the nested `counts` object. The [snapshot format](#snapshot-format) shows a complete example.
 
 <Note>
-  The `duplication_pct` field is populated automatically when `--score` is used, or when duplication analysis runs via `fallow dupes`, bare `fallow`, or `fallow dead-code --include-dupes`. It is `null` otherwise.
+  fallow sets the `duplication_pct` field automatically with `--score`, or when duplication analysis runs through `fallow dupes`, bare `fallow`, or `fallow dead-code --include-dupes`. Otherwise it is `null`.
 </Note>
 
 ### With health score
 
-When `--score` is used, the JSON output includes a `health_score` object with score, grade, and penalty breakdown:
+With `--score`, the JSON output has a `health_score` object with the score, the grade, and the penalty breakdown:
 
 ```json title="$ fallow health --score --format json (health_score excerpt)"
 {
@@ -1017,11 +1066,11 @@ When `--score` is used, the JSON output includes a `health_score` object with sc
 }
 ```
 
-The score is reproducible from the penalties: `100 - sum(penalties) == score`. Penalty fields are `null` (absent from JSON) when the corresponding pipeline didn't run. The penalty formulas, `formula_version`, and the letter-grade bands are documented under [Health score](/explanations/health#health-score).
+You can reproduce the score from the penalties: `100 - sum(penalties) == score`. A penalty field is `null` (absent from JSON) when its pipeline did not run. [Health score](/explanations/health#health-score) documents the penalty formulas, `formula_version`, and the letter-grade bands.
 
 ### With trend
 
-When `--trend` is used, the JSON output includes a `health_trend` object comparing current metrics against the most recent saved snapshot:
+With `--trend`, the JSON output has a `health_trend` object. It compares the current metrics with the most recent saved snapshot:
 
 ```json title="$ fallow health --trend --format json (health_trend)"
 {
@@ -1134,19 +1183,26 @@ When `--trend` is used, the JSON output includes a `health_trend` object compari
 }
 ```
 
-Each metric includes `direction` (`improving`, `declining`, or `stable`) based on whether the change is beneficial. Percentage metrics include `previous_count` and `current_count` with raw numerator/denominator. The `overall_direction` summarizes across all metrics by majority vote.
+Each metric has a `direction` (`improving`, `declining`, or `stable`) that shows if the change is good. Percentage metrics have `previous_count` and `current_count` with the raw numerator and denominator. `overall_direction` is the majority vote across all metrics.
 
 <Note>
-  `--trend` requires at least one saved snapshot in `.fallow/snapshots/`. Use `--save-snapshot` to create snapshots first. Without any snapshots, the `health_trend` object is omitted.
+  `--trend` requires at least one saved snapshot in `.fallow/snapshots/`. Create snapshots first with `--save-snapshot`. Without snapshots, the output has no `health_trend` object.
 </Note>
 
 ### With coverage gaps
 
-When `--coverage-gaps` is used, the JSON output includes a `coverage_gaps` object listing runtime files and exports that no test dependency path reaches.
+Coverage gaps show the runtime code that no test reaches. With `--coverage-gaps`, the JSON output has a `coverage_gaps` object. It lists the runtime files and exports that no test dependency path reaches.
 
-The analysis is mock-aware. A test that replaces a module with `vi.mock` / `jest.mock` and a statically closed factory (one that provably never loads the original: no `vi.importActual` / `jest.requireActual`, no outer imports of the mocked module) does not count as reaching that module, so a module only ever imported behind such a mock can surface as a gap. Anything fallow cannot prove keeps coverage credit: automock (`vi.mock` / `jest.mock` without a factory) never removes credit because the runner may still evaluate the original module, and `vi.doMock` / `jest.doMock` never remove credit because they are unhoisted and order-sensitive. `doMock` additionally credits its target and, for path-shaped static specifiers like `./services/api`, the `__mocks__` sibling; bare package specifiers (`vi.doMock('axios')`) credit the package but not a root `__mocks__` file, and templated specifiers credit nothing.
+The analysis is mock-aware. Some tests replace a module with `vi.mock` / `jest.mock` and a statically closed factory. Such a factory provably never loads the original: it has no `vi.importActual` / `jest.requireActual`, and no outer imports of the mocked module. Such a test does not count as reaching that module. A module that tests import only behind such a mock can therefore show up as a gap.
 
-The `coverage-gaps` rule supports `error`, `warn`, or `off` severity in your config (default `off`):
+When fallow cannot prove that a mock replaces the module, the module keeps its coverage credit:
+
+- Automock (`vi.mock` / `jest.mock` without a factory) never removes credit, because the runner can still evaluate the original module.
+- `vi.doMock` / `jest.doMock` never remove credit, because they are not hoisted and depend on order.
+
+`doMock` also gives credit to its target. For path-shaped static specifiers like `./services/api`, it also gives credit to the `__mocks__` sibling. Bare package specifiers (`vi.doMock('axios')`) give credit to the package, but not to a root `__mocks__` file. Templated specifiers give credit to nothing.
+
+Set the severity of the `coverage-gaps` rule to `error`, `warn`, or `off` in your config (default `off`):
 
 <CodeGroup>
 ```jsonc .fallowrc.json
@@ -1198,11 +1254,11 @@ coverage-gaps = "warn"
 }
 ```
 
-The `files` array lists runtime files where no export is reached by any test dependency path. The `exports` array lists individual exports in otherwise-covered files that lack test reachability.
+The `files` array lists runtime files where no test dependency path reaches any export. The `exports` array lists single exports that no test reaches, in files that tests otherwise cover.
 
 ### With runtime coverage
 
-When `--runtime-coverage` is used, the JSON output includes a `runtime_coverage` object that merges runtime evidence into the standard health report.
+Runtime coverage shows which code production actually runs. With `--runtime-coverage`, the JSON output has a `runtime_coverage` object that merges runtime evidence into the standard health report.
 
 ```json title="$ fallow health --runtime-coverage ./coverage --format json"
 {
@@ -1267,26 +1323,26 @@ When `--runtime-coverage` is used, the JSON output includes a `runtime_coverage`
 }
 ```
 
-Key points:
+The key fields:
 
 | Field | Meaning |
 |:------|:--------|
-| `verdict` | Overall runtime verdict: `clean`, `cold-code-detected`, `hot-path-touched`, `license-expired-grace`, or `unknown`. Promotes `hot-path-touched` over `cold-code-detected` in PR-review contexts when `--diff-file` (or `--changed-since`) is set. |
-| `signals` | Array of every signal post-processing detected, independent of `verdict` (the single most actionable one). Ordered severity-descending; omitted when empty. A PR run that hits both cold code and a hot path emits `["cold-code-detected", "hot-path-touched"]`. |
-| `summary` | Aggregate counts of tracked, hit, unhit, and untracked functions; the coverage ratio; total trace volume; and the observation window. |
-| `findings` | Cold or unresolved functions. Each finding has a stable `id` (`fallow:prod:<hash>`), `verdict` (`safe_to_delete` / `review_required` / `low_traffic` / `coverage_unavailable` / `active` / `unknown`), and an `evidence` block explaining the verdict. |
-| `hot_paths` | Highest-invocation runtime functions, filtered by `--min-invocations-hot`. Each has a stable `id` (`fallow:hot:<hash>`) and `percentile` rank. |
-| `coverage_intelligence` | Additive decision layer emitted when runtime coverage can be combined with static usage, test coverage, CRAP/complexity, ownership, or change scope. It summarizes `risky-change-detected`, `high-confidence-delete`, `review-required`, and `refactor-carefully` findings with stable `fallow:coverage-intel:<hash>` IDs, compact evidence, related runtime IDs, and actions. Omitted when no combined finding is available. |
-| `watermark` | Present only when trial/license grace rules require visible annotation in the output. |
+| `verdict` | Overall runtime verdict: `clean`, `cold-code-detected`, `hot-path-touched`, `license-expired-grace`, or `unknown`. In a PR review with `--diff-file` (or `--changed-since`), `hot-path-touched` wins over `cold-code-detected`. |
+| `signals` | Array of every signal that post-processing detected. `verdict` has only the one signal that is most useful to act on. Ordered from highest to lowest severity. Omitted when empty. A PR run that hits cold code and also a hot path emits `["cold-code-detected", "hot-path-touched"]`. |
+| `summary` | Aggregate counts of tracked, hit, unhit, and untracked functions, the coverage ratio, the total trace volume, and the observation window. |
+| `findings` | Cold or unresolved functions. Each finding has a stable `id` (`fallow:prod:<hash>`), `verdict` (`safe_to_delete` / `review_required` / `low_traffic` / `coverage_unavailable` / `active` / `unknown`), and an `evidence` block that explains the verdict. |
+| `hot_paths` | The runtime functions with the most invocations, filtered by `--min-invocations-hot`. Each has a stable `id` (`fallow:hot:<hash>`) and a `percentile` rank. |
+| `coverage_intelligence` | Additive decision layer. Fallow emits it when it can combine runtime coverage with static usage, test coverage, CRAP/complexity, ownership, or change scope. It summarizes `risky-change-detected`, `high-confidence-delete`, `review-required`, and `refactor-carefully` findings, with stable `fallow:coverage-intel:<hash>` IDs, compact evidence, related runtime IDs, and actions. Omitted when there is no combined finding. |
+| `watermark` | Present only when the trial or license grace rules require a visible note in the output. |
 | `warnings` | Non-fatal coverage merge diagnostics. |
 
-The `runtime_coverage` object is extended additively as the `fallow-cov` protocol evolves: `summary.capture_quality` is optional, and `HotPath.end_line` lets a consumer do line-range overlap against a `--diff-file`.
+The `runtime_coverage` object gets additive fields as the `fallow-cov` protocol changes. `summary.capture_quality` is optional. `HotPath.end_line` lets a tool check line-range overlap against a `--diff-file`.
 
-Use [`fallow coverage setup`](/cli/coverage) for first-run capture instructions; start a trial with [`fallow license`](/cli/license) when you need continuous or multi-capture runtime monitoring. For the conceptual model and trade-offs, see [Runtime coverage](/analysis/runtime-coverage).
+For first-run capture instructions, use [`fallow coverage setup`](/cli/coverage). When you need continuous or multi-capture runtime monitoring, start a trial with [`fallow license`](/cli/license). For the concepts and trade-offs, see [Runtime coverage](/analysis/runtime-coverage).
 
 ## Markdown output
 
-Formatted for PR comments. Pipe directly to `gh pr comment`:
+Use the markdown format for PR comments. Pipe it to `gh pr comment`:
 
 ```bash
 fallow health --file-scores --format markdown | gh pr comment --body-file -
@@ -1312,7 +1368,7 @@ fallow health --file-scores --format markdown | gh pr comment --body-file -
 
 ## SARIF output
 
-SARIF format for GitHub Code Scanning and other static analysis tools:
+Use the SARIF format for GitHub Code Scanning and other static analysis tools:
 
 ```bash
 fallow health --format sarif
@@ -1353,7 +1409,7 @@ Upload to GitHub Code Scanning in CI:
 
 ## Configuration
 
-Configure default thresholds and ignore patterns in your config file:
+Set default thresholds and ignore patterns in your config file:
 
 <CodeGroup>
 ```jsonc .fallowrc.json
@@ -1400,7 +1456,7 @@ See [Configuration](/configuration/overview) for the full config reference.
 
 ## Inline suppression
 
-Suppress individual functions from complexity findings with inline comments:
+To remove a single function from the complexity findings, add an inline comment:
 
 ```ts
 // fallow-ignore-next-line complexity
@@ -1409,30 +1465,32 @@ function* parseCsv(text) {
 }
 ```
 
-Both cyclomatic and cognitive metrics are suppressed together. File scores and vital signs are unaffected (they reflect actual complexity, not alerting). Use `// fallow-ignore-file complexity` to suppress all functions in a file.
+The comment suppresses the cyclomatic and the cognitive metric together. File scores and vital signs do not change, because they show the actual complexity and do not raise alerts. To suppress all functions in a file, use `// fallow-ignore-file complexity`.
 
-For coverage gaps: `// fallow-ignore-file coverage-gaps` excludes the file from untested-code reporting.
+To exclude a file from the coverage-gap report, use `// fallow-ignore-file coverage-gaps`.
 
 ### `suggestInlineSuppression` and baselines
 
-The JSON output for each health finding includes an `actions` array with machine-actionable hints (refactor, add coverage, suppress). The `suppress-line` hint is omitted automatically when:
+In the JSON output, each health finding has an `actions` array with hints that a tool can act on (refactor, add coverage, suppress). Fallow omits the `suppress-line` hint automatically when:
 
-- `--baseline` or `--save-baseline` is active. The baseline file already suppresses existing findings, so adding `// fallow-ignore-next-line` comments on top would create dead annotations once the baseline regenerates.
-- `health.suggestInlineSuppression` is set to `false` in config. Use this when your team manages suppressions exclusively through hand-authored `// fallow-ignore-*` comments and does not want CI-driven inline suppression hints in JSON output.
+- `--baseline` or `--save-baseline` is active. The baseline file already suppresses existing findings. Extra `// fallow-ignore-next-line` comments would become dead annotations when you regenerate the baseline.
+- `health.suggestInlineSuppression` is `false` in config. Use this when your team manages suppressions only through hand-written `// fallow-ignore-*` comments, and does not want inline suppression hints from CI in the JSON output.
 
-When the hint is omitted, a top-level `actions_meta: { "suppression_hints_omitted": true, "reason": "baseline-active" | "config-disabled" }` breadcrumb is added to the health JSON envelope so consumers can audit the omission.
+When fallow omits the hint, it adds a top-level `actions_meta: { "suppression_hints_omitted": true, "reason": "baseline-active" | "config-disabled" }` field to the health JSON envelope. A tool can use it to see why the hint is missing.
 
 ### Action selection by coverage tier
 
-For findings triggered by CRAP, the primary action is selected by a formula-aware rule, with the `coverage_tier` field choosing the description:
+For a finding that CRAP triggers, a rule based on the CRAP formula selects the primary action. The `coverage_tier` field selects the description:
 
-- **Coverage CAN clear CRAP** (`cyclomatic < maxCrap`): the function's CRAP score can be brought below `maxCrap` by improving coverage, since `CRAP = CC^2 * (1 - cov/100)^3 + CC` bottoms out at `CC` at 100% coverage. The tier picks the description:
-  - `none` (file not test-reachable, or Istanbul reports 0%): emits `add-tests` with a "start from scratch" description.
-  - `partial` (some coverage exists, Istanbul `(0, 70)`, or estimated 40% band): emits `increase-coverage` with a "targeted branch coverage" description, since the file already has a test path.
-  - `high` (Istanbul `>= 70`, or estimated 85% band): emits `increase-coverage` (NOT refactor) because additional coverage can still drop CRAP below threshold for a function whose cyclomatic is small enough.
-- **Coverage CANNOT clear CRAP** (`cyclomatic >= maxCrap`): no amount of coverage will bring CRAP under threshold; emits `refactor-function` instead, regardless of tier. Reducing cyclomatic complexity is the only remaining lever.
+- **Coverage CAN clear CRAP** (`cyclomatic < maxCrap`): more coverage can bring the CRAP score of the function below `maxCrap`, because `CRAP = CC^2 * (1 - cov/100)^3 + CC` drops to `CC` at 100% coverage. The tier selects the description:
+  - `none` (no test reaches the file, or Istanbul reports 0%): emits `add-tests` with a "start from scratch" description.
+  - `partial` (some coverage exists, Istanbul `(0, 70)`, or estimated 40% band): emits `increase-coverage` with a "targeted branch coverage" description, because the file already has a test path.
+  - `high` (Istanbul `>= 70`, or estimated 85% band): emits `increase-coverage` (NOT refactor), because more coverage can still bring CRAP below the threshold when the cyclomatic complexity of the function is small enough.
+- **Coverage CANNOT clear CRAP** (`cyclomatic >= maxCrap`): no amount of coverage brings CRAP below the threshold. Fallow emits `refactor-function` instead, for every tier. The only remaining fix is lower cyclomatic complexity.
 
-When CRAP-only and the function's cyclomatic count is within `health.crapRefactorBand` of `maxCyclomatic`, a secondary `refactor-function` action is also emitted alongside the coverage action, but only when cognitive complexity is at or above `maxCognitive / 2`. The default band is `5`; set it to `0` to only add the secondary refactor once cyclomatic already reaches `maxCyclomatic`. The cognitive floor suppresses the secondary refactor on flat type-tag dispatchers and JSX render maps where high cyclomatic comes from a single switch with near-zero cognitive load (refactoring those is wrong-target advice).
+For a CRAP-only finding whose cyclomatic count is within `health.crapRefactorBand` of `maxCyclomatic`, fallow also emits a secondary `refactor-function` action next to the coverage action. It does so only when cognitive complexity is at or above `maxCognitive / 2`. The default band is `5`. Set it to `0` to add the secondary refactor only when cyclomatic already reaches `maxCyclomatic`.
+
+The cognitive floor suppresses the secondary refactor on flat type-tag dispatchers and JSX render maps. In those functions, the high cyclomatic count comes from a single switch with almost no cognitive load, so a refactor is the wrong advice.
 
 See [Inline suppression](/configuration/suppression) for all suppressible issue types.
 
@@ -1440,10 +1498,10 @@ See [Inline suppression](/configuration/suppression) for all suppressible issue 
 
 <CardGroup cols={3}>
   <Card title="Health metrics explained" icon="chart-line" href="/explanations/health">
-    CRAP metric, maintainability index, hotspot scoring, and coverage model details.
+    The CRAP metric, maintainability index, hotspot scoring, and coverage model.
   </Card>
   <Card title="Dead code analysis" icon="skull-crossbones" href="/analysis/dead-code">
-    Find unused code alongside complexity hotspots.
+    Find unused code next to complexity hotspots.
   </Card>
   <Card title="Configuration" icon="gear" href="/configuration/overview">
     Set default thresholds in your config file.
