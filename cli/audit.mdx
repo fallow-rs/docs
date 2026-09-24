@@ -184,7 +184,7 @@ To judge a baseline, run the command that owns it over the whole project. The se
 
 An audit that loaded a baseline also has `gate_outcomes["stale-baseline"]` set to `{"status": "skipped", "enforced": false}`. There is one entry for any number of loaded baselines. The entry puts this fact on the gate outcomes line, which the pull-request comment and the merge-request note render. The entry also stays `skipped` for a baseline of another `kind`. See [CI](/integrations/ci) for what the shipped integrations report per baseline.
 
-An audit checks the `kind` of every baseline that it loads, and reports every mismatch. Each mismatch prints a warning on stderr that names the flag with the path: `--dead-code-baseline`, `--dupes-baseline` or `--health-baseline`. That section has `baseline_staleness.unrecognised_format: true`. To fix it, point that flag at a baseline from the command that owns it.
+An audit checks the `kind` of every baseline that it loads, and reports every mismatch. Each mismatch prints a warning on stderr that names the flag with the path: `--dead-code-baseline`, `--dupes-baseline` or `--health-baseline`. That section has `baseline_staleness.unrecognised_format: true`. Next to it, `saved_by` names the command that saved the file: `dead-code`, `dupes`, or `health`. The `saved_by` field is absent for an empty file, for a baseline saved before files named their writer, and for a writer that this version does not know. To fix it, point that flag at a baseline from the command that owns it.
 
 `audit` accepts `--fail-on-stale-baseline`, but in audit this gate never runs. A run that sets the flag with a baseline prints one warning on stderr, which names the commands that can run the gate.
 
@@ -197,7 +197,9 @@ An audit checks the `kind` of every baseline that it loads, and reports every mi
 | **fail** | 1 | Error-severity issues found | Fix the reported issues before merging. |
 | **error** | 2 | Runtime error (invalid ref, not a git repo, config error) | Check the error message. In JSON format, audit prints `{"error": true, "message": "...", "exit_code": 2}`. |
 
-Dead code issues use the severity from your [rules configuration](/configuration/rules) (error/warn/off). Complexity findings above the configured thresholds are always errors. The thresholds come from your `fallow health` config (defaults: cyclomatic 20, cognitive 15). Duplication is a warning unless you configure a `--threshold`. With the default `new-only` gate, the report can show inherited error-severity findings while the audit exits 0.
+Dead code issues use the severity from your [rules configuration](/configuration/rules) (error/warn/off). Complexity findings above the configured thresholds use the [complexity rules](/configuration/rules#complexity-rules). They default to `error`. With `warn`, a complexity finding gives a `warn` verdict. The thresholds come from your `fallow health` config (defaults: cyclomatic 20, cognitive 15). Duplication is a warning unless you configure a `--threshold`. With the default `new-only` gate, the report can show inherited error-severity findings while the audit exits 0. The audit ignores `--fail-on-issues` and keeps its own verdict.
+
+The [parse error gate](/cli/global-flags#parse-error-gate) (`--fail-on-parse-error` or `failOnParseError`) checks every file that the audit parsed, not only the changed files. The `verdict` does not include this gate. Read `gate_outcomes` for the exit reason.
 
 <Info>
   Inline suppression comments (`// fallow-ignore-next-line`) work in audit. They suppress findings in changed files in the same way as in `fallow dead-code`.
@@ -545,7 +547,7 @@ The decision surface is the ranked set of `coupling-boundary`, `public-api-contr
 
 ### JSON envelope
 
-`fallow review --format json` returns `decisions`, `focus`, `deltas`, `impact_closure`, `partition`, and `graph_facts`.
+`fallow review --format json` returns `decisions`, `focus`, `deltas`, `impact_closure`, `partition`, and `graph_facts`. When the project has a CODEOWNERS file, it also returns `ownership`. The brief `schema_version` is 11 since the `ownership` section. A consumer can read it to detect the section.
 
 `deltas` also has the dependency keys that the decision surface reads: `dependency_added` (`<manifest>::<name>`) and `dependency_major_bumped` (`<manifest>::<name>@<from>-><to>`). The envelope names what changed even when the cap collapses the decision. Both keys are always present, as empty arrays when nothing changed.
 
@@ -557,6 +559,16 @@ The decision surface is the ranked set of `coupling-boundary`, `public-api-contr
 - `coordination_gap` is separate and has no cap. It is not a subset of the sample. It skips, on purpose, the story and test consumers that the affected set counts.
 
 `partition` has `independent_slices` only when there are two or more slices. A slice is a connected component of the dependency graph between units, given as a sorted list of module directories. Two or more slices mean that the change splits along a seam that the graph proves, into pieces that you can review and merge separately. A single slice would only repeat `order`, so fallow leaves the field out. The field helps you orient. It never asks you to split the change.
+
+`ownership` shows how many CODEOWNERS owner groups the change reaches:
+
+- `group_count` counts the owner groups of the changed files and of the impact closure. `(unowned)` counts as one group.
+- `transitive_only_count` counts the groups that own no changed file and that the change reaches only through the impact closure.
+- `unowned_direct_count` counts the changed files that no CODEOWNERS rule owns.
+- `groups` is a capped list of `{ owner, direct_count, affected_count }` rows, sorted by `direct_count` (highest first), then `affected_count` (highest first), then `owner`. `groups_omitted` counts the groups that did not fit.
+- `slices` is present only when `partition.independent_slices` is present, with the same order. Each entry is `{ module_dirs, owners, separable }`. `separable` is true when the slice has one owner.
+
+Each file maps to its primary owner: the last matching rule, and the first owner of that rule. The section reads only the CODEOWNERS file (the configured `codeowners` path, else the standard locations), so it does not need git history. `routing` reads the same configured path. Without a readable CODEOWNERS file, the `ownership` key is absent. A configured path that fallow cannot read prints a warning. The human output lists the owner groups, and names each slice that has one owner. Fallow does not split the change: the reviewer decides.
 
 ### Agent walkthrough loop
 

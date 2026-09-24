@@ -26,14 +26,14 @@ The `--dupes-*` flags apply to combined mode. When you do not set one, fallow us
 | `--diff-file <PATH>` | Path to a unified diff (for example, `git diff --unified=0 main...HEAD`). Fallow uses it to report only the source-anchored findings on lines inside an added hunk. It drops a point finding (unused-export, unresolved-import, boundary-violation, and others) when its source line is not in the diff. It drops a range finding (complexity hotspots, clone families) when its `[start_line, end_line]` does not overlap the diff. Project-level findings (unused deps, catalog entries, dependency overrides) skip this filter. They point at fixed lines in `package.json` or `pnpm-workspace.yaml`, and a PR rarely touches those lines, even when the PR caused the finding. To filter these project-level findings too, sticky PR and MR summaries can set `FALLOW_SUMMARY_SCOPE=diff`. The diff also scopes the runtime-coverage `hot-path-touched` verdict per line. To read the diff from stdin, pass `-` as the path or use `--diff-stdin` (`gh pr diff \| fallow audit --diff-file -`). With `--changed-since`, the diff controls the line-level filter and `--changed-since` still scopes file discovery. A one-line note on stderr tells you this. When you omit the flag, fallow uses the `FALLOW_DIFF_FILE` env var. |
 | `--diff-stdin` | Read the unified diff from stdin and not from a file. Equivalent to `--diff-file -`. Cannot be combined with a `--diff-file PATH` value other than `-`. Use it to pipe `gh pr diff` or `git diff` directly into fallow. |
 | `--churn-file <PATH>` | For projects with no git repository, import change history from a `fallow-churn/v1` JSON file and not from `git log`. Affects only the health signals that use churn. See [`fallow health` › Importing churn from a non-git VCS](/cli/health#importing-churn-from-a-non-git-vcs). |
-| `--baseline <PATH>` | Compare against a previously saved baseline file |
+| `--baseline <PATH>` | Compare against a previously saved baseline file. Only the bare `fallow` run, `dead-code` (and `check`), `dupes`, and `health` use it. Other subcommands, `decision-surface` included, exit 2 with an error that names the subcommands that use the flag. `audit` has its own baseline flags. |
 | `--baseline-mode <MODE>` | How `--baseline` matches health findings: `count` (default) matches per file and category, `identity` matches per function identity. `identity` works only with a baseline that you saved with `--baseline-mode identity`. See [`fallow health`](/cli/health). |
-| `--save-baseline <PATH>` | Save the current results as a baseline file |
+| `--save-baseline <PATH>` | Save the current results as a baseline file. The same subcommands as `--baseline` accept it. See [Save destinations](#save-destinations) for the paths that fallow writes to. |
 | `--fail-on-stale-baseline` | Exit 1 when a loaded `--baseline` has an entry that matched nothing in this run. In the bare run, this also checks `--dupes-baseline` and `--health-baseline`. Applies to `dead-code` and `check`, the bare run, `dupes` and `health`, in every output format. It also exits 1 when the loaded file is a baseline of another `kind`, because such a file suppresses nothing. The result is the exit code and one stderr line with the stale count, the baseline path and the command to save the baseline again. Some runs cannot judge the baseline: a narrowed scope, `health --report-only`, `audit` and `decision-surface`. These runs do not apply the gate. They print a warning on stderr and do not pass silently. A narrowed scope skips only the unmatched-entry check. It still applies the other-`kind` check, because the scope of the run does not change which command saved the file. The report output does not change. The run always reports the result as `baseline_staleness.gate_trips`, with or without this flag. That field describes the baseline and not the exit code, so it can be true even when the run did not apply the gate. `gate_outcomes["stale-baseline"].status` reports `fail` for both parts of the rule, and stays `skipped` on `audit`. |
 | `--fail-on-regression` | Fail if the issue count grows by more than the tolerance, compared with a regression baseline |
 | `--tolerance <N>` | Allowed increase: `"2%"` (percentage) or `"5"` (absolute). Default: `"0"` |
 | `--regression-baseline <PATH>` | Path to regression baseline file (default: `.fallow/regression-baseline.json`) |
-| `--save-regression-baseline <PATH>` | Save the current issue counts as a regression baseline |
+| `--save-regression-baseline <PATH>` | Save the current issue counts as a regression baseline. See [Save destinations](#save-destinations). |
 | `--explain-skipped` | In human and markdown output, show why fallow skipped files. On `dupes`, it shows a per-pattern count of the files that the default duplicate ignores skipped. On `check`, `dead-code`, `audit` and the default run, it shows the built-in discovery ignore patterns that removed source files, with the count and the directory that lost the most files. Machine formats do not show the note. The counts are always in `workspace_diagnostics[]` as `excluded-by-default-ignore` entries. |
 | `--production` | Production mode: exclude test, story, and dev files, and use only start and build scripts |
 | `--no-production` | Turn production mode off for every analysis, even when the project config sets `production: true`. Conflicts with `--production`. |
@@ -45,7 +45,8 @@ The `--dupes-*` flags apply to combined mode. When you do not set one, fallow us
 | `--performance` | Show the time of each pipeline stage |
 | `--explain` | In human format, prints a `Description:` line under each section header. In JSON format, includes metric definitions in the output `_meta` object. Always enabled for MCP. |
 | `--ci` | CI mode: equivalent to `--format sarif --fail-on-issues --quiet` |
-| `--fail-on-issues` | Exit with code 1 if issues are found |
+| `--fail-on-issues` | Exit with code 1 if issues are found. Raises `warn` dead-code findings to `error`. In `health` and the bare run, it also raises `warn` complexity findings. `audit` ignores it. |
+| `--fail-on-parse-error` | Exit with code 1 when fallow cannot parse a source file cleanly. Applies to `dead-code`, `health`, `audit`, and the bare run, in every output format. `dupes` and `fix` reject the flag. The `failOnParseError` config key arms the same gate. See [Parse error gate](#parse-error-gate). |
 | `--sarif-file <PATH>` | Write SARIF output to a file, in addition to the primary `--format` output |
 | `-o, --output-file <PATH>` | Write the report to a file and not to stdout, for any `--format` (no ANSI codes). Use it on large projects, where the terminal scrollback cuts off the top of the report. Progress and a `Report written to <path>` confirmation stay on stderr (suppressed by `--quiet`). Valid with `dead-code`, `dupes`, `health`, `security`, and the bare command. Works together with `--sarif-file`. |
 | `--report-path-prefix <PREFIX>` | Override the repository-root offset that fallow adds in front of each path in the CI formats. An empty string disables the offset. See [Repository-root paths in CI formats](#repository-root-paths-in-ci-formats). |
@@ -69,12 +70,37 @@ The `--dupes-*` flags apply to combined mode. When you do not set one, fallow us
 | `--dupes-no-ignore-imports` | Count module wiring as clone candidates. Conflicts with `--dupes-ignore-imports`. |
 | `--score` | In combined mode, compute the health score (0-100 with letter grade). Enables the health delta header in PR comments. Also available on [`fallow health`](/cli/health). |
 | `--trend` | Compare current health metrics against the most recent saved snapshot. Implies `--score`. Also available on [`fallow health`](/cli/health). |
-| `--save-snapshot [PATH]` | Save a vital signs snapshot to track trends. Default path: `.fallow/snapshots/<timestamp>.json`. Always computes file scores and hotspots. Also available on [`fallow health`](/cli/health). |
+| `--save-snapshot [PATH]` | Save a vital signs snapshot to track trends. Default path: `.fallow/snapshots/<timestamp>.json`. Always computes file scores and hotspots. Also available on [`fallow health`](/cli/health). See [Save destinations](#save-destinations). |
 | `--include-entry-exports` | Report unused exports in entry files. Without this flag, fallow marks them as used. Finds typos in framework exports (for example, `meatdata` instead of `metadata`). You can also set `includeEntryExports: true` in your fallow config. When you set the CLI flag, it takes priority. |
 | `--type-aware` | Opt in to TypeScript semantic analysis for project-wide symbol evidence. It does not emit compiler diagnostics. See [Type-aware analysis](/analysis/type-aware). |
 | `--no-type-aware` | Turn type-aware analysis off, even when `typeAware.enabled` or `FALLOW_TYPE_AWARE` turns it on |
 | `--type-aware-project <PATH>` | TypeScript project config for type-aware analysis. Repeatable. |
 | `--type-aware-require <MODE>` | `best-effort` keeps conservative findings and reports semantic gaps. `complete` fails the quality gate when a semantic query is incomplete. |
+
+## Save destinations
+
+`--save-baseline`, `--save-regression-baseline`, and `--save-snapshot` write only inside these directories:
+
+- the project root
+- its Git work tree, when the working directory is also inside that tree
+- `RUNNER_TEMP`
+- the system temp directory
+
+Before the analysis runs, fallow resolves the file that each flag writes, and resolves symlinks first. A path outside these directories, for example `../outside.json`, exits 2. The check also applies to the default destinations: `.fallow/snapshots` for a bare `--save-snapshot`, and the config file for a bare `--save-regression-baseline`. A committed `.fallow` or config symlink therefore cannot move the write. A relative path still resolves against the working directory.
+
+The MCP `save_baseline`, `save_regression_baseline`, and `save_snapshot` parameters return a tool error for the same paths.
+
+## Parse error gate
+
+By default, a source file that fallow cannot parse does not change the exit code. The parser also rejects valid syntax that is newer than the parser, so the gate is off by default. To fail the run on such a file, pass `--fail-on-parse-error` or set `failOnParseError: true` in the config.
+
+When the gate is on and a file has a `source-parse-degraded` diagnostic, the run exits 1 in every output format. The `gate_outcomes["parse-error"]` entry has a `files` array. Each entry names a file and its parser error count. The human output prints one line per file.
+
+- `health --report-only` shows the verdict and does not fail.
+- `fallow audit` checks every file that it parsed, not only the changed files. A file that was already unparseable therefore fails every audit with the gate on, also with `--gate new-only`. The audit `verdict` does not include this gate. Read `gate_outcomes` for the exit reason.
+- The GitHub Action and the GitLab template fail the job when the gate fails. They have no input for this gate: set the config key, or pass the flag in `args` or `FALLOW_ARGS`.
+
+An older fallow version rejects `failOnParseError` as an unknown key. When you commit the key, also set [`minimumVersion`](/configuration/overview#minimumversion).
 
 ## Path scope
 

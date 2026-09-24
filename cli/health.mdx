@@ -47,6 +47,8 @@ To give known legacy functions a documented local ceiling, use `health.threshold
 
 Overrides keep the exceptions visible in the output. Suppression comments hide them.
 
+The thresholds decide which functions have a finding. The rules `complexity-cyclomatic`, `complexity-cognitive`, and `complexity-crap` decide if a finding fails the run. They default to `error`. With `warn`, the finding stays in the output and `fallow health` exits 0. With `off`, fallow does not report it. `overrides[].rules` can set these rules for some files. See [Complexity rules](/configuration/rules#complexity-rules).
+
 ### Output
 
 | Flag | Description |
@@ -102,7 +104,7 @@ partial or unavailable, use `--type-aware-require complete`. See
 | Flag | Description |
 |:-----|:------------|
 | `--min-score <N>` | Fail (exit code 1) only when the health score is below this threshold. Implies `--score`. This is the authoritative CI quality gate. With this flag, complexity findings become informational and only the score sets the exit code, so `--min-score 0` always exits 0. Works together with `--min-severity`: the run fails if either gate trips. |
-| `--min-severity <LEVEL>` | Exit with an error only for findings at or above this severity (`moderate`, `high`, `critical`). Works together with `--min-score`. |
+| `--min-severity <LEVEL>` | Exit with an error only for findings at or above this severity (`moderate`, `high`, `critical`). Works together with `--min-score`. The `complexity-*` rules apply first, so a finding with rule `warn` never fails the run. |
 | `--report-only` | Print the score and findings, but never fail CI (always exit 0). Use it to show health in logs without blocking. Cannot be combined with `--min-score` or `--min-severity`. |
 
 ### Hotspot options
@@ -161,21 +163,26 @@ When a run loads a baseline with entries and is narrowed only by a diff or `--ch
 
 Each command writes its own baseline format, and a saved baseline names that format. Every file that `--save-baseline` writes has a top-level `kind` of `dead-code`, `dupes` or `health`. A baseline from an earlier release has no `kind` and still loads. For such a file, its keys decide the format.
 
-`fallow health --baseline` loads a baseline of another kind as zero entries, so no entry stays unmatched. Such a run prints a warning on stderr, with or without `--quiet`, that names both kinds and the path. It reports `summary.baseline_staleness.unrecognised_format: true` and suppresses nothing. The field is present only when it is true. An absent field means false. Read this field, not `baseline_entries == 0`, because a baseline from a project with nothing above the threshold is correctly empty. The baseline gate trips on such a file, so `--fail-on-stale-baseline` exits 1. A run without a gate keeps its exit code.
+`fallow health --baseline` loads a baseline of another kind as zero entries, so no entry stays unmatched. Such a run prints a warning on stderr, with or without `--quiet`, that names both kinds and the path. It reports `summary.baseline_staleness.unrecognised_format: true` and suppresses nothing. Next to it, `saved_by` names the command that saved the file: `dead-code`, `dupes`, or `health`. The `saved_by` field is absent for an empty file, for a baseline saved before files named their writer, and for a writer that this version does not know. The field is present only when it is true. An absent field means false. Read this field, not `baseline_entries == 0`, because a baseline from a project with nothing above the threshold is correctly empty. The baseline gate trips on such a file, so `--fail-on-stale-baseline` exits 1. A run without a gate keeps its exit code.
 
 ## Exit codes
 
-Plain `fallow health` (no gate flag) exits 1 on any finding. To show health without a failure, use `--report-only`. The gate flags change what sets the exit code:
+Plain `fallow health` (no gate flag) exits 1 on any finding whose `complexity-*` rule is `error`, which is the default. A finding with rule `warn` shows in the output and does not fail the run. To show health without a failure, use `--report-only`. The gate flags change what sets the exit code:
 
 | Invocation | Exit 0 when | Exit 1 when |
 |:-----------|:------------|:------------|
-| `fallow health` (no gate flag) | no function exceeds a threshold | any function exceeds a threshold |
+| `fallow health` (no gate flag) | no `error` finding | a function exceeds a threshold and its rule is `error` |
+| `fallow health --fail-on-issues` | no finding | any finding, also with rule `warn` |
 | `fallow health --min-score N` | score >= N (findings are informational) | score < N |
 | `fallow health --min-severity LEVEL` | no finding at or above LEVEL | any finding at or above LEVEL |
 | `fallow health --min-score N --min-severity LEVEL` | score >= N AND no finding at or above LEVEL | score < N OR a finding at or above LEVEL |
 | `fallow health --report-only` | always | never |
 
-`--report-only` cannot be combined with `--min-score` or `--min-severity` (exit code 2). The runtime-coverage gate (`--runtime-coverage`) and the coverage-gap gate stay independent, explicit opt-ins. `--min-score` does not demote them. To gate only on complexity that a change introduces, use [`fallow audit --gate new-only`](/cli/audit).
+`--report-only` cannot be combined with `--min-score` or `--min-severity` (exit code 2). With `--fail-on-issues` (or `--ci`, which sets it), a `warn` complexity finding becomes `error`: the JSON `effective_severity` and the CI levels of the finding are then `error` too.
+
+With [`--fail-on-parse-error`](/cli/global-flags) or `failOnParseError`, the run also exits 1 when fallow cannot parse a source file. `--report-only` shows this verdict and does not fail. With or without the gate, `fallow health` names each file that did not parse cleanly in the report body, below the health score. The score does not change.
+
+The human summary line shows a yellow `⚠` when the run passes with findings, for example with only `warn` findings or with `--report-only`. A red `✗` shows only when a gate fails the run. A run with no finding and no failing gate shows `✓`. The runtime-coverage gate (`--runtime-coverage`) and the coverage-gap gate stay independent, explicit opt-ins. `--min-score` does not demote them. To gate only on complexity that a change introduces, use [`fallow audit --gate new-only`](/cli/audit).
 
 ## File score metrics
 
@@ -768,6 +775,8 @@ Fallow writes every entry with or without `--quiet`, so a CI job that drops stde
 ```
 
 A complexity finding that fallow evaluated with a local ceiling includes `effective_thresholds` and `threshold_source: "override"`. When configured threshold overrides affect a run, JSON also includes a top-level `threshold_overrides[]` array. See [Threshold overrides](#threshold-overrides) below.
+
+Each complexity finding has an optional `effective_severity` field (`error` or `warn`) with the result of its `complexity-*` rule. The `severity` field keeps the band (`moderate`, `high`, or `critical`). The CI formats take their level from `effective_severity`. See [Levels in CI formats](/configuration/rules#levels-in-ci-formats).
 
 With `--css`, JSON also includes `css_analytics` for descriptive CSS evidence and `styling_findings` for first-class styling issues. Each styling finding has `code`, `sub_kind`, `effective_severity`, location, evidence value, and read-only actions. You configure styling findings through the styling rules.
 

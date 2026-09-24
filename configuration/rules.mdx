@@ -21,7 +21,7 @@ Start with all rules as `warn`. Promote one type at a time to `error` when you h
 
 When you do not configure a rule, it uses its default severity. The **Default** column in [Available rule names](#available-rule-names) shows the default of each rule. The defaults by group:
 
-- Default `off` (opt-in): `private-type-leaks`, `prop-drilling`, `thin-wrapper`, `duplicate-prop-shape`, `coverage-gaps`, `feature-flags`, `require-suppression-reason`, `security-client-server-leak`, and `security-sink`.
+- Default `off` (opt-in): `private-type-leaks`, `deprecated-exports-in-use`, `prop-drilling`, `thin-wrapper`, `duplicate-prop-shape`, `coverage-gaps`, `feature-flags`, `require-suppression-reason`, `security-client-server-leak`, and `security-sink`.
 - Default `warn`:
   - Dependency hygiene: `unused-dev-dependencies`, `unused-optional-dependencies`, `type-only-dependencies`, `test-only-dependencies`, and `dev-dependencies-in-production`.
   - Framework components: `unused-store-members`, `unprovided-injects`, `unrendered-components`, `unused-component-props`, `unused-component-emits`, `unused-component-inputs`, `unused-component-outputs`, `unused-svelte-events`, `unused-server-actions`, and `unused-load-data-keys`.
@@ -98,6 +98,7 @@ stale-suppressions = "warn"
 | `unused-exports` | `error` | Exported symbols never imported |
 | `unused-types` | `error` | Type aliases and interfaces never referenced |
 | `private-type-leaks` | `off` | Opt-in API hygiene check. Finds exported signatures that reference a private type from the same file |
+| `deprecated-exports-in-use` | `off` | Opt-in. An export with a `@deprecated` JSDoc tag that a reachable file still uses. See [Deprecated exports in use](/explanations/dead-code#deprecated-exports-in-use) |
 | `unused-dependencies` | `error` | Packages in `dependencies` never used |
 | `unused-dev-dependencies` | `warn` | Packages in `devDependencies` never used |
 | `unused-optional-dependencies` | `warn` | Packages in `optionalDependencies` never used |
@@ -136,6 +137,9 @@ stale-suppressions = "warn"
 | `invalid-client-export` | `warn` | A `"use client"` file that exports a server-only or route-config name |
 | `mixed-client-server-barrel` | `warn` | A barrel that re-exports both a `"use client"` module and a server-only module |
 | `misplaced-directive` | `warn` | A `"use client"` or `"use server"` directive that is not in the leading position and therefore has no effect |
+| `complexity-cyclomatic` | `error` | A function above the cyclomatic ceiling (`health.maxCyclomatic` or a `thresholdOverrides` entry). See [Complexity rules](#complexity-rules) |
+| `complexity-cognitive` | `error` | A function above the cognitive ceiling (`health.maxCognitive` or a `thresholdOverrides` entry) |
+| `complexity-crap` | `error` | A function above the CRAP ceiling (`health.maxCrap` or a `thresholdOverrides` entry) |
 | `route-collision` | `error` | Two or more Next.js App Router route files that resolve to the same URL |
 | `dynamic-segment-name-conflict` | `error` | Sibling Next.js dynamic route segments that use different slug names at the same position |
 | `type-only-dependencies` | `warn` | Production dependencies that are only imported with `import type` |
@@ -152,6 +156,58 @@ stale-suppressions = "warn"
   `circular-dependencies` and `circular-dependency` are the same rule. You can use either form in `rules`, `overrides[].rules`, and inline directives.
 </Note>
 
+## Complexity rules
+
+The rules `complexity-cyclomatic`, `complexity-cognitive`, and `complexity-crap` decide if a complexity finding fails `fallow health` and `fallow audit`. The thresholds still decide which functions have a finding. The thresholds are `health.maxCyclomatic`, `health.maxCognitive`, `health.maxCrap`, and `health.thresholdOverrides`.
+
+| Rule value | Result |
+|:-----------|:-------|
+| `error` (default) | The finding fails the run. The exit code and the verdict do not change from earlier releases. |
+| `warn` | The finding stays in every output format. `fallow health` exits 0, and the audit verdict is `warn`. |
+| `off` | Fallow does not report the finding. |
+
+```jsonc .fallowrc.json
+{
+  "rules": {
+    "complexity-cyclomatic": "error",
+    "complexity-cognitive": "warn",
+    "complexity-crap": "warn"
+  },
+  "overrides": [
+    { "files": ["src/legacy/**"], "rules": { "complexity-cyclomatic": "warn" } }
+  ]
+}
+```
+
+- A function above more than one threshold gets the most severe rule of those kinds. Fallow drops the finding only when all of these rules are `off`.
+- `overrides[].rules` can set the complexity rules for some files.
+- The rule applies before `fallow health --min-severity`. So a `warn` finding never fails the run, also when its band is at or above the `--min-severity` level.
+- `--fail-on-issues` (and `--ci`, which sets it) raises a `warn` complexity finding to `error` in `fallow health` and in the bare `fallow` run. `fallow audit` ignores `--fail-on-issues` and keeps its own verdict.
+- `health.maxCrap: 0` stays the full off switch for CRAP. It also removes the CRAP signals of the file scores. `complexity-crap: "off"` hides the findings only, and keeps these signals.
+- After you set a kind to `off`, save the health baseline again. Its entries for the hidden findings no longer match, so they count as stale.
+- A `thresholdOverrides` row still lists the dimensions that its function breaches, also when a rule hides the finding.
+
+Each complexity finding in the JSON output has an optional `effective_severity` field (`error` or `warn`). The `severity` field keeps the band (`moderate`, `high`, or `critical`).
+
+<Note>
+A fallow version without these rules warns about an unknown rule name and ignores it. A shared config therefore works with an older binary, but its complexity findings still fail the run there.
+</Note>
+
+## Levels in CI formats
+
+The CI formats take the level of each finding from its rule severity. This includes the severity that an `overrides[].rules` entry sets for the file. For a complexity finding, the `complexity-*` rule sets the level, not the band. The band stays in the title and the message.
+
+| Rule severity | `github-annotations` | SARIF | CodeClimate |
+|:--------------|:---------------------|:------|:------------|
+| `error` | `::error` | `error` | `major` |
+| `warn` | `::warning` | `warning` | `minor` |
+
+With the default rules, a `moderate` complexity finding is an `::error` annotation and a SARIF `error`, because the finding fails the run. Error annotations come before warnings, so the `max-annotations` cap of the GitHub Action keeps the errors.
+
+Each dead-code and complexity finding in the JSON output has the optional `effective_severity` field. `fallow report --from` reads it, so a saved report gives the same levels as the direct run. A saved report from an older version has no `effective_severity`. For such a report, `report --from` uses the earlier levels.
+
+`prop-drilling`, `thin-wrapper`, and `duplicate-prop-shape` findings never fail the run. Their SARIF level is `warning` at most, also when the rule is `error`.
+
 <Accordion title="Incremental adoption strategy">
 In an existing codebase, adopt fallow in steps:
 
@@ -165,7 +221,7 @@ Use [baselines](/analysis/dead-code#baseline-comparison) to enforce rules on new
 </Accordion>
 
 <Info>
-To treat all warnings as errors for one run, pass `--fail-on-issues`. The config file stays the same. Use it for pre-merge gates on critical branches.
+To treat all warnings as errors for one run, pass `--fail-on-issues`. The config file stays the same. Use it for pre-merge gates on critical branches. In `fallow health` and the bare `fallow` run, it also raises `warn` complexity findings to `error`.
 </Info>
 
 ```bash
@@ -179,6 +235,10 @@ fallow dead-code --fail-on-issues
 | `0` | No error-severity issues |
 | `1` | Error-severity issues found |
 | `2` | Fatal error (invalid config, parse failure) |
+
+When all findings of a run are `warn`, the run exits 0 and the human summary line shows a yellow `⚠`. A red `✗` shows only when a gate fails the run, for example an `error` finding or `--fail-on-issues`.
+
+A source file that fallow cannot parse does not change the exit code by default. To fail the run on such a file, see [`failOnParseError`](/configuration/overview#failonparseerror).
 
 ## See also
 
