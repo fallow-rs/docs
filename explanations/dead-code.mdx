@@ -99,6 +99,47 @@ export function Component(p: Props): void {}
 
 **Prior art:** the Rust `unreachable_pub` lint, and the TypeScript TS4023 and TS4060 errors that `--declaration` emits. ESLint has no equivalent rule today.
 
+### Deprecated exports in use {#deprecated-exports-in-use}
+
+An export whose leading JSDoc has a `@deprecated` tag, and that at least one reachable file still uses. The finding tells you who still uses a deprecated API, and which deprecated exports you can remove now.
+
+This is an opt-in check. A deprecation window is a normal state, so the rule is `off` by default.
+
+| Severity | Default |
+|:---------|:--------|
+| Off | Yes |
+
+**Example:**
+
+```typescript
+/** @deprecated Use `formatDate` instead. */
+export function oldFormat(d: Date): string { /* ... */ }
+```
+
+Each finding has:
+
+- `consumer_count`: the exact number of consumers.
+- `consumers`: a sample of up to 10 consumers, each with path, line, column, and reference kind. The sample is sorted by path and line.
+- `deprecated_reason`: the deprecation message as plain text, up to 200 characters. A bare `@deprecated` tag gives no `deprecated_reason` key.
+- `public_api: true` when the export is in an entry point, or when a re-export chain carries it to an entry point. Fallow cannot see external consumers, so it makes no removal claim for such an export.
+
+For the full consumer list, run `fallow dead-code --trace <file>:<export>`. The `next_steps` array names this command for the deprecated export with the most consumers (id `trace-deprecated-export`).
+
+**Rules for consumers:**
+
+- A consumer in an unreachable file does not count. That file is dead code itself and has its own `unused-file` finding.
+- A deprecated export with no consumer stays an [unused export](#unused-exports). That finding then has `deprecated: true` and the `deprecated_reason`. The human and markdown output add `(marked @deprecated)`.
+- A per-path override applies to the file that declares the export, not to the consumer. You cannot keep a deprecated API legal only for the consumers in `legacy/**`.
+- Under `fallow audit` with `gate: new-only`, the finding is new only when the file that declares the export changed. A change that only adds a consumer does not make the finding new.
+
+**When to act:** Move each consumer to the replacement API. When the last consumer is gone, fallow reports the export as an unused export, and you can remove it. For a `public_api` export, keep your deprecation policy for external users.
+
+**Enable:** run `fallow dead-code --deprecated-exports-in-use` to report only this issue type, or set `deprecated-exports-in-use: "warn"` / `"error"` in [`rules`](/configuration/rules). The MCP `analyze` tool accepts `issue_types: ["deprecated-exports-in-use"]`. An `overrides` entry alone cannot turn the rule on: the base rule must not be `off`.
+
+**Suppression:** add `// fallow-ignore-next-line deprecated-export-in-use` above the export.
+
+There is no editor diagnostic for this finding, because TypeScript already strikes deprecated names through in the editor.
+
 ### Unused dependencies
 
 Packages in `dependencies` that no source file imports and that no `package.json` script uses as a binary.
