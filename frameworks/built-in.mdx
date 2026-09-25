@@ -218,7 +218,7 @@ Most plugins activate automatically when the relevant package is in your `packag
   | **Velite** | `defineCollection` `pattern` globs joined to the top-level `root` (default `content`), generated `.velite` output, a non-default `output.data` dir, and config imports from `velite.config.*` |
   | **UnoCSS** | Preset and transformer imports from `uno.config.ts` |
   | **Wuchale** | Adapter imports from `wuchale.config.js`; static custom JavaScript config files referenced from `@wuchale/vite-plugin` in `vite.config.*` |
-  | **Module Federation** | `exposes` targets and `remotes` aliases from `module-federation.config.*` and from a Federation plugin call in a webpack, rspack, rsbuild, vite or `next.config.*` file. See [Module Federation](#module-federation) |
+  | **Module Federation** | `exposes` targets, `remotes` aliases and `shared` packages from `module-federation.config.*` and from a Federation plugin call in a webpack, rspack, rsbuild, vite or `next.config.*` file. Remotes from literal runtime calls such as `registerRemotes` and `loadRemote`. See [Module Federation](#module-federation) |
 </Accordion>
 
 <Tip>
@@ -260,18 +260,20 @@ Entries resolve like the bundler resolves them:
 
 ## Module Federation
 
-With Module Federation, fallow keeps exposed modules out of the unused-file report and does not report remote imports as unlisted dependencies.
+With Module Federation, fallow keeps exposed modules out of the unused-file report, does not report remote imports as unlisted dependencies, and does not report shared packages as unused dependencies.
 
-Fallow reads `exposes` and `remotes` from `module-federation.config.{ts,js,mjs,cjs,mts,cts}`. It also reads them from a Federation plugin call in a webpack, rspack, rsbuild, vite or `next.config.*` file. Fallow recognizes these plugin calls: `ModuleFederationPlugin`, `NextFederationPlugin`, `moduleFederationPlugin`, `pluginModuleFederation` and `federation`. Fallow reads such a call wherever it is in the config program. A call counts only when its first argument is an object that declares `exposes` or `remotes`.
+Fallow reads `exposes`, `remotes`, and `shared` from `module-federation.config.{ts,js,mjs,cjs,mts,cts}`. It also reads them from a Federation plugin call in a webpack, rspack, rsbuild, vite or `next.config.*` file. Fallow recognizes these plugin calls: `ModuleFederationPlugin`, `NextFederationPlugin`, `moduleFederationPlugin`, `pluginModuleFederation` and `federation`. Fallow reads such a call wherever it is in the config program. A call counts only when its first argument is an object that declares `exposes`, `remotes`, or `shared`.
 
-- `exposes`: each target becomes a runtime entry point. The exposed module, and everything it reaches, stays out of `unused-file`. Its exports follow [`includeEntryExports`](/configuration/overview#includeentryexports), like the exports of any other entry point. A target that names a bare module request instead of a local path (`"./utils": "shared-utils"`) credits that dependency.
+- `exposes`: each target becomes a runtime entry point. The exposed module, and everything it reaches, stays out of `unused-file`. Its exports follow [`includeEntryExports`](/configuration/overview#includeentryexports), like the exports of any other entry point. A target that names a bare module request instead of a local path (`"./utils": "shared-utils"`) credits that dependency, but only in the package that owns the config.
 - `remotes`: fallow treats each alias and its subpaths as provided by the remote container, so it does not report `import("checkout/Button")` as an unlisted dependency. The alias holds only under the directory of the config that declared it. A sibling workspace package that declares no remote still reports the dependency.
+- `shared`: each package that the option names counts as used, so it does not report as an unused dependency. Fallow reads the object form (`shared: { react: { singleton: true } }`), the array form (`shared: ['react', 'react-dom']`), an object element in the array form, and the `import` and `packageName` fields of an entry descriptor. A key with a trailing `/` credits the same package. A relative key shares a project module and credits no package. The credit applies only to the package that owns the config (the nearest `package.json` at or above the config), so a sibling workspace that declares the same package and does not use it still reports it. A `shared` entry for a package that `package.json` does not declare creates no finding. A `shared` value that fallow cannot read gives no credit and records no diagnostic.
 
 Fallow reads a plugin call in these positions:
 
 - A nested plugin array, and a plugin list that a variable holds.
 - A tool-specific key such as `tools.rspack.plugins`.
 - A hook body, such as an rsbuild `appendPlugins` hook or a Next.js `webpack(config)` hook.
+- A helper module that the bundler config imports with a relative `import` or `require`, such as `config/module-federation.js`. Fallow reads the helper one import deep, inside the project root, as if the call was in the config. The diagnostics and the trace sources name the helper file.
 
 Fallow also reads the plugin options through one step of indirection:
 
@@ -288,17 +290,39 @@ Every config reader that resolves an options object, not only Module Federation,
 
 Fallow does not read:
 
-- `shared`, and the runtime `registerRemotes` and `loadRemote` calls.
 - The array form of `remotes`. A bundler derives the request scope of an element from the whole container location, so the alias is not a bare specifier.
 - A value that is not a static object literal, an unreadable `require` of a package, and an array element that holds glob syntax, a nested array, or a value that is not a string.
 - A spread over a binding fallow cannot resolve. This records a `plugin-config-unreadable` diagnostic with the `spread` reason for each Federation key the readable part does not declare. When the options declare no Federation key at all, a bare `federation(...)` call records nothing, because other libraries use that name too.
 
+### Runtime remotes
+
+A remote can also come from a call to the Federation runtime. Fallow reads these calls in a file that imports them from `@module-federation/runtime` or `@module-federation/enhanced/runtime`, by name, by a renamed import, or through a namespace import. A local function with the same name registers nothing.
+
+- `registerRemotes([{ name: 'checkout', entry }])` registers `checkout`, and a literal `alias` when the object has one.
+- `loadRemote('checkout/Button')` registers `checkout`. A scoped name keeps two segments (`@scope/remote`).
+- `init({ remotes })` and `createInstance({ remotes })` register the remotes that their `remotes` option names. Fallow also reads the `registerRemotes` and `loadRemote` methods of the instance that they return.
+
+A remote from a runtime call follows the same rule as a `remotes` entry: the alias and its subpaths are provided only inside the workspace that holds the file. Fallow also reads these calls in the `<script>` blocks of a `.vue` or `.svelte` file. The blocks count as one file, so an import in one block covers a call in another.
+
+Fallow reads only a static literal argument. A call whose argument is not a static literal, such as ``loadRemote(`${scope}/${module}`)``, records a `plugin-config-unreadable` diagnostic on the source file, with the function name as `key` and the reason `dynamic-argument`.
+
+### Trace the Federation source
+
+`--trace-file` and `--trace-dependency` name the Federation config when it is the reason for the result:
+
+- `--trace-file` on a file that an `exposes` entry makes an entry point lists each config that exposes it.
+- `--trace-dependency` on a `remotes` alias lists each config that declares the alias, and says that a remote container provides the name, not an npm package.
+
+The human output adds one `Source:` line for each config. The JSON output has a `sources` array with `{ kind, plugin, config, key }` entries, for example `{ "kind": "module-federation", "plugin": "webpack", "config": "packages/cart/webpack.config.js", "key": "exposes" }`. For a remote that only a runtime call names, `config` is the source file and `key` is the function name. A trace with no Federation involvement has no `sources` array. The MCP `trace_file` and `trace_dependency` tools have the same field.
+
+### Limits and diagnostics
+
 Fallow reads the config syntactically. It fetches no remote container and validates nothing about the remote. Fallow does not check the availability of the remote, its exports, its versions, or its shared singletons.
 
-When fallow cannot read a declaration in full, it adds a `plugin-config-unreadable` entry to `workspace_diagnostics[]` and prints a warning on stderr. The entry names the plugin, the key, and the reason, with the config file in `path`.
+When fallow cannot read a declaration in full, it adds a `plugin-config-unreadable` entry to `workspace_diagnostics[]` and prints a warning on stderr. The entry names the plugin, the key, and the reason, with the config file in `path`. For a runtime call, `path` is the source file.
 
-- `reason` is `not-object-literal`, `array-form`, `spread` or `unreadable-entries`. More values can come later, so do not treat this list as closed.
-- The plugin is `module-federation` for a standalone config file. It is `webpack`, `rspack`, `rsbuild`, `vite` or `nextjs` when fallow read the options from the config of that plugin.
+- `reason` is `not-object-literal`, `array-form`, `spread`, `unreadable-entries` or `dynamic-argument`. For a runtime call, `key` is `registerRemotes`, `loadRemote`, `init` or `createInstance`. More values can come later, so do not treat this list as closed.
+- The plugin is `module-federation` for a standalone config file and for a runtime call. It is `webpack`, `rspack`, `rsbuild`, `vite` or `nextjs` when fallow read the options from the config of that plugin.
 - Two unreadable keys in one file give two entries.
 - The entry has `degrades_analysis`, so both CI integrations that fallow ships report it under degraded inputs.
 
@@ -334,6 +358,8 @@ For each local layer:
 
 A remote layer (a `github:` or `gh:` reference) or a package layer (an npm name) stays a dependency reference only. Fallow does not scan its files.
 
+Fallow reads the `modules` of a package layer, so a module that the layer registers is active for the app. For example, with `extends: ['docus']`, or another package layer that lists `@nuxt/content` in its own `modules`, the `components/content/` files and the `content.config.*` file of the app stay entry points. Fallow reads the `nuxt.config` of the layer from the nearest `node_modules/<name>`. `docus` activates `@nuxt/content` also when it is not installed. Fallow does not follow the `extends` of a package layer. A local layer that registers `@nuxt/content` also marks the `content.config.*` file of the app as used.
+
 ## Nuxt auto-import scope
 
 With [`autoImports`](/configuration/overview#autoimports) on, an auto-import name marks as used only the files of the app that renders or calls it, and of the layers that this app extends. In a monorepo, a `<Card />` in one app does not keep the unused `Card.vue` of another app. A run with `autoImports` on can therefore report more unused files than before.
@@ -346,13 +372,17 @@ These component files stay entry points, because fallow cannot see how they rend
 - Files in `components/global/` and `*.global.vue` files. A string reference such as `resolveComponent('Name')` can render a global component.
 - Files in `components/content/` of the project and of each local layer, when `@nuxt/content` is in `modules`. Markdown content renders these components, and fallow does not read Markdown.
 
+`nuxt-og-image` renders the template that a string names, so no import or template tag reaches the file. A `defineOgImage('Docs.takumi')` or `defineOgImageComponent('Docs')` call marks the matching file as used, under an `OgImage/`, `og-image/`, `OgImageCommunity/`, or `OgImageTemplate/` components directory. The name match is the one that `nuxt-og-image` uses: dot segments join in PascalCase, and the renderer suffix (`.satori`, `.browser`, `.takumi`) and the directory prefix do not count. A template that no call names with a static string still reports as unused.
+
 ## Storybook stories
 
 Storybook reads each `stories` pattern in `.storybook/main` relative to the directory of that config file. Fallow does the same, so a pattern such as `../src/**/*.mdx` matches the story files that Storybook loads.
 
+- A pattern can point into another workspace of the project. For example, a central docs app with `apps/docs/.storybook` and `stories: ["../../../packages/ui/src/**/*.docs.tsx"]` marks the matching files in `packages/ui` as used.
 - Fallow drops a pattern that leaves the project root.
 - Storybook reads a leading `/` as an absolute filesystem path. A pattern such as `/src/**` outside the project therefore marks nothing as used.
-- A `@(ts|tsx)` group, as in the Storybook config template, matches like `{ts,tsx}`. Other extglob forms, such as `!(..)`, match nothing.
+- A `@(ts|tsx)` group, as in the Storybook config template, matches like `{ts,tsx}`. A nested `@(..)` group matches too. Other extglob forms, such as `!(..)`, match nothing.
+- Fallow reads the object form `{ directory, files, titlePrefix }`. `directory` resolves against the `.storybook/` directory, and `files` applies under it. Without `files`, the Storybook default `**/*.@(mdx|stories.@(js|jsx|mjs|ts|tsx))` applies.
 - Fallow also reads the `.storybook/main` config of a workspace when the root package uses Storybook too.
 
 ## See also
