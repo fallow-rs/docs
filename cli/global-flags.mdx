@@ -47,8 +47,8 @@ The `--dupes-*` flags apply to combined mode. When you do not set one, fallow us
 | `--ci` | CI mode: equivalent to `--format sarif --fail-on-issues --quiet` |
 | `--fail-on-issues` | Exit with code 1 if issues are found. Raises `warn` dead-code findings to `error`. In `health` and the bare run, it also raises `warn` complexity findings. `audit` ignores it. |
 | `--fail-on-parse-error` | Exit with code 1 when fallow cannot parse a source file cleanly. Applies to `dead-code`, `health`, `audit`, and the bare run, in every output format. `dupes` and `fix` reject the flag. The `failOnParseError` config key arms the same gate. See [Parse error gate](#parse-error-gate). |
-| `--sarif-file <PATH>` | Write SARIF output to a file, in addition to the primary `--format` output |
-| `-o, --output-file <PATH>` | Write the report to a file and not to stdout, for any `--format` (no ANSI codes). Use it on large projects, where the terminal scrollback cuts off the top of the report. Progress and a `Report written to <path>` confirmation stay on stderr (suppressed by `--quiet`). Valid with `dead-code`, `dupes`, `health`, `security`, and the bare command. Works together with `--sarif-file`. |
+| `--sarif-file <PATH>` | Write SARIF output to a file, in addition to the primary `--format` output. Only the dead-code analysis writes this file, so the flag works with `dead-code`, `security`, and a bare run that includes dead-code. `dupes`, `health`, and a bare run without dead-code (`--skip dead-code`, `--only dupes`, `--only health`) exit 2. For those, use `--format sarif` with `--output-file`. See [Save destinations](#save-destinations) for the paths that fallow writes to. |
+| `-o, --output-file <PATH>` | Write the report to a file and not to stdout, for any `--format` (no ANSI codes). Use it on large projects, where the terminal scrollback cuts off the top of the report. Progress and a `Report written to <path>` confirmation stay on stderr (suppressed by `--quiet`). Valid with `dead-code`, `dupes`, `health`, `security`, and the bare command. Works together with `--sarif-file`. See [Save destinations](#save-destinations) for the paths that fallow writes to. |
 | `--report-path-prefix <PREFIX>` | Override the repository-root offset that fallow adds in front of each path in the CI formats. An empty string disables the offset. See [Repository-root paths in CI formats](#repository-root-paths-in-ci-formats). |
 | `--group-by <MODE>` | Group output by CODEOWNERS ownership (`owner`), first directory component (`directory`), workspace package (`package`), or GitLab CODEOWNERS section (`section`). `json`, `human`, `sarif` and `codeclimate` show the groups. All other formats render one flat document and print a warning on stderr. See [Grouped output](#grouped-output). |
 | `--summary` | In human output, show only the issue counts per category, without the individual items. JSON output does not change. |
@@ -79,14 +79,23 @@ The `--dupes-*` flags apply to combined mode. When you do not set one, fallow us
 
 ## Save destinations
 
-`--save-baseline`, `--save-regression-baseline`, and `--save-snapshot` write only inside these directories:
+The save flags (`--save-baseline`, `--save-regression-baseline`, `--save-snapshot`) and the report flags (`--output-file`, `--sarif-file`) write only inside these directories:
 
 - the project root
 - its Git work tree, when the working directory is also inside that tree
+- the CI workspace: `GITHUB_WORKSPACE` and GitLab `CI_PROJECT_DIR`, when they are set
 - `RUNNER_TEMP`
 - the system temp directory
 
 Before the analysis runs, fallow resolves the file that each flag writes, and resolves symlinks first. A path outside these directories, for example `../outside.json`, exits 2. The check also applies to the default destinations: `.fallow/snapshots` for a bare `--save-snapshot`, and the config file for a bare `--save-regression-baseline`. A committed `.fallow` or config symlink therefore cannot move the write. A relative path still resolves against the working directory.
+
+The CI workspace keeps a GitHub Action job working that checks out into a subdirectory (`actions/checkout` with `path: app`) and sets `root: app`. The job runs from the workspace, which is outside the Git work tree of the root.
+
+An existing character device or named pipe is always allowed, because a write to it creates no file. So `-o /dev/null`, `--sarif-file /dev/stdout`, and process substitution keep working. When stdout is a regular file, `/dev/stdout` resolves to that file, and the directory rule applies to it. On Windows, `NUL` writes to the null device, in any case and with an optional colon, and so does `\\.\NUL`. A name with an extension, such as `NUL.txt`, stays a normal file name.
+
+Fallow checks the resolved path again right before each write, and does not follow a symlink at the last path component. This makes the window for a swapped path smaller, but does not remove it for an intermediate directory. On Windows, the last check and the open are two steps.
+
+When the default cache directory `.fallow` resolves outside these directories, for example through a committed symlink, the run does not use the cache and prints one note on stderr. The run does not fail. `FALLOW_CACHE_DIR`, `cache.dir`, and `--no-cache` do not change.
 
 The MCP `save_baseline`, `save_regression_baseline`, and `save_snapshot` parameters return a tool error for the same paths.
 
@@ -170,7 +179,7 @@ For supplied diffs (`--diff-file`, `--diff-stdin`, `FALLOW_DIFF_FILE`), fallow w
 | `status` | `applied` when the run did what you asked. `not-applied` when the run could not, and continued. |
 | `affects` | `scope` when the request narrows the report, `artifact` when it writes a file next to the report. Read this field first, to see the effect of an entry that the run did not apply. On `scope`, the report is valid and wider than you asked for. On `artifact`, the run wrote no file, and the scope of the report did not change. |
 | `requested` | What you asked for, exactly as you wrote it: the git ref, the diff source label, or the `--sarif-file` path. Fallow does not change it. Do not join it to the project root, as you do for the other path fields. |
-| `scope_size` | How much the request left in scope. Present only when the run applied the request and measured that scope. Each request name has its own unit. `diff-filter` counts added lines. Read the unit from the key of the entry, and do not compare values across names. The count is what the run indexed. `diff-filter` indexes one million added lines at most, so read a value above zero as a lower bound. `0` means the request left nothing to analyze, so a report with no findings covered nothing. An absent field means the run did not measure the scope. It never means zero. |
+| `scope_size` | How much the request left in scope. Present only when the run applied the request and measured that scope. Each request name has its own unit. `diff-filter` counts added lines. `changed-since` counts the changed files that the run analyzed: a changed file that discovery or an ignore rule drops does not count, so a change to a README only gives `0`. A combined run counts a changed file that any of its analyses kept. Read the unit from the key of the entry, and do not compare values across names. The count is what the run indexed. `diff-filter` indexes one million added lines at most, so read a value above zero as a lower bound. `0` means the request left nothing to analyze, so a report with no findings covered nothing. An absent field means the run did not measure the scope. It never means zero. |
 | `reason` | A kebab-case token, present exactly when `status` is not `applied`. |
 | `message` | One sentence that tells you what happened and what to do next. Present exactly when `status` is not `applied`. It is the same sentence that the run writes to stderr. |
 
