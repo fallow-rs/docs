@@ -121,6 +121,17 @@ fallow dupes --performance
 │  ────────────────────────────────────────────────
 │  TOTAL:                61.4ms
 │  rows are per-stage costs; several run outside or beside the TOTAL clock
+├─ Process ──────────────────────────────────────────
+│  startup:               1.3ms  (thread pool 0.1ms)
+│  config:                1.1ms
+│  analysis:             97.0ms  (the stage rows above)
+│  after analysis:        0.2ms
+│  output:               12.9ms
+│  (other):               0.4ms
+│  ────────────────────────────────────────────────
+│  WALL:                112.9ms
+│  work: 0 files read, 0 source bytes, 2481337 parse cache bytes
+│  resolve: 0 specifier calls (0 unique), 0 resolver calls, 0 canonicalize calls
 └───────────────────────────────────────────────────
 ```
 
@@ -128,7 +139,31 @@ The indented rows under `entry points` split that stage into parts. They are not
 
 Read the rows as the cost of each stage, not as parts of `TOTAL`. `TOTAL` is the wall clock of the dead-code analysis, from workspace and plugin loading until the detectors finish. File discovery, parsing and the cache update run before that clock starts, so on a warm run the rows can add up to more than `TOTAL`. The `(other)` row is `TOTAL` minus the stage rows, with a minimum of `0.0ms`.
 
-In combined mode (`fallow` with no subcommand), the `duplication` stage runs at the same time as the rest of the pipeline. Fallow marks it `(concurrent)` and does not add it to `TOTAL`. When duplication detection takes longer than the dead-code pass, this stage can be larger than `TOTAL`.
+In combined mode (`fallow` with no subcommand), the `duplication` stage can run at the same time as the rest of the pipeline. Fallow then marks it `(concurrent)`. When the two passes share one file walk, duplication runs after the dead-code pass, and fallow marks it `(after dead code)`. Fallow does not add it to `TOTAL` in either case. When duplication detection takes longer than the dead-code pass, this stage can be larger than `TOTAL`.
+
+### Process time
+
+The `Process` section covers the time outside the pipeline stages. The rows are parts of one clock, so they add up: the rows plus `(other)` give `WALL`, the time from process start to the table.
+
+- `startup` is argument parsing and setup before the command runs. The thread pool is part of it.
+- `config` is the config load for the command.
+- `git` appears when `--changed-since` runs git.
+- `analysis` holds all the stage rows above it.
+- `after analysis` is the scope filters, rules, baselines and gates.
+- `output` is the report serialization and write.
+
+`dead-code` prints the table after the report, so the `output` row is complete. In combined mode, the table prints before the health analysis and the report, so `WALL` covers only the time until then.
+
+### Work counts
+
+The `work` and `resolve` rows are exact counts, not times. They do not change from run to run on the same project and commit, so you can compare two runs with exact equality:
+
+- files and source bytes that the parse stage read from disk,
+- bytes of the parse cache that the run read,
+- specifier resolutions that the imports asked for, and the distinct specifiers per file,
+- calls into the module resolver and path canonicalize calls.
+
+A resolver count of zero means that the run reused the module graph cache. More specifier calls than distinct specifiers means that some files import the same specifier more than once. The health timings show `git_log_bytes` next to the `git churn` row: the bytes of `git log` output that the churn stage read.
 
 Use `--performance` when:
 
@@ -148,7 +183,13 @@ Here the stage took 382ms of wall-clock time and ~594ms of CPU time across cores
 
 In combined mode (`fallow` with no subcommand), the health breakdown reuses the files that the dead-code pass discovered and parsed. Its `discover files` and `parse/extract` rows therefore show `(measured above)`. You find that cost in the Pipeline Performance box.
 
-With `--format json`, the timings include `parse_cpu_ms` (total parse CPU time) next to the wall-clock fields. The health timings include `shared_parse`. These values change from run to run, so do not use them as a CI gate.
+With `--format json`, the timings include `parse_cpu_ms` (total parse CPU time) and `parse_cache_load_ms` (the parse cache load, part of `parse_extract_ms`) next to the wall-clock fields. The health timings include `shared_parse`. These values change from run to run, so do not use them as a CI gate.
+
+The JSON timings also carry these objects:
+
+- `counters`: the work counts, with the fields `files_read`, `source_bytes_read`, `parse_cache_bytes_read`, `resolve_specifier_calls`, `unique_specifiers`, `oxc_resolve_calls` and `canonicalize_calls`. The health timings carry `git_log_bytes`. These counts are stable, so a test can compare them exactly.
+- `process`: the process time in milliseconds, with the fields `wall_ms`, `startup_ms`, `thread_pool_ms`, `config_ms`, `git_ms`, `analysis_ms`, `post_analysis_ms` and `output_ms`.
+- `spans`: the span tree. Each span has a `name`, the `parent` span that holds it, its `ms`, and `concurrent`, which is `true` when the span runs at the same time as its siblings. The tree shows that file discovery, parsing and the cache update are siblings of the `pipeline` span, which is the `TOTAL` clock.
 
 ## Cache behavior
 
