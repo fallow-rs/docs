@@ -57,11 +57,29 @@ Fallow detects three categories of feature flag patterns:
 
 | Category | What it finds | Examples |
 |:---------|:--------------|:--------|
-| **Environment variable flags** | `process.env.*` checks used as feature gates | `process.env.FEATURE_NEW_UI`, `process.env.ENABLE_DARK_MODE` |
+| **Environment variable flags** | `process.env.*` and `import.meta.env.*` checks used as feature gates | `process.env.FEATURE_NEW_UI`, `import.meta.env.VITE_ENABLE_CHAT` |
 | **SDK calls** | Feature flag SDK method calls from known providers (LaunchDarkly, Statsig, Unleash, GrowthBook, Split, PostHog, Vercel Flags, ConfigCat, Flagsmith, Optimizely, Eppo) | LaunchDarkly `variation()`, Statsig `checkGate()`, PostHog `useFeatureFlagEnabled()`, Vercel Flags `flag({ key })` |
 | **Config object patterns** | Object property lookups used as boolean guards (opt-in) | `config.featureX`, `settings.enableNewFlow` |
 
 Each detected feature flag has a confidence level. It shows how sure fallow is that the pattern is a feature flag.
+
+### Flag names from a registry
+
+An SDK call can name its flag through a registry of keys, such as `useFlag(FLAGS.NewCheckout)` or `useFlag(FLAGS['NewCheckout'])`. Fallow reports the key that the registry member holds. The registry must be one of these:
+
+- A module-level `as const` object with string values: `const FLAGS = { NewCheckout: 'new-checkout' } as const`.
+- An enum with string values: `enum FLAGS { NewCheckout = 'new-checkout' }`.
+
+The registry can be local or imported. A relative import names the file that declares the registry. An import through a path alias or a barrel file resolves when exactly one registry in the project has the imported name. Fallow does not report a call that it cannot resolve.
+
+### Guards
+
+A flag read that controls a block of code is a guard. Fallow uses the guarded lines to find unused exports inside them, and reports the match in `dead_code_overlap`. These shapes are guards:
+
+- The test of an `if` statement or a ternary, for example `if (useFlag('beta'))`.
+- `flag && <Component />` in JSX.
+- `if (!flag) return`. This guards the rest of the enclosing block.
+- A `const` binding that holds one flag read, such as `const enabled = useFlag('beta')`. The first `if`, ternary, or JSX `&&` that tests the binding is its guard.
 
 ## Configuration
 
@@ -72,6 +90,8 @@ If `fallow flags` reports `No feature flags detected` but your project uses feat
 When you run `fallow flags` with all defaults and fallow finds nothing, the CLI lists the built-in env prefixes and SDKs that it checked. Use this list to tell a true negative from a missing detector.
 
 The [configuration reference](/configuration/overview#flags) documents the `flags` fields (`sdkPatterns`, `envPrefixes`, `configObjectHeuristics`). Fallow merges custom `sdkPatterns` and `envPrefixes` with the built-in sets. They never replace the built-in sets.
+
+Fallow applies the custom patterns when it parses a file, and the parse cache keys on them. After a change to the `flags` section, the next run parses every file again.
 
 ```json In-house SDK, extra env prefixes, and config heuristics
 {
