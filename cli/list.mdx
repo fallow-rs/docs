@@ -1,7 +1,7 @@
 ---
 title: "fallow list"
-description: "See what fallow found in your project, so you can debug the configuration and check the project setup. Fallow list shows discovered files, entry points, active plugins, boundary zones, and workspaces."
-keywords: ["fallow list", "plugins", "entry points", "files", "boundaries", "CLI", "inspect"]
+description: "See what fallow found in your project, so you can debug the configuration and check the project setup. Fallow list shows discovered files, entry points, active plugins, boundary zones, workspaces, and the startup import weight of each entry."
+keywords: ["fallow list", "plugins", "entry points", "files", "boundaries", "CLI", "inspect", "entry weight", "startup", "eager imports", "lazy loading"]
 icon: "terminal"
 ---
 
@@ -20,6 +20,7 @@ fallow list
 | `--plugins` | Show active plugins |
 | `--boundaries` | Show architecture boundary zones, rules, and per-zone file counts |
 | `--workspaces` | Show monorepo workspaces and workspace-discovery diagnostics, for example a malformed `package.json`, an unreachable glob match, or a missing tsconfig reference. The `fallow workspaces` alias does the same. |
+| `--entry-weight` | Show the startup import weight of each runtime entry point, in source bytes. See [Startup import weight](#startup-import-weight). |
 | `-f, --format <FORMAT>` | Output format: `human` (default), `json` |
 | `[PATH]` | Show only the items in this file or directory. Fallow still builds the whole project, and activates the plugins from the whole project, as the analysis does. For example, `fallow list src/app --entry-points` lists only the entry points under `src/app`. |
 
@@ -28,6 +29,105 @@ fallow list
 `fallow list --entry-points` shows the entry points that the analysis uses. The listing runs the same framework plugins and the same entry-point discovery as `fallow dead-code`, so the two agree. For example, on a Nuxt project with [`autoImports`](/configuration/overview#autoimports) on, a component that nothing renders is not an entry point in the listing, and `fallow dead-code` reports it as an unused file. The MCP `project_info` tool gives the same list.
 
 When a framework plugin cannot use a config, the listing records it in `workspace_diagnostics[]`, with the same `plugin-config-unreadable` and `plugin-effect-not-modeled` entries as the analysis. A `--plugins` or `--entry-points` listing has the array only when the plugin stage recorded an entry. See [Debugging](/analysis/debugging) for the diagnostic kinds.
+
+## Startup import weight
+
+`fallow list --entry-weight` shows how much code each runtime entry point loads before it runs. Use it to find the imports that make startup slow, and to keep that number from growing.
+
+For each runtime entry point, fallow walks the import graph and puts every project module that the entry reaches into one of three groups:
+
+| Group | Which modules |
+|:------|:--------------|
+| Eager | Modules that load before the entry runs: a static `import`, `export ... from`, `require()`, `require.context`, and `import.meta.glob(..., { eager: true })`. |
+| Deferred | Modules that load only on demand: `import('./x')`, a template `import()`, and a lazy `import.meta.glob`. A module that is also eager is not deferred. |
+| Out of thread | Modules that only another thread or process loads: a worker URL (`new URL('./worker.ts', import.meta.url)`), `child_process.fork`, a pino transport, and a `module.register` hook. |
+
+`import type` loads nothing, so fallow does not follow it. A declaration file (`.d.ts`) is not an entry, because nothing loads it. Test and config entry points are not runtime entries, so they are not in the report.
+
+```bash title="$ fallow list --entry-weight"
+Startup import weight of 1 runtime entry (source bytes on disk, not bundle size)
+src/main.ts (package.json main)
+  eager          9 modules, 4.7 KiB (24 B CSS)
+  deferred       4 modules, 209 B
+  out of thread  3 modules, 141 B
+  eager packages 2: lodash, react
+  imports that keep the most bytes eager:
+    src/main.ts:5 -> src/heavy/view.ts  3.7 KiB, 3 modules
+    src/heavy/view.ts:1 -> src/heavy/chart-data.ts  2.7 KiB, 1 module
+```
+
+### The unit is source bytes
+
+Every byte count is the size of the source file on disk. Types, comments, and code that tree shaking removes all count, and bundler chunks do not apply. The value is therefore not a bundle size. It is a repeatable count: the same tree gives the same number, and the number goes down when you move an import behind `import()`. Package code is not measured: `eager_packages` lists the packages on the eager path with the specifiers as written, for example `lodash/debounce`. Platform built-ins such as `node:fs` are not listed.
+
+### Imports that keep the most bytes eager
+
+`dominating_imports` lists single imports, heaviest first. For each import, `exclusive_bytes` is the number of bytes that leave the eager group if that one import becomes an `import()`. An import only counts when it is the only way into its target, so a module that two eager files import is never in the list. `line` is absent for an edge without a binding, such as `export ... from` or an eager glob match.
+
+Treat this list as evidence for a review, not as a fix. A lazy load of code that the first screen needs can make startup slower. To see why one module is eager, run `fallow trace --path <entry> <module> --eager-only`. See [Import path between two modules](/cli/trace#import-path-between-two-modules).
+
+### JSON output
+
+```json title="$ fallow list --entry-weight --format json"
+{
+  "entry_weight": {
+    "unit": "source_bytes",
+    "entry_count": 1,
+    "entries": [
+      {
+        "path": "src/main.ts",
+        "source": "package.json main",
+        "eager_modules": 9,
+        "eager_bytes": 4857,
+        "eager_css_bytes": 24,
+        "deferred_modules": 4,
+        "deferred_bytes": 209,
+        "out_of_thread_modules": 3,
+        "out_of_thread_bytes": 141,
+        "eager_package_count": 2,
+        "eager_packages": [
+          { "name": "lodash", "specifiers": ["lodash/debounce"] },
+          { "name": "react", "specifiers": ["react"] }
+        ],
+        "dominating_imports": [
+          {
+            "importer": "src/main.ts",
+            "line": 5,
+            "target": "src/heavy/view.ts",
+            "exclusive_bytes": 3825,
+            "exclusive_modules": 3
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The report does not change the health score.
+
+### Gate the startup weight in CI
+
+The gate is opt-in. Save a baseline file on your main branch:
+
+```bash
+fallow list --entry-weight --save-regression-baseline .fallow/regression-baseline.json
+```
+
+The file stores `eager_bytes`, `eager_modules`, and the eager package names of each entry. When the file already holds issue counts from `fallow dead-code --save-regression-baseline`, those counts stay, and the reverse is also true.
+
+Compare a later run with the baseline:
+
+```bash
+# Report the change of each entry, exit 0
+fallow list --entry-weight --regression-baseline .fallow/regression-baseline.json
+
+# Exit 1 when an entry grew by more than 5%
+fallow list --entry-weight --regression-baseline .fallow/regression-baseline.json \
+  --fail-on-regression --tolerance 5%
+```
+
+The comparison adds `entry_weight.regression` to the JSON output. Each row has `baseline_eager_bytes`, `current_eager_bytes`, `new_eager_packages`, and `exceeded`. `--tolerance` takes a byte count, such as `1024`, or a percentage, such as `5%`. The default is `0`. A new entry has nothing to grow from, so it never fails the gate. `--save-regression-baseline` needs a file path here, and a run with a `[PATH]` scope cannot save a baseline.
 
 ## Examples
 
@@ -54,6 +154,14 @@ fallow list --boundaries
 
 # JSON output with zone file counts
 fallow list --boundaries --format json
+```
+
+```bash Inspect startup weight
+# Show the startup import weight of each runtime entry
+fallow list --entry-weight
+
+# JSON output for scripting
+fallow list --entry-weight --format json
 ```
 
 ```bash Inspect workspaces
@@ -181,11 +289,14 @@ Each entry point shows how fallow found it. The plugin name tells you which fram
 
 ## See also
 
-<CardGroup cols={2}>
+<CardGroup cols={3}>
   <Card title="Built-in plugins" icon="puzzle-piece" href="/frameworks/built-in">
     Full list of fallow's built-in framework plugins.
   </Card>
   <Card title="Custom plugins" icon="plug" href="/frameworks/custom-plugins">
     Write plugins for frameworks that fallow does not cover yet.
+  </Card>
+  <Card title="Trace an import path" icon="route" href="/cli/trace#import-path-between-two-modules">
+    See why a module loads before an entry runs.
   </Card>
 </CardGroup>
