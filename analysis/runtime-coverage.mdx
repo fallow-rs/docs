@@ -36,7 +36,7 @@ The report also has these fields:
 | `signals` | Every signal that the post-processing pass detected, as an array. `verdict` shows only the most actionable signal for the current context, and `signals` shows all of them. Sorted by severity, highest first. Omitted when empty. A typical PR run emits `["cold-code-detected", "hot-path-touched"]` when both apply. |
 | `summary` | Aggregate counts and capture metadata. See [Summary fields](#summary-fields). |
 | `findings` | Cold or unresolved functions. See [Finding fields](#finding-fields). |
-| `hot_paths` | The busiest runtime functions, with a stable `id`, an optional `stable_id` join key, `line`, `end_line`, `invocations`, and `percentile` rank. |
+| `hot_paths` | The busiest runtime functions, with a stable `id`, an optional `stable_id` join key, `line`, `end_line`, `invocations`, `percentile` rank, and an `optimization_target` block. See [Optimization target fields](#optimization-target-fields). |
 | `blast_radius` | For each runtime-observed function, how far a change can spread: `caller_count`, `caller_count_weighted_by_traffic`, `deploys_touched`, and a `risk_band`. |
 | `importance` | For each runtime-observed function, how much it matters in production: `invocations`, `cyclomatic`, `owner_count`, an `importance_score`, and a `reason`. |
 | `actionable` | Whether the report has enough evidence to act on, with `actionability_reason` and `actionability_verdict`. A capture with no tracked functions reports an `insufficient_evidence` verdict, so fallow does not read it as cold. This verdict can only hold back action: it never gates a positive verdict or a confidence score. |
@@ -81,6 +81,37 @@ Every finding has an **evidence block**. It gives the reason for the verdict in 
 - `true`: the function is unreachable in the production graph, but an excluded file still references it. It is not dead code, because a removal breaks the test that references it. Fallow reports it as `review_required`, not `safe_to_delete`, with the action "Only tests reference this export; delete the test usage together with the function or keep it".
 - `false`: fallow compared the production graph with the full tree and found no such reference.
 - `null`: the report ran without a production filter, so there is no second reachability answer.
+
+### Optimization target fields
+
+A hot path tells you how often a function runs. The `optimization_target` block also tells you how much work each call does, so you know where speed work pays off. `importance` ranks the risk of a change. `optimization_target` ranks the speed payoff.
+
+| Field | Meaning |
+|:------|:--------|
+| `cost_score` | The invocations multiplied by the work per call. An integer with no upper limit. Sort by it to pick speed work. |
+| `cost_basis` | The input for the work per call: `inner_iterations` or `cognitive`. |
+| `inner_iterations_per_call` | The peak runs of one block inside the function for each call. `1.0` means no block ran more than once per call. A loop body or a lookup that runs 3 times per call gives `3.0`. Present only when the dump has V8 block counts. |
+| `cognitive` | The static cognitive complexity of the function. |
+| `cyclomatic` | The static cyclomatic complexity of the function. |
+| `line_count` | The number of lines in the function body. |
+
+The block counts come from the V8 dump. Node writes them under `NODE_V8_COVERAGE`, so a dump from a test run or a benchmark run gives the measured value. When the dump has block counts, `cost_basis` is `inner_iterations`. When it has none (an Istanbul file, or a cloud pull), `cost_basis` is `cognitive`. Cognitive complexity is a static proxy for the work per call, not a measurement.
+
+A hot path has no `optimization_target` block when it has no `stable_id`, or when no function in the checkout matches the `stable_id`. The `optimization_target_unmatched` warning gives the count of these hot paths.
+
+To list the best speed targets from the JSON output:
+
+```bash
+fallow health --runtime-coverage ./coverage --format json --quiet \
+  | jq '.runtime_coverage.hot_paths
+        | map(select(.optimization_target))
+        | sort_by(-.optimization_target.cost_score)
+        | .[:10]
+        | map({path, line, function, invocations, cost: .optimization_target.cost_score,
+               per_call: .optimization_target.inner_iterations_per_call})'
+```
+
+The human output shows the cost at the end of each hot path line, for example `(600 invocations, p100, cost 1,800 at 3.00 iterations/call)`.
 
 ## Confidence thresholds
 
