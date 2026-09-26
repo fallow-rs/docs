@@ -32,7 +32,7 @@ fallow flags
 | `--sort <KEY>` | Row order: `age` (default, oldest first), `sites` (fewest read sites first) or `name` |
 | `--flag-age <MODE>` | How to measure flag age: `blame` (default), `pickaxe` or `off`. See [Flag age](#flag-age). |
 | `--flag-state <FILE>` | Read a vendor flag export and add the vendor reasons. See [Vendor flag state](#vendor-flag-state). |
-| `--max-flag-age <DAYS>` | Exit 1 when a flag in scope is older than this many days. Opt-in. With `--flag-age off`, the command exits 2. |
+| `--max-flag-age <DAYS>` | Exit 1 when a flag in scope is older than this many days. Opt-in. With `--flag-age off`, the command exits 2. Without git history, the gate is skipped. See [Flag age](#flag-age). |
 
 These options need `--retirement`.
 
@@ -72,7 +72,7 @@ The regression options work on `fallow flags` only together with `--retirement`:
 | `--regression-baseline <PATH>` | The baseline file to compare with. The gate needs it. |
 | `--tolerance <N>` | Allowed growth: an absolute count such as `2`, or a percentage such as `5%`. Default `0`. |
 
-A run with `--changed-since` or `--workspace` skips the gate and saves no baseline, because its counts do not compare with a whole-project baseline. The verdict is in `retirement.regression` in the JSON output.
+A run with `--changed-since` or `--workspace` skips the gate and saves no baseline, because its counts do not compare with a whole-project baseline. The verdict is in `retirement.regression` in the JSON output. The verdict of each gate also prints on stderr in every output format, so a run that exits 1 always tells you why.
 
 ```bash
 # On main: record the flag counts
@@ -142,6 +142,17 @@ Ages count days to the analysis clock: the commit time of `HEAD`, or `FALLOW_CLO
 
 In a shallow clone, the age is `null` and `workspace_diagnostics[]` has a `flag-age-shallow-clone` entry. Run `git fetch --unshallow` for the full history. Outside a git repository, or on a branch without commits, the entry is `flag-age-unavailable`. In these cases `generated_at_clock` is also `null`.
 
+Without git history, `--max-flag-age` cannot check a flag. The gate then has the status `skipped` in `retirement.max_flag_age.status`, the command prints `Flag age check skipped` on stderr, and the run does not fail. The default checkout of GitHub Actions is a shallow clone with depth 1, so set `fetch-depth: 0` on `actions/checkout` for this gate:
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0
+- run: npx fallow flags --retirement --max-flag-age 180
+```
+
+`retirement.max_flag_age.unmeasured` counts the flags in scope without an age. The gate does not check these flags.
+
 ### Vendor flag state
 
 `--flag-state <FILE>` reads a local JSON file with the state of each flag in your flag provider. Fallow reads the file offline. It uses no credentials, makes no network calls and has no vendor clients. You make the file from the export of your vendor, for example with one of the `jq` recipes below.
@@ -183,13 +194,32 @@ How the export matches the code:
 - Only SDK flags match the export. Environment variables and config objects do not.
 - When `source` names an SDK in the project, such as `launchdarkly` for `LaunchDarkly`, only the flags of that SDK match. Thus a LaunchDarkly export does not mark your Statsig flags as `missing-in-vendor`.
 - The `flags.vendorKeyPrefix` config key removes a prefix from each vendor key before the match. For example, `"web."` makes `web.new-checkout` match the code flag `new-checkout`.
-- `vendor-only` rows need a whole-project run. A run with `--changed-since` or `--workspace` adds none.
+- The SDK check reads every SDK site of the project. Thus a run with `--changed-since` or `--workspace` gives a flag the same vendor reasons as a full run.
+- `vendor-only` rows need a whole-project run. A run with `--changed-since` or `--workspace` adds none. These rows do not count in `summary.distinct_flags`, so a key that exists only in the vendor does not change the flag count of the code, and it does not trip the [regression gate](#regression).
+- When the export file is outside the project root, for example in a CI temp directory, the evidence and the SARIF and CodeClimate locations show its file name only. All output paths stay relative to the project root.
 
 The human output warns when the export is more than 30 days old. The JSON output gives the age in `retirement.vendor_state.export_age_days`.
 
 #### jq recipes
 
 Each recipe turns the JSON of the vendor REST API into the schema above. The field names follow the vendor APIs at the time of writing, so compare them with your export. Set `state` to `rolled_out` or `serves_single_variation` to `true` when your vendor data shows that a flag serves one variation, because that gives the strongest reason.
+
+<Warning>
+The list endpoints of most vendors return one page of flags per request. An export with only the first page marks every flag on the other pages as `missing-in-vendor`, and it adds no `vendor-only` row for those keys. Get every page before you run a recipe:
+
+- LaunchDarkly returns 20 flags per page by default. Set `limit`, and follow `_links.next` until it is absent. `totalCount` gives the number of flags.
+- GrowthBook pages with `limit` and `offset`. Request pages until `hasMore` is `false`.
+- PostHog returns about 100 flags per page. Follow the `next` URL until it is `null`.
+- For another vendor, read its API docs for pagination.
+
+Then merge the pages into one file with the same shape as one page, and give that file to the recipe. For example, for LaunchDarkly pages saved as `page-1.json`, `page-2.json` and so on:
+
+```bash
+jq -s '{items: [.[].items[]]}' page-*.json > launchdarkly-flags.json
+```
+
+For GrowthBook use `.features` instead of `.items`, and for PostHog use `.results`. Compare the number of keys in `flag-state.json` with the flag count in your vendor before you trust `missing-in-vendor`.
+</Warning>
 
 **LaunchDarkly**
 
@@ -430,7 +460,7 @@ With `--retirement`, the output also has a top-level `retirement` object. Withou
 
 | Field | Description |
 |:------|:------------|
-| `retirement.summary` | Totals for every flag in scope, before `--reason` and `--min-age` |
+| `retirement.summary` | Totals for every flag in scope, before `--reason` and `--min-age`. `distinct_flags` counts the flags in the code only; `by_reason["vendor-only"]` counts the keys that only the export holds. |
 | `retirement.flags[].sites[].role` | `read`, or `definition` for a site that defines the flag. A definition is not a read site. |
 | `retirement.flags[].workspace` | Workspace root of the flag, when the project has workspaces |
 | `retirement.flags[].reasons` | Reason codes. The set is open, so ignore a code that you do not know. A row with an empty array is not a candidate. |
@@ -438,7 +468,7 @@ With `--retirement`, the output also has a top-level `retirement` object. Withou
 | `retirement.flags[].vendor` | With `--flag-state`: the vendor `key`, `state` and the optional vendor fields of the flag |
 | `retirement.vendor_state` | With `--flag-state`: `source`, `exported_at`, `export_age_days` and the number of `flags` in the export |
 | `retirement.regression` | With `--fail-on-regression`: `status` (`pass`, `exceeded` or `skipped`), `tolerance`, `tolerance_kind`, `metrics[]` (`metric`, `baseline`, `current`, `delta`, `exceeded`) and `exceeded` |
-| `retirement.max_flag_age` | With `--max-flag-age`: `max_days`, `exceeded` and the `flags[]` that are older, oldest first |
+| `retirement.max_flag_age` | With `--max-flag-age`: `status` (`pass`, `exceeded` or `skipped`), `max_days`, `exceeded`, `unmeasured` (flags in scope without an age), `reason` (only when `skipped`) and the `flags[]` that are older, oldest first |
 
 With `--changed-since`, the output also has a root [`request_outcomes`](/cli/global-flags#request-outcomes) object with the `changed-since` entry. When fallow cannot resolve the ref, the entry says so, and the report covers the whole project.
 
