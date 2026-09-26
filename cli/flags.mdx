@@ -1,7 +1,7 @@
 ---
 title: "fallow flags"
 description: "Find the feature flags in your codebase, so you can review them. Fallow flags detects environment variable gates, SDK calls, and config-based toggles."
-keywords: ["fallow flags", "feature flags", "environment variables", "LaunchDarkly", "Statsig", "Unleash", "GrowthBook", "PostHog", "Vercel Flags", "Optimizely", "Eppo", "SDK", "config", "CLI"]
+keywords: ["fallow flags", "feature flags", "flag retirement", "stale flags", "environment variables", "LaunchDarkly", "Statsig", "Unleash", "GrowthBook", "PostHog", "Vercel Flags", "Optimizely", "Eppo", "SDK", "config", "CLI"]
 icon: "terminal"
 ---
 
@@ -17,10 +17,22 @@ fallow flags
 
 | Flag | Description |
 |:-----|:------------|
-| `--top <N>` | Show only the top N feature flags |
+| `--top <N>` | Show only the top N feature flags. With `--retirement`, it also limits the JSON rows and the candidates in the human section. |
 | `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`. Other formats exit 2. |
 | `-q, --quiet` | Suppress progress output |
 | `--explain` | Add metric explanations. In JSON format, adds a `_meta` object with descriptions and docs links. |
+
+### Retirement
+
+| Flag | Description |
+|:-----|:------------|
+| `--retirement` | Add a retirement report: one row per flag, with the reasons that the flag can be retired. Supports the `human` and `json` formats. Other formats exit 2. |
+| `--reason <CODE>` | Keep only the rows with this reason. Repeat the flag for more reasons. |
+| `--min-age <DAYS>` | Keep only the flags that are at least this many days old. A flag without an age does not pass. With `--flag-age off`, the command exits 2. |
+| `--sort <KEY>` | Row order: `age` (default, oldest first), `sites` (fewest read sites first) or `name` |
+| `--flag-age <MODE>` | How to measure flag age: `blame` (default), `pickaxe` or `off`. See [Flag age](#flag-age). |
+
+These options need `--retirement`.
 
 ### Scoping
 
@@ -62,6 +74,42 @@ Fallow detects three categories of feature flag patterns:
 | **Config object patterns** | Object property lookups used as boolean guards (opt-in) | `config.featureX`, `settings.enableNewFlow` |
 
 Each detected feature flag has a confidence level. It shows how sure fallow is that the pattern is a feature flag.
+
+## Retirement report
+
+`fallow flags --retirement` groups the sites of each flag into one row and lists the reasons that the flag can be retired. The report is advisory. Fallow does not remove code, and every action has `auto_fixable: false`. You decide which flags to remove.
+
+The identity of a flag is its detection kind, its SDK provider and its name. In a monorepo, the workspace root is also part of the identity, so each workspace gets its own row.
+
+### Reasons
+
+| Reason | What it means |
+|:-------|:--------------|
+| `single-read-site` | The flag has exactly one read site in the project. |
+| `test-only` | Every read site is in a test, story or mock file. |
+| `literal-constant` | The flag is a module-level `const` with a flag prefix and a literal value, such as `const FEATURE_NEW_UI = true`, and a guard in the same module tests it. |
+| `identical-branches` | Both branches of the guard are the same code. Whitespace and comments do not count. |
+| `empty-branch` | No branch of the guard holds code, so the flag does nothing, as in `if (flag) {}` or `flag ? null : <></>`. An empty branch is `{}`, `;`, `null`, `undefined`, `void 0`, `<></>`, or `false` next to JSX. A missing `else` is also empty. `flag ? <New /> : null` and `flag ? null : <Old />` are plain gating and do not count. |
+| `guards-dead-code` | The guarded block holds unused exports. |
+| `defined-never-read` | The flag is defined but no code reads it: a Vercel `flag()` definition whose export is unused, or an unused member of an exported flag registry enum. |
+
+`single-read-site`, `test-only` and `defined-never-read` count every read of the flag in the project. Reads in other workspaces and reads outside `--changed-since` or `--workspace` also count.
+
+The reasons come from the code only. They do not tell you that a flag is on or off in production. Check the state of the flag in your flag provider before you remove it.
+
+A literal `const` flag gets the kind `constant`. It shows in the retirement report only, not in `feature_flags[]`. The binding must be the value of the test, as in `if (FEATURE_X)` or `if (FEATURE_X === 'on')`.
+
+### Flag age
+
+Each row also gives the age of the flag from git.
+
+- `blame` (default) runs `git blame` on the lines of the flag sites. The age counts from the oldest line that still holds the flag. A rewrite of a line resets its date, so this age is a lower bound.
+- `pickaxe` runs `git log -S<name>` for each flag name and sets `first_seen` to the first commit that added the name. This mode is slower on a long history.
+- `off` measures no age and starts no git process.
+
+Ages count days to the analysis clock: the commit time of `HEAD`, or `FALLOW_CLOCK_EPOCH` when you set it. Two runs on the same commit give the same ages. Fallow keeps the results in its cache directory for the current `HEAD`, so a second run starts no `git blame`.
+
+In a shallow clone, the age is `null` and `workspace_diagnostics[]` has a `flag-age-shallow-clone` entry. Run `git fetch --unshallow` for the full history. Outside a git repository, or on a branch without commits, the entry is `flag-age-unavailable`. In these cases `generated_at_clock` is also `null`.
 
 ## Configuration
 
@@ -113,6 +161,17 @@ fallow flags --format markdown | gh pr comment --body-file -
 fallow flags --format codeclimate > gl-code-quality-report.json
 ```
 
+```bash Retirement
+# Flags that you can retire, oldest first
+fallow flags --retirement
+
+# Test-only flags at least 90 days old, as JSON
+fallow flags --retirement --reason test-only --min-age 90 --format json --quiet
+
+# First commit of each flag name (slower)
+fallow flags --retirement --flag-age pickaxe
+```
+
 ```bash Scoping
 # Only flags in changed files
 fallow flags --changed-since main
@@ -148,6 +207,57 @@ fallow flags --production
 | `elapsed_ms` | integer | Analysis duration in milliseconds |
 | `feature_flags` | array | Detected feature flag patterns |
 | `total_flags` | integer | Total number of detected feature flags |
+
+With `--retirement`, the output also has a top-level `retirement` object. Without the option, the key is not there and the output does not change.
+
+```json title="$ fallow flags --retirement --format json"
+{
+  "kind": "feature-flags",
+  "schema_version": 8,
+  "feature_flags": ["..."],
+  "total_flags": 14,
+  "retirement": {
+    "generated_at_clock": "2026-09-25T00:00:00Z",
+    "age_mode": "blame",
+    "summary": {
+      "distinct_flags": 9,
+      "candidates": 2,
+      "by_reason": { "single-read-site": 2, "test-only": 1 }
+    },
+    "flags": [
+      {
+        "flag_name": "FEATURE_OLD_CHECKOUT",
+        "kind": "environment_variable",
+        "sites": [
+          { "path": "src/checkout.test.ts", "line": 12, "col": 6, "role": "read", "in_test": true }
+        ],
+        "read_sites": 1,
+        "test_only": true,
+        "first_seen": null,
+        "oldest_surviving_site": { "commit": "abc1234def56", "date": "2026-02-01" },
+        "last_touched": { "commit": "abc1234def56", "date": "2026-02-01" },
+        "age_days": 236,
+        "reasons": ["single-read-site", "test-only"],
+        "evidence": [
+          { "reason": "single-read-site", "path": "src/checkout.test.ts", "line": 12, "detail": "the flag has one read site" },
+          { "reason": "test-only", "path": "src/checkout.test.ts", "line": 12, "detail": "the only read site is in a test, story or mock file" }
+        ],
+        "actions": [
+          { "type": "review-retirement", "auto_fixable": false, "description": "Review this flag for retirement. The evidence lists the reasons." }
+        ]
+      }
+    ]
+  }
+}
+```
+
+| Field | Description |
+|:------|:------------|
+| `retirement.summary` | Totals for every flag in scope, before `--reason` and `--min-age` |
+| `retirement.flags[].sites[].role` | `read`, or `definition` for a site that defines the flag. A definition is not a read site. |
+| `retirement.flags[].workspace` | Workspace root of the flag, when the project has workspaces |
+| `retirement.flags[].reasons` | Reason codes. The set is open, so ignore a code that you do not know. A row with an empty array is not a candidate. |
+| `retirement.flags[].age_days` | Days from the oldest known commit to the analysis clock, or `null` |
 
 With `--changed-since`, the output also has a root [`request_outcomes`](/cli/global-flags#request-outcomes) object with the `changed-since` entry. When fallow cannot resolve the ref, the entry says so, and the report covers the whole project.
 
