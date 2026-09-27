@@ -25,8 +25,8 @@ npm run docs:dev
 
 ## Key files
 
-- `index.mdx`: landing page. Static and runtime intelligence positioning, feature overview.
-- `quickstart.mdx`: first run and reading the output, then links into VS Code, CI, MCP, and runtime intelligence.
+- `index.mdx`: landing page. Positioning of Fallow (static analysis) and Fallow Cloud (production data), feature overview.
+- `quickstart.mdx`: first run and reading the output, then links into VS Code, CI, MCP, and Fallow Cloud.
 - `integrations/mcp.mdx`: agent integration via CLI and MCP. Core page for agent audience.
 
 ## Writing conventions
