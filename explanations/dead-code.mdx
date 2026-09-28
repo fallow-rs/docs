@@ -387,6 +387,63 @@ Fallow accepts four spellings: `re-export-cycle`, `re-export-cycles`, `reexport-
 
 **When to keep it as a warning:** legacy projects with hand-written barrels from before ESM strictness can have harmless cycles that no code relies on. At `warn`, the diagnostic stays visible and CI does not break. Change the rule to `error` after you remove the cycles. After an upgrade, expect `total_issues` to go up on the first run. Cycles that existed before this rule shipped now show up as findings.
 
+### Package cycles {#package-cycles}
+
+Workspace packages that import each other in a loop. Package `a` imports package `b`, and package `b` imports package `a`, directly or through other packages. A package cycle can exist when no file-level cycle exists: `a/src/x.ts` imports `b/src/y.ts`, and `b/src/z.ts` imports `a/src/w.ts`. The files do not form a loop, but the packages do.
+
+| Severity | Default |
+|:---------|:--------|
+| Warning | Yes |
+
+**Why it matters:** packages in a cycle cannot be built, versioned, or published in dependency order. A build tool that builds dependencies first (for example with TypeScript project references or a task runner) has no valid order. One package must then use the build output of the other package from an earlier run.
+
+**How fallow builds the package graph:**
+- Each workspace package is a node. A file belongs to the workspace package with the longest root that contains the file.
+- Each resolved import from a file in one package to a file in another package is an edge. A relative import that goes into another package counts the same as an import by package name.
+- Declared dependencies in `package.json` are not edges. Only imports in the code count.
+- Imports from test, spec, story, and fixture files and from tooling config files (for example `vitest.config.ts`) are not edges. A package often imports a sibling package only in its tests, and that import does not change the build order. Fallow matches these files by their path relative to the package root.
+- The check needs two or more workspace packages. A project without workspaces has no package cycles.
+
+**Type-only hops:** a type-only import (`import type`) is an edge too. A type-only import has no runtime effect, but a declaration build can still need the other package first. Each hop in the finding has a `type_only` flag. The flag is `true` when every import on that hop is type-only. This is different from [circular dependencies](#circular-dependencies), which ignore type-only imports.
+
+**What the finding shows:** the packages in cycle order, starting at the package with the lowest name, and one example import for each hop. The example import is the first runtime import of the hop by path and line. When the hop has only type-only imports, it is the first type-only import.
+
+```
+● Package cycles (1)
+  @acme/core → @acme/utils → @acme/core
+    packages/core/src/format.ts:3 → packages/utils/src/index.ts
+    packages/utils/src/log.ts:1 → packages/core/src/index.ts (type-only)
+```
+
+In `--format json`, each finding in `package_cycles` has these fields:
+
+| Field | Description |
+|:------|:------------|
+| `packages` | Package labels in cycle order. The last package imports the first |
+| `package_roots` | Root directory of each package, in the same order as `packages` |
+| `length` | Number of packages in the cycle |
+| `edges` | One example import per hop: `from_package`, `to_package`, `path`, `target_path`, `line`, `col`, and `type_only` |
+| `group_truncated` | `true` when the group of packages that holds this cycle has more cycles than fallow lists |
+
+**Packages with the same name:** a label is the package name. When two or more workspace packages have the same name, for example several `examples/*` packages named `example`, the label also shows the package root: `example (examples/basic)`. The label is then unique in all output formats, in baseline keys, and in audit keys.
+
+**Limits:** fallow lists the shortest cycles first, and at most 20 cycles for one group of packages that are connected in a loop. On a very dense package graph, fallow can also stop the search earlier. Fallow then sets `group_truncated` on each cycle of that group, and every output format shows the note "this package group has more cycles than listed". Break a listed cycle and run fallow again to see the other cycles.
+
+**Suppression:** a suppression removes one import from the package graph. It does not hide the finding directly.
+
+```ts
+// fallow-ignore-next-line package-cycle
+import { log } from "@acme/utils";
+```
+
+The cycle goes away when every import on one hop is removed. If a hop has more than one import, suppress each import on that hop, or put `// fallow-ignore-file package-cycle` in each file that holds an import on the hop. A suppression on an import that is not part of a cycle is reported as a [stale suppression](#stale-suppressions). Fallow also accepts the alias `package-cycles`.
+
+**Scoped runs:** `--changed-since`, the diff scope of `fallow audit`, and `--workspace` look only at the example imports in the finding (`edges[].path`), not at every import of a hop. Fallow keeps a cycle when one of its example import files is in scope. A new cycle always adds a hop whose imports are all new, so a new cycle always shows. A change that adds a second import to a hop that already exists does not bring the cycle into scope. Per-file severity in `overrides` also uses the example import files: the highest severity among them applies. When `package-cycle` is `off` for every example import file, fallow hides the cycle.
+
+**Gating:** at the default `warn`, a package cycle shows in every output format but does not fail the run. At `error`, a package cycle makes fallow exit with code 1. `--fail-on-issues` also fails the run on a cycle at `warn`. A regression baseline and `fallow audit` key a cycle by its package labels, so a cycle that already exists does not fail a gate again.
+
+**When to act:** move the shared code to a package that both packages can import, or reverse the direction of one hop. A cycle where every hop is type-only is lower risk, because it cannot cause runtime initialization issues, but it still blocks a strict build order. Set the rule to `error` after you remove the cycles, or to `off` if your build tool does not need a package order.
+
 ### Boundary violations
 
 Imports that cross the architecture zone boundaries that you define. You define zones in the `boundaries` config section. Each zone maps file path patterns to a name. A boundary violation is an import from a file in one zone to a file in another zone that the boundary rules do not allow. Fallow checks every analyzed file, also a file that no entry point reaches. For a named or default import through a barrel file, fallow judges the zone of the module that declares the symbol. The finding then names the barrel in `via_path`.
