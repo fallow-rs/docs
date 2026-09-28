@@ -341,7 +341,31 @@ Fallow reads these parts of a script:
 - **Binary names.** Fallow maps commands such as `tsc`, `vitest`, or `next` to their packages (`typescript`, `vitest`, `next`). It does not report these packages as unused, even when no source file imports them.
 - **`--config` arguments.** When a script names a config file (for example `jest --config jest.e2e.config.ts`), fallow makes that file an entry point, so it does not report the file as unused.
 - **File path arguments.** Files that a script names directly (for example `node scripts/seed.js`) also become entry points.
-- **Env wrappers and package manager runners.** Fallow removes the `cross-env`, `npx`, `pnpx`, `yarn dlx`, or `node -r` prefix to find the real binary.
+- **Env wrappers and package manager runners.** Fallow removes the `cross-env`, `npx`, `pnpx`, `yarn dlx`, `pnpm exec`, `npm exec --`, `yarn run`, `bun run`, or `varlock run --` prefix to find the real binary. `yarn <bin>`, `yarn run <bin>`, `pnpm <bin>`, and `bun run <bin>` count as the binary when no script has that name.
+
+### Formatter and linter targets
+
+A formatter or a linter reads its file arguments, but it does not run them. So the file arguments of these tools do not become entry points: `eslint src/a.ts`, `prettier --check "**/*.ts"`, `oxlint src/`, and `oxfmt --check .` keep every file that no import reaches reportable as unused. This applies to every command form, including `npx`, `pnpm exec`, `yarn run`, env prefixes, and wrappers.
+
+Fallow knows these tools: alex, Biome, CSpell, dependency-cruiser, dprint, EditorConfig checkers, ember-template-lint, ESLint (and `eslint_d`), HTMLHint, jscpd, JSHint, madge, markdownlint, markuplint, Oxfmt, Oxlint, Prettier, remark, Secretlint, Standard, Stylelint, textlint, TSLint, and XO.
+
+The tool itself is still a used dependency, and its `--config` file is still tracked. A module that the tool loads through a flag also stays reachable:
+
+- A custom formatter, parser, or reporter: `eslint -f ./tools/formatter.js`, `stylelint --custom-formatter ./fmt.js`.
+- A local plugin: `prettier --plugin=./tools/plugin.mjs`, `remark --use ./plugins/lint.mjs`.
+- A rule directory: `eslint --rulesdir ./rules`, `textlint --rulesdir ./rules`. Fallow keeps the source files directly in that directory reachable.
+
+### Turn off entry points for a command
+
+Some other commands also read files as data. For example, a code generator that reads `src/**/*.ts` does not run those files. List such a command in [`ignoreCommandEntries`](/configuration/overview#ignorecommandentries), and its file arguments do not become entry points:
+
+```jsonc
+{
+  "ignoreCommandEntries": ["my-codegen"]
+}
+```
+
+The command is still a used dependency, and its `--config` file is still tracked. The option applies to `package.json` scripts, CI files, and infrastructure files. To turn off entry points from all commands, use `["*"]` and declare the real entry points in `entry`.
 
 ```json
 {
@@ -369,6 +393,8 @@ Fallow reads these files:
 | **CI pipelines** (`.gitlab-ci.yml`, `.github/workflows/*.yml`) | `npx` and binary invocations in CI steps |
 
 Fallow looks for these files in the project root and in common subdirectories (`config/`, `docker/`, `deploy/`).
+
+The rules for [formatter and linter targets](#formatter-and-linter-targets) and for `ignoreCommandEntries` also apply here. A CI step such as `npx eslint src/` does not make `src/` files entry points.
 
 ```dockerfile
 # Fallow detects scripts/migrate.ts and src/worker.ts as entry points
