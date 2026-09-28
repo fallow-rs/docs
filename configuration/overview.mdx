@@ -236,7 +236,7 @@ These findings stay visible even when their path matches:
 - Framework correctness findings, such as client and server directives and route collisions.
 - Security candidates.
 
-Human output prints a note on stderr that names patterns that matched no finding, so you can find typos. `--quiet` and the machine formats do not print this note.
+A pattern that matched no finding has no effect. The usual cause is a typo. Every output of `fallow dead-code` names such a pattern, see [Unmatched config patterns](#unmatched-config-patterns).
 </Accordion>
 
 <Accordion title="ignoreDependencies">
@@ -249,6 +249,21 @@ Use it for packages that the runtime provides, such as `bun:sqlite`, and for oth
   "ignoreDependencies": ["autoprefixer", "@types/node", "bun:sqlite"]
 }
 ```
+
+An entry can also be a glob. An entry with `*`, `?`, `[` or `{` is a glob with the same syntax as `ignorePatterns`, and fallow matches it against the package name. An entry without these characters matches one package name exactly.
+
+```jsonc
+{
+  // Every package in the @acme scope, and every @types package.
+  "ignoreDependencies": ["@acme/*", "@types/*", "eslint-plugin-*"]
+}
+```
+
+- `@acme/*` matches `@acme/lib` and `@acme/ui`, but not `@other/lib`.
+- A glob applies to the same checks as an exact name: unused, unlisted, type-only, test-only and dev-in-production dependencies.
+- An invalid glob, for example `@acme/[`, stops the config load with an `ignoreDependencies` error.
+
+A glob that matches no dependency that a `package.json` of the project declares has no effect. The usual cause is a typo in the scope. Every output of `fallow dead-code` names such a glob, see [Unmatched config patterns](#unmatched-config-patterns).
 </Accordion>
 
 <Accordion title="ignoreCatalogReferences">
@@ -1275,6 +1290,38 @@ The count keys use camelCase, for example `totalIssues` and `unusedExports`. Fal
 }
 ```
 </Accordion>
+
+## Unmatched config patterns
+
+An `ignoreDependencies` glob that matches no declared dependency, or an `ignoreFindings` pattern that matches no finding, has no effect. The usual cause is a typo. `fallow dead-code` reports such an entry in every output format. The presentation is different per format, but each format names the same entries.
+
+| Output | Where the entry shows |
+| --- | --- |
+| JSON | `workspace_diagnostics[]`, with `kind` set to `ignore-dependencies-glob-unmatched` or `ignore-findings-pattern-unmatched`, and a `pattern` field |
+| SARIF | `runs[0].invocations[0].toolConfigurationNotifications[]`, with `descriptor.id` set to the kind, and `properties.setting` and `properties.pattern` |
+| Markdown | An `Unmatched config patterns` section after the findings |
+| Human, compact, CodeClimate, CI formats | A note on stderr. `--quiet` removes the note |
+
+The MCP dead-code tool, the programmatic API, `fallow audit` and the combined `fallow` run carry the same `workspace_diagnostics[]` entries.
+
+```json
+{
+  "path": ".",
+  "kind": "ignore-dependencies-glob-unmatched",
+  "pattern": "@acm/*",
+  "message": "ignoreDependencies glob '@acm/*' matched no declared dependency in this run, so it has no effect. A glob matches package names, such as @scope/*. Fix the glob, or remove it from the config."
+}
+```
+
+An entry is advisory. It does not change the exit code, and `degrades_analysis` is not set.
+
+Fallow reports an `ignoreDependencies` glob only when the run shows dependency findings. These runs do not report it:
+
+- A run with an issue filter that does not include `--unused-deps` or `--unlisted-deps`, for example `--unused-files`.
+- A run with `--file`, because such a run drops dependency findings.
+- A run where every dependency rule is `off`.
+
+Fallow compares an `ignoreFindings` pattern with every finding of the analysis, before issue filters and scope filters. A filtered run therefore does not make a pattern look unused. A run with no findings at all reports no `ignoreFindings` pattern.
 
 ## JSON Schema
 
