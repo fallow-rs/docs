@@ -108,6 +108,11 @@ git diff --cached --unified=0 | fallow security --gate new --diff-stdin
 
 This rule finds server secrets that can end up in client code. The detector starts at each file with a top-level `"use client"` directive and follows static imports. It reports a candidate when the client boundary can reach a module that reads a non-public `process.env` value.
 
+Two kinds of import do not extend the client cone:
+
+- An import of a Server Action module. This is a `"use server"` module whose value exports are all async functions. The bundler replaces the import with an action reference, so the module and its imports stay on the server. A `"use server"` module with a different value export, such as a top-level `const`, a re-export, or a default value, stays in the cone, because that export ships to the client.
+- An import that names only type exports. `import { Props } from "./x"`, where `x` exports `interface Props`, is erased at build time, the same as `import type`. An import that also names a runtime value stays in the cone.
+
 Fallow excludes env values that are public by convention:
 
 | Public prefix | Example |
@@ -126,7 +131,7 @@ The output counts dynamic `import()` edges that the graph cannot follow as unres
 
 Fallow checks the same client cone (the modules that `"use client"` files reach) against a second sink set. It reports these findings as the `server-only-import` category: a `"use client"` file that transitively reaches a server-only module. A module counts as server-only when one of these is true:
 
-- It has a `"use server"` directive.
+- It has a `"use server"` directive and a value export that is not an async function. The cone stops at a Server Action module, so its directive alone does not produce a finding.
 - It imports the `server-only` package, `next/server`, `node:fs` / `node:fs/promises`, or `node:child_process` (the `node:` and bare forms both count).
 - It imports a server-only `next/headers` API (`cookies`, `headers`, `draftMode`).
 

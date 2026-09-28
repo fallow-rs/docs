@@ -30,6 +30,8 @@ The `--dupes-*` flags apply to combined mode. When you do not set one, fallow us
 | `--baseline-mode <MODE>` | How `--baseline` matches health findings: `count` (default) matches per file and category, `identity` matches per function identity. `identity` works only with a baseline that you saved with `--baseline-mode identity`. See [`fallow health`](/cli/health). |
 | `--save-baseline <PATH>` | Save the current results as a baseline file. The same subcommands as `--baseline` accept it. See [Save destinations](#save-destinations) for the paths that fallow writes to. |
 | `--fail-on-stale-baseline` | Exit 1 when a loaded `--baseline` has an entry that matched nothing in this run. In the bare run, this also checks `--dupes-baseline` and `--health-baseline`. Applies to `dead-code` and `check`, the bare run, `dupes` and `health`, in every output format. It also exits 1 when the loaded file is a baseline of another `kind`, because such a file suppresses nothing. The result is the exit code and one stderr line with the stale count, the baseline path and the command to save the baseline again. Some runs cannot judge the baseline: a narrowed scope, `health --report-only`, `audit` and `decision-surface`. These runs do not apply the gate. They print a warning on stderr and do not pass silently. A narrowed scope skips only the unmatched-entry check. It still applies the other-`kind` check, because the scope of the run does not change which command saved the file. The report output does not change. The run always reports the result as `baseline_staleness.gate_trips`, with or without this flag. That field describes the baseline and not the exit code, so it can be true even when the run did not apply the gate. `gate_outcomes["stale-baseline"].status` reports `fail` for both parts of the rule, and stays `skipped` on `audit`. |
+| `--fail-on-baseline-growth` | Exit 1 when a loaded baseline has a key that the same file at the base ref does not have. This makes a committed baseline shrink-only. See [Baseline growth gate](#baseline-growth-gate). |
+| `--baseline-base <REF>` | The git ref that `--fail-on-baseline-growth` compares the baseline with. Needs `--fail-on-baseline-growth`. Default: the `fallow audit` base. |
 | `--fail-on-regression` | Fail if the issue count grows by more than the tolerance, compared with a regression baseline. With `fallow list --entry-weight`, fail when the eager bytes of an entry grow by more than the tolerance. See [Startup import weight](/cli/list#gate-the-startup-weight-in-ci). |
 | `--tolerance <N>` | Allowed increase: `"2%"` (percentage) or `"5"` (absolute). Default: `"0"` |
 | `--regression-baseline <PATH>` | Path to regression baseline file (default: `.fallow/regression-baseline.json`) |
@@ -110,6 +112,27 @@ When the gate is on and a file has a `source-parse-degraded` diagnostic, the run
 - The GitHub Action and the GitLab template fail the job when the gate fails. They have no input for this gate: set the config key, or pass the flag in `args` or `FALLOW_ARGS`.
 
 An older fallow version rejects `failOnParseError` as an unknown key. When you commit the key, also set [`minimumVersion`](/configuration/overview#minimumversion).
+
+## Baseline growth gate
+
+`--baseline` and `--fail-on-stale-baseline` pass when a change adds a finding and saves the baseline again in the same commit. `--fail-on-baseline-growth` stops this. It compares each loaded baseline with the same file at a base ref:
+
+- A key that the base file does not have is growth. The run exits 1 and lists each new key per category on stderr.
+- A renamed file or a moved line gives a new key, so it counts as growth.
+- A baseline that the base ref does not have is a new baseline. The gate passes and prints a note.
+- A base ref that git cannot resolve exits 2, for example in a shallow clone. Fetch the full history (`fetch-depth: 0` on GitHub Actions).
+- A default base that resolves to `HEAD` exits 2, because a comparison with `HEAD` cannot fail. This happens on a branch that tracks its own pushed copy. Pass `--baseline-base origin/main` in CI.
+
+Without `--baseline-base`, the gate uses the `fallow audit` base: `--changed-since` (alias `--base`), then `FALLOW_AUDIT_BASE`, then the merge-base with the upstream or the remote default branch.
+
+The gate applies to the `dead-code`, `dupes` and `health` baselines, to the three baselines of the bare run, and to `--dead-code-baseline`, `--dupes-baseline` and `--health-baseline` of `fallow audit`. `health --report-only` and the review brief do not run the gate and say so on stderr. A command that loads no baseline rejects the flags.
+
+JSON output reports the verdict as `gate_outcomes["baseline-growth"]`. `observed` is the number of new keys and `threshold` is `0`.
+
+```bash
+fallow dead-code --baseline fallow-baselines/dead-code.json \
+  --fail-on-baseline-growth --baseline-base origin/main
+```
 
 ## Path scope
 
