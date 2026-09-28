@@ -182,7 +182,26 @@ Glob patterns for files that fallow does not analyze at all.
 }
 ```
 
-The built-in ignores apply at any depth: `**/node_modules/**`, `**/dist/**`, `**/build/**`, `**/coverage/**`, and the minified-bundle globs. Since 3.26.0, the `build` default is recursive like the others. Fallow therefore also skips a nested `build/` directory with hand-written source. `ignorePatterns` has no negation, so rename or move such a directory, or analyze it as a separate project with `fallow --root <dir>`.
+The built-in ignores apply at any depth: `**/node_modules/**`, `**/dist/**`, `**/build/**`, `**/coverage/**`, and the minified-bundle globs. Since 3.26.0, the `build` default is recursive like the others. Fallow therefore also skips a nested `build/` directory with hand-written source.
+
+A `!`-prefixed entry is an exception. It brings back files that a built-in default, one of your own patterns, or the hidden-directory skip removes:
+
+```jsonc
+{
+  "ignorePatterns": [
+    "legacy/**",
+    // lift the built-in **/coverage/** for this subtree only
+    "!src/policy/coverage/**",
+    // add the hidden directory .config to discovery
+    "!.config/**"
+  ]
+}
+```
+
+- Fallow applies the built-in defaults first, then your own patterns, then the `!` exceptions.
+- An exception lifts only the paths that it matches. With `!src/policy/coverage/**`, a top-level `coverage/` output directory stays excluded.
+- In a hidden directory that only an exception opens, fallow keeps only the files that an exception matches.
+- Paths under `node_modules` or `.git` cannot be lifted. A `!` entry that names one of these segments is a config error (exit 2).
 
 To see which built-in pattern removed files, and how many, run with `--explain-skipped`.
 </Accordion>
@@ -1013,6 +1032,34 @@ Use cases:
 - **Monorepo sub-packages** (for example a shared component library that multiple apps use) that do not inherit from the monorepo root config on purpose.
 
 `sealed: true` does **not** change config discovery. Fallow already stops at the nearest config in the directory tree (first match wins). This option only limits what `extends` can reference.
+</Accordion>
+
+<Accordion title="circularDependencies">
+Options for the `circular-dependencies` rule. The only option is `ignoreLazyImports` (default `false`).
+
+<CodeGroup>
+```jsonc .fallowrc.json
+{
+  "circularDependencies": { "ignoreLazyImports": true }
+}
+```
+
+```toml fallow.toml
+[circularDependencies]
+ignoreLazyImports = true
+```
+</CodeGroup>
+
+With `ignoreLazyImports: true`, an import edge that loads its target on demand or on another thread does not take part in cycle detection. These edges are lazy:
+
+- an `import()` inside a function
+- a template `import()`
+- a lazy `import.meta.glob`
+- a worker URL
+
+These edges stay in the cycle graph: a top-level `await import()`, `require()`, an eager `import.meta.glob`, and an edge that also has a static import. Fallow removes the lazy edges before it counts the cycles of a group, so lazy cycles do not fill the cycle limit and hide a static cycle.
+
+A top-level `await import()` in a Vue `<script setup>` block, a Svelte instance script, or an Astro frontmatter stays lazy, because that code runs for each component instance.
 </Accordion>
 
 <Accordion title="boundaries">
