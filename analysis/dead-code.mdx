@@ -129,7 +129,10 @@ fallow dead-code --unresolved-imports --unlisted-deps
       "elapsed_ms": 160,
       "total_issues": 401,
       "unused_files": [
-        { "path": "src/server/jobs/worker.ts" }
+        {
+          "path": "src/server/jobs/worker.ts",
+          "finding_id": "dc1:unused-file:5d2e8c41a07b93f6"
+        }
       ],
       "unused_exports": [
         {
@@ -139,7 +142,8 @@ fallow dead-code --unresolved-imports --unlisted-deps
           "line": 61,
           "col": 0,
           "span_start": 1420,
-          "is_re_export": false
+          "is_re_export": false,
+          "finding_id": "dc1:unused-export:81a349a3b9ea3b15"
         }
       ],
       "unused_dependencies": [
@@ -148,11 +152,14 @@ fallow dead-code --unresolved-imports --unlisted-deps
           "location": "dependencies",
           "path": "package.json",
           "line": 18,
-          "used_in_workspaces": ["apps/web"]
+          "used_in_workspaces": ["apps/web"],
+          "finding_id": "dc1:unused-dependency:3f9a0c7e12b4d865"
         }
       ]
     }
     ```
+
+    Each finding has a stable `finding_id`. The id does not change when lines move, so you can track one finding across runs. See [`finding_id`](/cli/dead-code#finding-id).
   </Tab>
   <Tab title="SARIF">
     <Tooltip tip="Static Analysis Results Interchange Format, a JSON-based standard for static analysis tool output">SARIF</Tooltip> output for GitHub Code Scanning and other static analysis tools.
@@ -177,12 +184,21 @@ fallow dead-code --unresolved-imports --unlisted-deps
                 "artifactLocation": { "uri": "src/server/jobs/queue.ts" },
                 "region": { "startLine": 61, "startColumn": 1 }
               }
-            }]
+            }],
+            "partialFingerprints": {
+              "tools.fallow.fingerprint/v1": "c4e1a9b07f2d3865",
+              "primaryLocationLineHash/v1": "c4e1a9b07f2d3865",
+              "fallowFinding/v1": "dc1:unused-export:81a349a3b9ea3b15"
+            }
           }
         ]
       }]
     }
     ```
+
+    A dead-code result has the key `fallowFinding/v1` in `partialFingerprints`. Its value is the [`finding_id`](/cli/dead-code#finding-id) of the finding in JSON output, so you can join a SARIF result to its JSON finding. The keys `tools.fallow.fingerprint/v1` and `primaryLocationLineHash/v1` did not change, so GitHub code scanning keeps each open alert after an upgrade.
+
+    Some findings give one result for each location: an unlisted dependency gives one result for each import site, and a duplicate export gives one result for each location. These results do not have the `fallowFinding/v1` key, because one id would identify more than one result. `fallow report --from` with a saved report from an older version also gives no key. Security results keep their own `fallowSecurity/v2` key.
   </Tab>
   <Tab title="Compact">
     One line per issue, for `grep` and editor integrations.
@@ -262,6 +278,12 @@ fallow dead-code --unresolved-imports --unlisted-deps
     ]
     ```
 
+    The `fingerprint` of a dead-code issue comes from its [`finding_id`](/cli/dead-code#finding-id), so it does not change when lines move. GitLab Code Quality therefore keeps an issue open when you add lines above it. The same package unused in two workspaces gives two issues with two fingerprints. Duplication, health and security fingerprints did not change.
+
+    <Warning>
+    On the first run after the upgrade to this fingerprint form, GitLab Code Quality and other tools that key on the fingerprint show each dead-code finding as resolved and as new one time. After that run, a line shift keeps the issue. A saved report without finding ids, rendered with `fallow report --from`, keeps the old line-based fingerprint.
+    </Warning>
+
     Add this job to GitLab CI:
 
     ```yaml
@@ -310,6 +332,8 @@ fallow dead-code --save-baseline fallow-baselines/dead-code.json
 # Only fail on new issues (compared to baseline)
 fallow dead-code --baseline fallow-baselines/dead-code.json
 ```
+
+A dead-code baseline stores one line-free key for each finding: the rule, the path and the names. When you add lines above a finding, the baseline still hides it. Each saved entry hides one finding, so a second finding with the same key is new. A baseline from an earlier release still loads. Save it again once to get the line-free form. See [Incremental](/cli/dead-code#incremental).
 
 ## Debugging
 

@@ -68,6 +68,7 @@ fallow check      # Hidden alias for fallow dead-code
 | `--unused-dependency-overrides` | Report only unused pnpm dependency overrides |
 | `--misconfigured-dependency-overrides` | Report only malformed pnpm dependency overrides |
 | `--include-dupes` | Also run duplication analysis and link its results to dead code findings |
+| `--finding-id <ID>` | Report only the findings with this `finding_id`. Repeat the flag or pass a comma-separated list. The JSON output adds a `finding_id_query` answer. A malformed id exits 2. See [`finding_id_query`](#finding-id-query). |
 
 ### Scoping
 
@@ -125,6 +126,10 @@ A run can load a baseline with entries and use only the inputs that a repeat run
 - A bare `fallow` run follows the same rule and adds the same entry.
 
 Each command writes its own baseline format, and a saved baseline names that format. Every file that `--save-baseline` writes has a top-level `kind` of `dead-code`, `dupes` or `health`. A baseline from an earlier release has no `kind` and still loads. For such a file, its keys decide the format.
+
+A dead-code baseline also names its key form. `--save-baseline` writes a top-level `"identity": "dc1"` and one canonical key for each finding, for example `unused-export:src/utils.ts:helper`. A canonical key holds the rule, the root-relative path and the names. It never holds a line, a column or a suppression reason, so a line shift does not change the file. The file repeats a key once for each occurrence: N saved occurrences hide at most N current findings with that key.
+
+A dead-code baseline from an earlier release has no `identity` and still loads. Each old entry matches only its exact old form. Some old forms hold a line, for example the keys of stale suppressions, so these entries can go stale after a line shift. A run that loads an old baseline prints a note on stderr in human output, and sets `baseline_staleness.format` to `legacy` in JSON. Neither fails the run. Run `--save-baseline` once to rewrite the file in the new form. An older fallow version reads a `dc1` file without an error, but matches nothing in it, so save the baseline again if you downgrade. A baseline with an `identity` value that this version does not know exits 2.
 
 `fallow dead-code --baseline` loads a baseline of another kind as zero entries, so no entry stays unmatched. Such a run prints a warning on stderr, with or without `--quiet`, that names both kinds and the path. It reports `baseline_staleness.unrecognised_format: true` and suppresses nothing. Next to it, `saved_by` names the command that saved the file: `dead-code`, `dupes`, or `health`. The `saved_by` field is absent for an empty file, for a baseline saved before files named their writer, and for a writer that this version does not know. The field is present only when it is true. An absent field means false. Read this field and not `baseline_entries == 0`, because a baseline from a project with nothing to record is correctly empty. The baseline gate trips on such a file, so `--fail-on-stale-baseline` exits 1. A run with no gate turned on keeps its exit code. Invalid JSON still exits 2. A dead-code baseline that has only some of its own keys also exits 2.
 
@@ -418,6 +423,87 @@ An unused dependency finding can include `used_in_workspaces`. This happens when
 ```
 
 In human, markdown, GitHub, and GitLab output, this shows as "imported in" or as an "Imported elsewhere" column. The dependency is in the wrong workspace. Move it to the workspace that imports it, and do not remove it automatically.
+
+### `finding_id` {#finding-id}
+
+Each dead-code finding has an optional `finding_id`, stale suppressions included. Use it to track one finding across runs, or to join a finding to its SARIF result, editor diagnostic or CI review thread.
+
+```json
+{
+  "unused_exports": [
+    {
+      "path": "src/utils.ts",
+      "export_name": "helper",
+      "line": 12,
+      "finding_id": "dc1:unused-export:81a349a3b9ea3b15"
+    }
+  ]
+}
+```
+
+The form is `dc1:<rule>:<16 hex digits>`. Fallow computes the id from the rule and the subject of the finding: the root-relative path and the symbol name. The line and the column are not inputs, so these changes keep the id:
+
+- you add lines above the finding
+- you reformat the file
+- you reorder the declarations
+
+A rename of the file or the symbol gives a new id. Another issue type also gives a new id. When two findings of one type have the same subject, for example a static and an instance member with one name, the first keeps the base id and the next one gets the suffix `~1`.
+
+Fallow computes the ids on the full result set, before the filters run. Workspace scope, `--changed-since`, `ignoreFindings` and baselines therefore never change the id of a finding that stays in the report. A finding that is absent from a scoped run, or from a run with other config, is unknown in that run. It is not resolved. To ask if a finding still exists, use [`--finding-id`](#finding-id-query).
+
+The field is optional in the JSON schema, so `schema_version` does not change. Security findings keep their own `finding_id` form. See [`fallow security`](/cli/security).
+
+### `finding_id_query` {#finding-id-query}
+
+`--finding-id` reports only the findings that you ask for. Repeat the flag or pass a comma-separated list:
+
+```bash
+fallow dead-code --finding-id dc1:unused-export:81a349a3b9ea3b15 --format json --quiet
+fallow dead-code --finding-id dc1:unused-file:0123456789abcdef,dc1:unused-export:81a349a3b9ea3b15 --format json --quiet
+```
+
+The filter runs after every other filter and after the baseline, and it does not change the ids. The JSON output then has a `finding_id_query` object:
+
+```json
+{
+  "finding_id_query": {
+    "requested": ["dc1:unused-file:0123456789abcdef", "dc1:unused-export:81a349a3b9ea3b15"],
+    "found": ["dc1:unused-export:81a349a3b9ea3b15"],
+    "missing": ["dc1:unused-file:0123456789abcdef"],
+    "filtered": [],
+    "conclusive": true,
+    "inconclusive_reasons": [],
+    "analysis_fingerprint": "af1:0123456789abcdef"
+  }
+}
+```
+
+| Field | Description |
+|:------|:------------|
+| `requested` | The requested ids, without duplicates, in the order of the arguments |
+| `found` | The requested ids that the report contains |
+| `missing` | The requested ids that the report does not contain |
+| `filtered` | The requested ids that the analysis found before a filter of this run removed them. These findings still exist. |
+| `conclusive` | `true` when no option of this run can hide a finding that still exists, and no requested id was filtered |
+| `inconclusive_reasons` | Why the answer is not conclusive, sorted. Empty exactly when `conclusive` is `true`. |
+| `analysis_fingerprint` | A hash (`af1:<16 hex digits>`) of the inputs that decide which findings the run reports, other than the source code |
+
+A missing id means "resolved" only when `conclusive` is `true`. The finding is then fixed, suppressed with an inline comment, or ignored by config such as `ignoreFindings`. When `conclusive` is `false`, the state of a missing id is unknown. These options make the answer not conclusive, because each one can hide a finding that still exists:
+
+- a diff, `--changed-since`, `--workspace`, `--changed-workspaces`, a positional path or `--file`
+- an issue-type filter such as `--unused-exports`
+- production mode or `includeEntryExports`, from the flag or from the config
+- `--baseline`
+- a rule set to `off` for the rule of a missing id, in `rules` or `overrides[].rules` (`rule-off`)
+- a requested id in `filtered`
+
+`inconclusive_reasons` is an open set of kebab-case names. Read a name that you do not know as "not conclusive". A project with production mode in its config never gets a conclusive answer.
+
+`analysis_fingerprint` hashes the fallow version, the merged config, the loaded plugins and rule packs, the detection options, the ignore files, the `package.json`, `tsconfig` and `jsconfig` files and the plugin config files (for example `vite.config.ts`). Store it with your verdict. When a later query gives another fingerprint, treat a missing id as unknown, also when `conclusive` is `true`. An edit to a manifest or a tsconfig changes the fingerprint, also when the edit fixes a dependency finding.
+
+The exit code follows the normal rule for the filtered report: 1 when a reported finding has error severity, 0 when every requested id is missing. A malformed id exits 2, so a typo never reads as "resolved". Regression detection and `--save-baseline` see the findings before the id filter. In human output, a note on stderr gives the counts and says if the answer is conclusive.
+
+The MCP `analyze` tool (`finding_ids`) and the Node bindings (`findingIds` on `detectDeadCode`) take the same option and return the same `finding_id_query`.
 
 ### `baseline` {#baseline_deltas}
 
