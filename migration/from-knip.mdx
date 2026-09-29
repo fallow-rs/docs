@@ -78,7 +78,7 @@ One command translates your knip configuration to fallow automatically. After th
 | `entry` | `entry` |
 | `project` | -- (fallow auto-discovers project files) |
 | `ignore` | `ignoreFindings` (matching files stay in the analysis graph) |
-| `ignoreDependencies` | `ignoreDependencies` |
+| `ignoreDependencies` | `ignoreDependencies` (a regex becomes a glob when a glob matches the same packages, see [Warnings and caveats](#warnings-and-caveats)) |
 | `ignoreExportsUsedInFile` | `ignoreExportsUsedInFile` (boolean and `{ type, interface }` object form both supported) |
 | `rules`, `include`, `exclude` | `rules` (knip issue types map to fallow rule names) |
 | `ignoreBinaries` | -- (not applicable) |
@@ -104,6 +104,25 @@ Note: knip and fallow use different glob engines; verify migrated entry / ignore
 ```
 
 Common patterns (brace expansion `{ts,tsx}`, double-star `**`, `src/**`) match the same files in both engines. `ignoreFindings` keeps a leading `!` as an exception to the earlier patterns. Run `fallow dead-code` on a representative subset before you use the migrated globs in CI.
+
+**Dependency regexes.** knip reads an `ignoreDependencies` entry as a regex when it contains one of `* + \ ( | { ^ $`. Fallow reads `ignoreDependencies` entries as exact names or as globs, see [`ignoreDependencies`](/configuration/overview#ignoredependencies). The migration converts a regex to a glob only when the glob matches exactly the same package names:
+
+| knip regex | Migrated glob |
+|:-----------|:--------------|
+| `@acme/.+` or `^@acme/.+$` | `@acme/*` |
+| `^@types/` | `@types/*` |
+| `^eslint-plugin-.*$` | `eslint-plugin-*` |
+| `-loader$` | `*-loader` |
+| `^react$` | `react` |
+
+A regex that has no exact glob form stays out of the config, for example an alternation such as `^(react|vue)$`, a character class such as `^@acme/[a-z]+$`, or `.+` in the middle of a name. The migration prints a warning for each such entry:
+
+```text
+Warning (1):
+  [knip] `ignoreDependencies`: regex pattern `^(react|vue)$` skipped (no glob matches the same packages) (suggestion: rewrite it as a glob such as `@scope/*`, or add each dependency name)
+```
+
+Add the skipped entries by hand as globs or as exact names. After the migration, `fallow dead-code` names every `ignoreDependencies` glob that matches no declared dependency, so a glob with a typo does not go unnoticed. See [Unmatched config patterns](/configuration/overview#unmatched-config-patterns).
 
 **Ignore scope.** knip's `ignore` also hides dependency and manifest issues by file path. Fallow's `ignoreFindings` never hides manifest-owned findings, such as unused dependencies. The migrate command prints a note about this difference for every knip migration.
 
