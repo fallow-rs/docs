@@ -156,6 +156,8 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
           with:
             sarif_file: fallow-results.sarif
         ```
+
+        Each dead-code result has a `fallowFinding/v1` partial fingerprint with the [`finding_id`](/cli/dead-code#finding-id) of the finding. The location-based keys did not change, so code scanning does not close and reopen the open alerts after an upgrade. See [SARIF output](/analysis/dead-code#output-formats).
       </Step>
     </Steps>
 
@@ -189,7 +191,7 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
     </Info>
 
     <Info>
-    PR summary comments use the native fallow `pr-comment-github` format. Inline review comments use `review-github`. When findings go away, `fallow ci reconcile-review --provider github` marks the old fallow review threads as resolved.
+    PR summary comments use the native fallow `pr-comment-github` format. Inline review comments use `review-github`. When findings go away, `fallow ci reconcile-review --provider github` marks the old fallow review threads as resolved. A dead-code review thread stays open when you add lines above its finding, because its fingerprint comes from the [`finding_id`](/cli/dead-code#finding-id).
     </Info>
 
     <Info>
@@ -319,6 +321,8 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
         The template generates a GitLab Code Quality report (CodeClimate format). GitLab shows the fallow findings as **inline annotations** on the MR diff. This is the GitLab equivalent of GitHub Code Scanning.
 
         You do not need to configure this. The template uploads the report as a CI artifact. If you run fallow yourself outside the template, `--format codeclimate` and its alias `--format gitlab-codequality` give the same JSON array that GitLab reads.
+
+        The fingerprint of a dead-code issue comes from its [`finding_id`](/cli/dead-code#finding-id), so an issue stays open when you add lines above it. On the first run after the upgrade to this fingerprint form, Code Quality shows each dead-code finding as resolved and as new one time. Duplication, health and security fingerprints did not change.
       </Step>
       <Step title="Rich MR comments">
         **Summary comment**: Set `FALLOW_COMMENT: "true"` to post an MR comment with collapsible sections for dead code, duplication, and complexity findings. Each push updates the same comment, so the MR does not fill up with comments. To hide old project-level dependency, catalog, and override findings outside the diff in the sticky summary, set `FALLOW_SUMMARY_SCOPE: "diff"`. When you read MR findings mainly in GitLab Code Quality, set `FALLOW_PR_COMMENT_LAYOUT: "gate-only"` to keep the sticky comment compact.
@@ -492,14 +496,14 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
     glab mr diff $CI_MERGE_REQUEST_IID | npx fallow audit --diff-stdin --format review-gitlab
     ```
 
-    Output (v2 envelope, fallow >= 2.77.0):
+    Output:
 
     ```json
     {
       "event": "COMMENT",
-      "body": "### Fallow audit\n\n3 inline findings selected for GitHub review.\n\n<!-- fallow-review -->\n\n<!-- fallow-fingerprint:v2: 06bf55db1c35210d -->",
+      "body": "### Fallow audit\n\n3 inline findings selected for GitHub review.\n\n<!-- fallow-review -->\n\n<!-- fallow-fingerprint:v3: 06bf55db1c35210d -->",
       "summary": {
-        "body": "### Fallow audit\n\n3 inline findings selected for GitHub review.\n\n<!-- fallow-review -->\n\n<!-- fallow-fingerprint:v2: 06bf55db1c35210d -->",
+        "body": "### Fallow audit\n\n3 inline findings selected for GitHub review.\n\n<!-- fallow-review -->\n\n<!-- fallow-fingerprint:v3: 06bf55db1c35210d -->",
         "fingerprint": "06bf55db1c35210d"
       },
       "comments": [
@@ -507,28 +511,29 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
           "path": "src/utils.ts",
           "line": 42,
           "side": "RIGHT",
-          "body": "**error** `fallow/unused-export`: ...\n\n<!-- fallow-fingerprint:v2: 9a8b7c6d5e4f3a2b -->",
-          "fingerprint": "9a8b7c6d5e4f3a2b"
+          "body": "**error** `fallow/unused-export`: ...\n\n<!-- fallow-fingerprint:v3: 9a8b7c6d5e4f3a2b -->",
+          "fingerprint": "9a8b7c6d5e4f3a2b",
+          "legacy_fingerprint": "4c1d7e0a9b2f6358"
         },
         {
           "path": "package.json",
           "line": 5,
           "side": "RIGHT",
-          "body": "**error** `fallow/unused-dependency`: ...\n\n**warn** `fallow/unused-dev-dependency`: ...\n\n<!-- fallow-fingerprint:v2: merged:37df0011a9d7ac87 -->",
+          "body": "**error** `fallow/unused-dependency`: ...\n\n**warn** `fallow/unused-dev-dependency`: ...\n\n<!-- fallow-fingerprint:v3: merged:37df0011a9d7ac87 -->",
           "fingerprint": "merged:37df0011a9d7ac87"
         }
       ],
-      "marker_regex": "^<!-- fallow-fingerprint:v2: ((?:[a-z]+:)?[0-9a-f]{16}) -->\\s*$",
+      "marker_regex": "^<!-- fallow-fingerprint:v[23]: ((?:[a-z]+:)?[0-9a-f]{16}) -->\\s*$",
       "marker_regex_flags": "m",
       "meta": {
-        "schema": "fallow-review-envelope/v2",
+        "schema": "fallow-review-envelope/v3",
         "provider": "github",
         "check_conclusion": "failure"
       }
     }
     ```
 
-    Each entry under `comments[]` is fully rendered Markdown that you can POST as-is. Each body has a `<!-- fallow-fingerprint:v2: <fingerprint> -->` marker. This marker is the stable identifier that matches comments across runs. The top-level `marker_regex` is the canonical pattern to extract it. Run it (with one capture group) against an existing PR or MR comment to get the fingerprint string. Fallow puts the multiline `m` flag in a separate field, `marker_regex_flags`, and not as `(?m)` in the pattern, because JavaScript RegExp rejects standalone inline flag groups. Pass both fields to your regex engine:
+    Each entry under `comments[]` is fully rendered Markdown that you can POST as-is. Each body has a `<!-- fallow-fingerprint:v3: <fingerprint> -->` marker. This marker is the stable identifier that matches comments across runs. The top-level `marker_regex` is the canonical pattern to extract it. It matches the current `v3` marker and the older `v2` marker. Match a captured value against `comments[].fingerprint` and against `comments[].legacy_fingerprint`. Run it (with one capture group) against an existing PR or MR comment to get the fingerprint string. Fallow puts the multiline `m` flag in a separate field, `marker_regex_flags`, and not as `(?m)` in the pattern, because JavaScript RegExp rejects standalone inline flag groups. Pass both fields to your regex engine:
 
     ```js
     const re = new RegExp(env.marker_regex, env.marker_regex_flags);
@@ -588,27 +593,43 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
 
     #### Reconciliation across runs
 
-    To prevent duplicate threads on later pushes, fetch the existing MR discussions before you POST, and extract their fingerprints from the marker. The simplest sed extraction matches the marker prefix `<!-- fallow-fingerprint:v2: ` and the fingerprint token. Then compare the results with `comments[].fingerprint`:
+    To prevent duplicate threads on later pushes, fetch the existing MR discussions before you POST, and extract their fingerprints from the marker. The simplest sed extraction matches the marker prefix `<!-- fallow-fingerprint:v2: ` or `<!-- fallow-fingerprint:v3: ` and the fingerprint token. Then compare the results with `comments[].fingerprint` and `comments[].legacy_fingerprint`:
 
     ```bash
     existing=$(curl --silent --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
       "$CI_API_V4_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID/discussions?per_page=100")
 
     existing_fps=$(echo "$existing" | jq -r '.[].notes[].body? // empty' \
-      | sed -n 's|.*fallow-fingerprint:v2: \([^ ]*\) .*|\1|p' \
+      | sed -n 's|.*fallow-fingerprint:v[23]: \([^ ]*\) .*|\1|p' \
       | sort -u)
 
-    # For each comment in plan.json, only POST when its fingerprint
-    # is not already present in $existing_fps.
+    # For each comment in plan.json, only POST when neither its fingerprint
+    # nor its legacy_fingerprint is already present in $existing_fps.
     ```
 
-    To resolve threads when a finding goes away between runs, use `fallow ci reconcile-review --provider gitlab`, if you can give fallow a token. If you cannot, use the same fingerprint comparison in your own script. Both paths use the same marker, so they give the same result. During the migration window, the bundled reconciler accepts v1 (`<!-- fallow-fingerprint: <hash> -->`) and v2 (`<!-- fallow-fingerprint:v2: <fingerprint> -->`) markers. After an upgrade, it processes old v1 comments with no extra steps.
+    To resolve threads when a finding goes away between runs, use `fallow ci reconcile-review --provider gitlab`, if you can give fallow a token. If you cannot, use the same fingerprint comparison in your own script. Both paths use the same marker, so they give the same result. The bundled reconciler accepts v1 (`<!-- fallow-fingerprint: <hash> -->`), v2 (`<!-- fallow-fingerprint:v2: <fingerprint> -->`) and v3 (`<!-- fallow-fingerprint:v3: <fingerprint> -->`) markers. After an upgrade, it processes old comments with no extra steps.
+
+    #### Upgrade to v3 markers
+
+    Before the v3 marker, the fingerprint of a dead-code comment held the line of the finding. When you added lines above an unused export, the thread resolved and a new thread opened for the same finding. Now the fingerprint comes from the [`finding_id`](/cli/dead-code#finding-id), and review comments end with `<!-- fallow-fingerprint:v3: <fingerprint> -->`. Duplication, health and security fingerprints did not change.
+
+    When the old line-based value is different, a comment has it in the optional `legacy_fingerprint` field. For one release, `fallow ci post-review` and `fallow ci reconcile-review` match an open thread with a `v2` marker through this value:
+
+    - They do not post a second thread for the same finding.
+    - They do not resolve the `v2` thread as stale.
+    - A `v2` thread stays open until its finding goes away or its old line-based value changes. The finding then gets one `v3` thread, which stays open across line shifts.
+
+    The bundled GitHub Action and GitLab template use these commands, so the first run after the upgrade posts no duplicate threads. A script that posts from the envelope itself must match each captured marker value against `fingerprint` and `legacy_fingerprint`.
+
+    <Warning>
+    An older fallow binary does not read the `v3` marker. Do not downgrade the binary after a run that wrote `v3` markers on an open PR or MR, because the older binary posts duplicate threads.
+    </Warning>
 
     The reconciler stops at the first failed provider change. When a provider target is gone or a change fails, the JSON output keeps the `apply_errors` array. It can also add `apply_hint`, `failed_fingerprints`, and `unapplied_fingerprints`. CI wrappers and custom integrations can then show a retry hint and know which old findings are still unresolved.
 
     #### Schema stability
 
-    The envelope has the tag `meta.schema: "fallow-review-envelope/v2"`. New fields are backwards-compatible, so ignore fields that you do not know. Fallow computes the fingerprint hash from `rule_id + path + snippet`, so it stays the same when only whitespace or the body Markdown changes. Code written for v1 still works on v2 output, because the v1 top-level `body` field stays. Code written for v2 should validate the schema marker against `^fallow-review-envelope/v[0-9]+$`, so it keeps working when fallow moves to v3.
+    The envelope has the tag `meta.schema`, for example `"fallow-review-envelope/v3"`. New fields are backwards-compatible, so ignore fields that you do not know. For a dead-code finding, fallow computes the fingerprint from its `finding_id`, so it stays the same when lines move. For other findings, fallow computes the fingerprint hash from `rule_id + path + snippet`. In both cases it stays the same when only whitespace or the body Markdown changes. Code written for v1 still works on v2 output, because the v1 top-level `body` field stays. Code written for v2 should validate the schema marker against `^fallow-review-envelope/v[0-9]+$`, so it keeps working when fallow moves to v3.
 
     ### Duplication checks
 
