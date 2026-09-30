@@ -181,6 +181,52 @@ To scope the output to the workspaces that changed since a git ref, pass `--chan
 For CI matrix jobs, combine `--workspace` with `--changed-since`. Fallow applies both filters, so you get only the changed files inside the matched workspaces.
 </Tip>
 
+## Per-package change baselines
+
+In a monorepo, packages often follow different release branches. `workspaces.changedSince` maps a workspace root to its own Git ref. For a mapped package, `check`, `dead-code`, `dupes` and the editor report only the findings in files that changed since that ref. Unlisted packages and files outside every workspace stay in full scope.
+
+<CodeGroup>
+```jsonc .fallowrc.json
+{
+  "workspaces": {
+    "changedSince": {
+      "packages/web": "main",
+      "packages/legacy": "release/2024.10"
+    }
+  }
+}
+```
+
+```toml fallow.toml
+[workspaces.changedSince]
+"packages/web" = "main"
+"packages/legacy" = "release/2024.10"
+```
+</CodeGroup>
+
+Write each key as `fallow list --workspaces` prints the workspace root: relative to the project root, with `/` separators. A file belongs to its nearest workspace, so a nested workspace uses its own entry. A clone group or a cycle stays in the report when one of its files is in scope.
+
+The map follows these rules:
+
+- A global `--changed-since` replaces the map for one run.
+- `--no-package-baselines` or `FALLOW_PACKAGE_BASELINES=false` turns the map off, so every package is in full scope. In VS Code, set `fallow.packageBaselines` to `false`.
+- `audit`, `health` and `security` do not read the map. In a bare `fallow` run, the health section is not scoped by it.
+- A malformed key or ref is a config error and exits with code 2.
+- A key that names no workspace of the project, or a ref that Git cannot resolve (for example in a shallow CI clone), turns the whole map off for that run. Fallow prints a warning and reports every package in full scope. The report is wider than you asked for, never narrower. A run from a package subdirectory loads the parent config, so its keys name no workspace there, and the map turns off in the same way.
+
+JSON reports list the applied refs in `package_baselines`, for example `[{ "workspace_root": "packages/web", "reference": "main" }]`. `request_outcomes["package-baselines"]` is `applied` when the map scoped the run, and `not-applied` with a `reason` and a `message` when it turned off. A narrowed run names `package-baselines` in `baseline_staleness.scope_reasons`.
+
+<Warning>
+The map applies to every run, so a baseline saved under it holds only the findings in changed files of the mapped packages. Fallow warns when it saves such a baseline and records the scope in the file. Save and gate a whole-project baseline with `--no-package-baselines`:
+
+```bash
+fallow dead-code --no-package-baselines --save-baseline fallow-baselines/dead-code.json
+fallow dead-code --no-package-baselines --baseline fallow-baselines/dead-code.json --fail-on-stale-baseline
+```
+
+The GitHub Action and the GitLab template add `--no-package-baselines` to their whole-project baseline check for you.
+</Warning>
+
 ## Additional workspace patterns
 
 If fallow does not detect all your workspace packages, add patterns in your config:
