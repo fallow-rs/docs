@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// `mint broken-links` checks page paths only, so a link to a heading that
-// does not exist still passes it.
+// Checks that each link to a heading points to a heading that exists on the
+// target page.
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FENCE = /```[\s\S]*?```/g;
@@ -18,7 +18,7 @@ const ANCHOR_LINK = /(?:\]\(|href=")(\/[^)#"\s]*)?#([^)"\s]+)/g;
 const stripFences = (text) =>
   text.replace(FENCE, (block) => block.replace(/[^\n]/g, ""));
 
-/** Mintlify slug: drop markup and punctuation, lowercase, join words with `-`. */
+/** Heading slug: drop markup and punctuation, lowercase, join words with `-`. */
 export const slugify = (heading) =>
   heading
     .replace(/<[^>]+>|`/g, "")

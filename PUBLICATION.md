@@ -1,8 +1,9 @@
 # Public documentation ownership
 
 This repository is the canonical source for fallow's public user documentation.
-It owns the prose published at `docs.fallow.tools` and the public content archive
-consumed by other fallow systems.
+It owns the prose published at `https://fallow.tools/docs/` and the public
+content archive that other fallow systems consume. The old host,
+`docs.fallow.tools`, redirects to `https://fallow.tools/docs/`.
 
 ## Boundary
 

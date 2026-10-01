@@ -172,7 +172,7 @@ Fallow clamps the result to \[0, 100\]. Higher is better. The dampening factor l
   diverge from MI. Risk: low <15, moderate 15-30, high >=30. CRAP estimated from
   export references (85% direct, 40% indirect, 0% untested). Run `fallow health
   --coverage <coverage-final.json>` for exact scores.
-  https://docs.fallow.tools/explanations/health#file-health-scores
+  https://fallow.tools/docs/explanations/health/#file-health-scores
 ```
 
 <Accordion title="How fallow's MI relates to the classic Maintainability Index">
@@ -258,7 +258,7 @@ Complex code without test coverage is the most likely source of production bugs.
 
 The score appears in [`fallow health --file-scores`](/cli/health) output and JSON.
 
-### How the score is computed
+### How the score is computed {#crap-score}
 
 Fallow uses the canonical CRAP formula:
 
@@ -359,6 +359,47 @@ Alberto Savoia and Bob Evans introduced the CRAP metric at Agitar Labs. Original
 </Accordion>
 
 
+## Coverage gaps {#coverage-gaps}
+
+A coverage gap is runtime code that no test reaches through the import graph. `fallow health --coverage-gaps` reports two finding types:
+
+| Rule ID | Finding |
+|:--------|:--------|
+| `fallow/untested-file` | A file that runtime entry points reach, but no test entry point reaches, directly or transitively. |
+| `fallow/untested-export` | A value export that runtime entry points reach, but no test-reachable module references. |
+
+This is a static test dependency gap. It is not line coverage: a test can import a file and still skip most of its code. For measured coverage, use `--coverage` (see [Untested complexity risk](#untested-complexity-risk)).
+
+Use `--coverage-gaps` to show the gaps. The `coverage-gaps` rule sets their severity and is `off` by default. For the JSON shape and the mock rules, see [With coverage gaps](/cli/health#with-coverage-gaps).
+
+## Runtime coverage {#runtime-coverage}
+
+Runtime coverage adds production evidence to the health report. With `--runtime-coverage`, fallow merges V8 or Istanbul runtime data with the static analysis. Each runtime finding has a per-function verdict:
+
+| Rule ID | Verdict | Meaning |
+|:--------|:--------|:--------|
+| `fallow/runtime-safe-to-delete` | `safe_to_delete` | Statically unused, and V8 tracked the function with zero invocations. This is the strongest delete signal from fallow. |
+| `fallow/runtime-review-required` | `review_required` | Statically used, but production never invoked it. The function can be seasonal, used only on an error path, or really unused. |
+| `fallow/runtime-low-traffic` | `low_traffic` | Invoked below the `--low-traffic-threshold` ratio of the total trace count. |
+| `fallow/runtime-coverage-unavailable` | `coverage_unavailable` | Fallow cannot match the function to tracked runtime data. This is not a dead-code signal. |
+| `fallow/runtime-coverage` | other | A runtime finding that no specific rule covers, for example the `unknown` verdict. |
+
+For the JSON fields, see [With runtime coverage](/cli/health#runtime-coverage). For the concepts and the capture workflow, see [Runtime coverage](/analysis/runtime-coverage).
+
+### Coverage intelligence {#coverage-intelligence}
+
+Coverage intelligence is an additive decision layer on top of runtime coverage. Fallow emits it when it can combine runtime evidence with static usage, test coverage, CRAP and complexity, ownership, or change scope. The JSON output has it as `runtime_coverage.coverage_intelligence`. Each finding has a stable `fallow:coverage-intel:<hash>` ID.
+
+| Rule ID | Meaning |
+|:--------|:--------|
+| `fallow/coverage-intelligence-risky-change` | A changed hot path has low test coverage and a high CRAP score. Add focused tests or split the change before you merge. |
+| `fallow/coverage-intelligence-delete` | Static usage, cold runtime evidence, and no test reachability all point to code that you can delete. |
+| `fallow/coverage-intelligence-review` | The code is statically reachable, cold at runtime, not covered by tests, and has an ownership risk. Ask an owner before you change or delete it. |
+| `fallow/coverage-intelligence-refactor` | Hot production code that tests cover, but with a high CRAP score. Refactor it carefully and keep its behavior. |
+
+When fallow finds no combined finding, the output does not have the `coverage_intelligence` object.
+
+
 ## Hotspot metrics
 
 Hotspots are files that are both **complex** and **frequently changing**. Bugs concentrate in these files, so a refactor there gives the highest return. Use [`fallow health --hotspots`](/cli/health) to see them.
@@ -396,7 +437,7 @@ Because the formula multiplies the two values, a file needs **both** high churn 
             8 commits    177 churn  0.35 density   2 fan-in  ▼ cooling
 
   Files with high churn and high complexity
-  https://docs.fallow.tools/explanations/health#hotspot-metrics
+  https://fallow.tools/docs/explanations/health/#hotspot-metrics
 ```
 
 ### Weighted commits
@@ -555,7 +596,7 @@ A file can match more than one rule, but only the match with the highest priorit
 
   Prioritized refactoring recommendations based on complexity, churn, and
   coupling signals
-  https://docs.fallow.tools/explanations/health#refactoring-targets
+  https://fallow.tools/docs/explanations/health/#refactoring-targets
 ```
 
 ### JSON structure
@@ -615,6 +656,64 @@ With `--format json`, each target has structured data for tools:
 Each factor has the raw `value` and `threshold`. For categories that support it, the `evidence` field gives the details you need to act. AI agents can use `evidence.unused_exports` to create removal PRs without a second tool call. Categories without evidence do not have the field.
 
 
+## Styling findings
+
+With `fallow health --css`, fallow reports first-class styling findings for CSS and CSS-in-JS. `fallow audit` also reports them when its CSS analysis is active. Each finding has a `code`, a `sub_kind`, an `effective_severity`, a location, an evidence value, and read-only actions. The JSON output has them in `styling_findings`.
+
+The five styling rules default to `warn`. A finding with `warn` shows in the output but does not change the audit verdict. Set a rule to `error` to make it fail the verdict. See [Rules](/configuration/rules).
+
+These findings are different from the [styling health grade](/analysis/css-analysis#styling-health-grade). The grade is a descriptive score and never fails a run.
+
+### Token drift {#css-token-drift}
+
+`css-token-drift` reports a styling value that bypasses the design token system. Examples:
+
+- A Tailwind arbitrary value in markup.
+- A hardcoded value that is near an existing design token.
+- A token that is almost a duplicate of another token.
+
+Make sure that the value is not intentional, then replace it with an existing scale token where that is correct.
+
+### Duplicate declaration block {#css-duplicate-block}
+
+`css-duplicate-block` reports a declaration block that repeats across selectors or variant definitions. This usually shows copied styling that you can merge into one rule.
+
+### Selector complexity {#css-selector-complexity}
+
+`css-selector-complexity` reports a rule that crosses a structural limit. The `sub_kind` gives the cause:
+
+| `sub_kind` | Cause |
+|:-----------|:------|
+| `high-specificity` | The selector uses an id selector. |
+| `deep-nesting` | The rule has a nesting depth of 3 or more. |
+| `important-density` | The rule uses `!important`. |
+| `complex-selector` | The selector is structurally complex. |
+
+Reset rules, accessibility rules, and overrides of third-party generated markup can be intentional. Make sure that the rule is not necessary before you change it.
+
+### Dead surface {#css-dead-surface}
+
+`css-dead-surface` reports styling that the analyzed project does not appear to use. Examples:
+
+- A scoped component class with no local use.
+- An unused `@theme` token.
+- A class that no file references.
+- Unused `@keyframes`, `@property`, or `@layer` at-rules.
+- An unused `@font-face` family.
+- An unused CSS-in-JS export.
+
+Dynamic class names and external consumers are not always visible to static analysis. Make sure that no dynamic consumer exists before you delete the styling.
+
+### Broken reference {#css-broken-reference}
+
+`css-broken-reference` reports a styling reference that has no stylesheet definition in the analyzed project. Examples:
+
+- A class name in markup that is one edit from a defined class.
+- An animation that references a `@keyframes` name that no file defines.
+
+The definition can come from an external stylesheet or from CSS-in-JS. Make sure that it does not exist before you fix the reference.
+
+
 ## Health score
 
 The health score is one 0–100 number for the overall quality of the codebase. Use [`fallow health --score`](/cli/health) to get it.
@@ -671,7 +770,7 @@ When you pass `--explain`, or run through MCP, the JSON output of each command i
 {
   "schema_version": 11,
   "_meta": {
-    "docs": "https://docs.fallow.tools/cli/health",
+    "docs": "https://fallow.tools/docs/cli/health/",
     "metrics": {
       "maintainability_index": {
         "name": "Maintainability Index",

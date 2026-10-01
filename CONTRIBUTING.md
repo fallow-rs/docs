@@ -2,19 +2,19 @@
 
 ## Quick edits
 
-For a quick fix, use the "Suggest edits" or "Raise issue" link at the bottom of each page on [docs.fallow.tools](https://docs.fallow.tools).
+For a quick fix, open an issue or a pull request in this repository. The pages are published at [fallow.tools/docs](https://fallow.tools/docs/).
 
-## Local development
+## Local setup
 
 ```bash
 git clone https://github.com/fallow-rs/docs
 cd docs
 npm ci
 git config core.hooksPath .githooks    # refreshes the content manifest on commit
-npm run docs:dev
 ```
 
-The preview runs at `http://localhost:3000`.
+This repository has no local preview server. The fallow.tools site renders
+the pages from a pinned commit of `main`.
 
 ## Before submitting
 
@@ -41,7 +41,7 @@ becomes public. Do not add any of this content:
 ## Writing guidelines
 
 Follow the [writing conventions in AGENTS.md](AGENTS.md#writing-conventions).
-They cover tone, terminology, volatile facts, page structure, and Mintlify
+They cover tone, terminology, volatile facts, page structure, and
 components.
 
 ## Content placement
