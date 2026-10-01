@@ -26,6 +26,8 @@ fallow dupes
 | `--cross-language` | Remove TS types so that TS code can match JS code |
 | `--ignore-imports` | Exclude module wiring from clone detection (default). Fallow removes ES imports, re-export declarations, and top-level static `require()` binding declarations from the token stream. It still counts runtime code, local exports, side-effect `require()` calls, nested `require()` calls, dynamic require arguments, and mixed declarations. |
 | `--no-ignore-imports` | Count module wiring as clone candidates (opt out of the default exclusion). Conflicts with `--ignore-imports`. |
+| `--ignore-symlinks` | Omit clone instances whose path is a symlink, or lies under a symlinked directory. Fallow does not report a clone group with fewer than two remaining instances. The `stats` counters then count only real files. See [Symlinked files](#symlinked-files). |
+| `--no-ignore-symlinks` | Report symlinked clone instances (default). Use it to override a config value of `duplicates.ignoreSymlinks: true`. Conflicts with `--ignore-symlinks`. |
 
 ### Output
 
@@ -35,6 +37,8 @@ fallow dupes
 | `--top <N>` | Show only the N highest-ranked clone groups (see [Ranking and JSON fields](#ranking-and-json-fields)). Fallow rebuilds `clone_families[]` from the groups it shows, so the families shrink too. The `stats` counters still describe the whole scoped corpus. `clone_groups_shown`, `clone_groups_omitted`, `clone_families_shown`, and `clone_families_omitted` report the split. With `--group-by`, fallow refuses the run with exit code `2`. |
 | `--quiet` | Suppress progress output |
 | `--threshold <N>` | Fail if duplication is more than N% |
+| `--fail-on-issues` | Exit 1 when at least one clone group remains after the baseline and suppression filters. Works in every output format. See [Exit codes](#exit-codes). |
+| `--ci` | Same as `--format sarif --fail-on-issues --quiet`. Exits 1 when at least one clone group remains. |
 | `--group-by <MODE>` | Split the report into one section per group. `MODE`: `owner` (CODEOWNERS), `directory` (first path component), `package` (workspace), or `section` (GitLab `[Section]` headers). Fallow assigns each clone group to its largest owner (most instances, alphabetical tiebreak). A group with 2 instances in `src` and 1 in `lib` appears under `src`. JSON adds `grouped_by` and a `groups` array. Each group has dedup-aware `stats`, its `clone_groups` (each with `primary_owner` and a per-instance `owner`), and `clone_families`. SARIF results have `properties.group`, and CodeClimate issues have a top-level `group` field. Compact and markdown print ungrouped output with a note on stderr. You cannot combine it with `--top`: fallow computes the stats of each group over all its clone groups, and a global top-N cut would make the stats describe groups that the output does not list. |
 | `--explain` | Add metric explanations. In human format, prints a `Description:` line under each section header. In JSON format, adds a `_meta` object with metric descriptions and docs links. |
 | `--explain-skipped` | In human and markdown output, show a per-pattern count of the files that the default duplicates ignores skipped. Machine formats do not show this note. |
@@ -160,6 +164,8 @@ Each JSON `clone_groups[]` entry has these fields:
 - `spread`: maximum directory or same-file line distance
 - `similarity`: lowest all-pairs similarity for near-miss groups, omitted for exact groups
 
+Each entry in `clone_groups[].instances[]` can also have `is_symlink: true`. See [Symlinked files](#symlinked-files).
+
 ### Shown versus measured
 
 `stats` always describes the corpus that the run measured. A presentation cap such as `--top` shortens the arrays and does not change `stats`. Four counters on the envelope report the split:
@@ -198,6 +204,33 @@ The `stats` object can also include these fields. Fallow omits them when they ar
 - `clone_groups_ignored`, when `duplicates.ignoredClones` hides groups
 - `near_candidates_skipped`, when bounded-work limits skip near-miss comparisons
 
+## Symlinked files
+
+A clone instance can come from a file whose path is a symlink, or lies under a symlinked directory, inside the project root. Such a clone can be one file under two paths, not copied code. Fallow marks these instances in each output format:
+
+- JSON: `is_symlink: true` on the instance. Fallow omits the field when it is `false`.
+- Compact: `symlink=true` on the record.
+- Human: a `(symlink)` marker after the location.
+
+By default, the report keeps symlinked instances. To report only duplication between real files, pass `--ignore-symlinks` or set `duplicates.ignoreSymlinks: true` in the [config](/configuration/overview). Fallow then removes the symlinked files from the duplication corpus. A clone group with fewer than two remaining instances is not reported. The file and line totals in `stats` and the duplication percentage that `--threshold` checks count only real files. `--no-ignore-symlinks` overrides a config value of `true`.
+
+## Exit codes
+
+Without a gate flag, `fallow dupes` exits 0, also when it finds clone groups. These flags turn on a gate:
+
+| Flag | Exits 1 when | `gate_outcomes` entry |
+|:-----|:-------------|:----------------------|
+| `--fail-on-issues` or `--ci` | At least one clone group remains after the baseline and suppression filters | `duplication-findings` |
+| `--threshold <N>` | The duplication percentage is more than N | `duplication-threshold` |
+| `--fail-on-stale-baseline` | The loaded baseline has an entry that matched no clone group | `stale-baseline` |
+| `--fail-on-baseline-growth` | The loaded baseline has a key that the same file at the base ref does not have | `baseline-growth` |
+
+The `duplication-findings` entry is present only when you pass `--fail-on-issues` or `--ci`. It is always `enforced`. `observed` is the number of clone groups and `threshold` is `0`. The bare run with `--only dupes --fail-on-issues` uses the same gate. Invalid input exits 2. For the parse error gate, see [global flags](/cli/global-flags#parse-error-gate).
+
+<Note>
+  Before fallow 3.32.0, `fallow dupes --fail-on-issues` and `fallow dupes --ci` exited 0 when they found clone groups. A CI job that runs `fallow dupes --ci` now fails when the project has clone groups. To keep a job that only reports, use `--format sarif --quiet` in place of `--ci`, or gate with `--threshold`. The GitHub Action and the GitLab CI template already failed such a job, so their result does not change.
+</Note>
+
 ## Examples
 
 <CodeGroup>
@@ -229,6 +262,9 @@ fallow dupes --cross-language
 
 # Count sorted import blocks as clones (opt out of the default exclusion)
 fallow dupes --no-ignore-imports
+
+# Report only duplication between real files, not symlinked paths
+fallow dupes --ignore-symlinks
 ```
 
 ```bash CI integration
@@ -237,6 +273,9 @@ fallow dupes --changed-since main
 
 # Fail CI if duplication exceeds 5%
 fallow dupes --threshold 5
+
+# Fail CI if any clone group remains
+fallow dupes --fail-on-issues
 
 # SARIF output for GitHub
 fallow dupes --format sarif > dupes.sarif
