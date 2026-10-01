@@ -8,7 +8,7 @@ icon: "terminal"
 Set up fallow for each coding-agent harness in a project with one command. `fallow agent install` detects Claude Code, Codex, and Cursor. Then it writes the files that each harness reads:
 
 - an `AGENTS.md` task map
-- the fallow skill
+- the `fallow` and `fallow-setup` skills
 - the MCP server registration
 - the commit and push gate
 
@@ -40,11 +40,11 @@ When fallow detects no harness, it writes only the harness-neutral files (`AGENT
 | Step | Claude Code | Codex | Cursor |
 |:-----|:------------|:------|:-------|
 | `guide` | `AGENTS.md` task map. `CLAUDE.md` gets an `@AGENTS.md` import (fallow creates the file when it is absent, and otherwise appends a marked block) | `AGENTS.md` task map | `AGENTS.md` task map (Cursor reads it) |
-| `skill` | `.claude/skills/fallow/` | `.agents/skills/fallow/` | `.agents/skills/fallow/` |
+| `skill` | `.claude/skills/fallow/` and `.claude/skills/fallow-setup/` | `.agents/skills/fallow/` and `.agents/skills/fallow-setup/` | `.agents/skills/fallow/` and `.agents/skills/fallow-setup/` |
 | `mcp` | `mcpServers.fallow` in `.mcp.json` | `[mcp_servers.fallow]` in `.codex/config.toml` | `mcpServers.fallow` in `.cursor/mcp.json` |
-| `hooks` | PreToolUse gate in `.claude/settings.json` plus `.claude/hooks/fallow-gate.sh` | marked gate block in `AGENTS.md` | skipped (`unsupported_harness`) |
+| `hooks` | PreToolUse gate in `.claude/settings.json` plus `.claude/hooks/fallow-gate.sh` | PreToolUse gate in `.codex/hooks.json` plus `.codex/hooks/fallow-gate.sh`, and a marked routing block in `AGENTS.md` | skipped (`unsupported_harness`) |
 
-**Skill.** When the project has `node_modules/fallow/skills/fallow`, the installed skill is a small pointer to that copy. The skill thus always matches the fallow version that the project pins. Without that directory, fallow writes the skill from the binary, which matches the binary version. If a skill named `fallow` exists and fallow did not write it, the step is refused (`skill_name_taken`), unless you pass `--force`.
+**Skills.** The step writes two skills: `fallow` for analysis, and `fallow-setup` to set up code-quality tooling in a project. It reports one `skill` row for each skill in each skill directory. When the project has `node_modules/fallow/skills/<name>`, the installed skill is a small pointer to that copy. The skill thus always matches the fallow version that the project pins. Without that directory, fallow writes the skill from the binary, which matches the binary version. Fallow selects the source of each skill separately. An older npm package without `fallow-setup` thus gets the copy from the binary for that skill. If a skill named `fallow` or `fallow-setup` exists and fallow did not write it, that step is refused (`skill_name_taken`), unless you pass `--force`. Fallow still writes the other skill.
 
 **MCP.** Before it writes anything, fallow checks that the server command can start. It tries these commands:
 
@@ -53,6 +53,8 @@ When fallow detects no harness, it writes only the harness-neutral files (`AGENT
 - the running binary, when it is the npm multicall build
 
 When none of them exists, fallow skips the step with `mcp_entry_unavailable`. It does not write a registration that cannot start. A project-level `.codex/config.toml` applies only after Codex trusts the project. The output thus starts with the `codex mcp add fallow -- ...` command, which works immediately.
+
+**Gate.** For Claude Code and Codex, the step installs a PreToolUse hook that runs `fallow audit` before `git commit` and `git push`, and blocks the command on a `fail` verdict. Both harnesses run the same gate script. The Codex handler in `.codex/hooks.json` uses the matcher `^Bash$`. Codex runs a project hook only after you trust it in `/hooks`. The `AGENTS.md` block tells agents to use fallow and names the hook as the enforcement layer. [Claude Code hooks](/integrations/claude-hooks) has the details.
 
 **Approval.** Claude Code asks before it starts a project-scoped MCP server. `--approve` records that approval for you: it lists `fallow` in `.claude/settings.local.json`. The flag is opt-in. Fallow refuses it when git tracks that file.
 
@@ -74,7 +76,7 @@ Each file or block that fallow writes has a `<!-- fallow:agent-install v1 ... --
 | `--dry-run` | `install`, `uninstall` | Print the plan, and change no files |
 | `--force` | `install`, `uninstall` | Replace or remove skills, hook scripts, or config files fallow did not write |
 | `--approve` | `install` | Pre-approve the project MCP server for yourself in `.claude/settings.local.json` |
-| `--user` | `install`, `uninstall` | Write the skill and MCP config under `$HOME`, not in the project. Fallow skips the guide step. For Claude Code, fallow prints the `claude mcp add --scope user` command and does not edit `~/.claude.json` |
+| `--user` | `install`, `uninstall` | Write the skills, the MCP config, and the gate under `$HOME`, not in the project. The Codex gate goes to `~/.codex/hooks.json`. Fallow skips the guide step and the `AGENTS.md` routing block. For Claude Code, fallow prints the `claude mcp add --scope user` command and does not edit `~/.claude.json` |
 | `--gitignore-claude` | `install` | Append `.claude/` to `.gitignore` |
 
 The root is the git toplevel of the current directory, unless you pass `--root`. A run from a monorepo package thus still writes where the harnesses read. The first line of output shows the chosen root.
@@ -95,7 +97,7 @@ The exit code is 2 when a step is `refused` or `failed`. All other steps still r
 
 `agent status` reports a different shape: `surfaces[]`, each with `harness`, `step`, `path`, and a `state` of `absent`, `installed`, `stale`, or `foreign`. `stale` means that an older fallow version wrote the surface, or that the surface is installed but would not do its job. `foreign` means that the file or entry exists, but fallow did not write it. `fallow agent install --force` replaces a `foreign` surface. Without `--force`, fallow leaves it alone.
 
-A `hooks` gate is `stale` when an older fallow wrote it. An installed gate is also `stale` when its run-time prerequisites are missing. The reason is in `detail`, with a matching entry in `next_actions[]`. Two gate conditions report this way:
+For Codex, the `hooks` step has two surfaces: the gate script `.codex/hooks/fallow-gate.sh` and the `AGENTS.md` routing block. A `hooks` gate is `stale` when an older fallow wrote it. An installed gate is also `stale` when its run-time prerequisites are missing. The reason is in `detail`, with a matching entry in `next_actions[]`. Two gate conditions report this way:
 
 - `gate-requires-jq`: when `jq` is absent, the gate script prints one stderr line and exits 0, and a PreToolUse hook never shows that line.
 - `gate-path-version`: the gate runs the `fallow` that PATH resolves, which can differ from the build that installed it.
