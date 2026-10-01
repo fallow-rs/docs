@@ -798,7 +798,9 @@ This rule has no inline suppression comment (`suppressible: false` in the capabi
 
 ### Unused pnpm catalog entries {#unused-catalog-entries}
 
-Packages in `pnpm-workspace.yaml` under `catalog:` or `catalogs.<name>:` that no workspace `package.json` references with the `catalog:` protocol.
+Packages in `pnpm-workspace.yaml` under `catalog:` or `catalogs.<name>:` that no workspace `package.json` and no pnpm override references with the `catalog:` protocol.
+
+A `catalog:` value in a pnpm override counts as a reference. The target package of the override uses the catalog entry, so `"parent>child": "catalog:x"` uses the `child` entry of catalog `x`. Fallow reads only the override sources that the declared pnpm version reads. See [override sources and the pnpm version](#pnpm-override-sources).
 
 | Severity | Default |
 |:---------|:--------|
@@ -819,6 +821,8 @@ Named `catalogs.<name>:` groups in `pnpm-workspace.yaml` that have no package en
 ### Unresolved pnpm catalog references {#unresolved-catalog-references}
 
 Workspace `package.json` dependencies that use `catalog:` or `catalog:<name>`, where the selected catalog does not declare the package.
+
+Fallow also checks the `catalog:` values in pnpm overrides, because `pnpm install` fails when the catalog does not declare the target package of the override. The finding points to the line of the override in `pnpm-workspace.yaml` or in the root `package.json`. Fallow checks only the override sources that the declared pnpm version reads. See [override sources and the pnpm version](#pnpm-override-sources).
 
 | Severity | Default |
 |:---------|:--------|
@@ -849,6 +853,25 @@ A lockfile that does not parse also stops the check, when no other lockfile pars
 | Error | Yes |
 
 `misconfigured-dependency-overrides` reports malformed override keys or empty values that pnpm rejects.
+
+#### Override sources and the pnpm version {#pnpm-override-sources}
+
+pnpm reads different override sources in different versions. Fallow reads the pnpm version from the `packageManager` field of the root `package.json`. Then it checks only the sources that this version reads. This rule applies to the override checks and to the catalog checks.
+
+| Source | When fallow skips it |
+|:-------|:---------------------|
+| `overrides` in `pnpm-workspace.yaml` | pnpm before 10.5.1. Also pnpm 10 or earlier when the root `package.json` declares non-empty `pnpm.overrides` or `resolutions` |
+| `pnpm.overrides` in the root `package.json` | pnpm 11 and later |
+| top-level `resolutions` in the root `package.json` (catalog checks) | pnpm 11 and later, and projects without a pnpm version |
+
+When `packageManager` has no pnpm version, fallow reads `pnpm-workspace.yaml` `overrides` and `pnpm.overrides`. A version without a minor or patch, such as `pnpm@10`, does not count as a version before 10.5.1. A prerelease comes before its release, so `pnpm@10.0.0-rc.3` is before 10.5.1.
+
+A skipped `pnpm-workspace.yaml` section gives no override findings, and its `catalog:` values do not count as catalog references. pnpm prints no warning for this case, so fallow records the [`pnpm-workspace-overrides-ignored`](/cli/list#workspace-diagnostics) workspace diagnostic. Its `cause` field tells why:
+
+- `pnpm-version`: the pnpm version is before 10.5.1. Update `packageManager` to pnpm 10.5.1 or later, or move the entries into `pnpm.overrides` in the root `package.json`.
+- `package-json-overrides`: the pnpm version is 10 or earlier, and the root `package.json` declares `pnpm.overrides` or `resolutions`. Move the entries into one source.
+
+When both causes apply, `cause` is `pnpm-version`.
 
 ### Stale suppressions {#stale-suppressions}
 
