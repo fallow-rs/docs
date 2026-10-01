@@ -248,6 +248,30 @@ el.innerHTML = render(userInput);
 
 One `security-sink` token covers every catalogue category. Suppress a finding only after you verify that the value cannot reach the sink unsanitized. For example, the input is a trusted constant, is server-only, or is sanitized upstream.
 
+## Per-path severity
+
+`fallow security` raises a top-level `off` for `security-sink` and `security-client-server-leak` to `warn`, so the command always reports candidates. To set another severity for some files, use `overrides[].rules`:
+
+```jsonc .fallowrc.json
+{
+  "rules": {
+    "security-sink": "warn"
+  },
+  "overrides": [
+    { "files": ["scripts/**"], "rules": { "security-sink": "off" } },
+    { "files": ["src/api/**"], "rules": { "security-client-server-leak": "error" } }
+  ]
+}
+```
+
+Each candidate takes the severity of its rule for its own path. Overrides match in the same way as for dead-code findings. An override matches the file that the candidate is anchored on: the sink site for `security-sink`, or the `"use client"` file for `security-client-server-leak`.
+
+- `off` removes the candidates in matching files. This also applies when `fallow security` raises the top-level `off` to `warn`.
+- `error` makes `fallow security` exit 1 when a candidate in a matching file stays.
+- A candidate fails the run only when its own rule is `error`. An `error` on one security rule does not fail the run for candidates of the other rule.
+
+The editor diagnostics and [`fallow viz`](/cli/viz) show the same result. The bare `fallow` run and `fallow audit` do not report security candidates, so overrides do not change them.
+
 ## JSON output
 
 `--format json` returns a typed root envelope with `kind: "security"`.
@@ -278,6 +302,8 @@ One `security-sink` token covers every catalogue category. Suppress a finding on
   "unresolved_callee_diagnostics": null
 }
 ```
+
+The `configured` and `effective` severities in `config.rules` are the values of the top-level `rules` only. An `overrides[].rules` entry can set another severity for a path. Such an override can drop candidates or fail the run, also when `effective` is `warn`. See [Per-path severity](#per-path-severity).
 
 When a run writes the `--sarif-file` document, the output has a root [`request_outcomes`](/cli/global-flags#request-outcomes) object. Its `sarif-file` entry is `applied` and names the path that the run wrote. This tells a run that wrote the document apart from a run that did not request one. A failed write makes the run exit 2 with an error document, so no envelope reports that entry as unapplied.
 
@@ -387,7 +413,7 @@ There is no `impact` field. The verifying agent decides exploitability. Fallow f
 
 `candidate.network` is present only on `secret-to-network` candidates. Its `destination` field holds the URL of the network call when the URL is a static string literal. That case is usually intended auth to the credential's own provider. `destination` is absent when the destination is dynamic, which is the stronger exfiltration signal. Use this field to tell exfiltration from intended auth without reading the code again.
 
-`finding_id` is a stable correlation id. It is identical across runs for the same rule, path, line, and column, and it matches the SARIF `partialFingerprints["fallowSecurity/v2"]` value of the finding. Two sinks on the same line get different IDs. Use it to track a candidate across runs (for example after a rebase) and to join JSON and SARIF output. IDs from earlier fallow versions hash only the rule, path, and line, so every ID changes when you upgrade. See [Finding identity migration](/cli/security-agent-verification#finding-identity-migration).
+`finding_id` is a stable correlation id. It is identical across runs for the same rule, path, line, and column, and it matches the SARIF `partialFingerprints["fallowSecurity/v2"]` value of the finding. The CLI, the MCP `security_candidates` tool, and the language server report the same id. An editor diagnostic has it in `data.findingId`. Two sinks on the same line get different IDs. Use it to track a candidate across runs (for example after a rebase) and to join JSON and SARIF output. IDs from earlier fallow versions hash only the rule, path, and line, so every ID changes when you upgrade. See [Finding identity migration](/cli/security-agent-verification#finding-identity-migration).
 
 ## Subcommands
 
