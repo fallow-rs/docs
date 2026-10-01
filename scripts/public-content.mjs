@@ -21,7 +21,6 @@ const PROVENANCE_NAME = "fallow-public-docs.provenance.json";
 const REQUIRED_FILES = ["docs.json", "index.mdx"];
 const USTAR_PATH_LIMIT = 100;
 const PUBLIC_ROOT_FILES = new Set([
-  ".mintignore",
   "adoption.mdx",
   "context7.json",
   "custom.css",

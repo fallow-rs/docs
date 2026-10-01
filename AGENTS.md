@@ -2,22 +2,25 @@
 
 ## What this is
 
-Mintlify documentation site for [fallow](https://github.com/fallow-rs/fallow), deterministic codebase intelligence for TypeScript and JavaScript. Three audiences: AI agents, human developers, CI pipelines.
+Documentation source for [fallow](https://github.com/fallow-rs/fallow), deterministic codebase intelligence for TypeScript and JavaScript. The fallow.tools site renders these pages at [fallow.tools/docs](https://fallow.tools/docs/). Three audiences: AI agents, human developers, CI pipelines.
 
 This repository is the canonical source for public user documentation. Read
 `PUBLICATION.md` before changing publication tooling or moving content between
 repositories.
 
-## Dev server
+## Checks
 
 ```bash
 npm ci
-npm run docs:dev
+npm run check
 ```
+
+This repository has no local preview server. The fallow.tools site renders
+the pages and reads `docs.json` as its navigation source.
 
 ## File structure
 
-- `docs.json`: navigation, tabs, theme, redirects. Edit this to add/reorder pages.
+- `docs.json`: navigation source. Edit this to add or reorder pages.
 - `*.mdx` files: content pages. YAML frontmatter (`title`, `description`, `keywords`, `icon`) required on every page.
 - `logo/`, `images/`: static assets.
 - `custom.css`: theme overrides.
@@ -57,7 +60,7 @@ npm run docs:dev
 - All code blocks need language tags.
 - End every page with a "See also" CardGroup linking related pages.
 
-### Mintlify components
+### Components
 Tabs, Steps, Cards, CardGroup, Accordion, Info, Tip, Warning, Note, CodeGroup.
 
 ## Content boundaries
@@ -71,5 +74,4 @@ Tabs, Steps, Cards, CardGroup, Accordion, Info, Tip, Warning, Note, CodeGroup.
 
 ## Verifying changes
 
-Run the checks in [CONTRIBUTING.md](CONTRIBUTING.md#before-submitting), then
-preview the changed page with `npm run docs:dev`.
+Run the checks in [CONTRIBUTING.md](CONTRIBUTING.md#before-submitting).
