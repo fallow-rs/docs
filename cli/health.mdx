@@ -124,7 +124,8 @@ partial or unavailable, use `--type-aware-require complete`. See
 | `[PATH]` | Report only findings in this file or directory. Fallow still builds the full project graph. |
 | `-w, --workspace <NAME>` | Scope output to one or more workspace packages while keeping the full cross-workspace graph. Comma-separated values, globs (`apps/*`, `@scope/*`), and `!`-prefixed negation are supported. Fallow recomputes vital signs, health score, hotspots, file scores, findings, and `summary.files_analyzed` for the scoped subset. |
 | `--changed-since <REF>` | Analyze only functions in files changed since the given git ref (for example `main`, `HEAD~5`). Also applies to hotspot analysis. |
-| `--group-by <owner\|directory\|package\|section>` | Split the report into one section per group. JSON output adds `grouped_by` and a `groups` array. Each group has its own `vital_signs`, `health_score`, `findings`, `file_scores`, `hotspots`, `large_functions`, and `targets`, computed for the files of that group. The top-level metrics stay project-wide, so a tool that ignores grouping still sees the project headline. Human output adds a summary block per group with score, files, hot, and p90 (worst first with `--score`). SARIF tags every result with `properties.group`, and CodeClimate adds a top-level `group` field per issue. GitHub Code Scanning and GitLab Code Quality can then split findings per team or package. Compact, markdown, and badge output ignore grouping and print a note on stderr that points to `--format json`. |
+| `--group-by <owner\|directory\|package\|section>` | Split the report into one section per group. JSON output adds `grouped_by` and a `groups` array. Each group has its own `vital_signs`, `health_score`, `findings`, `file_scores`, `hotspots`, `large_functions`, and `targets`, computed for the files of that group. The top-level metrics stay project-wide, so a tool that ignores grouping still sees the project headline. Each group also has `severity_critical_count`, `severity_high_count`, `severity_moderate_count`, and `hotspot_count`, counted before `--top`. `--top N` applies to the lists of each group. Human output adds a summary block per group with score, grade, files, crit, hot, and p90 (worst first with `--score`, unowned last). Markdown and `github-summary` add a `## Health by <mode>` table and one collapsible findings block per group. SARIF tags every result with `properties.group`, and CodeClimate adds a top-level `group` field per issue. GitHub Code Scanning and GitLab Code Quality can then split findings per team or package. Compact and badge output ignore grouping and print a note on stderr that points to `--format json`. |
+| `--group <KEY>` | With `--group-by`, keep only the matching groups. Accepts exact group keys, globs (`@org/*`), and `!`-prefixed negation, comma-separated or repeated. Fallow skips the per-group work for the other groups. The top-level metrics stay project-wide; use `--workspace` for a narrower project scope. JSON output adds `group_filter` and a `request_outcomes["group-filter"]` entry whose `scope_size` counts the kept groups. A pattern that matches no group prints a warning and does not change the exit code. |
 
 ### Snapshots & trends
 
@@ -132,6 +133,7 @@ partial or unavailable, use `--type-aware-require complete`. See
 |:-----|:------------|
 | `--save-snapshot [PATH]` | Save a vital signs snapshot for trend tracking. Default path: `.fallow/snapshots/<timestamp>.json`. Forces file-score and hotspot computation, so the metrics are complete. |
 | `--trend` | Compare current metrics against the most recent saved snapshot. Reads from `.fallow/snapshots/` and shows the delta per metric with a direction (improving/declining/stable). Implies `--score`. |
+| `--trend-from <PATH>` | Compare current metrics against this snapshot file instead of the newest file in `.fallow/snapshots/`. Use it when CI restores the baseline from external storage. A missing or invalid file exits with code 2. Implies `--trend` and `--score`. |
 
 <Tip>
   `--score`, `--trend`, and `--save-snapshot` also work on bare `fallow` (all analyses combined). See [global flags](/cli/global-flags) for details.
@@ -451,7 +453,7 @@ Snapshots let you track the health of your codebase across builds, sprints, or r
 
 ```json title="snapshot.json"
 {
-  "snapshot_schema_version": 10,
+  "snapshot_schema_version": 11,
   "version": "3.31.0",
   "timestamp": "2026-03-25T14:30:00Z",
   "git_sha": "a1b2c3d",
@@ -501,7 +503,7 @@ Snapshots let you track the health of your codebase across builds, sprints, or r
 
 | Field | Description |
 |:------|:------------|
-| `snapshot_schema_version` | Schema version for forward compatibility (currently v10) |
+| `snapshot_schema_version` | Schema version for forward compatibility (currently v11) |
 | `version` | The fallow version that produced the snapshot |
 | `timestamp` | ISO 8601 timestamp of the snapshot |
 | `git_sha` | Current git commit SHA (if in a git repo) |
@@ -511,6 +513,15 @@ Snapshots let you track the health of your codebase across builds, sprints, or r
 | `counts` | Raw numerators and denominators behind the percentage metrics |
 | `score` | Project health score (0-100). |
 | `grade` | Letter grade (A/B/C/D/F). |
+| `groups` | Present when the run used `--group-by` (v11). Holds `grouped_by`, the optional `group_filter`, and per group `key`, `files_analyzed`, `vital_signs`, `counts`, `score`, `grade`, `severity_critical_count`, and `hotspot_count`. |
+
+### Group trends
+
+With `--group-by`, `--trend` and `--trend-from` also compare each group against the same group key in the baseline snapshot. The baseline must be saved with the same `--group-by` mode. Each group gets `trend_status`:
+
+- `compared`: the group has a `trend` object with the same shape as `health_trend`.
+- `new_group`: the baseline holds no group with this key.
+- `no_group_baseline`: the baseline holds no group data for this mode. The run also records a `trend-group-baseline-unavailable` entry in `workspace_diagnostics`. The project trend still works.
 
 <Tip>
   To build a history of codebase health, store snapshots as CI artifacts or commit them to your repo.
@@ -657,6 +668,11 @@ fallow health --trend
 
 # JSON output with trend deltas
 fallow health --trend --format json
+
+# CI: per-team trend against a baseline restored from external storage
+fallow health --group-by owner --group @org/team-a \
+  --trend-from ./restored/health-baseline.json \
+  --save-snapshot ./health-baseline.json --format json --quiet
 ```
 
 ```bash Coverage gaps
