@@ -15,7 +15,7 @@ The `--dupes-*` flags apply to combined mode. When you do not set one, fallow us
 |:-----|:------------|
 | `-r, --root <PATH>` | Project root directory (default: current working directory) |
 | `-c, --config <PATH>` | Path to config file (default: auto-detected) |
-| `--allow-remote-extends` | Allow trusted config files to extend HTTPS URLs |
+| `--allow-remote-extends` | Allow trusted config files to extend HTTPS URLs (default: off, so an HTTPS `extends` entry exits 2). See [`fallow guard`](/cli/guard). |
 | `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`, `badge`, `github-annotations`, `github-summary`. Alias: `--output`. `--format json` is compact by default; add `--pretty` for indented output. |
 | `--pretty` | Indent `--format json` output so you can read it. JSON is compact by default, so machines and agents get the same schema with less output. Applies only to JSON output. SARIF, Code Climate, baselines, snapshots, caches, and other persisted JSON keep their format with or without this flag. |
 | `-q, --quiet` | Suppress progress bars and status messages |
@@ -28,7 +28,7 @@ The `--dupes-*` flags apply to combined mode. When you do not set one, fallow us
 | `--diff-stdin` | Read the unified diff from stdin and not from a file. Equivalent to `--diff-file -`. Cannot be combined with a `--diff-file PATH` value other than `-`. Use it to pipe `gh pr diff` or `git diff` directly into fallow. |
 | `--churn-file <PATH>` | For projects with no git repository, import change history from a `fallow-churn/v1` JSON file and not from `git log`. Affects only the health signals that use churn. See [`fallow health` › Importing churn from a non-git VCS](/cli/health#importing-churn-from-a-non-git-vcs). |
 | `--baseline <PATH>` | Compare against a previously saved baseline file. Only the bare `fallow` run, `dead-code` (and `check`), `dupes`, and `health` use it. Other subcommands, `decision-surface` included, exit 2 with an error that names the subcommands that use the flag. `audit` has its own baseline flags. |
-| `--baseline-mode <MODE>` | How `--baseline` matches health findings: `count` (default) matches per file and category, `identity` matches per function identity. `identity` works only with a baseline that you saved with `--baseline-mode identity`. See [`fallow health`](/cli/health). |
+| `--baseline-mode <MODE>` | How `--baseline` matches health findings: `count` (default) matches per file and category, `identity` matches per function identity. `identity` works only with a baseline that you saved with `--baseline-mode identity`. See [`fallow health` › Baseline](/cli/health#baseline). |
 | `--save-baseline <PATH>` | Save the current results as a baseline file. The same subcommands as `--baseline` accept it. See [Save destinations](#save-destinations) for the paths that fallow writes to. |
 | `--fail-on-stale-baseline` | Exit 1 when a loaded `--baseline` has an entry that matched nothing in this run. In the bare run, this also checks `--dupes-baseline` and `--health-baseline`. Applies to `dead-code` and `check`, the bare run, `dupes` and `health`, in every output format. It also exits 1 when the loaded file is a baseline of another `kind`, because such a file suppresses nothing. The result is the exit code and one stderr line with the stale count, the baseline path and the command to save the baseline again. Some runs cannot judge the baseline: a narrowed scope, `health --report-only`, `audit` and `decision-surface`. These runs do not apply the gate. They print a warning on stderr and do not pass silently. A narrowed scope skips only the unmatched-entry check. It still applies the other-`kind` check, because the scope of the run does not change which command saved the file. The report output does not change. The run always reports the result as `baseline_staleness.gate_trips`, with or without this flag. That field describes the baseline and not the exit code, so it can be true even when the run did not apply the gate. `gate_outcomes["stale-baseline"].status` reports `fail` for both parts of the rule, and stays `skipped` on `audit`. |
 | `--fail-on-baseline-growth` | Exit 1 when a loaded baseline has a key that the same file at the base ref does not have. This makes a committed baseline shrink-only. See [Baseline growth gate](#baseline-growth-gate). |
@@ -77,10 +77,10 @@ The `--dupes-*` flags apply to combined mode. When you do not set one, fallow us
 | `--trend` | Compare current health metrics against the most recent saved snapshot. Implies `--score`. Also available on [`fallow health`](/cli/health). |
 | `--save-snapshot [PATH]` | Save a vital signs snapshot to track trends. Default path: `.fallow/snapshots/<timestamp>.json`. Always computes file scores and hotspots. Also available on [`fallow health`](/cli/health). See [Save destinations](#save-destinations). |
 | `--include-entry-exports` | Report unused exports in entry files. Without this flag, fallow marks them as used. Finds typos in framework exports (for example, `meatdata` instead of `metadata`). You can also set `includeEntryExports: true` in your fallow config. When you set the CLI flag, it takes priority. |
-| `--type-aware` | Opt in to TypeScript semantic analysis for project-wide symbol evidence. It does not emit compiler diagnostics. See [Type-aware analysis](/analysis/type-aware). |
-| `--no-type-aware` | Turn type-aware analysis off, even when `typeAware.enabled` or `FALLOW_TYPE_AWARE` turns it on |
-| `--type-aware-project <PATH>` | TypeScript project config for type-aware analysis. Repeatable. |
-| `--type-aware-require <MODE>` | `best-effort` keeps conservative findings and reports semantic gaps. `complete` fails the quality gate when a semantic query is incomplete. |
+| `--type-aware` | Opt in to TypeScript semantic analysis for project-wide symbol evidence. It does not emit compiler diagnostics (default: off, or the `typeAware.enabled` config value). See [Type-aware analysis](/analysis/type-aware). |
+| `--no-type-aware` | Turn type-aware analysis off, even when `typeAware.enabled` or `FALLOW_TYPE_AWARE` turns it on. The run stays fully syntactic. |
+| `--type-aware-project <PATH>` | TypeScript project config for type-aware analysis. Repeatable. Default: the `typeAware.projects` config value, else automatic project selection. |
+| `--type-aware-require <MODE>` | `best-effort` keeps conservative findings and reports semantic gaps. `complete` fails the quality gate when a semantic query is incomplete. Default: `best-effort`. |
 
 ## Save destinations
 
@@ -291,6 +291,19 @@ fallow --score
 # Save a snapshot and track trends
 fallow --save-snapshot
 fallow --trend
+
+# Let a trusted config file extend an HTTPS URL
+fallow dead-code --allow-remote-extends
+
+# Match a health baseline per function, not per file and category
+fallow health --save-baseline .fallow/health-baseline.json --baseline-mode identity
+fallow health --baseline .fallow/health-baseline.json --baseline-mode identity
+
+# Add TypeScript checker evidence, and fail when it is incomplete
+fallow dead-code --type-aware --type-aware-project tsconfig.json --type-aware-require complete
+
+# Keep one run syntactic when the config turns type-aware analysis on
+fallow dead-code --no-type-aware
 ```
 
 ## Per-analysis production mode
