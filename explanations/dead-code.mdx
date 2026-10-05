@@ -469,17 +469,27 @@ Imports that cross the architecture zone boundaries that you define. You define 
 
 ### Policy violations {#policy-violations}
 
-Calls, imports, exports, or catalogue-derived effects that match a `banned-call`, `banned-import`, `banned-effect`, or `banned-export` rule from a configured rule pack (the `rulePacks` config key). A rule pack is a standalone JSON or JSONC file with declarative policy data only. Loading a pack never executes project code. Every output format identifies a finding as `<pack>/<rule-id>`.
+Calls, imports, exports, effects, or gdp-ts proof producers that violate a configured rule pack (the `rulePacks` config key). A rule pack is a standalone JSON or JSONC file with declarative policy data only. Loading a pack never executes project code. Every output format identifies a finding as `<pack>/<rule-id>`.
 
 | Severity | Default |
 |:---------|:--------|
 | Warning | Yes |
 
-The `rules."policy-violation"` master setting defaults to `warn`, so a new pack never fails CI on its first run. A per-rule `severity` in the pack overrides the master setting for each finding. The exit code uses the effective severity of each finding, so one `error` rule fails the run even when the master setting is `warn`. `off` on the master setting turns off the whole evaluator. An invalid or missing pack makes the config load fail with exit code 2, so fallow never silently enforces nothing.
+The `rules."policy-violation"` master setting defaults to `warn`. A per-rule `severity` in the pack overrides the master setting for each finding. The exit code uses the effective severity of each finding, so one `error` rule fails the run even when the master setting is `warn`. `off` on the master setting turns off the whole evaluator. An invalid or missing pack makes the config load fail with exit code 2, so fallow never silently enforces nothing.
 
 **When to act:** Replace the banned call or import with the alternative that the rule message names. If a rule fires in directories where the usage is allowed, limit the rule with `files` and `exclude` globs. To suppress one rule, use `// fallow-ignore-next-line policy-violation:<pack>/<rule-id>`. Use bare `policy-violation` only when you want to suppress every rule-pack finding at that line or file scope.
 
-**Limitations:** Matching is syntactic. `banned-call` does not follow aliased or re-bound callees (`const run = cp.exec; run()`). `banned-import` matches only the raw specifier, so it does not match rewritten forms such as `npm:moment`. Fallow does not check `require()` calls and dynamic `import()`.
+**Limitations:** `banned-call` does not follow aliased or re-bound callees (`const run = cp.exec; run()`). `banned-import` matches only the raw specifier, so it does not match rewritten forms such as `npm:moment`. These checks do not cover `require()` calls and dynamic `import()`.
+
+#### gdp-ts proof producer violations
+
+The opt-in `gdp-proof-producer` rule follows calls to `@gdp-ts/core.defineProof` through the module graph. It reports factory creation outside the rule's `allowedFiles`. With `proofKinds`, you can require a specific literal proof label to be created only in its owner file. Configure both rules in a [rule pack](/configuration/overview#config-fields).
+
+Fallow recognizes direct, renamed, and namespace imports, including unambiguous re-exports through project modules and workspace packages. A locally shadowed import name does not match. Each call site gets its own finding, with the resolved factory and a static proof label when available. This rule also checks analyzed files unreachable from entry points.
+
+Move the factory to an allowed authorization module and expose an operation that performs the permission check. Retain the gdp-ts ESLint or Oxlint rules, including `no-exported-prover`, and your TypeScript checks. Restricting factory locations does not prevent an allowed module from exporting a prover that callers can invoke without authorization.
+
+Fallow does not trace arbitrary wrappers, local value aliases, `require()`, or dynamic imports to the factory. It skips optional calls, computed member calls such as `gdp["defineProof"](...)`, and ambiguous re-export origins. When `proofKinds` contains labels, calls with dynamic labels are skipped. A global producer rule without a label filter still checks their producer locations. This analysis does not verify the authorization check or runtime permission validity.
 
 To print the pack JSON Schema for editor autocomplete, run `fallow rule-pack-schema`. For the pack file format, see the [`rulePacks` config key](/configuration/overview#config-fields).
 
