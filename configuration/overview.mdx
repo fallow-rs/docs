@@ -1116,7 +1116,7 @@ For presets, custom zones, examples, and output formats, see [Architecture bound
 </Accordion>
 
 <Accordion title="rulePacks">
-Rule packs let you ban specific calls, imports, and effects across your project. A rule pack is a standalone JSON or JSONC file with `banned-call`, `banned-import`, and `banned-effect` rules. Fallow loads packs as data only and never runs project code. Paths are relative to the project root. Fallow reports matches as `policy-violation` findings with the ID `<pack>/<rule-id>`.
+Rule packs let you enforce project policies for calls, imports, exports, effects, and gdp-ts proof producers. A rule pack is a standalone JSON or JSONC file. Fallow loads packs as data only and never runs project code. Paths are relative to the project root. Fallow reports matches as `policy-violation` findings with the ID `<pack>/<rule-id>`.
 
 ```jsonc
 {
@@ -1128,6 +1128,9 @@ A pack file declares `version: 1`, a unique `name`, and a non-empty `rules` arra
 
 - `banned-call` rules match callee paths per segment, through imports. `child_process.*` covers named, namespace, and default imports from `child_process` and `node:child_process`.
 - `banned-import` rules match import specifiers as written, per segment. `moment` covers `moment/locale/nl`, never `moment-timezone`.
+- `banned-effect` rules match effect classes from the security catalogue, such as `network` and `database`.
+- `banned-export` rules match exported names. A trailing `*` matches a name prefix.
+- `gdp-proof-producer` rules restrict calls to `@gdp-ts/core.defineProof` to `allowedFiles` globs. Optional `proofKinds` labels restrict the rule to those literal proof kinds.
 - Optional `files` and `exclude` globs limit where a rule applies.
 - `"ignoreTypeOnly": true` skips type-only imports.
 - An optional per-rule `severity` overrides the main `rules."policy-violation"` severity (default `warn`).
@@ -1137,6 +1140,42 @@ To suppress one rule, use `// fallow-ignore-next-line policy-violation:<pack>/<r
 For editor autocomplete, run `fallow rule-pack-schema` to print the pack JSON Schema, or point `$schema` at `https://raw.githubusercontent.com/fallow-rs/fallow/main/rule-pack-schema.json`. An invalid or missing pack makes the config load fail with exit code 2. Fallow does not continue with a pack that enforces nothing.
 
 Keep pack files in a committed directory such as `rule-packs/`. `.fallow/` is the gitignored cache directory, so packs there are missing from the checkouts of your teammates.
+
+#### gdp-ts proof producers
+
+Use a global producer rule to allow proof factories only in your authorization modules. Add a rule for a specific proof kind to require its factory to live in one owner file:
+
+```json title="rule-packs/gdp.json"
+{
+  "version": 1,
+  "name": "gdp",
+  "rules": [
+    {
+      "id": "trusted-producers",
+      "kind": "gdp-proof-producer",
+      "allowedFiles": ["src/auth/**"],
+      "severity": "error"
+    },
+    {
+      "id": "delete-project-owner",
+      "kind": "gdp-proof-producer",
+      "allowedFiles": ["src/auth/project.ts"],
+      "proofKinds": ["CanDeleteProject"],
+      "severity": "error"
+    }
+  ]
+}
+```
+
+Add `"rulePacks": ["rule-packs/gdp.json"]` to your fallow config. Each matching rule reports independently. A call outside `src/auth/**` can violate both rules. A call in `src/auth/other.ts` violates only the owner rule.
+
+`allowedFiles` must contain at least one project-root-relative glob. It grants producer permission. `files`, `exclude`, and `zones` limit where the rule checks code. Neither `allowedFiles` nor `proofKinds` applies to other rule kinds.
+
+An absent or empty `proofKinds` checks every recognized factory call, including dynamic labels. A nonempty list matches exact static string labels; dynamic labels are skipped by that rule. Keep the global rule to restrict those calls too.
+
+The rule checks every analyzed file, including files unreachable from entry points. Files excluded from discovery are outside its scope. It follows named and namespace imports, import aliases, and unambiguous project re-export chains to the gdp-ts factory. See [Policy violations](/explanations/dead-code#policy-violations) for supported forms and limits.
+
+Inspect the configured permissions with `fallow rule-pack list --format json` or `fallow guard src/routes/project.ts --format json`. Use `fallow rule-pack test rule-packs/gdp.json --format json` to inspect matches while authoring the pack. This command exits successfully when it reports findings. For CI enforcement, run `fallow dead-code --policy-violations`; an error-severity finding exits with code 1.
 
 For details on the issue type, see [Policy violations](/explanations/dead-code#policy-violations).
 </Accordion>
