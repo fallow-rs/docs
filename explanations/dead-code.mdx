@@ -9,7 +9,7 @@ Use this page to decide which `fallow dead-code` findings to fix, in which order
 
 ## Issue types
 
-Each dead-code issue type has a default severity. An `error` finding makes the run exit with code 1. A `warn` finding shows in the output, but does not fail the run unless you pass `--fail-on-issues`. An `off` rule does not run. To change a severity, use [`rules`](/configuration/rules).
+Each dead-code issue type has a default severity. An `error` finding makes the run exit with code 1. A `warn` finding shows in the output, but does not fail the run unless you pass `--fail-on-issues` or `--ci`. An `off` rule does not run. To change a severity, use [`rules`](/configuration/rules).
 
 ### Unused files
 
@@ -626,6 +626,65 @@ For **React and Preact**, the same rule key reports a prop that code destructure
 For **Astro**, the same rule key reports a field of a `.astro` `interface Props` (or `type Props`) that no code reads. That means no `Astro.props` destructure (also a nested destructure such as `const { post: { id } } = Astro.props`), no `Astro.props.<name>`, no `{expr}` template position, and no `<style>` or `<script>` `define:vars={{ prop }}` binding reads it. This check runs only when `astro` is a declared dependency. It skips the whole component for a `{...Astro.props}` template spread, a whole-object `Astro.props` use, an `interface Props extends ...` or imported-type alias (names not statically resolvable), or an array destructure of `Astro.props`.
 
 **When to act:** Use the prop where it belongs, or remove it from `defineProps` (Vue) or from the destructure (React). There is no auto-fix. Suppress the finding with `// fallow-ignore-next-line unused-component-prop`, or set the rule to `off`.
+
+### Absent component props {#absent-component-props}
+
+An optional prop that its component reads, but no inspected reachable caller supplies. Fallow requires at least one known caller and a complete set of statically identified callers in the analyzed project. A component exported for external package users has unknown callers, so fallow skips it. An export used only inside an application can still qualify.
+
+The rule is off by default. To enable it, set `absent-component-props` to `warn` or `error` in [rules](/configuration/rules):
+
+```json .fallowrc.json
+{
+  "rules": {
+    "absent-component-props": "warn"
+  }
+}
+```
+
+With `warn`, these findings do not fail the run unless you pass `--fail-on-issues` or `--ci`. With `error`, they count as error-severity findings. A required prop omitted by a caller remains the responsibility of TypeScript or the framework's type checker. A prop that the component never reads belongs to [unused component props](#unused-component-props).
+
+For example, an application component reads an optional `compact` prop:
+
+```tsx Card.tsx
+interface CardProps {
+  title: string;
+  compact?: boolean;
+}
+
+export const Card = ({ title, compact = false }: CardProps) => (
+  <article className={compact ? "card-compact" : "card"}>{title}</article>
+);
+```
+
+If every known caller renders `<Card title="Overview" />`, `compact` can be a review candidate. The default may be intentional. Keep a stable API when callers are expected to opt in later.
+
+Supplying `compact={false}` or `compact={undefined}` still counts as supplying the prop. Fallow can use a spread only when it can prove which keys the object supplies. An unknown spread can hide a supplied prop, so fallow skips absence findings for that component. Dynamic component selection, unsupported wrappers, and prop forwarding also prevent a complete static caller set.
+
+#### Supported syntax
+
+Fallow uses these declarations and caller forms when it can resolve the component and prove a complete static caller set. It does not infer optional props from imported or unsupported type shapes. A required typed prop remains required even when a destructure or `withDefaults` gives it a default.
+
+| Framework | Declarations | Caller syntax | Cases that prevent a finding |
+|:----------|:-------------|:--------------|:-----------------------------|
+| React and Preact, including Next.js | JSX function and arrow components with same-file inline types, interfaces, or type aliases; untyped destructure defaults; recognized `memo` and `forwardRef` wrappers | JSX attributes and children, including module scope, imported aliases, namespace members, and proven object spreads | Unresolved prop types, unsupported wrappers, component values that escape, or unknown spreads |
+| Solid | JSX function and arrow components with recognized Solid bindings and supported local prop contracts | JSX attributes, children, and proven object spreads | Unsupported wrappers, unresolved types, or opaque component use |
+| Qwik | Recognized `component$` wrappers, including supported same-file generic prop types | JSX attributes, children, and proven object spreads | Unrecognized wrappers, unresolved types, or opaque component use |
+| Vue and Nuxt | Typed or runtime `defineProps`, local named types, `withDefaults`, and supported Options API props | Static component tags, camel-case and kebab-case bindings, `v-model`, and literal or proven local constant `v-bind` | Dynamic or scoped component use, exposed or forwarded props, `defineModel`, rest props, or unresolved declarations |
+| Svelte and SvelteKit | Typed or destructured Svelte 5 `$props`, untyped defaults, and supported legacy `export let` props | Static tags, shorthand attributes, `bind`, paired-tag children, and proven spreads | Dynamic components, scoped component bindings, `$bindable`, rest props, or forwarding |
+| Astro | Same-file `Props` interfaces or type aliases, with `Astro.props` reads and destructure defaults | Static tags, explicit attributes, and proven spreads; an Astro caller can target another supported component framework | Dynamic tags, unresolved types, scoped component expressions, or opaque props use |
+| Angular | Recognized `Component` or `Directive` classes with aliased `@Input` or signal `input` declarations | Static selectors and attribute, property, or two-way bindings in supported inline or external HTML templates | Inheritance, unsupported metadata or host directives, model behavior, dynamic outlets, or imperative component use |
+| Lit | Direct recognized `LitElement` or `ReactiveElement` subclasses with supported property decorators and attribute aliases | Imported `html` templates, static tags, normalized HTML attributes, and case-sensitive property bindings | Unsupported inheritance or registration, imperative DOM use, injected HTML, dynamic static-HTML templates, or callers through unsupported framework syntax |
+| Ember and Glimmer | Direct component subclasses with optional fields in a same-file typed `Signature.Args`; reads in script or the owning class template | Static Glimmer component tags and named `@arguments` | Classic registry lookup, unsupported signatures, whole-args forwarding, computed argument access, or component values forwarded through template arguments |
+
+Angular reads in an external `templateUrl` belong to the class that declares that template. A read in another class's template does not make the prop eligible. Glimmer template reads through `@arg` or `this.args.arg` count when the template belongs to the declaring class. Passing a component value to a child through a template argument makes its callers uncertain.
+
+Lit attribute names follow HTML case rules and the property's configured attribute alias. Direct `.property` bindings use the exact property name, including when `attribute: false` disables attribute supply. A custom-element caller in Astro, Vue, Svelte, or JSX remains evidence of a caller, but prevents a Lit absence finding when fallow cannot model that syntax bridge.
+
+A proven spread has a known set of own keys and comes from a literal or an immutable local binding. Mutated or escaped objects, imported objects, computed keys, and methods or accessors do not establish complete prop supply. A `.tsx` filename alone does not establish which framework's component rules apply.
+
+Each finding points to the declaration and the inspected callers. It records whether the declaration has a default. Review these locations and the component's API before changing code. Static caller inspection does not prove that conditional UI is unreachable at runtime.
+
+There is no automatic prop removal or conditional-UI deletion. To keep an intentional prop, suppress the finding at its declaration with `fallow-ignore-next-line absent-component-prop`, using the comment syntax of that source file. You can also set the rule to `off` for matching paths in [overrides](/configuration/overview#overrides).
 
 ### Unused component emits {#unused-component-emits}
 
