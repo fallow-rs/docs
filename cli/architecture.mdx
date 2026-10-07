@@ -1,0 +1,153 @@
+---
+title: "fallow architecture"
+description: "Check the structure of your code after an edit. Fallow architecture reports circular dependencies, re-export cycles, package cycles, boundary violations, and rule-pack policy violations."
+keywords: ["fallow architecture", "architecture", "circular dependencies", "import cycles", "boundaries", "boundary violations", "rule packs", "policy", "CLI"]
+icon: "terminal"
+---
+
+`fallow architecture` reports the findings that break the structure of your code:
+
+- circular dependencies
+- re-export cycles
+- package cycles (workspace packages that import each other in a loop)
+- boundary violations, which include boundary coverage and forbidden calls
+- rule-pack policy violations
+
+```bash
+fallow architecture
+fallow architecture --cycles
+fallow architecture --boundaries --changed-since main
+```
+
+The command runs the same analysis as [`fallow dead-code`](/cli/dead-code) with only these issue types selected. The JSON output is the `dead-code` envelope (`kind: "dead-code"`). The arrays, the finding ids, the exit codes, and the baselines are the same as on `dead-code`.
+
+<Info>
+  Run [`fallow guard`](/cli/guard) before an edit to see the rules that apply to a file. Run `fallow architecture` after the edit to find the violations in the code.
+</Info>
+
+## Options
+
+### Selection
+
+| Flag | Selects |
+|:-----|:--------|
+| `--cycles` | Circular dependencies, re-export cycles, and package cycles |
+| `--boundaries` | Boundary violations, boundary coverage, and forbidden calls |
+| `--policy` | Rule-pack policy violations |
+
+Without a selection flag, the command reports all architecture issue types. You can combine the flags, for example `--cycles --policy`.
+
+### Scoping
+
+| Flag | Description |
+|:-----|:------------|
+| `[PATH]` | Report only the findings in this file or directory. The default is the whole project. Fallow still builds the full project graph. |
+| `--file <PATH>` | Report only the findings in these files. Repeat the flag for more files. Fallow still builds the full project graph. |
+| `--finding-id <ID>` | Report only the findings with this `finding_id`. Repeat the flag or pass a comma-separated list. See [`finding_id_query`](/cli/dead-code#finding-id-query). |
+
+The [global flags](/cli/global-flags) work as on `dead-code`. These include `--format`, `--quiet`, `--changed-since`, `--workspace`, `--baseline`, and `--save-baseline`.
+
+## Relation to `fallow dead-code`
+
+`fallow architecture` and `dead-code` with the matching filter flags give the same report:
+
+| Command | Same report as |
+|:--------|:---------------|
+| `fallow architecture --cycles` | `fallow dead-code --circular-deps --re-export-cycles --package-cycles` |
+| `fallow architecture --boundaries` | `fallow dead-code --boundary-violations` |
+| `fallow architecture --policy` | `fallow dead-code --policy-violations` |
+
+These five `dead-code` flags are deprecated aliases. They continue to work in version 3. `fallow dead-code` also continues to report the architecture findings by default until the next major version. In human output, `dead-code` prints a hint on stderr that points to `fallow architecture` when it reports such a finding.
+
+## Example output
+
+```bash title="$ fallow architecture (excerpt)"
+── Architecture ──────────────────────────────────
+
+● Circular dependencies (1)
+  src/ui/App.ts
+    → state.ts → App.ts
+
+● Boundary violations (1)
+  src/ui/App.ts:3 → src/db/client.ts (ui → db)
+```
+
+The output has one "Architecture" category. The sections in it are the same as in `dead-code` output. With `--group-by`, each group uses the `dead-code` category headings ("Structure" and "Policy"), and not one "Architecture" heading.
+
+In `--format json`, the findings are in the same arrays as in `dead-code` output, for example `circular_dependencies`, `re_export_cycles`, `boundary_violations`, and `policy_violations`:
+
+```json title="$ fallow architecture --boundaries --format json (excerpt)"
+{
+  "kind": "dead-code",
+  "boundary_violations": [
+    {
+      "from_path": "src/ui/App.ts",
+      "to_path": "src/db/client.ts",
+      "from_zone": "ui",
+      "to_zone": "db",
+      "import_specifier": "../db/client",
+      "line": 3,
+      "col": 9
+    }
+  ]
+}
+```
+
+## Exit codes
+
+| Code | Meaning |
+|:-----|:--------|
+| `0` | No finding with error severity. |
+| `1` | At least one finding has error severity. |
+| `2` | Invalid input or configuration. |
+
+The exit codes are the same as on `dead-code`. A circular dependency and a boundary violation have `error` severity by default. A policy violation has `warn` severity by default. Change the severity in [`rules`](/configuration/rules).
+
+## Baselines
+
+`fallow architecture` reads and writes the same baseline format as `dead-code`. You can use a baseline from `fallow dead-code --save-baseline` with `fallow architecture --baseline`.
+
+A baseline that `fallow architecture --save-baseline` writes records a scope that the issue types filter. For this reason, `--fail-on-stale-baseline` does not gate on such a baseline.
+
+## Examples
+
+```bash
+# Before an edit: the rules that apply to the file
+fallow guard src/ui/App.ts --format json --quiet
+
+# After an edit: cycles, boundaries, and policy rules
+fallow architecture --format json --quiet
+
+# Only import cycles in the files that changed since main
+fallow architecture --cycles --changed-since main --format json --quiet
+
+# Only boundary findings in one workspace
+fallow architecture --boundaries --workspace web
+
+# Adopt the check on an existing codebase
+fallow architecture --save-baseline fallow-architecture-baseline.json
+fallow architecture --baseline fallow-architecture-baseline.json
+```
+
+## Bare `fallow`
+
+Bare `fallow` also reports these findings. In human output, they show in an "Architecture" section after the dead code findings. The JSON and the other machine formats do not change: the findings stay in the dead code part of the output.
+
+To run only this section, pass `--only architecture`. To leave it out, pass `--skip architecture`. See [global flags](/cli/global-flags).
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="fallow guard" icon="terminal" href="/cli/guard">
+    See the architecture rules for a file before you edit it.
+  </Card>
+  <Card title="Architecture boundaries" icon="layer-group" href="/analysis/boundaries">
+    Define zones and the imports that each zone allows.
+  </Card>
+  <Card title="Issue types" icon="book" href="/explanations/dead-code#circular-dependencies">
+    What cycles, boundary violations, and policy violations mean, and when to act.
+  </Card>
+  <Card title="fallow dead-code" icon="terminal" href="/cli/dead-code">
+    The dead code command and its issue type filters.
+  </Card>
+</CardGroup>
