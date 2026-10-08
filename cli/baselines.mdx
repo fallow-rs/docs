@@ -23,9 +23,10 @@ Pruned 1 entry from the dupes baseline baselines/dupes.json (9 -> 8)
 
 - Prune keeps exactly the entries that `--baseline` matches. A pruned file hides the same findings as before.
 - Prune never adds an entry. A new finding stays outside the baseline, and the normal gates report it. To record new findings on purpose, use `fallow dead-code --save-baseline`, `fallow health --save-baseline` or `fallow dupes --save-baseline`.
-- Prune keeps the order of the file and writes a file only when it removes an entry. It writes through a temporary file and a rename.
+- Prune keeps the order of the file and writes a file only when it removes an entry. It writes through a temporary file and a rename, and it does not write through a symbolic link.
 - Health buckets keep the slots that cover current findings. A slot of a higher severity can cover a finding of a lower severity, as with `--baseline`. An identity bucket that follows a moved file keeps its saved key.
 - Prune does not change the runtime-coverage keys or the refactoring target keys of a health baseline.
+- When the run still reports a function whose identity bucket loses all its slots, the bucket stays as an empty object. This keeps the move matching of `--baseline` as it was.
 
 ## Which files
 
@@ -45,16 +46,23 @@ The paths resolve against the project root. A flag overrides the config path for
 
 ## Whole-project scope
 
-Prune always analyzes the whole project. A narrowed run would remove entries for findings that it did not see. So prune rejects `--changed-since`, `--workspace`, `--changed-workspaces`, `--diff-file` and `--production`, and it ignores `workspaces.changedSince`. The production mode of each analysis comes from the config, as for `fallow audit`.
+Prune always analyzes the whole project. A narrowed run would remove entries for findings that it did not see. So prune exits 2 on `--changed-since`, `--workspace`, `--changed-workspaces`, `--diff-file`, `--diff-stdin`, `--production` and the `FALLOW_DIFF_FILE` environment variable, and it ignores `workspaces.changedSince`. The production mode of each analysis comes from the config, as for `fallow audit`.
+
+Prune also exits 2 on the global baseline flags `--baseline`, `--save-baseline`, `--fail-on-baseline-growth` and `--baseline-base`. Name the files with the prune flags or the config.
+
+CRAP scores in a health baseline depend on coverage. Prune reads the coverage input of the config and of `FALLOW_COVERAGE`. When you saved the health baseline with `--coverage`, pass the same input to prune.
 
 ## Skipped files
 
-Prune does not change a file that it cannot match entry by entry. It reports the file as skipped, prints the command that saves it again, and exits 2. A file is skipped when:
+Prune does not change a file that it cannot match entry by entry. It reports the file as skipped, prints the command that saves it again, and exits 2. The other files are still pruned. A file that does not exist or cannot be read gets the status `error`, and the other files are still pruned. A file is skipped when:
 
 - another command saved it;
 - it uses an older key form, for example a dead-code baseline without `identity`;
 - it was saved by a type-aware run;
+- it has fields that this version does not know, for example from a newer fallow version;
 - it is a duplication baseline with the clone keys that older versions shared between unrelated groups. See [migrating collision handles](/analysis/duplication#migrating-collision-handles).
+
+The stale-baseline warning and the `--fail-on-stale-baseline` message print the prune command for the file, with an absolute path.
 
 ## Pre-commit hook
 
@@ -76,9 +84,11 @@ fi
 | `--dead-code-baseline <PATH>` | The dead-code baseline to prune. Overrides `audit.deadCodeBaseline`. |
 | `--health-baseline <PATH>` | The health baseline to prune. Overrides `audit.healthBaseline`. |
 | `--dupes-baseline <PATH>` | The duplication baseline to prune. Overrides `audit.dupesBaseline`. |
+| `--coverage <PATH>` | The coverage input for CRAP scores, as for `fallow health --coverage`. |
+| `--coverage-root <PATH>` | Rebase the file paths of the coverage input onto this root. |
 | `-f, --format <FORMAT>` | `human` (default) or `json` |
 | `-r, --root <ROOT>` | Project root directory |
-| `-q, --quiet` | Suppress the human report and progress output |
+| `-q, --quiet` | Print only the skipped and failed files, and no progress output |
 
 ## Exit codes
 
@@ -86,7 +96,7 @@ fi
 |:-----|:--------|
 | `0` | The files are pruned, or have nothing to prune. |
 | `1` | With `--check`: at least one entry can be pruned. |
-| `2` | No baseline is configured, a file cannot be read, or a file is skipped. |
+| `2` | No baseline is configured, a flag narrows the run, a file cannot be read or written, or a file is skipped. Exit 2 wins over exit 1 when both apply. |
 
 ## JSON output
 
@@ -115,7 +125,7 @@ fi
     {
       "type": "stage-baselines",
       "auto_fixable": false,
-      "description": "Commit the pruned baseline files with the change that fixed the findings",
+      "description": "Stage the pruned baseline files and commit them with the change that fixed the findings",
       "paths": ["baselines/dead-code.json"],
       "command": "git add -- baselines/dead-code.json"
     }
@@ -123,6 +133,7 @@ fi
 }
 ```
 
-- `status` is `pruned`, `would-prune` (with `--check`), `unchanged`, `refused` or `error`.
-- `reason_code` names why a file is skipped: `parse-error`, `not-this-kind`, `legacy-keys`, `unknown-key-scheme`, `incompatible-identity` or `shared-clone-keys`.
+- `status` is `pruned`, `would-prune` (with `--check`), `unchanged`, `refused` (skipped) or `error` (the file cannot be read or written).
+- `reason` is a sentence for people. It is set for `refused` and `error`, and `null` for the other statuses.
+- `reason_code` names why a file is skipped: `parse-error`, `not-this-kind`, `legacy-keys`, `unknown-key-scheme`, `incompatible-identity`, `shared-clone-keys` or `unknown-fields`. It is `null` for `error` and for the other statuses.
 - `actions` holds `stage-baselines` for written files, `prune-baselines` after a `--check` run with entries to prune, and `resave-baseline` with the save command for each skipped file.
