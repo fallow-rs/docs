@@ -270,6 +270,68 @@ Some decorators do NOT mean that a framework calls the method, for example Playw
 
 Fallow still skips a method that has any decorator NOT in the list. A method with `@step + @Inject` is still skipped, as DI code needs.
 
+### Files that a build step collects by their default export
+
+Some SDKs have a build step that finds files by what their default export calls. No import reaches these files. For example, a file holds only this code:
+
+```typescript
+// apps/billing/src/objects/invoice.ts
+export default defineObject({ name: "invoice" });
+```
+
+Fallow reports such files as unused. In a monorepo, the app packages that hold these files are often not in the `workspaces` of `package.json` or in `pnpm-workspace.yaml`. Then they get no plugins and no entry points of their own.
+
+**Fix**: List the collected files in `entry`, and declare the nested app packages in `workspaces.patterns`:
+
+```jsonc
+// .fallowrc.json
+{
+  "entry": [
+    "apps/*/src/objects/*.ts",
+    "apps/*/src/actions/*.ts"
+  ],
+  "workspaces": {
+    "patterns": ["apps/*"]
+  }
+}
+```
+
+Run `fallow list --workspaces` to make sure that fallow finds each app package. See [Additional workspace patterns](/configuration/workspaces#additional-workspace-patterns).
+
+### Entity properties that code uses only as a type
+
+An ORM entity class can have properties that code reads only through a type, for example in a query result or in a DTO. Fallow does not resolve types, so these properties can look like unused class members. Fallow already skips decorated members, such as `@Column()` properties, and [entities that a library reads by reflection](/frameworks/built-in#classes-and-enums-that-a-library-reads-by-reflection).
+
+**Fix**: Use one of these two options.
+
+1. Mark the members as used for each class that extends or implements a base type. A scoped `usedClassMembers` entry must have `extends` or `implements`:
+
+   ```jsonc
+   // .fallowrc.json
+   {
+     "usedClassMembers": [
+       { "extends": "BaseEntity", "members": ["*"] },
+       { "implements": "AuditedEntity", "members": ["createdAt", "updatedAt"] }
+     ]
+   }
+   ```
+
+2. Turn off the `unused-class-members` rule for the entity files:
+
+   ```jsonc
+   // .fallowrc.json
+   {
+     "overrides": [
+       {
+         "files": ["**/*.entity.ts"],
+         "rules": { "unused-class-members": "off" }
+       }
+     ]
+   }
+   ```
+
+The first option keeps the check for the other members and classes. The second option is shorter, but it hides all unused class members in these files. See [`usedClassMembers`](/configuration/overview#usedclassmembers) and [`overrides`](/configuration/overview#overrides).
+
 ### Peer dependencies and optional dependencies
 
 Fallow does not report packages in `peerDependencies`, because the project that installs your package supplies them. Fallow does report a package in `optionalDependencies` that no file imports and no script uses. A package that loads at runtime without an import, such as a platform-specific binary, can therefore look unused.
