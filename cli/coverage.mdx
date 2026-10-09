@@ -308,7 +308,7 @@ first 5 of 14,280 entries:
 
 ## `upload-source-maps`
 
-For bundled code, source maps let Fallow Cloud show runtime coverage on your original source files. The production beacon reports coverage against the deployed bundles. The cloud resolver uses the uploaded source maps to map those bundle positions back to the original source files. `fallow coverage upload-source-maps` finds the source maps in a build output directory and POSTs each map to Fallow Cloud under the current repo and git SHA.
+For bundled or compiled code, source maps let Fallow Cloud show runtime coverage on your original source files. Compiled code includes a Node service that `tsc` builds to `dist/`. The production beacon reports coverage against the deployed JavaScript files. The cloud resolver uses the uploaded source maps to map those bundle positions back to the original source files. `fallow coverage upload-source-maps` finds the source maps in a build output directory and POSTs each map to Fallow Cloud under the current repo and git SHA.
 
 ```bash
 FALLOW_API_KEY=fallow_live_... \
@@ -325,7 +325,7 @@ FALLOW_API_KEY=fallow_live_... \
 | `--repo <NAME>` | `package.json` `repository.url`, then `git remote get-url origin` parsed to `owner/repo` | Repo identifier in `/v1/coverage/:repo/source-maps`. Must match the `projectId` of the beacon (and the `--project-id` that you pass to `upload-inventory`). If your beacon reports a bare name, pass `--repo <bare-name>`. |
 | `--git-sha <SHA>` | `$GITHUB_SHA`, `$CI_COMMIT_SHA`, `$COMMIT_SHA`, then `git rev-parse HEAD` | The commit SHA that the beacon reports for the deployed build. Must be 7-40 hex chars. |
 | `--endpoint <URL>` | `$FALLOW_API_URL` or `https://api.fallow.cloud` | Override for staging or enterprise deployments. |
-| `--strip-path <BOOL>` | `true` | Upload only the basename as `fileName`, for example `dist/assets/app.js.map` -> `app.js.map`. When runtime coverage reports bundle paths with directories (for example, `assets/app.js`), set `--strip-path=false`. |
+| `--strip-path <BOOL>` | `true` | Upload only the basename as `fileName`, for example `dist/assets/app.js.map` -> `app.js.map`. When runtime coverage reports bundle paths with directories (for example, `assets/app.js`), set `--strip-path=false`. When two maps have the same basename, for example two `index.js.map` files in different directories, fallow sends each of them under its path in the build directory, so that no map replaces another. |
 | `--dry-run` | `false` | Print what fallow would upload. Does not read `FALLOW_API_KEY` and makes no network calls. |
 | `--concurrency <N>` | `4` | Number of parallel uploads. |
 | `--fail-fast` | `false` | Stop on the first failed map. Without this flag, fallow uploads the rest and reports a partial-failure summary. |
@@ -376,6 +376,18 @@ Fallow tries each upload up to three times on network failures, HTTP 429, and HT
 
   </Tab>
 </Tabs>
+
+### Compiled Node services (`tsc`)
+
+A Node service that runs `tsc` output needs no extra flags. Fallow Cloud matches the absolute path that the beacon reports, for example `/usr/app/dist/consumers/base/index.js`, to the map at `dist/consumers/base/index.js.map`.
+
+- Run `upload-source-maps` from the repository root, so that each map gets its path in the repository.
+- Do not set `sourceRoot` in `tsconfig.json`. With `rootDir: "src"`, `sourceRoot: "/"` removes the `src/` segment from each source path, so no runtime function resolves to a file in the repository. `upload-source-maps` warns about this before it uploads.
+
+### Check that coverage resolves
+
+1. Before the first upload, run the command with `--dry-run`. Fix each warning about `sources` that do not resolve to files in the repository.
+2. After the deployed service has had traffic, run `fallow coverage analyze --cloud --repo <repo>`. A `coverage_unresolved` warning means that runtime positions did not map to source for this commit. Make sure that you uploaded the maps for the same `--git-sha` that the beacon reports.
 
 ### Source-map failure modes
 
