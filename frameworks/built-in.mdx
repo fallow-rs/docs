@@ -33,6 +33,7 @@ Most plugins activate automatically when the relevant package is in your `packag
     | **Expo** | `expo` |
     | **Firebase** | `firebase` |
     | **NestJS** | `@nestjs/core` |
+    | **nest-commander** | `nest-commander` (credits the `run` method of each class that extends `CommandRunner`) |
     | **AdonisJS** | `@adonisjs/core` |
     | **Docusaurus** | `@docusaurus/core` |
     | **Nitro** | `nitropack` |
@@ -195,15 +196,15 @@ Most plugins activate automatically when the relevant package is in your `packag
   |:-------|:-----------------|
   | **ESLint** | Plugin imports, shared configs, custom rule paths, import resolver packages |
   | **Vitest** | Reporters, coverage provider, typecheck checker, browser provider from `vitest.config.ts` |
-  | **Vite** | Entry points, `resolve.alias` mappings, plugin imports from `vite.config.ts` |
-  | **Jest** | Setup files, transform paths, module mappers from `jest.config.js` |
+  | **Vite** | Entry points, `resolve.alias` mappings, plugin imports from `vite.config.ts` and from named configs such as `vite.config.lib.ts` |
+  | **Jest** | Setup files, transform paths, module mappers, and test patterns from `jest.config.*`, `jest-*.config.*`, and `jest.*.config.*`. See [Jest configs](#jest-configs) |
   | **tsd** | Declaration test directory from `package.json#tsd.directory` |
   | **Storybook** | Story globs, addon imports from `.storybook/main.ts`. Fallow resolves each `stories` pattern against the `.storybook/` directory, as Storybook does. See [Storybook stories](#storybook-stories) |
   | **Tailwind** | Content paths, plugin imports from `tailwind.config.js` |
   | **Webpack** | Entry points including descriptor/context forms, `resolve.alias` mappings, loader/plugin imports from `webpack.config.js`. An `entry` value that names a package instead of a file credits that dependency, with the resource query included (`webpack-hot-middleware/client?reload=true` credits `webpack-hot-middleware`). A glob-shaped value stays an entry pattern. Fallow also reads a config under `config/`, `build/` or `webpack/` when it exports a webpack configuration; see [config directories](#webpack-config-directories). Inline loader requests (`!raw-loader!./file.js`) resolve to their resource; see [inline loader requests](#webpack-inline-loader-requests) |
   | **TypeScript** | Path aliases, project references from `tsconfig.json` |
   | **Babel** | Plugin and preset imports from `babel.config.js` |
-  | **Rollup** | Entry points, plugin imports from `rollup.config.js` |
+  | **Rollup** | Entry points, plugin imports from `rollup.config.js` and from named configs such as `rollup.config.esm.js` |
   | **Rolldown** | Entry points, external deps, plugin imports from `rolldown.config.ts` |
   | **PostCSS** | Plugin imports from `postcss.config.js` |
   | **Nuxt** | Modules, plugins, server routes, `alias`, `imports.dirs`, `components`, `srcDir` from `nuxt.config.ts`. Fallow reads the config of each root separately: the project root and every workspace root. The custom `components:` or `imports:` shape of one app decides the [`autoImports`](/configuration/overview#autoimports) verdict for that root only. See [local layers](#nuxt-local-layers) |
@@ -213,7 +214,9 @@ Most plugins activate automatically when the relevant package is in your `packag
   | **Rspack** | Entry points, plugin imports from `rspack.config.js`. An `entry` value that names a package credits that dependency, with the resource query included. A glob-shaped value stays an entry pattern. `context` applies to a relative entry. An entry without an extension matches the source file or the directory index |
   | **Remark** | Plugin imports from `.remarkrc.js` |
   | **Angular** | Styles, scripts, main, polyfills from `angular.json` build targets. The ng-packagr `lib.entryFile` in `ng-package.json` or `ng-package.prod.json` (default `src/public_api.ts`, resolved relative to the config directory) becomes a library public API entry point. Fallow also scans nested secondary-entry-point configs in the package subtree. `@Component({ templateUrl, styleUrl })` decorator references create graph edges. Standalone `.html` templates and inline `template:` literals both add synthetic `<template>` complexity findings (`@if`/`@for`/`@switch`/`@defer`, `*ngIf`, bound attributes, interpolations). To suppress them, use `<!-- fallow-ignore-file complexity -->` (external) or `// fallow-ignore-next-line complexity` above the `@Component` decorator (inline) |
-  | **Nx** | Executor references, main entry points, tsconfig paths from `project.json` |
+  | **Nx** | Executor references, main entry points, tsconfig paths, and the commands of `nx:run-commands` targets from `project.json`. See [Nx run-commands targets](#nx-run-commands-targets) |
+  | **GraphQL Codegen** | Plugin imports and `documents` globs from `codegen*.{ts,js,cjs,mjs}` and `graphql.config.*`. Each `documents` glob is an entry pattern, because the codegen run reads these files without an import |
+  | **TypeORM** | `migrations` globs from a `DataSource` config. See [TypeORM migrations](#typeorm-migrations) |
   | **Kibana** | For each `kibana.jsonc` with `"type": "plugin"`: `public/index` when `plugin.browser`, `server/index` when `plugin.server`, `common/index`, and the index of each `plugin.extraPublicDirs` directory. Scout Playwright configs and global setup files. `setup`, `start` and `stop` on classes that implement `Plugin`, `PrebootPlugin` or `AsyncPlugin` |
   | **Hardhat** | Plugin imports and side-effect requires from `hardhat.config.ts` |
   | **Contentlayer** | `contentDirPath`, same-file `defineDocumentType` `filePathPattern` entries, and config imports from `contentlayer.config.*` |
@@ -243,6 +246,62 @@ Active plugins:
 <Info>
 If your framework is not in the list, write a [custom plugin](/frameworks/custom-plugins). Custom plugins support any internal or third-party tool, with declarative JSON or TOML.
 </Info>
+
+## Jest configs
+
+The Jest plugin reads every Jest config in a package:
+
+- `jest.config.*`
+- `jest-*.config.*`, for example `jest-integration.config.ts`
+- `jest.*.config.*`, for example `jest.e2e.config.ts`
+
+Each config adds its own test patterns. A config with its own `testMatch` or `testRegex` does not remove the default test patterns of the other configs.
+
+Fallow converts a simple `testRegex` to a glob:
+
+| `testRegex` | Glob |
+|:------------|:-----|
+| `\.integration-spec\.ts$` | `**/*.integration-spec.ts` |
+| `test/integration/.*\.integration-spec\.ts$` | `test/integration/**/*.integration-spec.ts` |
+
+When fallow cannot convert a regex, add the test files to `entry`.
+
+A `--config` file that a script passes to `jest` is also an entry point, for example `jest --config ./jest-integration.config.ts`.
+
+## Nx run-commands targets
+
+Fallow reads the `command` and `commands` of each `nx:run-commands` target in a `project.json` file as a script. For example, `tsx scripts/seed.ts` makes `scripts/seed.ts` an entry point, and `jest --config ./jest-integration.config.ts` makes the Jest config an entry point.
+
+- Fallow replaces the `{projectRoot}` and `{workspaceRoot}` tokens.
+- Fallow also reads a command in the `configurations` of the target.
+- A command that calls another target of the same project, such as `nx ts-node -- src/run.ts`, uses the command of that target.
+- Fallow reads a target only when it runs in the project directory, for example with `cwd` set to `{projectRoot}`. A target without `cwd` in a nested project runs from the workspace root, so Fallow skips it. Fallow also skips a target with a `cwd` that points to a different directory, because its relative paths can point to the wrong files.
+
+## TypeORM migrations
+
+Fallow reads the `migrations` option of a `DataSource` config in `data-source.{ts,js}`, `*.data-source.{ts,js}`, `*.datasource.{ts,js}`, and `ormconfig.{ts,js,json}`. Each glob becomes an entry pattern, because TypeORM loads the migration files at runtime without an import.
+
+```typescript
+// src/data-source.ts
+export const dataSource = new DataSource({
+  type: "postgres",
+  migrations: [`${isJest ? "src/" : "dist/"}migrations/*.{ts,js}`],
+});
+```
+
+When a template selects between two paths, fallow uses the path that starts with `src/`. When no path starts with `src/`, fallow changes a `dist/` path to the same path under `src/`.
+
+Fallow does not read the `entities` and `subscribers` options. TypeORM uses only the decorated classes of these files. An entry point for each file would also hide the other unused exports and members of the file.
+
+## Classes and enums that a library reads by reflection
+
+Some libraries read every member of a class or an enum. Project code does not name these members, so fallow counts them as used in these cases:
+
+- **ORM entities.** An entity class that you pass to `getRepository`, `getCustomRepository`, `getTreeRepository`, `getMongoRepository`, or `createQueryBuilder` uses all of its members. The type argument of a repository getter, as in `getRepository<Order>()`, counts too.
+- **ORM find calls.** An entity class that you pass to `find`, `findBy`, `findOne`, `findOneBy`, `findOneOrFail`, `findOneByOrFail`, `findAndCount`, or `findAndCountBy` uses all of its members. This applies only when the file imports from `typeorm`, `@nestjs/typeorm`, or a `@mikro-orm/` package.
+- **GraphQL enums.** An enum that you pass to `registerEnumType` from `@nestjs/graphql` or `type-graphql` uses all of its values.
+
+An entity class that code uses only as a type can still have unused properties. See [Entity properties that code uses only as a type](/analysis/debugging#entity-properties-that-code-uses-only-as-a-type).
 
 ## Webpack config directories
 
