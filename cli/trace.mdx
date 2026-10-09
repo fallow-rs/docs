@@ -14,9 +14,10 @@ Before you change an exported symbol, use `fallow trace` to see how it connects 
 fallow trace src/api.ts:fetchUser --format json --quiet
 fallow trace src/api.ts:fetchUser --callers --depth 2
 fallow trace --path src/app.ts src/db.ts
+fallow trace --dependency date-fns --format json --quiet
 ```
 
-`--path` answers a different question: which chain of imports connects one module to another. See [Import path between two modules](#import-path-between-two-modules).
+`--path` answers a different question: which chain of imports connects one module to another. See [Import path between two modules](#import-path-between-two-modules). `--dependency` reports how the code uses each imported name of a package. See [Usage of a package](#usage-of-a-package).
 
 <Note>
   `fallow trace` is a standalone, best-effort command. Its results are **not** part of the ranked [review brief](/cli/audit#review-brief-and-decision-surface), and they never change the focus map or its ranking. Use `trace` to see how a symbol connects. For a prioritized review, use the review brief.
@@ -30,7 +31,7 @@ fallow trace --path src/app.ts src/db.ts
 fallow trace src/api.ts:fetchUser
 ```
 
-`FILE` is a project-relative path, and `SYMBOL` is the exported symbol name. When you pass `--path`, omit this argument. `--path` takes two file paths.
+`FILE` is a project-relative path, and `SYMBOL` is the exported symbol name. When you pass `--path` or `--dependency`, omit this argument. `--path` takes two file paths. `--dependency` takes a package name.
 
 When a file exists at the exact path from the project root, fallow takes that file. `src/api.ts` then never selects `packages/x/src/api.ts`. When no file has the exact path, fallow accepts a path suffix. A short path that matches more than one file takes the first match, so use the full project-relative path in a monorepo.
 
@@ -43,6 +44,11 @@ When a file exists at the exact path from the project root, fallow takes that fi
 | `--depth <N>` | Maximum walk depth in each requested direction (default: `2`). |
 | `--path <FROM> <TO>` | Find the shortest import path between two modules. You cannot use it with the `FILE:SYMBOL` target, `--callers`, `--callees`, or `--depth`. |
 | `--eager-only` | With `--path`, follow only static imports that carry a runtime value. The route shows why `TO` loads before `FROM` runs. |
+| `--dependency <PACKAGE>` | Report how the code uses each imported name of the package. You cannot use it with the `FILE:SYMBOL` target, `--path`, or `--callees`. |
+| `--specifier <NAME>` | With `--dependency`, report only these imported names. Repeat the flag or use a comma-separated list. Turns on the site page. |
+| `--sites` | With `--dependency`, list the usage sites with file, line, and column. |
+| `--limit <N>` | With `--dependency`, the largest number of sites on a page (1 to 500, default `50`). Turns on the site page. |
+| `--cursor <TOKEN>` | With `--dependency`, the `next_cursor` of the previous page. Turns on the site page. |
 
 Without `--callers` or `--callees`, fallow walks both directions. `trace` also accepts the project, output, and performance [global flags](/cli/global-flags): `--root`, `--config`, `--format` with `human` or `json`, `--quiet`, `--no-cache`, `--threads`, and `--changed-since`.
 
@@ -75,6 +81,26 @@ collision from an unknown or misspelled symbol. To fix the collision, keep one
 origin and rename the others, or replace the star exports with explicit re-exports.
 
 You can also get the same best-effort call-chain data as opt-in evidence from [`fallow inspect --symbol-chain`](/cli/inspect#evidence-flags) and from the `symbol_chain` option of the `inspect_target` MCP tool.
+
+## Usage of a package
+
+`--dependency <PACKAGE>` reports how the code uses each imported name of a package. Use it before a library migration or an API change, when you must know which names the code uses and where.
+
+```bash
+fallow trace --dependency date-fns --format json --quiet
+fallow trace --dependency date-fns --specifier format --format json --quiet
+fallow trace --dependency date-fns --callers --depth 1 --format json --quiet
+```
+
+The JSON output is the `--trace-dependency` result of [`fallow dead-code`](/cli/dead-code) plus one `usage` object:
+
+- `specifiers` has one entry for each imported name: `file_count`, `type_only_file_count`, and `call_site_count`.
+- `wrappers` lists the project exports that wrap the name, for example `export const useAppSelector = useSelector.withTypes<RootState>()`. Each wrapper has its consumer files and calls. The trace follows one wrapper step.
+- `unresolved` counts each use that the trace cannot resolve, for each name: `value_alias`, `non_call_reference`, `jsx_element`, `re_export`, `nested_wrapper`, and `binding_without_site`. The top-level `unresolved` counts the file-level forms: `dynamic_import`, `require`, `side_effect_import`, `star_re_export`, and `unattributed_file`. A use that the trace cannot resolve is counted. It is not dropped.
+- `sites` is a page of usage sites, sorted by file, line, and column. Each site has a `kind`. When more sites exist, pass the `next_cursor` value to `--cursor`. Fallow adds the page when you pass `--sites`, `--specifier`, `--limit`, or `--cursor`.
+- `closure` lists the files that import the users, up to `--depth`, when you pass `--callers`.
+
+The trace is syntactic (`confidence: "syntactic"`). It does not use the TypeScript compiler. `fallow dead-code --trace-dependency` keeps its own output without the `usage` object.
 
 ## Import path between two modules
 
