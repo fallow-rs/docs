@@ -282,13 +282,17 @@ Packages that source code imports but `package.json` does not declare.
 |:---------|:--------|
 | Error | Yes |
 
-**When to act:** Add the package to `dependencies` or `devDependencies`. An unlisted dependency works by accident, because it is hoisted from another package. It will break in environments with strict `node_modules` resolution (pnpm, Yarn Plug'n'Play).
+**When to act:** Add the package to `dependencies` or `devDependencies` in the importing package. An undeclared import can resolve through hoisting or workspace links, but fail when the install excludes that package.
 
-**Internal workspace packages count too:** in monorepos, a workspace can import a workspace package (e.g., `import { x } from '@repo/utils'`) while its own `package.json` does not list `@repo/utils`. Fallow reports that import as unlisted. Add the workspace package to the `dependencies` of that workspace, or move the import. Self-references stay allowed, and a package does not need to depend on itself.
+Fallow uses the nearest valid `package.json` inside the project, including a standalone nested package omitted from explicit workspace patterns. Its declarations count for files below that package. This does not change workspace membership.
+
+**Internal workspace packages count too:** in monorepos, a workspace can import a workspace package (e.g., `import { x } from '@repo/utils'`) while its own `package.json` does not list `@repo/utils`. Runtime source in a publishable package must declare that dependency itself. Private workspace packages and tooling files may use declarations from ancestor manifests. Self-references stay allowed, and a package does not need to depend on itself.
 
 The result is the same for a direct import such as `@repo/utils/format` and for a package.json `imports` alias such as `"#utils/*": "@repo/utils/*"`. It is also the same before and after an install that links the workspace packages into `node_modules`. One exception: when a tsconfig `paths` alias maps the workspace package to its source and no install link exists, fallow does not report the import.
 
-The root package follows the same rule. A file that belongs to the root package, such as `e2e/run.ts`, must list the workspace packages that it imports in the root `package.json`. Fallow does not guess whether the install links a workspace package into the root `node_modules`, because that depends on the package manager, its version, and its hoisting settings.
+The root package follows the same rule. A file that belongs to the root package, such as `e2e/run.ts`, needs the workspace packages that it imports listed in the root `package.json`. An npm workspace link makes the package resolvable without satisfying this declaration check. See [workspace dependency declarations](/configuration/workspaces#workspace-dependency-declarations) for a root manifest example.
+
+If your project deliberately permits undeclared workspace imports, add those package names to `ignoreDependencies`. This suppresses dependency findings for the named packages.
 
 ### Duplicate exports
 
@@ -748,7 +752,11 @@ A React or Preact prop that two or more intermediate components pass on without 
 |:---------|:--------|
 | Off (opt-in) | Yes |
 
-This rule is off by default. To enable it, set `prop-drilling: "warn"` (or `"error"`) under `rules`. Fallow then reports one chain per drilled prop. The chain shows the source component that owns the value, each pass-through hop, and the component that uses the prop, each with file, line, and component name. To stay false-positive-safe, fallow skips the whole chain when it cannot prove a clean pass-through: any `{...props}` or `{...rest}` spread, a `cloneElement` call, a component passed as a prop, render prop, or function-as-children, a matching context `*.Provider` in the subtree (where drilling can be a deliberate choice), or any dynamic or unresolvable hop. The rule runs only when `react`, `react-dom`, `next`, or `preact` is a declared dependency. When you enable it, it also adds a small, capped penalty to the health score: one point per chain, with a cap of five. With the rule off, the health score does not change.
+This rule is off by default. Set `prop-drilling: "warn"` under `rules` for advisory findings, or `"error"` to fail CI when fallow finds a chain. A `warn` finding stays advisory even with `--fail-on-issues`. Fallow then reports one chain per drilled prop. The chain shows the source component that owns the value, each pass-through hop, and the component that uses the prop, each with file, line, and component name. To stay false-positive-safe, fallow skips the whole chain when it cannot prove a clean pass-through: any `{...props}` or `{...rest}` spread, a `cloneElement` call, a component passed as a prop, render prop, or function-as-children, a matching context `*.Provider` in the subtree (where drilling can be a deliberate choice), or any dynamic or unresolvable hop. The rule runs only when `react`, `react-dom`, `next`, or `preact` is a declared dependency. When you enable it, it also adds a small, capped penalty to the health score: one point per chain, with a cap of five. With the rule off, the health score does not change.
+
+You can save existing chains with `--save-baseline` and gate later runs with `--baseline`. Fallow identifies a chain by its source path, component, and prop. A change to the route or depth of the same source chain stays inherited. `fallow audit --gate new-only` gates new source identities; use `--gate all` to include inherited findings.
+
+Changed-file and changed-line scopes retain an enforced (`error`) chain when any downstream hop changes, while the reported location stays at the source. Changed-file scopes retain an advisory (`warn`) chain only when its source file changes. In the editor, both levels remain hints.
 
 **When to act:** Move the component that uses the prop next to the data, move the value to a React context or provider at a hop in the middle of the chain, or compose the components so that the intermediate components no longer pass the prop. There is no auto-fix, because the right refactor is a design choice. To suppress one chain, use `// fallow-ignore-next-line prop-drilling`, or set the rule to `off`.
 
