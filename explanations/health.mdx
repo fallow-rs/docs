@@ -497,7 +497,17 @@ A pair is hidden when all of these conditions are true. The defaults are the [Co
 | The coupling degree is at least this value | `health.changeCoupling.minDegree` | `0.3` |
 | No import or re-export chain connects the two files | | |
 
-A commit that changes more analyzed files than `health.changeCoupling.maxFilesPerCommit` (default `30`, at least `2`) is skipped. Bulk commits, such as renames and format passes, would make false pairs.
+A commit that changes more analyzed files than `health.changeCoupling.maxFilesPerCommit` (default `30`, from `2` to `1000`) is skipped. Bulk commits, such as renames and format passes, would make false pairs. The upper limit keeps the pair count of one commit small.
+
+Fallow checks the ranges when it loads the config. `maxFilesPerCommit` must be from `2` to `1000`, and `minDegree` must be from `0` to `1`. A value out of range stops the run with exit code 2:
+
+```
+invalid config:
+  - health.changeCoupling.maxFilesPerCommit must be from 2 to 1000, found 1
+  - health.changeCoupling.minDegree must be from 0 to 1, found 1.5
+```
+
+An older fallow version rejects the `changeCoupling` key as unknown. When you commit the key, also set [`minimumVersion`](/configuration/overview#minimumversion).
 
 A pair with a degree of `0.5` or more is `strong`. A strong pair adds the `hidden_coupling` factor to the [refactoring targets](#refactoring-targets) of both files.
 
@@ -505,7 +515,7 @@ A pair with a degree of `0.5` or more is `strong`. A strong pair adds the `hidde
 
 Without `--since`, change coupling reads 12 months of git history. Hotspots keep their 6 month default. With `--since`, both read the same window. The `since` field shows the window that the section read.
 
-A shallow clone, or a window with fewer analyzed commits than `minRevisions`, gives an empty `pairs` list. The `workspace_diagnostics[]` array then has the kind `change-coupling-skipped`, with `cause` `shallow-clone` or `too-few-commits`. This kind does not degrade the other sections, so `degrades_analysis` is absent. See [Debugging](/analysis/debugging#a-health-section-reports-nothing).
+A shallow clone, or a window with fewer analyzed commits than `minRevisions`, gives an empty `pairs` list. The `workspace_diagnostics[]` array then has the kind `change-coupling-skipped`, with `cause` `shallow-clone` or `too-few-commits`. This kind does not degrade the other sections, so `degrades_analysis` is absent. Fallow records the kind only when the run asks for the change coupling section, with the hotspot section. A run that reads the history only for the refactoring targets does not record it. See [Debugging](/analysis/debugging#a-health-section-reports-nothing).
 
 ### JSON fields
 
@@ -552,7 +562,34 @@ A shallow clone, or a window with fewer analyzed commits than `minRevisions`, gi
 | `pairs[].degree` | Coupling degree, from 0 to 1 |
 | `pairs[].strong` | Present and `true` when `degree` reaches `thresholds.strong_degree`. Absent otherwise |
 
-The section is present when the hotspot section ran and the run read git history. The `sections` list then has the token `change-coupling`.
+The section is present when the hotspot section ran and the run read git history. The `sections` list then has the token `change-coupling`. Fallow writes `degree` and the `thresholds` degrees as JSON numbers with a decimal point, for example `1.0` and `0.3`. The commit counts are integers.
+
+With `--group-by`, `change_coupling` stays at the root of the JSON envelope. No group has its own copy.
+
+### Other output formats
+
+The markdown output adds a table after the hotspots table. Fallow leaves out the table when `pairs` is empty:
+
+```markdown
+### Hidden Change Coupling (1 pair, since 12 months)
+
+| File A | File B | Degree | Shared | Commits A | Commits B | Strong |
+|:-------|:-------|:-------|:-------|:----------|:----------|:-------|
+| `src/a.ts` | `src/b.ts` | 100% | 6 | 6 | 6 | **strong** |
+
+*Files that change together in the commit history with no import between them.*
+```
+
+When `--top` cuts the list, a line under the table counts the pairs that are not shown.
+
+The compact output has one line for each pair. `degree` has two decimals, and `strong` is `true` or `false`:
+
+```
+change-coupling:<path_a>:<path_b>:degree=<degree>,shared=<shared_revisions>,commits_a=<revisions_a>,commits_b=<revisions_b>,strong=<strong>
+change-coupling:src/a.ts:src/b.ts:degree=1.00,shared=6,commits_a=6,commits_b=6,strong=true
+```
+
+The [VS Code extension](/integrations/vscode) shows the pairs in the Health view. The [GitHub Action](/integrations/ci) keeps a pair in a pull request when one of the two files changed.
 
 ### Change dispersion {#change-dispersion}
 
@@ -561,7 +598,7 @@ Each hotspot entry has two change dispersion values. They show how far a change 
 - `median_files_per_commit`: the median number of analyzed files in the commits that changed this file.
 - `median_lines_per_commit`: the median number of added plus deleted lines, analyzed files only, in the commits that changed this file.
 
-Both values use the change coupling window and skip the same bulk commits. Both are absent when the history has no commit ids, for example a [`fallow-churn/v1`](/cli/health#importing-churn-from-a-non-git-vcs) import without the `commit` field. In that import format, events with the same `commit` form one commit.
+Both values use the change coupling window and skip the same bulk commits. The human hotspot row shows `median_files_per_commit` at the end, for example `3.0 files/commit`. Both are absent when the history has no commit ids, for example a [`fallow-churn/v1`](/cli/health#importing-churn-from-a-non-git-vcs) import without the `commit` field. In that import format, events with the same `commit` form one commit.
 
 **When to act:** Look at the strong pairs first. If the two files must change together, make the dependency explicit with an import, or move the shared logic into one module. If the pair is a coincidence of the history, ignore it. The section never fails a run.
 
@@ -674,7 +711,7 @@ Fallow checks the rules in priority order and gives each target the category of 
 
 A file can match more than one rule, but only the match with the highest priority sets the category. JSON output still shows all contributing factors.
 
-The `resolve_hidden_coupling` rule runs last. It claims a file only when no other rule matches, so an existing target keeps its category and its baseline key. A strong hidden pair still adds the `hidden_coupling` factor to the target of each file, whatever the category. The factor has the `degree` as `value` and `0.5` as `threshold`.
+The `resolve_hidden_coupling` rule runs last. It claims a file only when no other rule matches, so an existing target keeps its category and its baseline key. A health baseline that you saved before this rule existed has no `resolve_hidden_coupling` target. A run against that baseline reports these targets as new. Save the baseline again to accept them. A strong hidden pair still adds the `hidden_coupling` factor to the target of each file, whatever the category. The factor has the `degree` as `value` and `0.5` as `threshold`.
 
 The `resolve_hidden_coupling` value moved the health `schema_version` to 12. Each envelope that embeds the health contract moved too: `fallow audit` to 13, the combined `fallow` report to 14, and the audit review brief to 13.
 
