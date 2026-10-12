@@ -218,7 +218,8 @@ Audit reports three counts that look alike but answer different questions. A CI 
 | Field | What it counts | Severity-aware? |
 |:------|:---------------|:----------------|
 | `verdict` | Overall outcome (`pass` / `warn` / `fail`). Uses the per-rule severity from `.fallowrc.json` | **Yes** |
-| `attribution.dead_code_introduced`, `attribution.complexity_introduced`, `attribution.duplication_introduced`, `attribution.styling_introduced`, `attribution.diff_risk_introduced` | Findings that the changeset introduced under `gate: new-only`, at any severity | No |
+| `attribution.dead_code_introduced`, `attribution.complexity_introduced`, `attribution.duplication_introduced`, `attribution.styling_introduced` | Findings that the changeset introduced under `gate: new-only`, at any severity | No |
+| `attribution.diff_risk_introduced` | All diff-risk findings, under both gates (`new-only` and `all`), at any severity. The change introduced each diff-risk finding | No |
 | `summary.dead_code_issues`, `summary.complexity_findings`, `summary.duplication_clone_groups` | All findings in changed files (any gate), at any severity | No |
 | Per-finding `introduced: true \| false` | Whether the changeset introduced this finding | No (severity is per-rule, not per-finding) |
 
@@ -372,7 +373,7 @@ The rule severity sets the effect on the verdict:
 - A `warn` finding changes a `pass` verdict to `warn`.
 - An `off` rule does not run.
 
-Each finding has only suppression actions. Fallow never applies a fix for a diff-risk finding. A rename source is skipped. A rename target reads its base text at the old path.
+Each finding has only suppression actions. Fallow never applies a fix for a diff-risk finding. A file that cannot hold a comment, such as a `package.json` or a JSON config file, gets only a `suppress-in-config` action. The same is true for a deleted file. A rename source is skipped. A rename target reads its base text at the old path.
 
 ### Weakened tests {#weakened-tests}
 
@@ -397,7 +398,7 @@ A test or an assertion that moved to another changed test file does not report, 
 
 ### Added suppressions {#added-suppression}
 
-The change adds a comment line with a suppression. Audit reports these markers: `eslint-disable`, `oxlint-disable`, `biome-ignore`, `@ts-ignore`, `@ts-expect-error`, `@ts-nocheck`, `istanbul ignore`, `c8 ignore`, `v8 ignore`, and `fallow-ignore`.
+The change adds a comment line with a suppression. Audit reports these markers: `eslint-disable`, `oxlint-disable`, `biome-ignore`, `deno-lint-ignore`, `@ts-ignore`, `@ts-expect-error`, `@ts-nocheck`, `istanbul ignore`, `c8 ignore`, `v8 ignore`, and `fallow-ignore`.
 
 - A moved comment is not added, so it does not report.
 - A marker inside a string literal does not report.
@@ -462,7 +463,7 @@ An invented package name already fails as an [unresolved import or an unlisted d
 
 **Example:** a change adds `"left-pad": "^1.3.0"` to `dependencies`.
 
-**When to act:** Make sure that the package exists, is maintained, and does not repeat a dependency that the project already has. A `package.json` cannot hold a comment, so suppress the finding with an `overrides` entry that sets the rule to `off` for the path.
+**When to act:** Make sure that the package exists, is maintained, and does not repeat a dependency that the project already has. You cannot suppress this finding with a comment, because a `package.json` cannot hold a comment. Add an `overrides` entry that sets `added-dependency` to `off` for the path, or set the rule to `off`.
 
 ### Configure diff-risk rules
 
@@ -483,17 +484,46 @@ Set each rule in the [`rules`](/configuration/rules) object. `overrides[].rules`
 }
 ```
 
-Fallow also accepts the plural keys `added-suppressions`, `test-only-branches`, `diverged-clone-siblings`, and `added-dependencies`. The suppression token of a rule is its rule name, for example `// fallow-ignore-next-line test-only-branch`.
+Fallow also accepts the plural keys `added-suppressions`, `test-only-branches`, `diverged-clone-siblings`, and `added-dependencies`. The suppression token of a rule is its rule name, for example `// fallow-ignore-next-line test-only-branch`. `added-dependency` has no suppression comment. Use an `overrides` entry for it.
 
-### Diff-risk findings in CI formats
+### Diff-risk findings in output formats
 
 Every output format of `fallow audit` shows the diff-risk findings:
+
+- The human output adds a **Diff risk** section with one line for each finding. The status line names the number of diff-risk findings.
+- `--format compact` prints one record for each finding: `<rule>:<path>:<line>:<evidence>,severity=<severity>[,kind=<kind>]`. The line is `0` for a finding about the whole file. Only `weakened-tests` records have `kind`.
+- `--format markdown` adds a `## Fallow: N diff-risk findings` table with the location, the rule, the severity, and the evidence of each finding.
 
 - `--format json` and the MCP `audit` tool put them in the `diff_risk` section. See [Key fields](#key-fields).
 - `--format sarif` adds a run with `automationDetails.id` `fallow/audit/diff-risk`. The rule ids are `fallow/<rule>`, and `helpUri` links to this section. The unchanged clone copies are `relatedLocations`.
 - `--format codeclimate` adds issues with the check name `fallow/<rule>` and the category `Bug Risk`.
 - `--format github-annotations` writes one annotation for each finding. An `error` finding gives `::error`, and a `warn` finding gives `::warning`.
 - `--format github-summary` adds a **Diff Risk** table to the audit summary, with the rule, the location, the evidence, and the severity of each finding. The table shows 15 findings at most, and a note gives the number of other findings.
+- The [GitHub Action](/integrations/ci) and the GitLab CI template add the diff-risk findings to the issue count of `command: audit`, under both gates.
+- The [VS Code extension](/integrations/vscode) adds the diff-risk findings to the gating-candidate count of the audit status bar, and shows a diff-risk row in the tooltip.
+
+For example, a change that skips a test and adds a `@ts-ignore` comment gives this output:
+
+```text title="$ fallow audit --base main"
+── Diff risk ──────────────────────────────────────
+  src/index.test.ts:3  weakened-tests (skip-only) [warn]  it.skip
+  src/index.ts:2  added-suppression [warn]  @ts-ignore
+⚠ diff risk: 2 findings (warn) · 2 changed files (0.14s)
+```
+
+```text title="$ fallow audit --base main --format compact"
+weakened-tests:src/index.test.ts:3:it.skip,severity=warn,kind=skip-only
+added-suppression:src/index.ts:2:@ts-ignore,severity=warn
+```
+
+```markdown title="$ fallow audit --base main --format markdown"
+## Fallow: 2 diff-risk findings
+
+| Location | Rule | Severity | Evidence |
+|:---------|:-----|:---------|:---------|
+| `src/index.test.ts:3` | `weakened-tests` / `skip-only` | warn | `it.skip` |
+| `src/index.ts:2` | `added-suppression` | warn | `@ts-ignore` |
+```
 
 ## JSON output
 
@@ -589,7 +619,7 @@ The audit `schema_version` is 13. Version 13 follows the embedded health contrac
 | `duplication.clone_groups[].demotion_reason` | string | Present only on demoted groups. A kebab-case reason for the demotion, currently `no-added-lines`. Fallow can add more values, so treat an unknown value as "some demotion reason". `fallow dupes --format json` never emits this field. |
 | `complexity.styling_findings[]` | array | Present when CSS analysis is active. Holds first-class styling issues with rule severity and actions. Each item has an optional `introduced` attribution when the base comparison is available. |
 | `complexity.css_analytics` | object | Descriptive CSS analytics from the CSS analysis: specificity, token usage, context for duplicate declarations, and cleanup candidates. Use it as evidence for `styling_findings`. Do not gate on it alone. |
-| `attribution.diff_risk_introduced` | integer | The number of entries in `diff_risk.findings`. Always present in audit-family JSON. `0` when the `diff_risk` section is absent. |
+| `attribution.diff_risk_introduced` | integer | The number of entries in `diff_risk.findings`. It counts under both gates (`new-only` and `all`), unlike the other `*_introduced` fields. Always present in audit-family JSON. `0` when the `diff_risk` section is absent. |
 | `diff_risk.findings[].rule` | string | `weakened-tests`, `added-suppression`, `test-only-branch`, `diverged-clone-sibling`, or `added-dependency`. See [Diff-risk rules](#diff-risk-rules). |
 | `diff_risk.findings[].kind` | string | Only on `weakened-tests`: `skip-only`, `removed-tests`, `assertion-drop`, or `coverage-threshold`. |
 | `diff_risk.findings[].path` | string | Root-relative path of the changed file, with forward slashes. |
