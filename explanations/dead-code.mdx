@@ -810,6 +810,49 @@ Page-load data goes only to the sibling `+page.svelte`. A `+layout.svelte` gets 
 
 **When to act:** Read the key where you need the data, or remove it from the `load()` return. If nothing else needs the fetch that produced the key, remove the fetch too. There is no auto-fix, because a load fetch can have side effects and a person must decide. Suppress the finding with `// fallow-ignore-next-line unused-load-data-key`, or set the rule to `off`.
 
+### Unused Effect layers {#unused-effect-layers}
+
+An Effect `Layer` that only other unused layers compose. The layer is a module-scope const (`const CacheLive = Cache.layer.pipe(Layer.provide(Db.layer))`) or a class static (`static readonly layer = Layer.effect(this, make)`). No `Effect.provide`, `ManagedRuntime.make`, `Layer.launch` or other runtime use reaches it, so it never runs. The type checker does not see this, because the dead layers still type-check.
+
+| Severity | Default |
+|:---------|:--------|
+| Warning | Yes |
+
+Fallow builds a layer graph from `Layer.*` initializers and `.pipe(Layer.*)` chains. Every value reference outside a layer definition is a root. This includes references in functions, tests and scripts. A layer that an entry module exports, directly or through re-exports, is also a root, because code outside the project can use it. A layer with zero references is not reported here: `unused-export` or `unused-class-member` reports it. So this rule reports the tail of a dead composition, and the finding names the unused layers that compose it (`dead_consumers`). The rule runs only when `effect` is a declared dependency, and only reads modules that import `effect` or an `@effect/*` package.
+
+**When to act:** Remove the unused consumer layers first, then this layer. Or compose the layer into a layer that reaches a runtime. There is no auto-fix. Suppress the finding with `// fallow-ignore-next-line unused-effect-layer`, or set the rule to `off`.
+
+### Unused tagged errors {#unused-tagged-errors}
+
+An Effect tagged error class (`Data.TaggedError("X")`, `Schema.TaggedError<Self>()("X", ...)` or `Schema.TaggedErrorClass`) that type positions or `catchTag("X")` handlers reference, but that no code constructs or fails with. The error is in an error channel type, so the type checker accepts it, but the failure never happens.
+
+| Severity | Default |
+|:---------|:--------|
+| Warning | Yes |
+
+Any value reference counts as a producer: `new X()`, `X.make`, `Schema.Union(X)`, an API or RPC error declaration that decodes the error at a boundary, or passing the class to a function. Only type positions and catch-tag strings do not count. Fallow follows import aliases, export aliases, namespace members and namespace re-exports. To stay false-positive-safe, fallow skips these classes:
+
+- a class with zero references, which stays an `unused-export`
+- a default-exported class, because an importer can bind it under any name
+- a class that an entry module exports, because code outside the project can construct it
+- a class whose tag is not a string literal
+
+The finding lists the `catchTag` handlers for the tag (`catch_sites`). The rule runs only when `effect` is a declared dependency.
+
+**When to act:** Fail with the error where the condition occurs, or remove the class, its type references and its `catchTag` handlers. There is no auto-fix. Suppress the finding with `// fallow-ignore-next-line unused-tagged-error`, or set the rule to `off`.
+
+### Unproduced catch tags {#unproduced-catch-tags}
+
+A `catchTag("X", ...)` or `catchTags({ X: ... })` handler for a project error tag that no code produces. The handler never runs. Fallow reads `catchTag` and `catchTags` on `Effect`, `Stream`, `Layer` and method chains, with data-first calls and tag arrays.
+
+| Severity | Default |
+|:---------|:--------|
+| Warning | Yes |
+
+Fallow reports a handler only when every project class with tag `X` is unused, and no object literal `_tag: "X"` (also with `as const`), class `_tag` field or tagged constructor produces the tag. A tag that no project class declares can come from a package, so fallow skips it. Fallow also skips Effect built-in tags such as `TimeoutException` and `NoSuchElementException`. The rule reports a handler only when no `unused-tagged-error` finding covers its classes, so one cause gives one finding. You see this finding when `unused-tagged-errors` is `off`, or when its finding is suppressed. The rule runs only when `effect` is a declared dependency.
+
+**When to act:** Remove the handler, or fail with the error where the condition occurs. There is no auto-fix. If a package or code outside the project produces the tag, suppress the finding with `// fallow-ignore-next-line unproduced-catch-tag`, or set the rule to `off`.
+
 ### Type-only dependencies
 
 Production dependencies (`dependencies`) that code imports only through `import type`. The compiler erases type imports, so these packages never load at runtime. Move them to `devDependencies`.
