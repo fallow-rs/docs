@@ -474,6 +474,97 @@ Michael Feathers started this method, and Adam Tornhill made it systematic in [*
 </Accordion>
 
 
+## Change coupling {#change-coupling}
+
+Change coupling finds two files that change together in most commits, while no import or re-export chain connects them. Fallow calls such a pair a hidden pair. An agent or a reviewer that follows the import graph does not find the second file. The `change_coupling` section of `fallow health` lists the hidden pairs. Use [`fallow health --hotspots`](/cli/health) to see them.
+
+The section is advisory. It has no weight in the health score, and it never gates.
+
+### Coupling degree
+
+```
+degree = shared_revisions / mean(revisions_a, revisions_b)   (0..1)
+```
+
+`revisions_a` and `revisions_b` are the commits that changed each file in the history window. `shared_revisions` are the commits that changed both files. Fallow rounds the degree to two decimals.
+
+A pair is hidden when all of these conditions are true. The defaults are the [Code Maat](https://github.com/adamtornhill/code-maat) defaults:
+
+| Condition | Config key | Default |
+|:----------|:-----------|:--------|
+| Each file has at least this number of commits | `health.changeCoupling.minRevisions` | `5` |
+| The two files share at least this number of commits | `health.changeCoupling.minSharedRevisions` | `5` |
+| The coupling degree is at least this value | `health.changeCoupling.minDegree` | `0.3` |
+| No import or re-export chain connects the two files | | |
+
+A commit that changes more analyzed files than `health.changeCoupling.maxFilesPerCommit` (default `30`, at least `2`) is skipped. Bulk commits, such as renames and format passes, would make false pairs.
+
+A pair with a degree of `0.5` or more is `strong`. A strong pair adds the `hidden_coupling` factor to the [refactoring targets](#refactoring-targets) of both files.
+
+### History window
+
+Without `--since`, change coupling reads 12 months of git history. Hotspots keep their 6 month default. With `--since`, both read the same window. The `since` field shows the window that the section read.
+
+A shallow clone, or a window with fewer analyzed commits than `minRevisions`, gives an empty `pairs` list. The `workspace_diagnostics[]` array then has the kind `change-coupling-skipped`, with `cause` `shallow-clone` or `too-few-commits`. This kind does not degrade the other sections, so `degrades_analysis` is absent. See [Debugging](/analysis/debugging#a-health-section-reports-nothing).
+
+### JSON fields
+
+```json
+{
+  "change_coupling": {
+    "since": "12 months",
+    "commits_analyzed": 412,
+    "commits_skipped": 6,
+    "total_pairs": 1,
+    "thresholds": {
+      "max_files_per_commit": 30,
+      "min_revisions": 5,
+      "min_shared_revisions": 5,
+      "min_degree": 0.3,
+      "strong_degree": 0.5
+    },
+    "pairs": [
+      {
+        "path_a": "src/billing/invoice.ts",
+        "path_b": "src/email/templates/invoice.html.ts",
+        "revisions_a": 14,
+        "revisions_b": 10,
+        "shared_revisions": 9,
+        "degree": 0.75,
+        "strong": true
+      }
+    ]
+  }
+}
+```
+
+| Field | Description |
+|:------|:------------|
+| `since` | The history window that the section read, for example `"12 months"` |
+| `commits_analyzed` | Commits that changed at least one analyzed file and that fallow did not skip |
+| `commits_skipped` | Commits that fallow skipped, because they changed more analyzed files than `thresholds.max_files_per_commit` |
+| `total_pairs` | Hidden pairs in scope, before `--top` cuts `pairs` |
+| `thresholds` | The thresholds that the run applied, with `strong_degree` |
+| `pairs[]` | Hidden pairs, sorted by `degree` and then `shared_revisions` (both highest first), then by path |
+| `pairs[].path_a`, `pairs[].path_b` | The two files, relative to the project root. `path_a` sorts first |
+| `pairs[].revisions_a`, `pairs[].revisions_b` | Commits that changed each file in the window |
+| `pairs[].shared_revisions` | Commits that changed both files |
+| `pairs[].degree` | Coupling degree, from 0 to 1 |
+| `pairs[].strong` | Present and `true` when `degree` reaches `thresholds.strong_degree`. Absent otherwise |
+
+The section is present when the hotspot section ran and the run read git history. The `sections` list then has the token `change-coupling`.
+
+### Change dispersion {#change-dispersion}
+
+Each hotspot entry has two change dispersion values. They show how far a change to the file usually spreads:
+
+- `median_files_per_commit`: the median number of analyzed files in the commits that changed this file.
+- `median_lines_per_commit`: the median number of added plus deleted lines, analyzed files only, in the commits that changed this file.
+
+Both values use the change coupling window and skip the same bulk commits. Both are absent when the history has no commit ids, for example a [`fallow-churn/v1`](/cli/health#importing-churn-from-a-non-git-vcs) import without the `commit` field. In that import format, events with the same `commit` form one commit.
+
+**When to act:** Look at the strong pairs first. If the two files must change together, make the dependency explicit with an import, or move the shared logic into one module. If the pair is a coincidence of the history, ignore it. The section never fails a run.
+
 ## Refactoring targets {#refactoring-targets}
 
 Refactoring targets are ranked recommendations that you can act on. [`fallow health --targets`](/cli/health) produces them. Fallow gives each file a priority score from the metrics above, and then sorts the targets by `efficiency` (priority divided by effort), highest first. Quick wins come first.
@@ -523,7 +614,7 @@ Every target also has a `confidence` level, based on the source of the data:
 | Confidence | Categories | Why |
 |:-----------|:-----------|:----|
 | **high** | dead code, circular dependency, complexity, untested risk | Deterministic graph and AST analysis |
-| **medium** | high impact, coupling | Heuristic fan-in and fan-out thresholds |
+| **medium** | high impact, coupling, hidden coupling | Heuristic fan-in and fan-out thresholds, and git history for hidden coupling |
 | **low** | churn+complexity | Depends on the quality of the git history |
 
 In human output, the second line of each target shows the category, the effort, and the confidence, separated by ` · `:
@@ -542,6 +633,7 @@ Fallow adds structured evidence that links the target to specific analysis data.
 | `extract_complex_functions` | `complex_functions`: list of `{name, line, cognitive}` with cognitive complexity >= 30 | `[{"name": "processData", "line": 45, "cognitive": 113}]` |
 | `add_test_coverage` | `complex_functions`: up to 3 functions of the file with the highest cognitive complexity | `[{"name": "parseRow", "line": 12, "cognitive": 18}]` |
 | `break_circular_dependency` | `cycle_path`: list of file paths forming the cycle | `["src/a.ts", "src/b.ts", "src/c.ts"]` |
+| `resolve_hidden_coupling` | `co_change_partners`: up to 5 files that change together with the target without an import, strongest first, each with `path`, `shared_revisions`, and `degree` | `[{"path": "src/email/templates/invoice.html.ts", "shared_revisions": 9, "degree": 0.75}]` |
 | Any category | `direct_callers`: files that import the target, with the imported symbols. `clone_siblings`: other instances of clones in the file | `[{"path": "src/app.ts", "symbols": [...]}]` |
 
 When no evidence field has data, fallow omits `evidence` from the JSON.
@@ -578,8 +670,13 @@ Fallow checks the rules in priority order and gives each target the category of 
 | Reduce coupling | `coupling` | Fan-out ≥ P90 (floor 5) and MI < 60 (excluding entry points) | Too many imports reduce testability |
 | Add test coverage | `untested risk` | `crap_above_threshold` ≥ 2 and density > 0.3 | Multiple complex functions lack a test dependency path |
 | Break circular dependency | `circular dependency` | Any other file in an import cycle | The cycle spreads changes, but few files depend on this one |
+| Resolve hidden coupling | `hidden coupling` | A strong [hidden pair](#change-coupling) (degree ≥ 0.5) | The file changes together with another file, but no import connects them. Make the dependency explicit or move the shared logic into one module |
 
 A file can match more than one rule, but only the match with the highest priority sets the category. JSON output still shows all contributing factors.
+
+The `resolve_hidden_coupling` rule runs last. It claims a file only when no other rule matches, so an existing target keeps its category and its baseline key. A strong hidden pair still adds the `hidden_coupling` factor to the target of each file, whatever the category. The factor has the `degree` as `value` and `0.5` as `threshold`.
+
+The `resolve_hidden_coupling` value moved the health `schema_version` to 12. Each envelope that embeds the health contract moved too: `fallow audit` to 13, the combined `fallow` report to 14, and the audit review brief to 13.
 
 ```text fallow health --targets --top 5
 ● Refactoring targets (5)
@@ -777,7 +874,7 @@ When you pass `--explain`, or run through MCP, the JSON output of each command i
 
 ```json
 {
-  "schema_version": 11,
+  "schema_version": 12,
   "_meta": {
     "docs": "https://fallow.tools/docs/cli/health/",
     "metrics": {

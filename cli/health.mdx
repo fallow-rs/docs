@@ -111,7 +111,7 @@ partial or unavailable, use `--type-aware-require complete`. See
 
 | Flag | Description |
 |:-----|:------------|
-| `--since <DURATION>` | Git history window for hotspot analysis (default: `6m`). Accepts durations (`6m`, `90d`, `1y`, `2w`) or ISO dates (`2025-06-01`). Ignored when `--churn-file` is set, because the file sets the window. |
+| `--since <DURATION>` | Git history window for hotspot analysis (default: `6m`). Without this flag, [change coupling](/explanations/health#change-coupling) and change dispersion read 12 months. With this flag, all three read the same window. Accepts durations (`6m`, `90d`, `1y`, `2w`) or ISO dates (`2025-06-01`). Ignored when `--churn-file` is set, because the file sets the window. |
 | `--min-commits <N>` | Minimum number of commits before a file enters the hotspot ranking (default: 3). |
 | `--churn-file <PATH>` | Import change history from a `fallow-churn/v1` JSON file instead of `git log`. See [Importing churn from a non-git VCS](#importing-churn-from-a-non-git-vcs). |
 | `--ownership` | Add ownership signals to each hotspot entry: bus factor (Avelino truck factor), contributor count, top contributor with stale-days, recent contributors (top-3), `suggested_reviewers`, declared CODEOWNERS owner, `ownership_state`, ownership drift, and unowned-hotspot detection. Human output adds a project-level summary line above the hotspot list. Test paths get a `[test]` tag. Implies `--hotspots`. Uses git history. Outside a git repository, the hotspot and ownership section is empty. |
@@ -222,6 +222,8 @@ Each hotspot entry includes:
 | `complexity_density` | Cyclomatic complexity / lines of code |
 | `fan_in` | Blast radius: number of files importing this file |
 | `trend` | `Accelerating`, `Stable`, or `Cooling`. Shows the direction of recent change activity. |
+| `median_files_per_commit` | Change dispersion: the median number of analyzed files in the commits that changed this file. Optional. See [Change dispersion](/explanations/health#change-dispersion) |
+| `median_lines_per_commit` | Change dispersion: the median number of added plus deleted lines, analyzed files only, in the commits that changed this file. Optional |
 
 ### Hotspot summary
 
@@ -772,7 +774,7 @@ These inputs report in this way:
 - An unparsable CODEOWNERS file.
 - An unreadable trend snapshot.
 
-The inputs that stop churn share one kind, `hotspots-skipped`. Its `cause` names the input: `not-a-repository`, `invalid-since` or `churn-file-unreadable`. `coverage-auto-detected` is the exception. It names the coverage file that fed the CRAP scores, so it reports the source of an input that did load. It leaves `degrades_analysis` unset. [Debugging](/analysis/debugging#a-health-section-reports-nothing) lists every kind, and which numbers each kind leaves at zero.
+The inputs that stop churn share one kind, `hotspots-skipped`. Its `cause` names the input: `not-a-repository`, `invalid-since` or `churn-file-unreadable`. `coverage-auto-detected` is an exception. It names the coverage file that fed the CRAP scores, so it reports the source of an input that did load. It leaves `degrades_analysis` unset. A shallow clone, or a history window with too few analyzed commits, also gives an empty `change_coupling.pairs` list and the kind `change-coupling-skipped`, with `cause` `shallow-clone` or `too-few-commits`. That kind does not degrade the analysis, because the other sections still measure, so it leaves `degrades_analysis` unset. [Debugging](/analysis/debugging#a-health-section-reports-nothing) lists every kind, and which numbers each kind leaves at zero.
 
 Select on `degrades_analysis`, not on a list of kinds. A kind that fallow adds later then reaches your tool without a change:
 
@@ -786,7 +788,7 @@ Fallow writes every entry with or without `--quiet`, so a CI job that drops stde
 
 ```json title="$ fallow health --format json --top 2"
 {
-  "schema_version": 11,
+  "schema_version": 12,
   "version": "3.33.1",
   "elapsed_ms": 140,
   "summary": {
@@ -879,7 +881,7 @@ With `--file-scores`, the JSON output has more fields:
 
 ```json title="$ fallow health --file-scores --format json --top 2"
 {
-  "schema_version": 11,
+  "schema_version": 12,
   "version": "3.33.1",
   "elapsed_ms": 320,
   "summary": {
@@ -938,7 +940,7 @@ With `--hotspots`, the JSON output has a `hotspots` array and a `hotspot_summary
 
 ```json title="$ fallow health --hotspots --format json --top 2"
 {
-  "schema_version": 11,
+  "schema_version": 12,
   "version": "3.33.1",
   "elapsed_ms": 480,
   "summary": {
@@ -977,7 +979,9 @@ With `--hotspots`, the JSON output has a `hotspots` array and a `hotspot_summary
       "lines_deleted": 620,
       "complexity_density": 0.89,
       "fan_in": 3,
-      "trend": "Accelerating"
+      "trend": "Accelerating",
+      "median_files_per_commit": 3.0,
+      "median_lines_per_commit": 42.0
     },
     {
       "path": "src/legacy/handler.ts",
@@ -1001,7 +1005,7 @@ With `--targets`, the JSON output has a `targets` array:
 
 ```json title="$ fallow health --targets --format json --top 2"
 {
-  "schema_version": 11,
+  "schema_version": 12,
   "version": "3.33.1",
   "elapsed_ms": 520,
   "summary": {
@@ -1066,7 +1070,7 @@ Fallow sorts targets by `efficiency` (priority / effort), highest first, so the 
 - `confidence` (`high`/`medium`/`low`, from the reliability of the data source)
 - `factors`, with the raw `value`/`threshold` for use in scripts
 
-The `target_thresholds` object shows the adaptive, percentile-based thresholds that the scoring used, so you can read the scores in context. The `evidence` field gives details that you can act on for the supported categories (`remove_dead_code`, `extract_complex_functions`, `break_circular_dependency`, `add_test_coverage`). Other categories omit it.
+The `target_thresholds` object shows the adaptive, percentile-based thresholds that the scoring used, so you can read the scores in context. The `evidence` field gives details that you can act on for the supported categories (`remove_dead_code`, `extract_complex_functions`, `break_circular_dependency`, `add_test_coverage`, `resolve_hidden_coupling`). Other categories omit it.
 
 ### Target categories
 
@@ -1079,6 +1083,7 @@ The `target_thresholds` object shows the adaptive, percentile-based thresholds t
 | `extract_complex_functions` | complexity | Contains functions with very high cognitive complexity |
 | `extract_dependencies` | coupling | Too many imports make the file harder to test and increase coupling |
 | `add_test_coverage` | untested risk | Several complex functions have no test dependency path. Applies when a file has 2+ functions above the CRAP threshold and complexity density > 0.3. These targets show the `crap_max` contributing factor. |
+| `resolve_hidden_coupling` | hidden coupling | The file changes together with another file in most commits, but no import or re-export chain connects them. Applies only when no other category claims the file. These targets show the `hidden_coupling` contributing factor and `evidence.co_change_partners`. See [Change coupling](/explanations/health#change-coupling). |
 
 ### With vital signs
 
@@ -1270,7 +1275,7 @@ coverage-gaps = "warn"
 
 ```json title="$ fallow health --coverage-gaps --format json"
 {
-  "schema_version": 11,
+  "schema_version": 12,
   "version": "3.33.1",
   "elapsed_ms": 280,
   "coverage_gaps": {
@@ -1311,7 +1316,7 @@ Runtime coverage shows which code production actually runs. With `--runtime-cove
 
 ```json title="$ fallow health --runtime-coverage ./coverage --format json"
 {
-  "schema_version": 11,
+  "schema_version": 12,
   "version": "3.33.1",
   "elapsed_ms": 412,
   "runtime_coverage": {
