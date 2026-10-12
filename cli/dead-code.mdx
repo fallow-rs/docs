@@ -180,6 +180,47 @@ A dead-code baseline from an earlier release has no `identity` and still loads. 
   ```
 </Accordion>
 
+### Search visibility in traces
+
+A whole-word text search for an export name (`grep -w`) does not find every consumer. The module graph finds all of them. The JSON output of `--trace FILE:NAME` tells you which consumers the text search does not find. Each entry in `direct_references[]` and in `direct_references_by_namespace[].references[]` has these fields:
+
+| Field | Description |
+|:------|:------------|
+| `line` | 1-based line of the import statement in the consumer. |
+| `search_visibility` | `found`: the consumer contains the name and uses it under that name. `renamed`: the consumer contains the name, but uses the export under another local name. `missed`: the consumer does not contain the name. |
+| `reason` | Why the search does not find the uses. See the values below. |
+| `search_as` | The name to search for in this consumer instead. Absent for `found`, and absent when no single name finds the uses. |
+
+The `reason` values are:
+
+- `import-alias`: the consumer imports the export under another name (`import { foo as bar }`).
+- `default-import`: the consumer imports a default export under another name.
+- `re-export-alias`: a barrel re-exports the export under another name, and the consumer imports that name.
+- `namespace-use`: the consumer imports the whole namespace (`import * as ns`) and does not name the export.
+- `dynamic-import`: the consumer loads the module with `import()` and does not name the export.
+- `pass-through`: the consumer is a barrel that only forwards the export (`export * from`, `export { foo } from`) and does not import it.
+
+A pass-through barrel is `found`, and it is never a gap. A change of the export needs no edit in the barrel. Fallow checks the files that import through the barrel on their own.
+
+Example: a consumer has `import { formatNumber as utilFormatNumber } from "./utils"`. A trace of `src/utils.ts:formatNumber` gives this entry:
+
+```json
+{
+  "from_file": "src/report.ts",
+  "kind": "named import",
+  "line": 3,
+  "search_visibility": "renamed",
+  "reason": "import-alias",
+  "search_as": "utilFormatNumber"
+}
+```
+
+For a class member trace, each entry in `owner_direct_references[]` has the same fields. There the check uses the owner export name, not the member name, because a search for the class name finds the users of the class.
+
+The `--impact-closure` output adds `search_visibility`, `reason`, and `search_as` to each `coordination_gap[]` entry. The check uses the consumed symbol names. When a consumer uses more than one symbol, the worst level applies: `missed`, then `renamed`, then `found`.
+
+Fallow reads the consumer sources when the trace runs. A match in a comment or a string counts as `found`, because a text search finds it too. The fields are absent when no check applies, for example when fallow cannot read the consumer source. The human output marks `missed` and `renamed` references with a short hint. The MCP [`trace_export`](/integrations/mcp#available-mcp-tools) and `impact_closure` tools return the same fields. [`fallow audit --brief`](/cli/audit#json-envelope) collects the gaps of the changed exports in `impact_closure.search_gap`.
+
 ## Examples
 
 <CodeGroup>
