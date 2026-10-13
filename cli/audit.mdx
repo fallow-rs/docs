@@ -127,8 +127,8 @@ The decision uses the same diff precedence as [diff scoping](#diff-scoping). A d
 | `--production-dead-code` | Production mode for dead-code only. See [global flags](/cli/global-flags#per-analysis-production-mode). |
 | `--production-health` | Production mode for health only. |
 | `--production-dupes` | Production mode for duplication only. |
-| `--no-dead-code` | Skip the dead-code sub-analysis on the head and on the base snapshot. The verdict, `summary` and `attribution` then come from complexity and duplication only, and the JSON report has no `dead_code` section. `summary.dead_code_skipped` is then `true`, so a 0 dead-code count does not read as a clean result. Boundary violations and circular dependencies come from the dead-code pass, so they are skipped too. Overrides `audit.deadCode`. Cannot be combined with `--dead-code-baseline`. The review brief (`--brief`, `fallow review`) keeps the pass, because it reads the module graph. |
-| `--dead-code` | Run the dead-code sub-analysis when `audit.deadCode` is `false`. |
+| `--only <dead-code,architecture,dupes,health>` | Run only these sub-analyses, with the values of bare [`fallow --only`](/cli/global-flags). Replaces the `audit.deadCode`, `audit.health` and `audit.dupes` selection. `architecture` keeps only the import cycles, boundary violations and policy violations of the dead-code sub-analysis. |
+| `--skip <dead-code,architecture,dupes,health>` | Skip these sub-analyses, on top of the `audit.*` selection. A skipped sub-analysis is skipped on the head and on the base snapshot, so it leaves the verdict, `summary` and `attribution`. Its JSON block is absent and `summary.dead_code_skipped`, `complexity_skipped` or `duplication_skipped` is `true`, so a 0 count does not read as a clean result. Styling findings come from the health sub-analysis. `architecture` drops the cycles, boundary violations and policy violations. A baseline flag for a skipped sub-analysis exits 2. The review brief (`--brief`, `fallow review`) keeps every sub-analysis. |
 | `--no-css` | Turn off audit styling analytics completely. |
 | `--css-deep` | Force deep styling analytics on when config turns it off. Deep CSS is on by default in audit. Fallow narrows project-wide styling reachability back to changed anchors, and JSON can include `complexity.css_analytics` and first-class `complexity.styling_findings`. |
 | `--no-css-deep` | Keep local styling analytics on, but skip project-wide styling reachability. |
@@ -280,7 +280,10 @@ fallow audit --workspace @app/core
 fallow audit --base develop --workspace @app/api
 
 # Gate on complexity and duplication only (no dead-code pass)
-fallow audit --no-dead-code
+fallow audit --skip dead-code
+
+# Only the architecture findings (cycles, boundaries, policies)
+fallow audit --only architecture
 ```
 
 ```bash Baselines
@@ -627,7 +630,7 @@ The audit `schema_version` is 13. Version 13 follows the embedded health contrac
 | `base_ref` | string | The git ref used for comparison |
 | `summary.dead_code_issues` | integer | Total dead code issues in changed files |
 | `summary.dead_code_has_errors` | boolean | Whether any dead code issue has error severity |
-| `summary.dead_code_skipped` | boolean | Present and `true` only when `audit.deadCode: false` or `--no-dead-code` skipped the dead-code pass. The dead-code counts are then `0` and the `dead_code` section is absent. |
+| `summary.dead_code_skipped` / `complexity_skipped` / `duplication_skipped` | boolean | Present and `true` only when `--only`, `--skip` or the `audit` config skipped that sub-analysis. Its counts are then `0`, and its `dead_code`, `complexity` or `duplication` section is absent. |
 | `summary.complexity_findings` | integer | Functions above the complexity thresholds |
 | `summary.max_cyclomatic` | integer \| null | Highest cyclomatic complexity found (null if none) |
 | `summary.duplication_clone_groups` | integer | Clone groups involving changed files |
@@ -662,12 +665,13 @@ The `audit` MCP tool wraps `fallow audit --format json --quiet --explain`:
   "arguments": {
     "base": "main",
     "gate": "new-only",
+    "skip": ["dead-code"],
     "css_deep": true
   }
 }
 ```
 
-When you omit `base`, the tool resolves it as described under [How it works](#how-it-works). To pin it, set `FALLOW_AUDIT_BASE` in the server environment. Set `gate` to `all` for strict mode. Set `dead_code` to `false` to skip the dead-code sub-analysis, as `--no-dead-code` does, or to `true` to run it when config turns it off. The tool includes styling findings by default. Set `css_deep` to `false` to skip project-wide styling reachability, or to `true` to force it back on when config turns it off. The tool returns the same JSON envelope as the CLI.
+When you omit `base`, the tool resolves it as described under [How it works](#how-it-works). To pin it, set `FALLOW_AUDIT_BASE` in the server environment. Set `gate` to `all` for strict mode. Set `skip` (for example `["dead-code"]`) or `only` to choose the sub-analyses, with the values and rules of `--skip` and `--only`. The tool includes styling findings by default. Set `css_deep` to `false` to skip project-wide styling reachability, or to `true` to force it back on when config turns it off. The tool returns the same JSON envelope as the CLI.
 
 The `audit` tool description is a short summary. Read the `fallow://tools/audit` [tool guide](/integrations/mcp#resources) for the detail. The guide names the five [diff-risk rules](#diff-risk-rules) and holds the styling, coverage, complexity unit, `group_by`, baseline, runtime-coverage and `FALLOW_DIFF_FILE` detail.
 
