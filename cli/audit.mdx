@@ -364,7 +364,7 @@ A finding is not a proof of a defect. It shows a change that a reviewer must loo
 | `weakened-tests` | `warn` | A change that makes the tests or a coverage threshold weaker |
 | `added-suppression` | `warn` | A new lint, type-check, coverage, or Fallow suppression comment |
 | `test-only-branch` | `warn` | A new test-environment check in source code |
-| `diverged-clone-sibling` | `warn` | An edit to one copy of duplicated code, while the other copies did not change |
+| `diverged-clone-sibling` | `off` | An edit to one copy of duplicated code, while the other copies did not change |
 | `added-dependency` | `off` | A new dependency in a `package.json` |
 
 The rule severity sets the effect on the verdict:
@@ -386,7 +386,14 @@ The change makes the tests weaker. The `kind` field tells how:
 | `assertion-drop` | A test file has fewer `expect`, `assert`, or `should` calls, and no test case was removed |
 | `coverage-threshold` | A coverage or quality threshold is less strict |
 
-A test or an assertion that moved to another changed test file does not report, because the total did not drop. `coverage-threshold` reads test-runner, coverage, and Fallow config files, such as `vitest.config.*`, `jest.config.*`, `.nycrc`, `.c8rc`, `package.json`, and `.fallowrc.json`. A lower `lines`, `branches`, `functions`, `statements`, `minScore`, or `minCoverage` value reports. A higher `maxCrap`, `maxCyclomatic`, or `maxCognitive` value reports too.
+A test or an assertion that moved to another changed test file does not report, because the total did not drop.
+
+These drops do not report either:
+
+- The lost test lines name code that the same change removed, such as a deleted function, error code, or fixture directory. The tests went with that code. A name of a deleted file that a changed file still holds, a name that a deleted file only imports, a directory that still exists, and a reserved word such as `import` do not count. A deleted directory or file name matches only a whole path segment.
+- An assertion drop where assertions are less than half of the code lines that the test file lost. A test rewrite that moves setup checks into a shared helper does not report.
+
+`coverage-threshold` reads test-runner, coverage, and Fallow config files, such as `vitest.config.*`, `jest.config.*`, `.nycrc`, `.c8rc`, `package.json`, and `.fallowrc.json`. A lower `lines`, `branches`, `functions`, `statements`, `minScore`, or `minCoverage` value reports. A higher `maxCrap`, `maxCyclomatic`, or `maxCognitive` value reports too.
 
 | Severity | Default |
 |:---------|:--------|
@@ -403,6 +410,7 @@ The change adds a comment line with a suppression. Audit reports these markers: 
 - A moved comment is not added, so it does not report.
 - A marker inside a string literal does not report.
 - A `fallow-ignore` comment that names only diff-risk rules does not report.
+- A file below a fixture or generated directory (`fixture`, `fixtures`, `__fixtures__`, `__snapshots__`, `generated`, `__generated__`) does not report, because a tool writes it or a test reads it as data. The match uses the directory name only.
 - Only a suppression that names `added-suppression` hides this finding. A new blanket `fallow-ignore` comment cannot hide itself.
 
 | Severity | Default |
@@ -421,7 +429,7 @@ The change adds a line to a non-test source file that checks the test environmen
 - `process.env.VITEST`
 - `process.env.JEST_WORKER_ID`
 
-Such a branch lets the tests take a path that production does not take. `import.meta.vitest` does not report, because Vitest in-source tests use it on purpose. Test files, type-test files, and tool config files (such as `vite.config.ts` or `.eslintrc.js`) are skipped. A token inside a string literal does not report.
+Such a branch lets the tests take a path that production does not take. `import.meta.vitest` does not report, because Vitest in-source tests use it on purpose. Test files, type-test files, and tool config files (such as `vite.config.ts` or `.eslintrc.js`) are skipped. A token inside a string literal does not report. A check that only keeps `console` output quiet in tests, such as `if (process.env.NODE_ENV !== 'test') console.warn(...)`, does not report. A check that picks an env file, such as `'.env.test'`, does not report.
 
 | Severity | Default |
 |:---------|:--------|
@@ -440,12 +448,15 @@ These changes do not report:
 - A cosmetic edit that keeps the clone.
 - A change that removes a copy.
 - A change that edits every copy.
+- An edit to a test copy or a story copy (`*.stories.*`, `*.story.*`).
 
 The rule needs the base snapshot of `--gate new-only`. With `--gate all`, or when audit skips the base pass, the rule does not run.
 
+This rule is off by default. Copies often differ on purpose, for example an input and an output type, a legacy copy, or one component that gets a new feature. Set the rule to `warn` or `error` to review every diverged copy.
+
 | Severity | Default |
 |:---------|:--------|
-| Warn | Yes |
+| Off | Yes |
 
 **Example:** `src/a/total.ts` and `src/b/total.ts` held the same function. The change fixes a bug in the first copy only.
 
@@ -475,8 +486,8 @@ Set each rule in the [`rules`](/configuration/rules) object. `overrides[].rules`
     "weakened-tests": "error",
     "added-suppression": "warn",
     "test-only-branch": "warn",
-    "diverged-clone-sibling": "warn",
-    "added-dependency": "warn"
+    "diverged-clone-sibling": "warn", // opt-in, off by default
+    "added-dependency": "warn" // opt-in, off by default
   },
   "overrides": [
     { "files": ["packages/legacy/**"], "rules": { "added-suppression": "off" } }
