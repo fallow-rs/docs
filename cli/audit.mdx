@@ -792,7 +792,7 @@ The decision surface is the ranked set of `coupling-boundary`, `public-api-contr
 
 ### JSON envelope
 
-`fallow review --format json` returns `decisions`, `focus`, `deltas`, `impact_closure`, `partition`, and `graph_facts`. When the project has a CODEOWNERS file, it also returns `ownership`. The brief `schema_version` is 13. Consumers can use it to detect contract changes.
+`fallow review --format json` returns `decisions`, `focus`, `deltas`, `impact_closure`, `partition`, and `graph_facts`. When the project has a CODEOWNERS file, it also returns `ownership`. When the diff changes a value export, it also returns `test_reach`. The brief `schema_version` is 13. Consumers can use it to detect contract changes.
 
 `deltas` also has the dependency keys that the decision surface reads: `dependency_added` (`<manifest>::<name>`) and `dependency_major_bumped` (`<manifest>::<name>@<from>-><to>`). The envelope names what changed even when the cap collapses the decision. Both keys are always present, as empty arrays when nothing changed.
 
@@ -827,6 +827,28 @@ The first three kinds come from the `diff_risk` findings of the same run, so the
 - `slices` is present only when `partition.independent_slices` is present, with the same order. Each entry is `{ module_dirs, owners, separable }`. `separable` is true when the slice has one owner.
 
 Each file maps to its primary owner: the last matching rule, and the first owner of that rule. The section reads only the CODEOWNERS file (the configured `codeowners` path, else the standard locations), so it does not need git history. `routing` reads the same configured path. Without a readable CODEOWNERS file, the `ownership` key is absent. A configured path that fallow cannot read prints a warning. The human output lists the owner groups, and names each slice that has one owner. Fallow does not split the change: the reviewer decides.
+
+`test_reach` states how tests reach each value export that the diff changes. An export counts when its declaring statement overlaps an added line. Type-only exports, re-exports and exports of test files do not count. Fallow reads the reach from the module graph, so it needs no coverage run. Each export gets one `reach` class:
+
+| `reach` | Meaning |
+|:--------|:--------|
+| `direct` | A test file references the export. |
+| `transitive` | Tests reach the export only through other modules. |
+| `mocked-only` | Only tests that replace a module on the import path with a closed `vi.mock` or `jest.mock` factory reference the export. The real code does not run in those tests. |
+| `none` | Tests load the declaring file, but no test-reachable module references the export. |
+| `none-file` | No test loads the declaring file. |
+| `framework` | A framework reads the export as configuration with a literal value, for example the Next.js `dynamic` or `revalidate` option. It needs no test. |
+
+The object has these keys:
+
+- `status` is `measured`, or `no-tests` when the project has no test files. With `no-tests`, every export counts as `none-file` and `exports` is empty.
+- `masking` is `active` when a test uses a closed mock factory, `no-mocks` when no test does, and `capped` when the tests use more than 1024 distinct mock sets. With `capped`, mock detection is off and a mocked module counts as reached.
+- `total` is the number of changed value exports, and `counts` has one key per `reach` value.
+- `exports` lists at most 25 exports that need attention: `mocked-only`, `none`, `none-file` and `transitive`, in that order. Inside a class, changed declarations (`modified`) come before new ones (`new`), then the order is file, line and name. Each row has `file`, `export_name`, `line`, `reach` and `change`. A `mocked-only` row adds `tests` (the mocking test files, at most three), `tests_total`, `test_changed` (one of those tests changed in the diff) and `mocked_targets` (the mocked modules, which can be a barrel in front of the declaring file). `exports_omitted` counts the rows past the cap.
+
+Treat `reach` as an open set: a later version can add a class. Read an unknown value as "needs attention". The section is advisory and never changes the verdict or the exit code. The human brief prints the counts and the first three rows.
+
+Some limits apply. A change inside a non-exported helper is not attributed to the exports that call it. An automock without a factory (`vi.mock('./x')`) counts as reach. Code that only a setup file imports, and pages that only end-to-end tests visit, get `none-file`.
 
 ### Agent walkthrough loop
 
