@@ -1,0 +1,321 @@
+---
+title: "fallow mutation"
+description: "Check whether your tests fail when the changed code is wrong. fallow mutation makes small changes to your code, runs your Vitest tests against each one, and reports the changes that no test detects."
+keywords: ["fallow mutation", "mutation testing", "mutation score", "test quality", "Vitest", "surviving mutants", "CLI"]
+icon: "flask"
+---
+
+`fallow mutation` measures whether your tests fail when the changed code is wrong. It makes small changes to the code (mutants), runs your project tests against each mutant, and reports the mutants that no test detects.
+
+A mutant changes one thing, for example `<=` to `<`, `+` to `-`, or `true` to `false`. When a test fails, the test detected the change and the mutant is killed. When every test passes, the mutant survived. A survivor shows a place where the code can be wrong and your tests still pass.
+
+Fallow reports evidence. It does not write tests and it does not propose code changes. You decide what a survivor means.
+
+<Note>
+  Mutation testing is opt-in. Bare `fallow`, `fallow audit`, `fallow health`, the CI gates, SARIF, CodeClimate, LSP, the GitHub Action, and the GitLab template never run it.
+</Note>
+
+```bash
+fallow mutation
+```
+
+## Three commands
+
+| Command | Runs project code | JSON `kind` |
+|:--------|:------------------|:------------|
+| `fallow mutation --plan` | No | `mutation-plan` |
+| `fallow mutation` | Yes, the project tests | `mutation` |
+| `fallow mutation inspect <mutant_id>` | No | `mutation-inspect` |
+
+Only `fallow mutation` without `--plan` runs code. Project config cannot start a run, and the MCP server cannot start a run.
+
+## Scope
+
+By default, fallow mutates only the changed code against the base ref. It finds the base ref in the same way as [`fallow audit`](/cli/audit#base-ref).
+
+| Flag | Description |
+|:-----|:------------|
+| `--changed-since <REF>` | Set the base ref, for example `main` or `HEAD~5`. Alias: `--base`. |
+| `--diff-file <PATH>` | Use a unified diff for the changed lines. Pass `-` to read stdin. |
+| `--all` | Mutate every source file. |
+| `<PATH>...` | Mutate only these files or directories. |
+
+The changed-code scope, `--all`, and paths are exclusive. `--workspace` and `--changed-workspaces` exit with code 2, because the plan cannot narrow to a workspace yet. To mutate one package, pass its directory as a path:
+
+```bash
+fallow mutation packages/billing
+```
+
+## Plan without running code
+
+`--plan` selects, maps, and ranks the mutants. It runs no code.
+
+```bash
+fallow mutation --plan
+fallow mutation --plan --all
+```
+
+The plan shows each mutant with its location, function, operator, and id:
+
+```text
+Mutation plan (no code runs)
+Scope: all source files
+Mutants: 8 planned, 0 pending, 0 no coverage, 0 pruned
+Files: 1 instrumented, 1 test file reaches them
+
+● Planned (8)
+  #1 src/pricing.ts:2:7  applyDiscount  relational-operator  c65def5cd9bd279a
+  #2 src/pricing.ts:2:15  applyDiscount  relational-operator  72487a15b6adc213
+  ...
+```
+
+Use the plan to see the size of a run before you start it. When the changed-code scope is empty, the output suggests `fallow mutation --plan --all`.
+
+## Run the tests
+
+`fallow mutation` without `--plan` runs your Vitest tests against each mutant. It supports Vitest 4 and Vitest 5 in Node mode. Fallow finds Vitest in the project `node_modules`.
+
+```bash
+fallow mutation
+```
+
+Example output:
+
+```text
+Mutation testing (ran the project tests)
+Scope: all source files
+Score 71.4%  killed 5  survived 2  timeout 0  complete
+Coverage 87.5%  no coverage 1
+
+● Survived (2)
+  src/pricing.ts
+    #2 2:15  applyDiscount  relational-operator  if (percent <= 0) return total; -> if (percent < 0) return total;
+      id 72487a15b6adc213
+      covered by 1 test: src/pricing.test.ts::discount
+    #3 2:15  applyDiscount  relational-operator  if (percent <= 0) return total; -> if (percent == 0) return total;
+      id 77ac825e81517e35
+      covered by 1 test: src/pricing.test.ts::discount
+
+● No coverage (1): no test reaches these mutants
+  src/pricing.ts  1 mutant
+
+Next
+  Inspect a survivor (runs no code): fallow mutation inspect 72487a15b6adc213
+```
+
+The human output shows the 10 best-ranked survivors, grouped by file. The JSON report lists all survivors and all covering tests.
+
+### Run options
+
+| Flag | Description |
+|:-----|:------------|
+| `--max-mutants <N>` | Run at most N mutants, in rank order. The others are `pending`. |
+| `--time-budget <DURATION>` | Stop starting mutants after this time, for example `90s`, `10m`, or `1h`. The others are `pending`. |
+| `--concurrency <N>` | The number of test processes. Default: half the logical cores. |
+| `--runtime <PATH>` | The JavaScript runtime. Default: `node`, then `bun`, from `PATH`. |
+| `--operators <NAMES>` | The operators to use, comma-separated. Default: every operator. |
+| `--min-score <0-100>` | Exit with code 1 when the mutation score is below this percentage. |
+| `--verdicts <PATH>` | A verdict document that marks mutants as equivalent. See [Verdicts](#verdicts-for-equivalent-mutants). |
+| `--allow-dirty` | Run in a git worktree with uncommitted changes. |
+| `--allow-side-effects` | Keep mutants in functions that reach a file system, process, network, or database call. |
+| `-o, --output-file <PATH>` | Write the report to a file after the run. |
+| `-f, --format <FORMAT>` | `human` (default) or `json`. |
+
+### Operators
+
+| Operator | Change |
+|:---------|:-------|
+| `arithmetic-operator` | `a + b` to `a - b`, and the other arithmetic pairs. |
+| `relational-operator` | `a < b` to `a <= b`, and the other relational pairs. |
+| `logical-operator` | `a && b` to `a \|\| b`, and the reverse. |
+| `negate-condition` | A condition to its negation. |
+| `unary-operator` | A unary operator removed or changed. |
+| `update-operator` | `i++` to `i--`, and the reverse. |
+| `removed-call` | A call statement removed. |
+| `return-value` | A return value changed. |
+| `boolean-literal` | `true` to `false`, and the reverse. |
+| `string-literal` | A string literal emptied or filled. |
+| `optional-chaining` | `a?.b` to `a.b`. |
+
+## Safety rules
+
+A run executes your project tests, so fallow applies these rules:
+
+- **Clean worktree.** A run refuses a git worktree with uncommitted changes and exits with code 2. Commit or stash your changes, or pass `--allow-dirty`. After the run, fallow compares the worktree with the start state and reports each path that changed.
+- **Side effects.** Fallow skips the mutants in functions that reach a file system, process, network, or database call. These mutants have the status `pruned` with the reason `side-effect-sink`. A mutant there can remove a guard of a real side effect. `--allow-side-effects` keeps them. This option is a flag only. The config rejects an `allowSideEffects` key, so a project config cannot widen what a run executes.
+- **Project files never change.** Fallow does not write to your project files. The changed copies of your files live in the fallow cache. The report lists any path that your tests changed.
+
+<Warning>
+  Do not redirect the report with `> mutation.json`. The shell creates the file before fallow starts, so the clean-worktree check refuses the run. Use `-o mutation.json` or the [saved report](#saved-report) instead.
+</Warning>
+
+## Score and coverage
+
+The report gives two separate values. In JSON, both are fractions from 0 to 1.
+
+| Value | Formula | What it tells you |
+|:------|:--------|:------------------|
+| `summary.score` | `(killed + timeout) / (killed + timeout + survived)` | How many of the tested mutants your tests detect. |
+| `summary.coverage` | `covered / (covered + no_coverage)` | How many of the planned mutants a test reaches. |
+
+The score covers only the mutants that ran. A mutant that no test reaches is `no_coverage`, and it never enters the score. The coverage reports these mutants apart. A run of 200 mutants in a large project therefore gets a score that describes the 200 tested mutants.
+
+Before the mutants run, fallow runs your tests once with no active mutant (the dry run). The dry run decides the coverage of every planned mutant, also of the mutants after the `--max-mutants` limit. A run that `--max-mutants` limits therefore reports the coverage of the full plan.
+
+A run with no executed mutant has no score (`null` in JSON).
+
+`--min-score` and `mutation.minScore` use percent, not a fraction.
+
+### Statuses
+
+| Status | Meaning | In score | In coverage |
+|:-------|:--------|:---------|:------------|
+| `killed` | A covering test failed. | Yes | Yes |
+| `timeout` | The run passed its timeout. The mutant counts as detected. | Yes | Yes |
+| `survived` | Each covering test passed, also in a second run. | Yes | Yes |
+| `no_coverage` | No test reaches the mutant. | No | Yes |
+| `runtime_error` | The runner failed for a reason outside the tests. | No | Yes |
+| `flaky` | The second run gave a different result than the first run. | No | Yes |
+| `pending` | The mutant did not run, because the mutant limit or the time budget ended first. | No | Yes |
+| `equivalent` | A verdict marks the mutant as equivalent to the original code. | No | No |
+| `pruned` | A static rule removed the mutant, for example `side-effect-sink`, `dead-code`, or `generated`. | No | No |
+
+### Completion
+
+`completion.status` is `complete` or `partial`. Only a `complete` run makes an empty survivor list conclusive. A `partial` run lists its reasons, for example `mutant-limit`, `time-budget`, `runtime-error`, or `baseline-failure`.
+
+A test that fails in the dry run is a baseline failure. Fallow lists it in `baseline_failures`, and its result decides no mutant status. Fix the failing test, then run again.
+
+### Type tests
+
+When your Vitest config enables the type-check pass (`typecheck.enabled`), the run does not execute it. A mutant that only a type test detects is not counted as killed. The report adds `typecheck-not-run` to `runner.notes`, and the human output prints one line for it.
+
+## Saved report
+
+Each run saves its full JSON report to `.fallow/mutation/last-report.json` in the fallow cache directory. The cache directory has its own `.gitignore`, so the saved report does not make the worktree dirty. Each run replaces the saved report.
+
+For a report file that you keep, use `-o`:
+
+```bash
+fallow mutation --format json -o mutation.json
+```
+
+## Inspect a mutant
+
+`fallow mutation inspect` shows one mutant against the current file. It runs no code.
+
+```bash
+fallow mutation inspect 72487a15b6adc213
+```
+
+```text
+Mutant 72487a15b6adc213  fresh
+src/pricing.ts:2:15  applyDiscount  relational-operator  (report: survived)
+-    2 |   if (percent <= 0) return total;
++    2 |   if (percent < 0) return total;
+
+● Covering tests (1)
+  src/pricing.test.ts::discount
+```
+
+Without `--report`, inspect reads the report that the last run saved. Pass `--report <file>` to read another saved `mutation` report or `--plan` document. Pass the same `--root` and `--config` as the run, because the config can move the cache directory. From a subdirectory, inspect finds the report of a run at the project root.
+
+The report holds no source text. Inspect reads the current file and finds the mutant again:
+
+- `fresh`: the file matches the report. The output shows the original and the mutated line, the covering tests, and the killing test.
+- `stale`: the file changed or is missing. The output shows no code, so a changed file never gives a wrong answer. Run `fallow mutation` again.
+
+Inspect exits with code 2 when no run saved a report, or when the id is not in the report.
+
+## Verdicts for equivalent mutants
+
+Some mutants do not change the behavior of the code. No test can detect them. You can mark them in a verdict document:
+
+```json
+{
+  "schema_version": "1",
+  "verdicts": [
+    {
+      "review_key": "77ac825e81517e35",
+      "verdict": "equivalent",
+      "note": "percent is never negative here"
+    }
+  ]
+}
+```
+
+```bash
+fallow mutation --verdicts verdicts.json
+```
+
+The `review_key` is the `mutant_id`. The id stays the same until the enclosing function changes, so one verdict document can serve many runs.
+
+| Mutant status | Verdict result |
+|:--------------|:---------------|
+| `survived`, `no_coverage`, `flaky` | The status becomes `equivalent`. The mutant leaves the score and the coverage. |
+| `killed`, `timeout` | The verdict is `contradicted`. A test detects the mutant, so the status stays. |
+| `pending`, `runtime_error`, `pruned` | The verdict is `deferred`. |
+| No match | The verdict is `unmatched`. |
+
+The JSON report lists each group under `verdicts`, together with a digest of the document. A malformed document, an empty or duplicate `review_key`, or an unknown field stops the command with exit code 2 before any test runs.
+
+## Exit codes
+
+| Code | Meaning |
+|:-----|:--------|
+| `0` | The plan, the run, or inspect finished. Survivors do not fail a run. |
+| `1` | `--min-score` or `mutation.minScore` is set, and the score is lower. |
+| `2` | Invalid input or an execution error. Examples: a dirty worktree without `--allow-dirty`, a missing runtime or Vitest install, an invalid verdict document. |
+
+The flag wins over the config key. A run with no score exits with `0`, also when every mutant is `no_coverage`.
+
+```bash
+fallow mutation --min-score 80
+```
+
+## Configuration
+
+Set project defaults in the [`mutation` config section](/configuration/overview#mutation):
+
+```jsonc
+{
+  "mutation": {
+    "runner": "auto",
+    "operators": ["arithmetic-operator", "relational-operator"],
+    "minScore": 80,
+    "concurrency": 4
+  }
+}
+```
+
+A CLI flag wins over the config. No config key starts a run or keeps side-effect mutants.
+
+## MCP tools
+
+The [MCP server](/integrations/mcp) has two read-only tools. Neither tool runs tests.
+
+- `mutation_plan` returns the plan envelope: each mutant's id, location, operator, disposition, and static test files. It takes `changed_since`, `all`, `paths`, `max_mutants`, and `operators`.
+- `mutation_inspect` shows one mutant of a saved report. It takes `mutant_id` and an optional `report`. Without `report`, it reads the report of the last run.
+
+A run needs the CLI command `fallow mutation`, which executes your tests. An agent should ask you before it starts a run.
+
+## Current limits
+
+- Vitest is the only runner. Support for `node:test` and `bun test` is on the roadmap.
+- The output formats are `human` and `json`. There is no SARIF, CodeClimate, LSP, or CI gate output.
+- `--workspace` and `--changed-workspaces` are not supported. Pass a package directory as a path.
+- A run executes the mutants that a verdict marks. Fallow applies the verdicts after the run.
+
+## See also
+
+<CardGroup cols={3}>
+  <Card title="fallow audit" icon="terminal" href="/cli/audit">
+    Get a verdict for the files that a PR changes.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/overview#mutation">
+    Set the runner, operators, minimum score, and concurrency.
+  </Card>
+  <Card title="MCP integration" icon="robot" href="/integrations/mcp">
+    Use the read-only plan and inspect tools from an agent.
+  </Card>
+</CardGroup>
