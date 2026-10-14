@@ -99,6 +99,35 @@ When automatic project selection misses a consumer project, add repeatable
 partial or unavailable, use `--type-aware-require complete`. See
 [Type-aware TypeScript analysis](/analysis/type-aware).
 
+### Mutation report
+
+`--mutation-report <FILE>` reads a saved [`fallow mutation`](/cli/mutation) report and shows the mutation score of each complexity finding under its CRAP score. The file is the saved report of the last run (`.fallow/mutation/last-report.json`) or the `-o` file of a run. Health reads the file only. It runs no test.
+
+```bash
+fallow mutation --all
+fallow health --mutation-report .fallow/mutation/last-report.json
+```
+
+```text
+  src/pricing.ts
+    :12 applyDiscount
+          24 cyclomatic   18 cognitive   64 lines
+          42.0 CRAP
+         74% mutation score (17 killed, 6 survived, 1 no coverage)
+
+  Mutation report: 3 of 4 findings matched; 1 stale file has no score. The score does not change CRAP or the health score.
+```
+
+- The killed count in the line includes the `timeout` mutants, because both count as detected.
+- A finding matches a function of the report when the path, the first line, and the name are the same.
+- A function whose file changed since the run is stale. It shows `mutation score: stale (file changed since the run)` and no score, so a changed function never shows an old value.
+- The mutation score never changes CRAP, the health score, the vital signs, or a gate.
+- Only complexity findings get a score. A function under each threshold has no finding, so its score stays in the mutation report.
+- The SARIF, CodeClimate, markdown, and compact formats do not show the score.
+- A `--plan` document, a missing file, or an invalid file exits with code 2 and `FALLOW_MUTATION_REPORT_INVALID`.
+
+The JSON fields are in [With a mutation report](#with-a-mutation-report).
+
 ### Health score options
 
 | Flag | Description |
@@ -181,7 +210,7 @@ Plain `fallow health` (no gate flag) exits 1 on any finding whose `complexity-*`
 | `fallow health --min-score N --min-severity LEVEL` | score >= N AND no finding at or above LEVEL | score < N OR a finding at or above LEVEL |
 | `fallow health --report-only` | always | never |
 
-`--report-only` cannot be combined with `--min-score` or `--min-severity` (exit code 2). With `--fail-on-issues` (or `--ci`, which sets it), a `warn` complexity finding becomes `error`: the JSON `effective_severity` and the CI levels of the finding are then `error` too.
+`--report-only` cannot be combined with `--min-score` or `--min-severity` (exit code 2). A `--mutation-report` file that is a plan, is missing, or does not parse also exits with code 2. With `--fail-on-issues` (or `--ci`, which sets it), a `warn` complexity finding becomes `error`: the JSON `effective_severity` and the CI levels of the finding are then `error` too.
 
 With [`--fail-on-parse-error`](/cli/global-flags) or `failOnParseError`, the run also exits 1 when fallow cannot parse a source file. `--report-only` shows this verdict and does not fail. With or without the gate, `fallow health` names each file that did not parse cleanly in the report body, below the health score. The score does not change.
 
@@ -1309,6 +1338,44 @@ coverage-gaps = "warn"
 ```
 
 The `files` array lists runtime files where no test dependency path reaches any export. The `exports` array lists single exports that no test reaches, in files that tests otherwise cover.
+
+### With a mutation report
+
+With [`--mutation-report`](#mutation-report), each matched complexity finding gets a `mutation` object. The findings in `groups[].findings[]` get the same object. The `sections` list then has the token `mutation`.
+
+```json title="findings[].mutation"
+{
+  "state": "fresh",
+  "score": 0.74,
+  "counts": {
+    "total": 24,
+    "killed": 17,
+    "timeout": 0,
+    "survived": 6,
+    "no_coverage": 1
+  }
+}
+```
+
+| Field | Description |
+|:------|:------------|
+| `state` | `fresh`: the file has the same content as in the mutation run. `stale`: the file changed, is missing, or has no digest in the report. |
+| `stale_reason` | Only for `stale`: `source-changed`, `file-missing`, or `no-digest`. |
+| `score` | Only for `fresh`: the mutation score of the function, a fraction from 0 to 1. Absent when no mutant of the function ran to a tested result. |
+| `counts` | Only for `fresh`: the counts by mutant status of the function, with the same fields as `summary.counts` of the mutation report. The example shows a part of them. |
+
+The top-level `mutation` object summarizes the join:
+
+| Field | Description |
+|:------|:------------|
+| `completion` | The completion status of the mutation run: `complete` or `partial`. |
+| `functions` | The number of function results in the mutation report. |
+| `findings_fresh` | The number of findings with a fresh score. |
+| `findings_stale` | The number of findings in a stale file. |
+| `findings_unmatched` | The number of findings with no function in the mutation report. |
+| `stale_files` | A list of `{ path, reason }` for each stale file. |
+
+The `mutation` fields never change `crap`, the health score, the vital signs, or a gate.
 
 ### With runtime coverage {#runtime-coverage}
 
