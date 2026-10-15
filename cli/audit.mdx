@@ -687,7 +687,9 @@ Under `--gate new-only`, `audit` creates a temporary base snapshot (a git worktr
 
 Each project root keeps one base-snapshot cache that the root owns. audit rebuilds it in place when the resolved base SHA changes. audit holds the reuse lock for the whole run, so cleanup can never remove files under a running audit.
 
-Every audit runs an automatic age-based garbage collection (GC). The default age is 30 days. To change it, set the [`FALLOW_AUDIT_CACHE_MAX_AGE_DAYS`](/configuration/environment#fallow_audit_cache_max_age_days) env var or the `audit.cacheMaxAgeDays` config field. `0` turns off the age-based sweep. Two subcommands clean the caches on demand.
+audit also saves the result of each base pass as a snapshot file in the fallow cache directory, below `.fallow/cache/audit-base-v<N>/` by default. The key of a file includes the base SHA, the changed files, and `--brief`. A later audit with the same key reads the file and does not run the base pass again.
+
+Every audit runs an automatic age-based garbage collection (GC). The default age is 30 days. To change it, set the [`FALLOW_AUDIT_CACHE_MAX_AGE_DAYS`](/configuration/environment#fallow_audit_cache_max_age_days) env var or the `audit.cacheMaxAgeDays` config field. `0` turns off the age-based sweep. For the snapshot files, the age counts from the last use. After each save, audit also keeps only the newest 32 snapshot files. This cap applies also when the age is `0`. Two subcommands clean the caches on demand.
 
 ### `audit-cache remove`
 
@@ -709,8 +711,9 @@ Use `fallow audit-cache prune` when audit caches from deleted checkouts or old b
 - cleanup of orphaned sidecars
 - age-based reclaim under the resolved threshold
 - reclaim of abandoned entries whose recorded owner root no longer exists
+- the age threshold and the newest-32 cap for the base-snapshot files in the fallow cache directory of `--root`
 
-It reports every cache entry that it considered, with sizes and ages. It never touches entries that other live projects own.
+It reports every cache entry that it considered, with sizes and ages. It never touches entries that other live projects own. In the fallow cache directory, it removes only files with the name pattern that audit writes.
 
 ```bash
 fallow audit-cache prune --dry-run          # preview every decision without touching the filesystem
@@ -766,7 +769,7 @@ With `--format json`, prune returns its own maintenance envelope. It is separate
 |:------|:-----|:------------|
 | `dry_run` | boolean | `true` when the run only previewed decisions. |
 | `max_age_days`, `max_age_source` | integer, string | The resolved age threshold and which precedence level supplied it (`flag`, `env`, `config`, or `default`) |
-| `entries[]` | array | One item per considered cache entry: `path`, `pass` (`owned`, `legacy`, or `foreign`), `disposition` (`removed`, `kept`, `skipped`, or `failed`), a short kebab-case `reason` (for example `aged-out`, `fresh`, `owner-live`), `age_days`, `size_bytes`, and `owner_root` (each of the last three is `null` when not measurable). |
+| `entries[]` | array | One item per considered cache entry: `path`, `pass` (`owned`, `legacy`, `foreign`, or `snapshot` for a base-snapshot file), `disposition` (`removed`, `kept`, `skipped`, or `failed`), a short kebab-case `reason` (for example `aged-out`, `fresh`, `owner-live`, or `over-capacity` for a snapshot file beyond the newest 32), `age_days`, `size_bytes`, and `owner_root` (each of the last three is `null` when not measurable). |
 | `found`, `removed`, `kept`, `skipped`, `failed` | integer | Aggregate counts. `removed + kept + skipped + failed` always equals `found` |
 | `complete` | boolean | `true` when nothing was skipped or failed. Gate on this field in scripts. The exit code stays 0 either way. |
 | `reclaimed_bytes` | integer | Bytes that this run removed from disk. On a dry run, the bytes that the run would remove. |

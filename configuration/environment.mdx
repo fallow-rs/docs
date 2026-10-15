@@ -122,7 +122,7 @@ export FALLOW_CACHE_MAX_SIZE=64
 fallow dead-code   # cache capped at 64 MB
 ```
 
-When not set, the default is `256` (MB). When the serialized cache grows past 80% of the limit, fallow removes the least recently used entries until the cache is at 60%. Use this variable on CI runners with disk quotas. Local machines with large disks rarely need it.
+When not set, the default is `256` (MB). When the serialized cache grows past 80% of the limit, fallow removes entries until the cache is at 60%. It removes first the entries for the files that recent runs did not discover, for example test files after a `--production` run. A file that every run reads stays, also when it never changes. Use this variable on CI runners with disk quotas. Local machines with large disks rarely need it.
 
 `--no-cache` turns off the cache fully. This variable then has no effect.
 
@@ -162,6 +162,8 @@ A malformed value (a ref with disallowed characters) stops the audit with exit c
 
 Maximum age of a base-snapshot worktree cache that `fallow audit` keeps and reuses. The age is in whole days since the last reuse or since creation. The next `fallow audit` run removes older entries when it starts.
 
+The same age applies to the base-snapshot files in the fallow cache directory (`.fallow/cache/audit-base-v<N>/` by default), counted from the last use. After each save of a snapshot file, audit removes the older files and keeps only the newest 32 files.
+
 When both are set, this variable takes precedence over the `audit.cacheMaxAgeDays` config field. In [`fallow audit-cache prune`](/cli/audit#audit-cache-prune), the `--max-age-days` flag takes precedence over this variable.
 
 ```bash
@@ -169,9 +171,9 @@ export FALLOW_AUDIT_CACHE_MAX_AGE_DAYS=7
 fallow audit --base origin/main   # caches older than 7 days are reclaimed
 ```
 
-When not set, the default is `30` days. Set `0` to turn off the cleanup fully, for example on CI runners that clean `/tmp` with a separate process. For an invalid value (not an integer, or negative), fallow uses the config field or the default and gives no message. A typo in a runner variable does not fail audits.
+When not set, the default is `30` days. Set `0` to turn off the age-based cleanup, for example on CI runners that clean `/tmp` with a separate process. The cap of 32 snapshot files stays. For an invalid value (not an integer, or negative), fallow uses the config field or the default and gives no message. A typo in a runner variable does not fail audits.
 
-The cleanup runs once per `fallow audit` run. It looks only at base-snapshot cache entries that fallow owns, never at other content of the temp directory. It never removes a cache entry that another running `fallow audit` uses (a kernel `flock(2)` lock per entry).
+The cleanup runs once per `fallow audit` run. It looks only at base-snapshot cache entries that fallow owns, never at other content of the temp directory or the cache directory. It never removes a cache entry that another running `fallow audit` uses (a kernel `flock(2)` lock per entry).
 
 When it removes caches, fallow writes one `fallow: reclaimed N stale base-snapshot caches` line to stderr, unless `--quiet` is set. To run the same cleanup on demand and see the decision for each entry, use [`fallow audit-cache prune`](/cli/audit#audit-cache-prune).
 
