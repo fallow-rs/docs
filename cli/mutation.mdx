@@ -110,10 +110,26 @@ The default value `auto` selects the runner from the project, in this order:
 1. A `vitest` dependency in the root `package.json` selects Vitest.
 2. Otherwise, the test module that most test files import: `vitest`, `bun:test`, or `node:test`.
 3. Otherwise, a `bunfig.toml`, `bun.lock`, or `bun.lockb` file at the root selects `bun test`.
-4. Otherwise, a `node --test` command in a `package.json` script selects `node:test`.
+4. Otherwise a `node --test` or `borp` command in a `package.json` script selects `node:test`.
 5. Otherwise, Vitest.
 
+`borp` is a test runner that runs `node:test`. Fallow reads the test files of a `borp` command in this order. First, it reads the positional arguments. Fallow ignores a glob that starts with `!`, so it does not exclude those files. Second, it reads the glob of `-p` or `--pattern`. Third, it uses the default glob `**/*.test.{js,mjs,cjs,ts,mts,cts}`. These files are test entry points, so the plan finds the test files of the project. Fallow does not read a `.borp.yaml` file.
+
 Fallow finds Vitest in the project `node_modules`. For `node:test` and `bun test`, each test file runs in its own process. The test files are the files that the default patterns of the runner find.
+
+The `node:test` runner reads the `node --test` command in your `package.json` scripts. It reads the `test` script first, then the other scripts in name order. Each test process gets the module loading flags of that command:
+
+- `--experimental-transform-types`
+- `--experimental-strip-types` and `--no-experimental-strip-types`
+- `--import` and `--require` (`-r`)
+- `--experimental-loader` (`--loader`)
+- `--conditions` (`-C`)
+
+Fallow ignores the other flags of the command. A relative `--import`, `--require` or loader path resolves against the project root. Example: a project that uses a TypeScript `enum` runs its tests with `node --experimental-transform-types --test`. `fallow mutation` then uses the same flag, and you do not need to set it.
+
+`NODE_OPTIONS` of the `fallow mutation` process also reaches each test process. Use it for a Node flag that is not in the list above.
+
+When a test file does not load, the baseline failure message starts with the error line. Example: `SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript enum is not supported in strip-only mode`.
 
 Node.js and Bun cannot load a Vue, Svelte, or Astro component file. With `node-test` or `bun-test`, the plan leaves each component file out. The report lists the file in `skipped_files` with the reason `runner-cannot-load`, and the human output prints one `Skipped files:` line. The mutants of these files do not count in the coverage. To test component files, use Vitest with the framework plugin of your project.
 
@@ -246,6 +262,10 @@ A run with no executed mutant has no score (`null` in JSON).
 | `equivalent` | A verdict marks the mutant as equivalent to the original code. | No | No |
 | `pruned` | A static rule removed the mutant, for example `side-effect-sink`, `dead-code`, or `generated`. | No | No |
 
+A `pruned` mutant has a reason. One of the reasons:
+
+- `framework-config`: the mutant changes framework or tool config, not tested logic. Framework config is an export that an active plugin reads, for example `export const revalidate = 60` in a Next.js page. It is also the default export of a tool config file, such as `vite.config.ts`, `vitest.config.ts`, `eslint.config.js` or `.eslintrc.js`. A top-level `module.exports = ...` statement counts as the default export. A mutant inside a function of the config, for example an inline Vite plugin, is not pruned. No test loads a tool config file, so these mutants do not lower the coverage.
+
 ### Retries
 
 A `survived` or `timeout` mutant runs a second time in a new runner process. Host load can make a test time out, so one timeout is not proof that your tests detect the mutant. The second run of a timeout gets twice the time. A mutant with `"retried": true` in JSON got both runs. A `survived` or `timeout` mutant without the field got no second run, because the time budget ended first.
@@ -271,6 +291,8 @@ A test that fails in the dry run is a baseline failure. Fallow lists it in `base
 ### Type tests
 
 When your Vitest config enables the type-check pass (`typecheck.enabled`), the run does not execute it. A mutant that only a type test detects is not counted as killed. The report adds `typecheck-not-run` to `runner.notes`, and the human output prints one line for it. The [survivor type check](#type-check-of-survivors) does not run these type tests either.
+
+A type test file (`*.test-d.ts`, `*.spec-d.ts`, or a TypeScript file below a `test-d/` directory) is not a test file of the mutation plan. No runner executes it. A project whose only test files are type tests has `no_test_files: true`, and a file that only type tests reach has no coverage.
 
 ## Test reach of no-coverage mutants
 
