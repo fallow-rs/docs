@@ -165,7 +165,7 @@ The output can add these lines:
 | `--verdicts <PATH>` | A verdict document that marks mutants as equivalent. See [Verdicts](#verdicts-for-equivalent-mutants). |
 | `--typecheck` | Type-check each survivor after the tests. See [Type check of survivors](#type-check-of-survivors). |
 | `--allow-dirty` | Run in a git worktree with uncommitted changes. |
-| `--allow-side-effects` | Keep mutants in functions that reach a file system, process, network, or database call. |
+| `--allow-side-effects` | Keep mutants in functions whose own body calls a file system, process, network, or database API. See [Safety rules](#safety-rules). |
 | `-o, --output-file <PATH>` | Write the report to a file after the run. |
 | `-f, --format <FORMAT>` | `human` (default) or `json`. |
 
@@ -204,8 +204,11 @@ Fallow has no absolute-value operator (`x` to `-x`). Without type information, t
 A run executes your project tests, so fallow applies these rules:
 
 - **Clean worktree.** A run refuses a git worktree with uncommitted changes and exits with code 2. Commit or stash your changes, or pass `--allow-dirty`. After the run, fallow compares the worktree with the start state and reports each path that changed.
-- **Side effects.** Fallow skips the mutants in functions that reach a file system, process, network, or database call. These mutants have the status `pruned` with the reason `side-effect-sink`. A mutant there can remove a guard of a real side effect. `--allow-side-effects` keeps them. This option is a flag only. The config rejects an `allowSideEffects` key, so a project config cannot widen what a run executes.
-- **Project files never change.** Fallow does not write to your project files. The changed copies of your files live in the fallow cache. The report lists any path that your tests changed.
+- **What the check sees.** The check covers tracked and untracked files. It also covers the ignored files that git lists at the start, such as `.env`, so a write to one of them or a delete is a change. Git lists an ignored directory such as `node_modules/` or `coverage/` as one entry, so the check does not see the files below it. A new ignored file is not a change, because test runs make such files. The check leaves out `mutation/` in the fallow cache directory and the output files of the run.
+- **Safe cache directory.** A run refuses a cache directory that is the project root or a directory above it, or that holds a planned source or test file. It exits with code 2 and `FALLOW_MUTATION_UNSAFE_CACHE_DIR`. Such a directory would hide the writes of your tests from the check.
+- **Side effects.** Fallow skips the mutants in a function whose own body calls a file system, process, network, or database API. A mutant in top-level code is skipped when the module makes such a call at the top level. These mutants have the status `pruned` with the reason `side-effect-sink`. A mutant there can remove a guard of a real side effect. The rule does not follow calls: a mutant in a function that calls a helper, which then makes the call, still runs. `--allow-side-effects` keeps the skipped mutants. This option is a flag only. The config rejects an `allowSideEffects` key, so a project config cannot widen what a run executes.
+- **Project files never change.** Fallow does not write to your project files. The changed copies of your files live in a run directory in the fallow cache. Two runs of the same plan share one directory, and a run never reads a partly written one. Fallow keeps the 5 most recently used run directories. It removes older ones that no run used in the last hour. The report lists any path that your tests changed.
+- **No test process outlives fallow.** The test processes run in their own process group on Unix and in a Job Object on Windows. Fallow ends them when the run ends, on SIGINT, SIGTERM, SIGHUP, or SIGQUIT, and on a crash. When fallow starts with SIGHUP ignored, as under `nohup`, a hangup does not end the run.
 
 <Warning>
   Do not redirect the report with `> mutation.json`. The shell creates the file before fallow starts, so the clean-worktree check refuses the run. Use `-o mutation.json` or the [saved report](#saved-report) instead.
@@ -320,10 +323,10 @@ The report also has `summary.counts.compile_error`, `functions[].counts.compile_
 
 A run stores the result of each `killed` mutant and of each `survived` mutant that a retry confirmed. A later run uses a stored result when the key is the same, and does not run that mutant again. The dry run always runs.
 
-The key covers the mutant, the content of its source file, its covering tests, the content of the covering test files and the files that they import, the runner setup files, the lockfile, the runner config files, the runner and runtime versions, and the fallow version. A change to one of them runs the mutant again.
+The key covers the mutant, the content of its source file, its covering tests, the content of the covering test files and the files that they import, the runner setup files, the lockfile, the runner config files at the root and the files that they import, the configs that the root `tsconfig.json` extends, the runner and runtime versions, and the fallow version. A change to one of them runs the mutant again.
 
 <Warning>
-  Two inputs are not in the key: dynamic imports that the module graph does not resolve, and files that your tests read. A change to them does not run the mutant again. Pass `--no-cache` when such a change can affect your tests.
+  Some inputs are not in the key: dynamic imports that the module graph does not resolve, and files that your tests or the runner config read. Runner configs and `tsconfig.json` files below the root, for example in a workspace package, are also not in the key. A change to them does not run the mutant again. Pass `--no-cache` when such a change can affect your tests.
 </Warning>
 
 - A `timeout`, `flaky`, `runtime_error`, or `pending` result is never stored.
@@ -420,7 +423,7 @@ The JSON report lists each group under `verdicts`, together with a digest of the
 |:-----|:--------|
 | `0` | The plan, the run, or inspect finished. Survivors do not fail a run. |
 | `1` | `--min-score` or `mutation.minScore` is set, and the score is lower. |
-| `2` | Invalid input or an execution error. Examples: a dirty worktree without `--allow-dirty`, a missing runtime or runner install, a runtime of the wrong kind for the runner (`FALLOW_MUTATION_RUNTIME_NOT_FOUND`), an invalid verdict document, `--typecheck` without a type-aware companion (`FALLOW_MUTATION_TYPECHECK_UNAVAILABLE`), `--plan --typecheck`. |
+| `2` | Invalid input or an execution error. Examples: a dirty worktree without `--allow-dirty`, a cache directory that hides project files (`FALLOW_MUTATION_UNSAFE_CACHE_DIR`), a missing runtime or runner install, a runtime of the wrong kind for the runner (`FALLOW_MUTATION_RUNTIME_NOT_FOUND`), an invalid verdict document, `--typecheck` without a type-aware companion (`FALLOW_MUTATION_TYPECHECK_UNAVAILABLE`), `--plan --typecheck`. |
 
 The flag wins over the config key. A run with no score exits with `0`, also when every mutant is `no_coverage`.
 
