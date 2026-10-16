@@ -139,6 +139,41 @@ preset = "bulletproof"
 ```
 </CodeGroup>
 
+## Path globs
+
+The config fields that select files use the same glob rules. A single `*` and a `?` match inside one path segment and do not match `/`. Only `**` crosses directories, as in picomatch.
+
+| Glob | Matches | Does not match |
+|:-----|:--------|:---------------|
+| `src/*.ts` | `src/a.ts` | `src/a/b.ts` |
+| `src/**/*.ts` | `src/a.ts`, `src/a/b.ts` | `lib/a.ts` |
+| `*.test.ts` | `a.test.ts` at the project root | `src/a.test.ts` |
+| `**/*.test.ts` | `a.test.ts`, `src/a.test.ts` | `src/a.spec.ts` |
+
+These rules apply to:
+
+- `entry` and `dynamicallyLoaded`
+- `ignorePatterns`, with its `!` exceptions
+- `ignoreFindings`, `overrides[].files`, `ignoreExports[].file` and `ignoreCatalogReferences[].consumer`
+- `duplicates.ignore`, `similarCode.ignore`, `health.ignore` and `health.thresholdOverrides[].files`
+- `boundaries.zones[].patterns` and `boundaries.coverage.allowUnmatched`
+- the `files`, `exclude` and `allowedFiles` globs of a rule pack
+- the `framework[]` fields `usedExports[].pattern`, `manifestEntries[].manifests` and `detection.pattern`
+
+<Warning>
+In older fallow versions, a single `*` in these fields also matched `/`. If your config used `*` to match nested files, it now matches fewer files, and a run can show new findings. Change the single `*` to `**` to keep the old match, for example `src/generated/**` or `**/*.test.ts`.
+
+fallow prints a warning on stderr for each glob that matches fewer files now. The warning names the field, the pattern, the count of files and the `**` form, for example:
+
+```text
+fallow: health.ignore glob "*.test.ts" no longer matches 481 files, because "*" and "?" no longer match "/". To keep the old match, use "**/*.test.ts".
+```
+
+`--quiet` hides the warning, and JSON output does not change.
+</Warning>
+
+Globs that match package names or import specifiers do not use these rules. In `ignoreDependencies`, `ignoreUnresolvedImports` and `publicPackages`, a `*` still matches `/`, so `@scope/*` and `@*` keep their match.
+
 ## Config fields
 
 <Accordion title="entry">
@@ -149,6 +184,8 @@ Extra entry point glob patterns. Fallow detects entry points from `package.json`
   "entry": ["src/workers/*.ts", "scripts/*.ts", "src/cli.ts"]
 }
 ```
+
+A single `*` matches inside one directory. `src/workers/*.ts` does not match `src/workers/jobs/send.ts`. Use `src/workers/**/*.ts` for nested files. See [Path globs](#path-globs).
 </Accordion>
 
 <Accordion title="Entry point auto-detection">
@@ -208,6 +245,8 @@ A `!`-prefixed entry is an exception. It brings back files that a built-in defau
 - Paths under `node_modules` or `.git` cannot be lifted. A `!` entry that names one of these segments is a config error (exit 2).
 
 To see which built-in pattern removed files, and how many, run with `--explain-skipped`.
+
+A line that you copy from `.gitignore` can match fewer files here. In `.gitignore`, `src/generated/*` also ignores the subfolders of `src/generated`, because git does not go into an ignored directory. Fallow matches each glob against the full file path, so in `ignorePatterns` the same line ignores only the files directly in `src/generated`. Use `src/generated/**` to ignore the subfolders too. See [Path globs](#path-globs).
 </Accordion>
 
 <Accordion title="ignoreFindings">
@@ -224,7 +263,7 @@ Glob patterns for files where fallow does not report dead-code findings. Fallow 
 }
 ```
 
-Patterns are relative to the project root and use `/` on every platform, including Windows. Matching is case sensitive. `*` and `?` match across `/`, so `src/*` covers the whole `src` subtree. Fallow rejects absolute paths, `..` segments, and a bare `"!"` when it loads the config.
+Patterns are relative to the project root and use `/` on every platform, including Windows. Matching is case sensitive. `*` and `?` do not match `/`, so `src/*` covers only the files directly in `src`. Use `src/**` for the whole `src` subtree. See [Path globs](#path-globs). Fallow rejects absolute paths, `..` segments, and a bare `"!"` when it loads the config.
 
 Order does not matter. A negation wins over any positive match, in any position in the array. An array with only negations hides every path except the paths that a negation matches.
 
@@ -682,6 +721,8 @@ Glob patterns for files that your code loads at runtime, for example with `impor
   "dynamicallyLoaded": ["src/plugins/**/*.ts", "src/routes/**/page.tsx"]
 }
 ```
+
+A single `*` matches inside one directory. `src/plugins/*/index.ts` matches `src/plugins/alpha/index.ts`, but not `src/plugins/alpha/ui/index.ts`. See [Path globs](#path-globs).
 </Accordion>
 
 <Accordion title="duplicates">
@@ -1064,7 +1105,7 @@ Apply different rules to specific file patterns. For example, relax rules in tes
 {
   "overrides": [
     {
-      "files": ["*.test.ts", "*.spec.ts"],
+      "files": ["**/*.test.ts", "**/*.spec.ts"],
       "rules": {
         "unused-exports": "off"
       }
@@ -1082,7 +1123,7 @@ Apply different rules to specific file patterns. For example, relax rules in tes
 
 ```toml
 [[overrides]]
-files = ["*.test.ts", "*.spec.ts"]
+files = ["**/*.test.ts", "**/*.spec.ts"]
 
 [overrides.rules]
 unused-exports = "off"
@@ -1097,7 +1138,7 @@ unused-types = "error"
 
 Each override object has these fields:
 
-- **`files`**: array of glob patterns, matched against paths relative to the project.
+- **`files`**: array of glob patterns, matched against paths relative to the project. A single `*` does not match `/`, so `*.test.ts` matches only test files at the project root. Use `**/*.test.ts` for test files at any depth.
 - **`rules`**: rule severities for the files that match the patterns.
 
 When multiple overrides match the same file, the later override takes precedence.

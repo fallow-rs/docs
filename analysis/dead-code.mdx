@@ -496,6 +496,27 @@ Fallow supports these patterns:
 
 Fallow marks the matched files as reachable, so it does not report them as unused. This covers locale files, icon sets, route modules, and other directories that follow a naming convention.
 
+An `import.meta.glob` pattern can use the extglob groups `@(..)`, `?(..)`, `+(..)`, `*(..)` and `!(..)`, as Vite does. A negated group excludes the files that match its alternatives:
+
+```typescript
+// Loads every module in ./modules except the *.spec files
+const modules = import.meta.glob("./modules/**/!(*.spec).{j,t}s");
+```
+
+A negative entry in an `import.meta.glob` array excludes files from every positive entry of the same call. Fallow can then report an excluded file as unused:
+
+```typescript
+// ./pages/skip.js is not loaded, so fallow can report it as unused
+const pages = import.meta.glob(["./pages/*.js", "!./pages/skip.js"]);
+```
+
+- Fallow applies a negative entry that starts with `./`, `../` or `**`. Other negative entries need the alias resolver of Vite, so fallow keeps the files.
+- Like Vite, fallow matches a `**` entry from the common base directory of the positive entries. Next to `./pages/*.js`, the entry `!**/pages/a.js` excludes nothing, because the match starts inside `pages`.
+
+The static text of a template literal, a string concatenation, or a `require.context` directory matches only itself. Glob characters in that text, such as `[`, `]`, `{` or `*`, are not glob syntax. For example, `` import(`./[id]/${name}.js`) `` matches `./[id]/view.js`, and `import("./{group}/" + name)` matches `./{group}/item.js`.
+
+When a dynamic import pattern is not a valid glob, fallow gives a warning, and the pattern matches no files.
+
 A pattern match uses every value export of the matched file, `default` included. A type export (a type alias or an interface) of a matched file is used only by an import that names it.
 
 <Note>
@@ -586,6 +607,7 @@ Fallow handles these cases without configuration:
 - **Decorators.** By default, fallow skips decorated members. Decorators such as `@Get()`, `@Column()`, and `@Injectable()` mean that a framework calls the member at runtime.
 - **Framework lifecycle methods.** Fallow never reports `componentDidMount`, `ngOnInit`, `connectedCallback`, and other framework lifecycle methods.
 - **Whole-object patterns.** `Object.values(instance)`, `Object.keys()`, spread operators, and `for..in` loops mark all members as used.
+- **Playwright fixtures.** A test made with `test.extend<T>(...)` or `mergeTests(...).extend<T>(...)` credits the members of each fixture class that the test uses. Fallow reads `test` and `mergeTests` from `@playwright/test` and from `playwright/test`.
 
 ### Opting decorators out via `ignoreDecorators`
 

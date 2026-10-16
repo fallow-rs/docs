@@ -85,7 +85,7 @@ Most plugins activate automatically when the relevant package is in your `packag
     | **Vitest** | `vitest` or config file present |
     | **Rstest** | `@rstest/core` |
     | **Jest** | `jest` |
-    | **Playwright** | `@playwright/test` |
+    | **Playwright** | `@playwright/test`, or `playwright` with a `playwright.config.ts` or `playwright.config.js` file in the package root |
     | **Cypress** | `cypress` |
     | **Mocha** | `mocha` |
     | **Jasmine** | `jasmine` (reads `spec/support/jasmine.*` or a `jasmine --config` file) |
@@ -500,9 +500,28 @@ Storybook reads each `stories` pattern in `.storybook/main` relative to the dire
 - A pattern can point into another workspace of the project. For example, a central docs app with `apps/docs/.storybook` and `stories: ["../../../packages/ui/src/**/*.docs.tsx"]` marks the matching files in `packages/ui` as used.
 - Fallow drops a pattern that leaves the project root.
 - Storybook reads a leading `/` as an absolute filesystem path. A pattern such as `/src/**` outside the project therefore marks nothing as used.
-- A `@(ts|tsx)` group, as in the Storybook config template, matches like `{ts,tsx}`. A nested `@(..)` group matches too. Other extglob forms, such as `!(..)`, match nothing.
+- A pattern can use the extglob groups `@(..)`, `?(..)`, `+(..)`, `*(..)` and `!(..)`. A `@(ts|tsx)` group, as in the Storybook config template, matches like `{ts,tsx}`. A negated group excludes files: `../src/**/!(*.dev).stories.@(js|ts)` does not match `button.dev.stories.ts`. See [Extglob groups in tool globs](#extglob-groups-in-tool-globs).
 - Fallow reads the object form `{ directory, files, titlePrefix }`. `directory` resolves against the `.storybook/` directory, and `files` applies under it. Without `files`, the Storybook default `**/*.@(mdx|stories.@(js|jsx|mjs|ts|tsx))` applies.
 - Fallow also reads the `.storybook/main` config of a workspace when the root package uses Storybook too.
+
+## Extglob groups in tool globs
+
+Fallow reads the extglob groups `@(..)`, `?(..)`, `+(..)`, `*(..)` and `!(..)` in these tool globs:
+
+- Storybook `stories` patterns
+- Playwright `testMatch`
+- Vitest `test.include` and `test.exclude`
+- Rstest `include` and `exclude`
+- Jasmine `spec_files` and `helpers`
+- `import.meta.glob` patterns, see [Dynamic import resolution](/analysis/dead-code#dynamic-import-resolution)
+
+The glob matcher cannot repeat a group, so fallow changes each group into a glob that it can match:
+
+- A negated group `!(..)` in an include glob excludes the files that match its alternatives.
+- A `+(..)` group in an include glob matches one or more repetitions. Fallow reads `+(ts|js)` as `{ts,js}*`. Thus `*.test.+(ts|js)` also matches `a.test.jsx` and `a.test.tsx`, so a few more files can become entry points.
+- An exclude glob matches a `+(..)` group once and a `*(..)` group zero times or once. An exclude glob with a `!(..)` group removes no file. Thus an exclude never removes a file that the tool keeps.
+- A Playwright `testMatch` glob with a group makes only the matching files entry points. The match ignores case, as before.
+- A Vitest plain `(a|b)` group matches one of its alternatives.
 
 ## See also
 
