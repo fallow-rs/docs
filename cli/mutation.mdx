@@ -139,6 +139,22 @@ Node.js and Bun cannot load a Vue, Svelte, or Astro component file. With `node-t
 
 `--runtime` must name a runtime of the correct kind for the runner. A Bun runtime for `node-test`, or a Node.js runtime for `bun-test`, exits with code 2 and `FALLOW_MUTATION_RUNTIME_NOT_FOUND`. For `bun-test`, install Bun.
 
+### Runner config
+
+`--runner-config <path>`, or the `mutation.runnerConfig` config key, selects the config file of the test runner. Use it when your project keeps its integration, UI, or browser tests in a separate Vitest config:
+
+```bash
+fallow mutation src/math.ts --runner-config vitest.integration.config.mjs
+```
+
+- The flag wins over the config key. Do not mix it up with `--config`: that flag selects the Fallow config.
+- A relative flag path resolves against the project root, then against the current directory. A relative config key path resolves against the project root.
+- The file must exist inside the project root. Otherwise the run exits with code 2, `FALLOW_INVALID_MUTATION_OPTIONS`, and the context `mutation.runnerConfig`.
+- Only the Vitest runner reads a config file. With `node-test` or `bun-test`, a selected config exits with code 2.
+- Without a selection, Vitest finds its config the usual way.
+- The selected config sets the test files that Vitest lists. When the selected config does not include a static test file of the plan, the run is `partial` with the reason `test-files-not-discovered`. See [Completion](#completion).
+- A change to the selected config file changes the [result cache](#result-cache) key. The key does not include the files that the selected config imports.
+
 ### Example output
 
 ```text
@@ -171,6 +187,20 @@ The output can add these lines:
 - `Survivor type check: 2 checked, 1 does not type-check, 1 not checked (no-project 1)` after a run with `--typecheck`. When the check fails, the line says that the survivors keep the status `survived`.
 - `Cache: 2 results came from an earlier run. Pass --no-cache to run each mutant.` when the [result cache](#result-cache) gave at least one result.
 
+### Progress
+
+A run with human output prints phase lines on stderr, so a long run does not look stalled. Each line starts with `fallow: mutation:` and ends with the run time:
+
+```text
+fallow: mutation: 8/20 mutants done (1m25s)
+```
+
+- The phases are the runner setup, the baseline run, the mutant runs with done and total counts, the retries of survivors and timeouts, and the final worktree check and report.
+- A run with no covered mutant and no test file prints only the final phase.
+- The start of each phase prints at once. A mutant count prints at most once in each interval and at the end of its phase.
+- A phase that prints nothing for one interval prints a line that says it continues. The interval is 5 seconds on a terminal and 15 seconds in captured output, for example a CI log.
+- `--quiet` and `--format json` print no progress lines. Stdout never gets a progress line, so the JSON report does not change.
+
 ### Run options
 
 | Flag | Description |
@@ -178,6 +208,7 @@ The output can add these lines:
 | `--max-mutants <N>` | Run at most N covered mutants, in rank order. Uncovered mutants do not count. The others are `pending`. |
 | `--time-budget <DURATION>` | Stop starting mutants after this time, for example `90s`, `10m`, or `1h`. The others are `pending`. A run that started continues until its timeout, so the command can end a little after the budget. |
 | `--setup-timeout <DURATION>` | Wait this long for each runner process to start, finish its dry run or reload (default `2m`). Use a longer value, for example `5m`, on a slow or busy host. |
+| `--runner-config <PATH>` | The Vitest config file of the run. The file must be inside the project root. See [Runner config](#runner-config). |
 | `--concurrency <N>` | The number of test processes. Default: half the logical cores. |
 | `--runtime <PATH>` | The JavaScript runtime. Default: `node` for `node-test`, `bun` for `bun-test`, and `node`, then `bun`, for Vitest. Fallow looks on `PATH`. |
 | `--operators <NAMES>` | The operators to use, comma-separated. Default: every operator. |
@@ -288,7 +319,11 @@ A `survived` or `timeout` mutant runs a second time in a new runner process. Hos
 
 ### Completion
 
-`completion.status` is `complete` or `partial`. Only a `complete` run makes an empty survivor list conclusive. A `partial` run lists its reasons, for example `mutant-limit`, `time-budget`, `runtime-error`, `baseline-failure`, or `typecheck-failed`.
+`completion.status` is `complete` or `partial`. Only a `complete` run makes an empty survivor list conclusive. A `partial` run lists its reasons, for example `mutant-limit`, `time-budget`, `runtime-error`, `baseline-failure`, `typecheck-failed`, or `test-files-not-discovered`.
+
+The reason `test-files-not-discovered` means that the runner did not list a test file that the plan maps statically. For example, the test file is included only by a second Vitest config. The tests of that file never run. The `errors` entry with the same code names each such file. A survivor or a `no_coverage` mutant that such a file reaches is then not proof of a test gap. To include the file, select its config with [`--runner-config`](#runner-config).
+
+A `partial` run does not change the exit code. The run exits with `0`, with `1` when the score is lower than `--min-score`, or with `2` when baseline failures leave no mutant with a test result.
 
 A test that fails in the dry run is a baseline failure. Fallow lists it in `baseline_failures`, and its result decides no mutant status. Fix the failing test, then run again.
 
@@ -449,7 +484,7 @@ The JSON report lists each group under `verdicts`, together with a digest of the
 |:-----|:--------|
 | `0` | The plan, the run, or inspect finished. Survivors do not fail a run. |
 | `1` | `--min-score` or `mutation.minScore` is set, and the score is lower. |
-| `2` | Invalid input or an execution error. Examples: a dirty worktree without `--allow-dirty`, a cache directory that hides project files (`FALLOW_MUTATION_UNSAFE_CACHE_DIR`), a missing runtime or runner install, a runtime of the wrong kind for the runner (`FALLOW_MUTATION_RUNTIME_NOT_FOUND`), an invalid verdict document, `--typecheck` without a type-aware companion (`FALLOW_MUTATION_TYPECHECK_UNAVAILABLE`), `--plan --typecheck`. |
+| `2` | Invalid input or an execution error. Examples: a dirty worktree without `--allow-dirty`, a cache directory that hides project files (`FALLOW_MUTATION_UNSAFE_CACHE_DIR`), a missing runtime or runner install, a runtime of the wrong kind for the runner (`FALLOW_MUTATION_RUNTIME_NOT_FOUND`), an invalid verdict document, a `--runner-config` file that does not exist inside the project root or a runner config with a runner other than Vitest (`FALLOW_INVALID_MUTATION_OPTIONS`), `--typecheck` without a type-aware companion (`FALLOW_MUTATION_TYPECHECK_UNAVAILABLE`), `--plan --typecheck`. |
 
 The flag wins over the config key. A run with no score exits with `0`, also when every mutant is `no_coverage`.
 
@@ -468,7 +503,8 @@ Set project defaults in the [`mutation` config section](/configuration/overview#
     "operators": ["arithmetic-operator", "relational-operator", "regex-literal"],
     "minScore": 80,
     "concurrency": 4,
-    "typecheck": true
+    "typecheck": true,
+    "runnerConfig": "vitest.integration.config.mjs"
   }
 }
 ```
