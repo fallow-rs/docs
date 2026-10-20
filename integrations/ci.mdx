@@ -136,6 +136,7 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
         | `low-traffic-threshold` | -- | Share of the total trace volume below which an invoked function is `low_traffic` and not `active` (health command) |
         | `max-crap` | `30.0` | CRAP score threshold (health and audit commands). Functions at or above this score count toward the verdict. |
         | `gate` | `new-only` | Audit verdict gate. `new-only` fails only on findings that the changeset introduces. `all` fails on every finding in changed files. |
+        | `worsened` | -- | Audit effect of an inherited complexity finding that got worse under `gate: new-only`. `warn` gives at least a `warn` verdict. `error` counts the finding like an introduced finding. `off` reports no worsened finding. When you do not set it, the CLI uses `audit.worsened` from the config, then `warn`. See [Worsened complexity findings](/cli/audit#worsened-complexity-findings). |
         | `security-gate` | -- | Security delta gate for `command: security`. `new` fails only on changed-line candidates. `newly-reachable` fails only on candidates that became reachable from entry points, and needs a base ref from `changed-since` or PR auto-scoping. A gated security failure exits with code 8, and the `issues` output counts only the candidates that match the gate. The PR comment and review renderers do not support security envelopes yet, so the action skips them for this command. |
         | `dead-code-baseline` / `health-baseline` / `dupes-baseline` | -- | Baseline file paths for each analysis in the audit command (saved by `fallow dead-code|health|dupes --save-baseline`). With these, old issues in touched files do not decide the verdict. `health-baseline` and `dupes-baseline` also apply when `command` is empty, and `fail-on-stale-baseline` judges them there. Other commands ignore them. |
         | `no-cache` | `false` | Turn off the incremental parse cache and parse all files again |
@@ -282,6 +283,7 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
         | `FALLOW_MIN_INVOCATIONS_HOT` / `FALLOW_MIN_OBSERVATION_VOLUME` / `FALLOW_LOW_TRAFFIC_THRESHOLD` | `""` | Thresholds for runtime coverage verdicts (health command) |
         | `FALLOW_MAX_CRAP` | `30.0` | CRAP score threshold (health and audit commands) |
         | `FALLOW_AUDIT_GATE` | `new-only` | Audit verdict gate (`new-only` or `all`) |
+        | `FALLOW_AUDIT_WORSENED` | `""` | Audit effect of an inherited complexity finding that got worse under `new-only`: `warn`, `error`, or `off`. An empty value uses `audit.worsened` from the config, then `warn`. Another value stops the job with exit code 2. See [Worsened complexity findings](/cli/audit#worsened-complexity-findings). |
         | `FALLOW_AUDIT_DEAD_CODE_BASELINE` / `FALLOW_AUDIT_HEALTH_BASELINE` / `FALLOW_AUDIT_DUPES_BASELINE` | -- | Baseline file paths for each analysis in the audit command (saved by `fallow dead-code|health|dupes --save-baseline`) |
         | `FALLOW_HEALTH_BASELINE` / `FALLOW_DUPES_BASELINE` | -- | Bare run only (empty `FALLOW_COMMAND`): the health and duplication baselines, saved by `fallow health --save-baseline` and `fallow dupes --save-baseline`. `FALLOW_FAIL_ON_STALE_BASELINE` judges them too. Other commands ignore them. |
         | `FALLOW_DRY_RUN` | `"true"` | Preview changes without modifying files (fix command) |
@@ -1002,6 +1004,21 @@ To gate on severity when your project uses the default combined run, add `comman
 To gate on every finding in changed files, inherited or introduced, use `gate: all` (`FALLOW_AUDIT_GATE: "all"`). This is the strict mode. No new finding gets in, but old findings in touched files block the merge until you clean them up.
 
 The issue count of `command: audit` includes styling findings in both the GitHub Action and the GitLab CI template. Under `gate: all`, the count includes every entry of `complexity.styling_findings`. Under `gate: new-only`, it includes `attribution.styling_introduced`.
+
+Under `gate: new-only`, an inherited complexity finding that got worse is `worsened`. For example, a function grew by 200 lines, or its cognitive complexity went up. The `worsened` input (`FALLOW_AUDIT_WORSENED`) selects the effect:
+
+- `warn` (default): the verdict is at least `warn`, and the job does not fail. A GitHub Check Run then reports `neutral` instead of `success`.
+- `error`: a worsened finding counts like an introduced finding. The issue count then also includes `attribution.complexity_worsened`, so a failed audit does not report 0 issues.
+- `off`: no finding is worsened. The verdict and the Check Run stay as in fallow versions before this feature.
+
+```yaml
+- uses: fallow-rs/fallow@v3
+  with:
+    command: audit
+    worsened: error
+```
+
+The GitHub job summary marks each worsened finding. See [Worsened complexity findings](/cli/audit#worsened-complexity-findings) for the measured values and the line count minimum.
 
 <Tip>
 Audit needs a base ref. The action and the GitLab CI template detect the PR or MR base, so PR and MR pipelines need no extra configuration. On other pipelines (pushes, release branches, scheduled jobs), set `changed-since` (`FALLOW_CHANGED_SINCE`). Without it, fallow looks for a base itself: the upstream branch, then `origin/HEAD`, `origin/main` or `origin/master`, then a local `main` or `master`. When it finds none, the run stops with exit code 2. When the base it finds is the commit itself, for example on a push to `main`, audit has no changed files and returns `pass` without analyzing anything.
