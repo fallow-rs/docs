@@ -41,6 +41,7 @@ fallow audit
 |:-----|:------------|
 | `--gate new-only` | Default. Compare against the base ref and fail only on findings that the current changeset introduces. JSON reports inherited findings in `attribution` and marks them `introduced: false`. |
 | `--gate all` | Strict mode. Fail on every finding in changed files, including findings inherited from the base ref. Skips the extra base-snapshot attribution pass, so the run is faster. |
+| `--worsened <warn\|error\|off>` | The effect of a [worsened complexity finding](#worsened-complexity-findings) on the verdict under `new-only`. `warn` (default) makes the verdict at least `warn`. `error` counts the finding like an introduced finding. `off` reports no worsened finding. Has no effect with `--gate all`, which counts every finding. |
 
 You can set the gate in three places. All three accept the same values (`new-only`, `all`). Precedence: the CLI flag or the MCP `gate` parameter, then the config, then the default (`new-only`).
 
@@ -61,6 +62,53 @@ gate = "all"
 }
 ```
 </CodeGroup>
+
+#### Worsened complexity findings {#worsened-complexity-findings}
+
+Under `new-only`, an inherited complexity finding must not get worse. A finding is `worsened` when it matches a base finding, it is not introduced, and a measured value is higher than in the base finding. The measured values are:
+
+- cyclomatic complexity, at any growth.
+- cognitive complexity, at any growth.
+- the CRAP score, at any growth. Fallow compares CRAP only when the base finding and the head finding both have a score.
+- the line count of the function, when it grows by at least 5 lines. The line count includes comments and blank lines. The minimum keeps a finding inherited after a short comment or a formatter rewrap.
+
+For example, a function that grows from 80 to 300 lines with the same complexity values is `worsened`, not inherited. A finding whose exceeded metric grew stays introduced, in all modes.
+
+`--worsened` selects the effect on the verdict:
+
+| Value | Effect |
+|:------|:-------|
+| `warn` | Default. A worsened finding makes the verdict at least `warn`. The exit code stays 0, so CI that passed before the upgrade does not fail. A `pass` verdict can become `warn`. |
+| `error` | A worsened finding counts like an introduced finding. Its `complexity-*` rule then decides the verdict. |
+| `off` | No finding is worsened, and the verdict does not change. Use this value to keep the verdict of fallow versions before this feature. |
+
+You can set the mode in three places. Precedence: the CLI flag or the MCP `worsened` parameter, then the config key `audit.worsened`, then the default (`warn`).
+
+<CodeGroup>
+```bash CLI
+fallow audit --worsened error
+```
+
+```toml fallow.toml
+[audit]
+worsened = "error"
+```
+
+```jsonc MCP
+// fallow_audit tool params
+{
+  "worsened": "error"
+}
+```
+</CodeGroup>
+
+The human, `compact`, and `markdown` output add a "Worse than base" section. It lists each complexity finding with a grown value, with the base value and the head value. The section also lists an introduced finding whose exceeded metric grew. A `compact` line has this shape:
+
+```text
+worse-than-base:src/parser.ts:45:parseExpression:attribution=worsened,line_count=80->300
+```
+
+SARIF results put `attribution` and `worsened_metrics` in the property bag. CodeClimate descriptions name the grown values. The fingerprints do not change. In JSON, read `attribution` and `worsened_metrics` on each complexity finding. See [Key fields](#key-fields).
 
 #### Docs-only-diff fast path
 
@@ -205,7 +253,7 @@ An audit checks the `kind` of every baseline that it loads, and reports every mi
 | **fail** | 1 | Error-severity issues found | Fix the reported issues before merging. |
 | **error** | 2 | Runtime error (invalid ref, not a git repo, config error) | Check the error message. In JSON format, audit prints `{"error": true, "message": "...", "exit_code": 2}`. |
 
-Dead code issues use the severity from your [rules configuration](/configuration/rules) (error/warn/off). [Diff-risk rules](#diff-risk-rules) use their rule severity in the same way. Complexity findings above the configured thresholds use the [complexity rules](/configuration/rules#complexity-rules). They default to `error`. With `warn`, a complexity finding gives a `warn` verdict. The thresholds come from your `fallow health` config (defaults: cyclomatic 20, cognitive 15). Duplication is a warning unless you configure a `--threshold`. With the default `new-only` gate, the report can show inherited error-severity findings while the audit exits 0. The audit ignores `--fail-on-issues` and keeps its own verdict.
+Dead code issues use the severity from your [rules configuration](/configuration/rules) (error/warn/off). [Diff-risk rules](#diff-risk-rules) use their rule severity in the same way. Complexity findings above the configured thresholds use the [complexity rules](/configuration/rules#complexity-rules). They default to `error`. With `warn`, a complexity finding gives a `warn` verdict. The thresholds come from your `fallow health` config (defaults: cyclomatic 20, cognitive 15). Duplication is a warning unless you configure a `--threshold`. With the default `new-only` gate, the report can show inherited error-severity findings while the audit exits 0. A [worsened complexity finding](#worsened-complexity-findings) makes the verdict at least `warn`, or counts like an introduced finding with `--worsened error`. The audit ignores `--fail-on-issues` and keeps its own verdict.
 
 The [parse error gate](/cli/global-flags#parse-error-gate) (`--fail-on-parse-error` or `failOnParseError`) checks every file that the audit parsed, not only the changed files. The `verdict` does not include this gate. Read `gate_outcomes` for the exit reason.
 
@@ -222,6 +270,7 @@ Audit reports three counts that look alike but answer different questions. A CI 
 | `verdict` | Overall outcome (`pass` / `warn` / `fail`). Uses the per-rule severity from `.fallowrc.json` | **Yes** |
 | `attribution.dead_code_introduced`, `attribution.complexity_introduced`, `attribution.duplication_introduced`, `attribution.styling_introduced` | Findings that the changeset introduced under `gate: new-only`, at any severity | No |
 | `attribution.diff_risk_introduced` | All diff-risk findings, under both gates (`new-only` and `all`), at any severity. The change introduced each diff-risk finding | No |
+| `attribution.complexity_worsened` | Inherited complexity findings whose measured value grew, under `gate: new-only`, at any severity. These findings are also in `complexity_inherited` | No |
 | `summary.dead_code_issues`, `summary.complexity_findings`, `summary.duplication_clone_groups` | All findings in changed files (any gate), at any severity | No |
 | Per-finding `introduced: true \| false` | Whether the changeset introduced this finding | No (severity is per-rule, not per-finding) |
 
@@ -358,10 +407,12 @@ Audit scope: 12 changed files vs main (d4a2f91..HEAD)
 3. **Run three analyses** scoped to changed files: [dead code](/cli/dead-code), [complexity](/cli/health), [duplication](/cli/dupes).
 4. **Compute attribution**: with `new-only`, audit runs the same analyses at the base ref and compares structural issue keys. A dead-code key is the line-free canonical key of the finding: the rule, the root-relative path and the names, the same input as the [`finding_id`](/cli/dead-code#finding-id). A line shift above a finding therefore keeps it inherited. The keys compare by count, so a new second finding with the key of an inherited finding is introduced. An unlisted dependency is keyed by the package, so a new import site of a package that the base already reports stays inherited.
 
-   A complexity finding matches its base finding by the root-relative path and the function name. The line and the exceeded category do not affect the match, and a renamed file keeps its match. The finding is introduced when no base finding matches it, or when a metric that it exceeds has a higher value than in the base finding. An unchanged or lower metric keeps the finding inherited, also when the exceeded category changes (for example from `both` to `cyclomatic`). When a file has more than one finding with the same function name, each base finding matches at most one head finding. Findings with unchanged values match first, and the others match in line order.
+   A complexity finding matches its base finding by the root-relative path and the function name. The line and the exceeded category do not affect the match, and a renamed file keeps its match. The finding is introduced when no base finding matches it, or when a metric that it exceeds has a higher value than in the base finding. An unchanged or lower metric keeps the finding inherited, also when the exceeded category changes (for example from `both` to `cyclomatic`). When a file has more than one finding with the same function name, each base finding matches at most one head finding. Findings with unchanged values and an unchanged line count match first. Findings with unchanged values match next. The other findings then match in line order.
+
+   A matched finding that is not introduced is `worsened` when a measured value grew. See [Worsened complexity findings](#worsened-complexity-findings).
 
    A merge of the default branch brings in code that the default branch already has. When audit auto-detects the base, it also runs the analyses at the merged default-branch commits: `MERGE_HEAD` of a merge in progress, and the merge-base with the default branch after a merge commit. A finding that one of these commits already has is inherited, so the gate does not block the merge commit or the push after it. Code from a merged branch that the default branch does not contain stays introduced. With `--base` or `FALLOW_AUDIT_BASE`, audit compares with that one base only.
-5. **Compute verdict**: `new-only` gates only introduced findings. `all` gates every finding in changed files and skips the extra base-snapshot analysis.
+5. **Compute verdict**: `new-only` gates only introduced findings. `--worsened` decides the effect of worsened findings. `all` gates every finding in changed files and skips the extra base-snapshot analysis.
 
 ## Diff-risk rules {#diff-risk-rules}
 
@@ -574,12 +625,14 @@ added-suppression:src/index.ts:2:@ts-ignore,severity=warn
     "dead_code_inherited": 0,
     "complexity_introduced": 1,
     "complexity_inherited": 0,
+    "complexity_worsened": 0,
     "duplication_introduced": 0,
     "duplication_inherited": 0,
     "styling_introduced": 0,
     "styling_inherited": 0,
     "duplication_demoted": 0,
-    "diff_risk_introduced": 1
+    "diff_risk_introduced": 1,
+    "worsened": "warn"
   },
   "dead_code": {
     "schema_version": 10,
@@ -638,6 +691,10 @@ The audit `schema_version` is 13. Version 13 follows the embedded health contrac
 | `summary.duplication_clone_groups` | integer | Clone groups involving changed files |
 | `attribution.*_introduced` | integer | Findings whose structural key did not exist at the base ref. With `gate=all`, these stay `0`, because audit skips the base-snapshot attribution pass. |
 | `attribution.*_inherited` | integer | Findings already present at the base ref. Also `0` under `gate=all`. |
+| `attribution.worsened` | `"warn"` \| `"error"` \| `"off"` | The active [worsened mode](#worsened-complexity-findings). |
+| `attribution.complexity_worsened` | integer | Complexity findings whose `attribution` is `worsened`. These findings are also counted in `complexity_inherited`. |
+| `complexity.findings[].attribution` | `"introduced"` \| `"worsened"` \| `"inherited"` | The class of the finding against the base snapshot. Absent outside an audit with a base snapshot. |
+| `complexity.findings[].worsened_metrics` | array | One entry for each measured value that is higher than in the matched base finding: `metric` (`cyclomatic`, `cognitive`, `crap`, or `line_count`), `base`, and `head`. Present on a worsened finding, and on an introduced finding that matches a base finding. Absent when no value grew. |
 | `attribution.duplication_demoted` | integer | Clone groups that the `new-only` gate demoted from introduced to inherited, because no instance overlaps an added line. Always present in audit-family JSON (audit, review brief, MCP `audit`). Demoted groups still count in `duplication_inherited`, so this value never exceeds it. |
 | `dead_code.*[].introduced` | boolean | Present in audit JSON sub-results when base attribution is available. `true` means the finding is new compared with the base ref. |
 | `duplication.clone_groups[].demotion_reason` | string | Present only on demoted groups. A kebab-case reason for the demotion, currently `no-added-lines`. Fallow can add more values, so treat an unknown value as "some demotion reason". `fallow dupes --format json` never emits this field. |
@@ -668,12 +725,13 @@ The `audit` MCP tool wraps `fallow audit --format json --quiet --explain`:
     "base": "main",
     "gate": "new-only",
     "skip": ["dead-code"],
-    "css_deep": true
+    "css_deep": true,
+    "worsened": "error"
   }
 }
 ```
 
-When you omit `base`, the tool resolves it as described under [How it works](#how-it-works). To pin it, set `FALLOW_AUDIT_BASE` in the server environment. Set `gate` to `all` for strict mode. Set `skip` (for example `["dead-code"]`) or `only` to choose the sub-analyses, with the values and rules of `--skip` and `--only`. The tool includes styling findings by default. Set `css_deep` to `false` to skip project-wide styling reachability, or to `true` to force it back on when config turns it off. The tool returns the same JSON envelope as the CLI.
+When you omit `base`, the tool resolves it as described under [How it works](#how-it-works). To pin it, set `FALLOW_AUDIT_BASE` in the server environment. Set `gate` to `all` for strict mode. Set `worsened` to `warn`, `error`, or `off` to select the effect of a [worsened complexity finding](#worsened-complexity-findings). When you omit it, the tool uses `audit.worsened`. Set `skip` (for example `["dead-code"]`) or `only` to choose the sub-analyses, with the values and rules of `--skip` and `--only`. The tool includes styling findings by default. Set `css_deep` to `false` to skip project-wide styling reachability, or to `true` to force it back on when config turns it off. The tool returns the same JSON envelope as the CLI.
 
 The `audit` tool description is a short summary. Read the `fallow://tools/audit` [tool guide](/integrations/mcp#resources) for the detail. The guide names the five [diff-risk rules](#diff-risk-rules) and holds the styling, coverage, complexity unit, `group_by`, baseline, runtime-coverage and `FALLOW_DIFF_FILE` detail.
 
@@ -863,8 +921,13 @@ The walkthrough guide turns the brief into a strict contract with a coding agent
 **1. Fetch the guide.**
 
 ```bash
-fallow review --base main --walkthrough-guide --format json
+review="${TMPDIR:-/tmp}"
+fallow review --base main --walkthrough-guide --format json > "$review/fallow-guide.json"
 ```
+
+<Warning>
+  Save the guide and the judgment outside the project tree, for example in the temporary folder. A new file in the project tree changes the snapshot hash, and fallow then refuses the judgment as `stale`. Do not create `.fallow/` for these files, because a folder that you create has no ignore file.
+</Warning>
 
 The response has `digest` (brief + decision surface), `direction`, `graph_snapshot_hash`, `agent_schema`, `injection_note`, `emitted_signal_ids`, and `change_anchors`. Fallow builds the digest from the graph only and never adds PR prose, so the digest resists injection. The snapshot hash is pinned into the digest.
 
@@ -885,7 +948,7 @@ The field is absent when the graph was not retained or the unit is itself a test
 
 `change_anchors` has one stable `chg:` id per changed region (hunk), derived from the same diff source that the run used. The id is content-addressed (file path + normalized added text, without line numbers). It survives an edit above the hunk and a whitespace-only change, and it survives a rename through `previous_change_anchor`. With a change anchor, an agent can anchor a judgment about a changed REGION that has no graph finding (a trade-off with no `signal_id`). Fallow can then validate that broader trade-off, so the agent cannot invent it.
 
-**2. The agent returns judgment JSON.** Each judgment cites a `signal_id` OR a `change_anchor` that fallow emitted. The agent echoes the hash.
+**2. The agent returns judgment JSON.** Each judgment cites a `signal_id` OR a `change_anchor` that fallow emitted. The agent echoes the hash. The agent writes the judgment to `$review/fallow-judgment.json`, next to the guide.
 
 ```json
 {
@@ -907,7 +970,7 @@ The field is absent when the graph was not retained or the unit is itself a test
 **3. Post-validate the judgment against the live graph.**
 
 ```bash
-fallow review --base main --walkthrough-file judgment.json --format json
+fallow review --base main --walkthrough-file "$review/fallow-judgment.json" --format json
 ```
 
 Fallow sorts each judgment into one of these outcomes:
