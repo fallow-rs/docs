@@ -119,7 +119,7 @@ The default value `auto` selects the runner from the project, in this order:
 
 `borp` is a test runner that runs `node:test`. Fallow reads the test files of a `borp` command in this order. First, it reads the positional arguments. Fallow ignores a glob that starts with `!`, so it does not exclude those files. Second, it reads the glob of `-p` or `--pattern`. Third, it uses the default glob `**/*.test.{js,mjs,cjs,ts,mts,cts}`. These files are test entry points, so the plan finds the test files of the project. Fallow does not read a `.borp.yaml` file.
 
-Fallow finds Vitest in the project `node_modules`. For `node:test` and `bun test`, each test file runs in its own process. The test files are the files that the default patterns of the runner find.
+Fallow finds Vitest in the project `node_modules`. For `node:test` and `bun test`, each test file runs in its own process. The test files are the files that the default patterns of the runner find. These patterns do not go into a hidden directory, such as `.github/`. A test file in a hidden directory also runs when the plan maps it statically and its path matches a default pattern of the runner. A mapped test file that no default pattern matches does not run, and the run is `partial` with the reason `test-files-not-discovered`.
 
 With Vitest, a test that loads a source file with a native `require`, for example through `createRequire(import.meta.url)`, also gets the mutated file. This needs Node.js 22.15 or later. On an older Node.js version, the test runs the original file, and the report lists the file in `unloaded_paths`. Load the file with a static `import` instead.
 
@@ -208,7 +208,7 @@ fallow: mutation: 8/20 mutants done (1m25s)
 | Flag | Description |
 |:-----|:------------|
 | `--max-mutants <N>` | Run at most N covered mutants, in rank order. Uncovered mutants do not count. The others are `pending`. |
-| `--time-budget <DURATION>` | Stop starting mutants after this time, for example `90s`, `10m`, or `1h`. The others are `pending`. A run that started continues until its timeout, so the command can end a little after the budget. |
+| `--time-budget <DURATION>` | Stop starting mutants after this time, for example `90s`, `10m`, or `1h`. The others are `pending`. The run stops new mutants early, to keep time for the [retries](#retries) of its survivors and timeouts. A run that started continues until its timeout, so the command can end a little after the budget. |
 | `--setup-timeout <DURATION>` | Wait this long for each runner process to start, finish its dry run or reload (default `2m`). Use a longer value, for example `5m`, on a slow or busy host. |
 | `--runner-config <PATH>` | The Vitest config file of the run. The file must be inside the project root. See [Runner config](#runner-config). |
 | `--concurrency <N>` | The number of test processes. Default: half the logical cores. |
@@ -316,7 +316,7 @@ A `pruned` mutant has a reason. One of the reasons:
 
 ### Retries
 
-A `survived` or `timeout` mutant runs a second time in a new runner process. Host load can make a test time out, so one timeout is not proof that your tests detect the mutant. The second run of a timeout gets twice the time. A mutant with `"retried": true` in JSON got both runs. A `survived` or `timeout` mutant without the field got no second run, because the time budget ended first.
+A `survived` or `timeout` mutant runs a second time in a new runner process. Host load can make a test time out, so one timeout is not proof that your tests detect the mutant. The second run of a timeout gets twice the time. A mutant with `"retried": true` in JSON got both runs. A `survived` or `timeout` mutant without the field got no second run, because the time budget ended first. With `--time-budget`, the mutant runs keep time free for these second runs, so the [result cache](#result-cache) stores the confirmed survivors. A repeat run with the same budget then continues with the next mutants. A survivor without a second run is not stored, so a repeat run does it again.
 
 | First run | Second run | Final status |
 |:----------|:-----------|:-------------|
