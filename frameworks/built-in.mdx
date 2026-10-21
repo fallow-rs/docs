@@ -35,6 +35,7 @@ Most plugins activate automatically when the relevant package is in your `packag
     | **NestJS** | `@nestjs/core` |
     | **nest-commander** | `nest-commander` (credits the `run` method of each class that extends `CommandRunner`) |
     | **AdonisJS** | `@adonisjs/core` |
+    | **Egg.js / tegg** | `egg`, `@eggjs/core`, `@eggjs/tegg`, or the `package.json` key `egg`, `eggPlugin` or `eggModule` |
     | **Docusaurus** | `@docusaurus/core` |
     | **Nitro** | `nitropack` |
     | **Capacitor** | `@capacitor/core`, `@capacitor/cli` |
@@ -68,6 +69,7 @@ Most plugins activate automatically when the relevant package is in your `packag
     | Plugin | Enabler packages |
     |:-------|:-----------------|
     | **Vite** | `vite`, `rolldown-vite` |
+    | **Vite+** | `vite-plus`, or a root `vite.config.*` that imports `vite-plus`. See [Vite+](#vite-plus) |
     | **Webpack** | `webpack` |
     | **Rspack** | `@rspack/core`, `@rspack/cli` |
     | **Rsbuild** | `@rsbuild/core` |
@@ -82,7 +84,7 @@ Most plugins activate automatically when the relevant package is in your `packag
   <Tab title="Testing">
     | Plugin | Enabler packages |
     |:-------|:-----------------|
-    | **Vitest** | `vitest` or config file present |
+    | **Vitest** | `vitest`, `vite-plus`, or config file present |
     | **Rstest** | `@rstest/core` |
     | **Jest** | `jest` |
     | **Playwright** | `@playwright/test`, or `playwright` with a `playwright.config.ts` or `playwright.config.js` file in the package root |
@@ -229,6 +231,8 @@ Most plugins activate automatically when the relevant package is in your `packag
   | **Nx** | Executor references, main entry points, tsconfig paths, and the commands of `nx:run-commands` targets from `project.json`. See [Nx run-commands targets](#nx-run-commands-targets) |
   | **GraphQL Codegen** | Plugin imports and `documents` globs from `codegen*.{ts,js,cjs,mjs}` and `graphql.config.*`. Each `documents` glob is an entry pattern, because the codegen run reads these files without an import |
   | **TypeORM** | `migrations` globs from a `DataSource` config. See [TypeORM migrations](#typeorm-migrations) |
+  | **Vite+** | `pack.entry` values as entry points, and the `lint.jsPlugins`, `lint.overrides[].jsPlugins` and `lint.extends` packages from `vite.config.*`. See [Vite+](#vite-plus) |
+  | **Egg.js / tegg** | `package` values in `config/plugin.*` and `config/module.json`, `egg.framework`, `egg.tscompiler` and `egg.require` from `package.json`, and the default `egg` framework. See [Egg.js and tegg](#eggjs-and-tegg) |
   | **Kibana** | For each `kibana.jsonc` with `"type": "plugin"`: `public/index` when `plugin.browser`, `server/index` when `plugin.server`, `common/index`, and the index of each `plugin.extraPublicDirs` directory. Scout Playwright configs and global setup files. `setup`, `start` and `stop` on classes that implement `Plugin`, `PrebootPlugin` or `AsyncPlugin` |
   | **Hardhat** | Plugin imports and side-effect requires from `hardhat.config.ts` |
   | **Contentlayer** | `contentDirPath`, same-file `defineDocumentType` `filePathPattern` entries, and config imports from `contentlayer.config.*` |
@@ -376,6 +380,66 @@ An import can name its loaders inline, such as `require('!raw-loader?esModule=fa
 - A `!` is also valid in a file name. A request without a prefix, such as `./we!rd.js` or `pkg/a!b.js`, resolves as a plain path first when that file exists, also an installed package file. When the file does not exist, for example in a clone without installed packages, fallow reads the request the way webpack does: webpack splits every request on `!`, so `pkg/a!b.js` is the loader `pkg/a` for `b.js`.
 - Only inline loaders change an import. A loader that a rule in `module.rules` of a webpack config applies, such as `{ test: /\.worker\.js$/, use: 'worker-loader' }`, gives no worker or text loader semantics. The rule conditions (`test`, `include`, `exclude`, `issuer`, `resourceQuery`, the `oneOf` order) use JavaScript regular expressions and computed paths, and many projects build the rules in code, for example with `webpack-merge`, in the `webpack` function of `next.config.js`, or in Storybook `webpackFinal`. A static read would miss or misapply rules, and a misapplied text loader rule would hide the imports of every file that it matches. The configured loader packages still count as used dependencies.
 - When the resource does not resolve, the unresolved import shows the full request, so an `ignoreUnresolvedImports` entry must use the full request.
+
+## Vite+ {#vite-plus}
+
+Vite+ keeps the config of each tool that it bundles in `vite.config.*`, and runs the tools through the `vp` command. Fallow reads each block of the config with the rules for the same tool:
+
+| Block | What fallow reads |
+|:------|:------------------|
+| `test` | The Vitest settings. A `vite-plus` dependency enables the Vitest plugin, so the test and bench files are entry points without a `vitest` dependency. |
+| `pack` | Each `entry` value is a runtime entry point. `pack` can be one tsdown config or an array of configs. `entry` can be a string, an array or an object. |
+| `lint` | The Oxlint settings. The packages in `jsPlugins`, `overrides[].jsPlugins` and `extends` are used dependencies. |
+| `fmt` | Nothing. The block holds formatter options only. |
+| `staged` | The commands, like a lint-staged config. They credit packages only. |
+| `run.tasks` | The commands, like `package.json` scripts. A task with `cwd` gives no command, because its paths resolve against another directory. |
+
+```ts vite.config.ts
+import { defineConfig } from 'vite-plus';
+
+export default defineConfig({
+  pack: { entry: ['src/index.ts', 'src/cli.ts'] },
+  lint: { jsPlugins: ['@e18e/eslint-plugin'] },
+});
+```
+
+In this example, `src/index.ts` and `src/cli.ts` are entry points, and `@e18e/eslint-plugin` is a used dependency.
+
+Fallow reads the `staged` and `run.tasks` blocks from the root `vite.config.*` of the project and of each workspace package. A config in a nested fixture directory gives no command. The scripts in `.vite-hooks/` are read like Git hook scripts.
+
+The `vp`, `vpr` and `vpx` binaries credit `vite-plus`. The bundled tool decides how fallow reads the arguments of a `vp` subcommand:
+
+- `vp lint`, `vp fmt` and `vp check` take file targets that are not entry points. See [Formatter and linter targets](/analysis/dead-code#formatter-and-linter-targets).
+- `vp test -c <file>` reads the file as a Vitest config.
+- `vp pack <file>` makes the file an entry point.
+- `vp run <task>` and `vpr <task>` call a declared script, also with the `-r`, `-w` and `--filter` selection of pnpm.
+- `vp exec`, `vp dlx` and `vpx` run their child command, as `npx` does. A `vp exec` with `-r` or `--filter` makes no entry point.
+- `vp config`, `vp install` and the other subcommands take no file arguments.
+
+A `vi.mock` call through `vite-plus/test` counts as a Vitest mock.
+
+## Egg.js and tegg
+
+The Egg loader loads the files of an app, a framework or a plugin by directory convention, so no source file imports them. Fallow marks these files as entry points:
+
+- `app.js` and `agent.js`
+- `app/router.js` or `app/router/index.js`
+- the files in `app/controller`, `app/service`, `app/middleware` and `app/schedule`, also in subdirectories
+- the files in `app/extend`
+- `config/config.*.js` and `config/plugin.*.js`
+
+The same rules apply to a nested app, such as an example app or a test fixture app. Fallow finds a nested app through its `config/config.default.*` or `config/plugin.*` file. Each pattern also matches the `.cjs`, `.mjs`, `.ts`, `.cts` and `.mts` extensions.
+
+tegg loads every source file of a directory whose `package.json` has an `eggModule` key, or that `config/module.json` lists. Fallow marks these files as entry points too. Like tegg, it skips hidden directories, `node_modules`, `test`, `coverage`, declaration files and `vitest.config.*`.
+
+A `package` value in `config/plugin.*` counts as a used dependency:
+
+```js
+// config/plugin.js
+exports.redis = { enable: true, package: '@eggjs/redis' };
+```
+
+Fallow credits the package to the `package.json` that owns the app: the nearest manifest with a dependency section outside a `test` or `fixtures` directory. A test fixture app therefore credits the workspace package that runs its tests. A package that only another workspace names stays reported.
 
 ## Module Federation
 
