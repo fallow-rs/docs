@@ -18,7 +18,7 @@ The `--dupes-*` flags apply to combined mode. When you do not set one, fallow us
 | `--allow-remote-extends` | Allow trusted config files to extend HTTPS URLs (default: off, so an HTTPS `extends` entry exits 2). See [`fallow guard`](/cli/guard). |
 | `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`, `badge`, `github-annotations`, `github-summary`. Alias: `--output`. `--format json` is compact by default; add `--pretty` for indented output. |
 | `--pretty` | Indent `--format json` output so you can read it. JSON is compact by default, so machines and agents get the same schema with less output. Applies only to JSON output. SARIF, Code Climate, baselines, snapshots, caches, and other persisted JSON keep their format with or without this flag. |
-| `-q, --quiet` | Suppress progress bars and status messages |
+| `-q, --quiet` | Suppress progress bars, status messages, and the stderr warnings that repeat a `workspace_diagnostics[]` entry. See [Quiet runs](#quiet-runs) |
 | `--no-cache` | Disable incremental caching and parse all files again. For `fallow mutation`, also run each mutant again instead of reusing an [earlier result](/cli/mutation#result-cache) |
 | `--threads <N>` | Number of parser threads (default: available parallelism) |
 | `--max-file-size <MB>` | At discovery, skip source files larger than this many megabytes and do not parse them (default `5`; `0` disables the guard). On large repositories, one multi-megabyte generated, vendored, or bundled file can make fallow run out of memory. This guard prevents that. While the guard is on, fallow also skips large one-line minified JS assets. Fallow always analyzes declaration files (`.d.ts`), for all sizes. Fallow reports skipped files on stderr and in `--format json` under `workspace_diagnostics` (`kind: "skipped-large-file"` or `"skipped-minified-file"`). You can also set it with `FALLOW_MAX_FILE_SIZE`. |
@@ -105,11 +105,23 @@ When the default cache directory `.fallow` resolves outside these directories, f
 
 The MCP `save_baseline`, `save_regression_baseline`, and `save_snapshot` parameters return a tool error for the same paths.
 
+## Quiet runs
+
+A quiet run (`--quiet`, `--ci` or `FALLOW_QUIET`) hides progress output. It also hides the stderr warnings that repeat a `workspace_diagnostics[]` entry or describe the analysis inputs, for example:
+
+- parse degradations
+- the tsconfig chain warning
+- re-export cycles
+- skipped `package.json` entry points
+- a graph cache that fallow cannot use
+
+The JSON output does not change, so a script can still read every entry. To show these warnings in a quiet run, set `RUST_LOG`, for example `RUST_LOG=warn`. Config warnings, such as an unknown rule name, and the stderr lines of gates and baselines still print.
+
 ## Parse error gate
 
 By default, a source file that fallow cannot parse does not change the exit code. The parser also rejects valid syntax that is newer than the parser, so the gate is off by default. To fail the run on such a file, pass `--fail-on-parse-error` or set `failOnParseError: true` in the config.
 
-When the gate is on and a file has a `source-parse-degraded` diagnostic, the run exits 1 in every output format. The `gate_outcomes["parse-error"]` entry has a `files` array. Each entry names a file and its parser error count. The human output prints one line per file.
+When the gate is on and a file has a `source-parse-degraded` diagnostic, the run exits 1 in every output format. A file that [`ignoreFindings`](/configuration/overview#ignorefindings) covers has no such diagnostic, so it does not count. The `gate_outcomes["parse-error"]` entry has a `files` array. Each entry names a file and its parser error count. The human output prints one line per file.
 
 - `health --report-only` shows the verdict and does not fail.
 - `fallow audit` checks every file that it parsed, not only the changed files. A file that was already unparseable therefore fails every audit with the gate on, also with `--gate new-only`. The audit `verdict` does not include this gate. Read `gate_outcomes` for the exit reason.
