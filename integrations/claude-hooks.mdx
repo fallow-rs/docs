@@ -88,6 +88,34 @@ gate = "all"
 
 You can also edit `.claude/hooks/fallow-gate.sh` to pass `--gate all`. But each `fallow hooks install --target agent` run regenerates the script and removes your edit. Use the config file for a permanent setting.
 
+## Block message
+
+When the gate blocks, it writes a short message to stderr. Claude Code and Codex give this message to the agent as the reason for the block. The message has:
+
+- the line `fallow-gate: blocked by fallow <version> at <binary>`,
+- the verdict and the number of findings that caused the block,
+- one line for each of these findings, in the form `<kind> <path>:<line> <name>`,
+- the path of the full JSON report.
+
+```text
+fallow-gate: blocked by fallow 3.36.0 at /usr/local/bin/fallow
+fallow-gate: verdict fail, 2 finding(s) caused the block:
+  unused-export src/utils.ts:12 formatDate
+  complexity src/parser.ts:40 parse
+fallow-gate: full report: /path/to/repo/.fallow/gate-report.json
+```
+
+With the default `gate=new-only`, the list holds only the findings that the changeset introduces. Inherited findings are not in the list, but they stay in the full report. With `gate = "all"`, the list holds every finding that is not a warning. The message lists at most 50 findings and gives the count of the rest.
+
+The gate writes the full report, the output of `fallow audit --format json --explain`, to `.fallow/gate-report.json` in the audited tree. The `.fallow/` directory holds a `.gitignore` with `*`, so the report does not show in `git status`. Two env vars change this behavior:
+
+| Env var | Effect |
+|---|---|
+| `FALLOW_GATE_REPORT` | Writes the full report to this path. A relative path resolves against the audited tree. |
+| `FALLOW_GATE_OUTPUT=json` | Prints the full JSON report on stderr, as gates from earlier versions did, and writes no report file. |
+
+Run `fallow agent install` or `fallow hooks install --target agent` again to get this message in an installed gate.
+
 ## Comparison base
 
 The hook runs `fallow audit` with no `--base`. Audit then uses the `git merge-base` (fork point) as the comparison base. It compares against the upstream of the branch, or else the remote default (`origin/main`). Audit finds the merge-base at run time, so a new branch from `origin/main` is gated only on its own changes.
@@ -253,7 +281,7 @@ The rest of the block explains the audit gate default and includes the task-to-c
 
 1. Claude tries to commit or push.
 2. The gate blocks only on `fail`-severity issues.
-3. Claude reads the JSON output and fixes the code.
+3. Claude reads the block message, which lists the findings that caused the block, and fixes the code. It can read the full JSON report for more detail.
 4. Claude tries again.
 
 ## See also
