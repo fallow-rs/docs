@@ -1582,6 +1582,47 @@ reason = "Queued legacy parser cleanup"
 
 See [Configuration](/configuration/overview) for the full config reference.
 
+### Literal membership chains
+
+The standard cyclomatic count adds 1 for each `||` operator. A check of one value against a list of literals therefore gets a high score, although it is one decision:
+
+```ts
+if (kind === "a" || kind === "b" || kind === "c" || kind === "d") {
+  throw new Error("Unsupported kind");
+}
+```
+
+The standard count of this function is 5. A rewrite to `["a", "b", "c", "d"].includes(kind)` gives 2, but it does not make the code simpler, and TypeScript no longer narrows `kind`.
+
+Set `health.cyclomaticPolicy` to `"literal-membership"` to count such a chain as one predicate:
+
+```json
+{
+  "minimumVersion": "3.36.0",
+  "health": {
+    "cyclomaticPolicy": "literal-membership"
+  }
+}
+```
+
+The function above then has the value 2 for the gates. A chain qualifies only when all of these are true:
+
+- Every operator in the chain is `||`. Parentheses do not change the chain.
+- Every operand is a `===` check between a plain identifier and a string, number, bigint, boolean, or `null` literal. The literal can be on either side.
+- Every operand checks the same identifier.
+
+Member access (`obj.kind === "a"`), calls, `==`, `!==`, template literals, and a chain that also contains another condition keep the standard count. A chain inside a wider condition, such as `flag && (kind === "a" || kind === "b")`, counts as one predicate, and the `&&` still adds 1.
+
+The policy changes these values:
+
+- the cyclomatic value that `maxCyclomatic` and `thresholdOverrides[].maxCyclomatic` compare against;
+- the cyclomatic value in every CRAP score, so `maxCrap` does not fail the same chain;
+- the CRAP values in the file scores (`crap_max`, `crap_above_threshold`).
+
+The health score, the complexity density, the vital signs, and the hotspots keep the standard count, so grades stay comparable across projects. The cognitive metric does not change.
+
+In JSON output, `summary.cyclomatic_policy` names the policy. A finding has the policy value in `cyclomatic`, and the standard value in `standard_cyclomatic` when the two differ. With `--complexity-breakdown`, each `||` contribution of a recognized chain has `"literal_membership": true`.
+
 ## Inline suppression
 
 To remove a single function from the complexity findings, add an inline comment:
