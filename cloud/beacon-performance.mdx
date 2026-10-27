@@ -1,0 +1,190 @@
+---
+title: "Beacon performance and overhead"
+description: "What the Fallow Cloud beacon costs in production, measured per runtime and mode against a baseline without the beacon. Covers where the cost comes from, how to lower it, and how to run the benchmark on your own hardware."
+keywords: ["fallow beacon", "beacon overhead", "runtime coverage cost", "v8 coverage overhead", "istanbul overhead", "beacon benchmark"]
+icon: "gauge"
+---
+
+The beacon measures how often each function runs in production. Optional entry points also record error groups, branch-level usage and CPU time per function. This work has a cost in each process and each page that runs the beacon. This page gives the measured cost per runtime and mode, the source of each cost, and the settings that make it smaller.
+
+## Test conditions
+
+All numbers on this page come from one benchmark run on 2026-10-27:
+
+| Item | Value |
+| :--- | :---- |
+| Hardware | Apple M5, 10 cores, 32 GB RAM, macOS |
+| Node | 22.23.3 (server and load client) |
+| Bun | 1.4.2 |
+| Browser | Headless Chromium 153 through Playwright 1.63.0, 4x CPU throttle |
+| Instrumenter | `oxc-coverage-instrument` 0.18.0 |
+| Beacon | `@fallow-cli/beacon` 0.6.6 |
+
+Each mode ran 5 times. The runs were interleaved: every run executed each mode one time, and each run started one mode later. Each server run had a 5 s warm-up, a 20 s measured window, 32 keep-alive connections from a separate Node process, and a beacon snapshot every 5 s. Each browser run was a 20 s session in a new browser context.
+
+Each cell is the median of the 5 runs. The range of the 5 runs is in brackets. When the ranges of two modes overlap, the difference is inside the noise of the machine.
+
+<Warning>
+The machine had background load during the runs. The 1-minute load average was 3.4 to 11.5. Use these numbers as a guide, and run the benchmark on your own hardware and service before you decide. See [Run the benchmark yourself](#run-the-benchmark-yourself).
+</Warning>
+
+The server target is a small JSON API with about 0.14 ms CPU per request. On this target, the relative cost is high. For a service with more work per request, the relative numbers below are an upper bound.
+
+## Node
+
+The baseline has no beacon and no coverage.
+
+| Mode | Throughput (req/s) | vs baseline | p99 latency (ms) | CPU per request (ms) | Snapshot block (ms) | Payload per snapshot (KB) |
+| :--- | :----------------- | :---------- | :--------------- | :------------------- | :------------------ | :------------------------ |
+| Baseline | 7297 [6642-8101] | | 10.5 [9.3-11.9] | 0.137 [0.12-0.15] | none | none |
+| V8 | 5034 [4594-5409] | -31% | 14.4 [13.3-16.1] | 0.200 [0.19-0.22] | 12.9 [11.1-13.8] | 34.0 |
+| V8 + `captureBlocks` | 4898 [4531-5341] | -33% | 16.4 [13.4-18.7] | 0.204 [0.19-0.22] | 12.4 [9.8-16.1] | 66.2 |
+| V8 + errors entry | 5267 [3648-5372] | -28% | 14.0 [13.4-36.5] | 0.191 [0.19-0.25] | 11.3 [9.7-18.9] | 43.2 |
+| V8 + profiler window | 5053 [1735-5465] | -31% | 15.2 [13.7-68.3] | 0.199 [0.19-0.34] | 11.0 [9.7-28.6] | 38.9 |
+| `oxc-coverage-instrument` (Istanbul) | 5658 [5344-6516] | -22% | 14.0 [11.4-22.3] | 0.176 [0.15-0.18] | 6.2 [4.0-7.9] | 11.6 |
+| Reference: binary V8 coverage, no beacon | 6601 [5012-7166] | -10% | 11.6 [10.7-16.9] | 0.152 [0.14-0.20] | 5.2 [4.0-11.7] | 16.1 |
+
+The modes:
+
+- **V8**: the process starts with `NODE_V8_COVERAGE`, and the beacon runs in V8 mode.
+- **V8 + `captureBlocks`**: as V8, plus branch-level usage. The throughput and CPU cost are inside the noise of V8. The payload per snapshot doubles.
+- **V8 + errors entry**: as V8, plus `withErrorCapture` from `@fallow-cli/beacon/errors`, and `captureError` for each failed request. The difference from V8 is inside the noise.
+- **V8 + profiler window**: as V8, plus `createCpuProfiler` from `@fallow-cli/beacon/profiler`. The benchmark keeps one profiler window open for the full measured window, so this row is the cost while a window is open. The difference from V8 is inside the noise, but the range is wide.
+- **Istanbul**: the target is built with `oxc-coverage-instrument`, and the beacon reads the Istanbul counters.
+- **Binary V8 coverage**: this mode has no beacon. It starts precise coverage through `node:inspector` with `callCount: false` and `detailed: false`, so V8 records only if a function ran. It shows how much of the V8 cost comes from call counts and block ranges. The beacon does not use this mode.
+
+Inside one snapshot, `v8.takeCoverage()` took 2.5 ms median [2.2-2.8]. The full snapshot (collect, diff, queue) blocked the event loop for 12.9 ms median in V8 mode and 6.2 ms in Istanbul mode. The peak RSS was 150 MB [144-154] for the baseline, 163 MB [156-164] for V8 and 159 MB [150-160] for Istanbul.
+
+## Bun
+
+Bun does not implement `v8.takeCoverage()`, so Bun has no V8 mode. The Istanbul modes instrument the code at module load with a Bun preload that runs `oxc-coverage-instrument`.
+
+| Mode | Throughput (req/s) | vs baseline | p99 latency (ms) | CPU per request (ms) | Peak RSS (MB) | Startup (ms) | Snapshot block (ms) |
+| :--- | :----------------- | :---------- | :--------------- | :------------------- | :------------ | :----------- | :------------------ |
+| Baseline | 8560 [8410-8857] | | 9.7 [8.4-10.5] | 0.120 [0.12-0.12] | 126 [108-143] | 19.3 [15.3-24.6] | none |
+| Istanbul | 7293 [4419-7833] | -15% | 12.6 [9.5-28.5] | 0.139 [0.13-0.21] | 150 [135-157] | 42.3 [33.0-112.4] | 0.22 [0.18-0.28] |
+| Istanbul + errors entry | 7558 [4876-8142] | -12% | 10.1 [9.0-25.5] | 0.134 [0.13-0.19] | 155 [152-162] | 91.8 [34.9-184.8] | 0.23 [0.20-0.32] |
+| Istanbul + profiler window | 7284 [5444-8886] | -15% | 10.7 [8.6-22.6] | 0.139 [0.12-0.18] | 239 [218-255] | 38.4 [34.2-44.4] | 0.21 [0.20-0.83] |
+
+On Bun, the run ranges of the beacon modes are wide. The startup time includes the instrumentation at module load. While a profiler window is open, the peak RSS is 239 MB against 150 MB for Istanbul alone. That is the clearest cost of the profiler on Bun. The payload per snapshot was 16.5 KB for Istanbul.
+
+## Browser
+
+The browser target is a small shop page: a product grid with filters, sort, search and a cart. Vite built it two times: a plain build, and a build with Istanbul counters from `oxc-coverage-instrument` plus the browser beacon. Each session ran a fixed cycle of clicks and input for 20 s.
+
+| Mode | JS bundle gzip (bytes) | Script at load (ms) | Script in session (ms) | LCP (ms) | INP (ms) | Ingest requests | Ingest bytes |
+| :--- | :--------------------- | :------------------ | :--------------------- | :------- | :------- | :-------------- | :----------- |
+| Plain bundle | 1498 | 17.7 [17.1-18.5] | 946 [916-1024] | 64 [60-72] | 24 | 0 | 0 |
+| Instrumented, `sampleRate: 1.0` | 12179 | 19.3 [17.8-19.5] | 992 [978-1038] | 64 [60-68] | 24 | 4 | 14091 |
+| Instrumented, `sampleRate: 0.01` | 12179 | 19.8 [18.1-20.2] | 978 [968-1027] | 68 [64-76] | 24 | 0 | 0 |
+
+No session had a long task. LCP and INP show no difference outside the noise. The app is small, so most of the bundle growth is the beacon and the coverage map. In your app, the counter cost grows with the amount of instrumented code that runs.
+
+At `sampleRate: 0.01`, about 99 of 100 page loads do not start the beacon, so they send nothing. These page loads still download the larger bundle and run the coverage counters.
+
+Each beacon entry point has a min+gzip size budget, which the beacon build checks with `bun run size` against `size-budget.json` in the beacon package source.
+
+## Where the cost comes from
+
+| Source | Where | What you pay |
+| :----- | :---- | :----------- |
+| V8 precise coverage | Node with `NODE_V8_COVERAGE` | `NODE_V8_COVERAGE` starts precise coverage with call counts and block ranges for the whole process. V8 counts every call, so the cost is on each request, also between snapshots. On the benchmark this is the largest cost. |
+| Istanbul counters | Instrumented code in Node, Bun and the browser | `oxc-coverage-instrument` adds a counter update to each function, statement and branch. The cost is on each request and each interaction, and it grows with the amount of instrumented code that runs. |
+| `takeCoverage` and the snapshot diff | Each snapshot | In V8 mode, `v8.takeCoverage()` is synchronous and blocks the event loop. The beacon then compares the snapshot with the last one and queues a payload. This was 12.9 ms per snapshot in V8 mode and 6.2 ms in Istanbul mode on Node, and 0.22 ms on Bun. |
+| Payload upload | Each snapshot with new data | One `POST /v1/ingest` per snapshot. On the benchmark, each server mode sent 720 requests per hour at the 5 s interval. The size per snapshot is in the tables above. `captureBlocks` doubled it on Node. |
+| Profiler window | Only while a window is open | The V8 CPU profiler samples at a 1 ms interval. The default is one 10 s window every 5 min. The benchmark kept one window open for the full measured time, so with the defaults the averaged cost is about 1/30 of the measured window cost. On Bun, the peak RSS grew while the window was open. |
+| Instrumentation bytes | The browser bundle | Instrumented code is larger, and the coverage map and the beacon add bytes. Every page load downloads and parses them, also a page load that the sample rate skips. |
+
+The benchmark took a snapshot every 5 s, so a short run had more than one snapshot. The default schedule takes one snapshot every 60 s. Scale the per-snapshot costs to your own interval: at 60 s, the beacon takes 60 snapshots per hour instead of 720.
+
+## Lower the cost
+
+- **Sample browser sessions.** Set `sampleRate` to a value from 0 to 1. A skipped session sends nothing. The bundle bytes and the counters stay.
+- **Take fewer snapshots.** `snapshotSchedule` controls when the beacon takes a snapshot:
+  - `"idle"` (default): one snapshot every 60 s, on a timer that does not keep the process alive.
+  - `"interval"`: one snapshot every `flushIntervalMs` (default 30 s).
+  - `"manual"`: no automatic snapshot. You call `flush()`, for example after a batch job or before shutdown.
+
+  Fewer snapshots mean fewer event-loop blocks and fewer ingest requests. The per-request cost of the coverage counters does not change.
+- **Leave the opt-ins off.** `captureBlocks`, the errors entry and the profiler are off by default. Turn on only the signal that you use. `captureBlocks` doubled the Node payload. The profiler costs memory and CPU while a window is open. Use `profileWindowMs` and `profileIntervalMs` to change the window length and the time between windows.
+- **Pick the coverage source on Node.** On this benchmark, the Istanbul mode cost less than the V8 mode:
+
+  | Node mode | Throughput vs baseline | CPU per request | Snapshot block | Payload per snapshot |
+  | :-------- | :--------------------- | :-------------- | :------------- | :------------------- |
+  | V8 | -31% | 0.200 ms | 12.9 ms | 34.0 KB |
+  | Istanbul | -22% | 0.176 ms | 6.2 ms | 11.6 KB |
+
+  The throughput ranges of the two modes overlap a little ([4594-5409] and [5344-6516]). The CPU per request ranges do not overlap. Istanbul needs a build step with `oxc-coverage-instrument`, and it counts only the code that you instrument. V8 mode needs no build change, but `NODE_V8_COVERAGE` must be set before the process starts. Measure both on your own service, because the Istanbul cost grows with the amount of instrumented code that runs.
+
+## Run the benchmark yourself
+
+The benchmark is in `packages/beacon/bench` of the beacon source repository. It is not part of the published npm package. It needs Bun, and Node 22.18 or later. From `packages/beacon`:
+
+```bash
+bun install            # once, at the repository root
+bun run build          # the benchmark loads the beacon from dist/
+bun run bench          # all runtimes: node, bun, browser
+```
+
+A full run with the defaults takes about 30 minutes. A smoke run takes about 1 minute, but do not compare smoke runs:
+
+```bash
+bun run bench --smoke
+```
+
+To measure only the main Node modes:
+
+```bash
+bun run bench --runtimes node --modes baseline,v8,istanbul
+```
+
+| Flag | Default | Meaning |
+| :--- | :------ | :------ |
+| `--runtimes` | `node,bun,browser` | Runtimes to run, comma-separated. |
+| `--runs` | `5` | Runs per mode. |
+| `--duration` | `20` | Seconds of measured load per run (browser: session length). |
+| `--warmup` | `5` | Seconds of load before each measured window. |
+| `--connections` | `32` | Concurrent keep-alive connections of the load client. |
+| `--snapshot` | `5` | Seconds between beacon snapshots. |
+| `--modes` | all | Modes to run, comma-separated. |
+| `--cpu-throttle` | `4` | Chromium CPU slowdown factor (browser only). |
+| `--node` | `node` | Node binary for the Node server and the load client. |
+| `--bun` | the running Bun | Bun binary for the Bun server. |
+| `--out` | `bench/results` | Output directory. |
+| `--smoke` | off | 1 run, 3 s duration, 1 s warm-up, 1 s snapshots. |
+
+The mode names are `baseline`, `v8`, `v8-blocks`, `v8-errors`, `v8-profiler`, `istanbul` and `inspector-binary` for Node, `baseline`, `istanbul`, `istanbul-errors` and `istanbul-profiler` for Bun, and `plain`, `instrumented-rate-1` and `instrumented-rate-0.01` for the browser. The browser runtime needs Chromium: run `bunx playwright install chromium` if it is missing.
+
+A full run writes `<runtime>.json` to the output directory, and a smoke run writes `<runtime>.smoke.json`. Each file has these fields:
+
+- `machine`: CPU model, cores, RAM, OS and the load average at the start.
+- `runtimeVersions`: the runtime, the load client Node, the instrumenter and the beacon version.
+- `method`: runs, order, warm-up, duration, connections and the snapshot interval.
+- `modes[]`: for each mode, `metrics.<name>` with `values` (one per run, in run order), `median`, `min` and `max`.
+
+A `null` value means that the run did not measure the metric, for example a snapshot metric in the baseline. It does not mean zero. To get the overhead of a mode, compare its `median` with the `median` of the baseline in the same file, and compare the `min` and `max` ranges too.
+
+For stable numbers:
+
+1. Close other work, such as builds, test runs, browsers and IDE indexing.
+2. Connect a laptop to power and turn off power saving.
+3. Check that `machine.loadAverageAtStart` is below 1 per core.
+4. Use 5 runs or more.
+5. Compare modes from the same file only.
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="Cloud beacon setup" icon="tower-broadcast" href="/cloud/beacon">
+    Set up the beacon in a browser or Node service and confirm the first ingest.
+  </Card>
+  <Card title="Runtime coverage" icon="chart-network" href="/analysis/runtime-coverage">
+    Use the runtime data in `fallow health` for hot paths and cold paths.
+  </Card>
+  <Card title="MCP server" icon="robot" href="/integrations/mcp">
+    Read the runtime data of Fallow Cloud from an agent with `get_cloud_runtime_context`.
+  </Card>
+  <Card title="fallow coverage" icon="terminal" href="/cli/coverage">
+    Upload the static inventory and source maps.
+  </Card>
+</CardGroup>
