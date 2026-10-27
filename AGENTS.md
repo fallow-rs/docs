@@ -2,7 +2,7 @@
 
 ## What this is
 
-Documentation source for [fallow](https://github.com/fallow-rs/fallow), deterministic codebase intelligence for TypeScript and JavaScript. The fallow.tools site renders these pages at [fallow.tools/docs](https://fallow.tools/docs/). Three audiences: AI agents, human developers, CI pipelines.
+Documentation source for [fallow](https://github.com/fallow-rs/fallow), deterministic codebase intelligence for TypeScript and JavaScript. The fallow.tools site renders these pages at [fallow.tools/docs](https://fallow.tools/docs/). The pages under `cloud/` document Fallow Cloud and render at [docs.fallow.cloud](https://docs.fallow.cloud/); keep them in the "Fallow Cloud" tab of `docs.json`. Three audiences: AI agents, human developers, CI pipelines.
 
 This repository is the canonical source for public user documentation. Read
 `PUBLICATION.md` before changing publication tooling or moving content between
