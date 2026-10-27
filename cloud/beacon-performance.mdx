@@ -1,6 +1,6 @@
 ---
 title: "Beacon performance and overhead"
-description: "What the Fallow Cloud beacon costs in production, measured per runtime and mode against a baseline without the beacon. Covers where the cost comes from, how to lower it, and how to run the benchmark on your own hardware."
+description: "What the Fallow Cloud beacon costs in production, measured per runtime and mode against a baseline without the beacon. Covers where the cost comes from, how to lower it, and how the numbers were measured."
 keywords: ["fallow beacon", "beacon overhead", "runtime coverage cost", "v8 coverage overhead", "istanbul overhead", "beacon benchmark"]
 icon: "gauge"
 ---
@@ -25,7 +25,7 @@ Each mode ran 5 times. The runs were interleaved: every run executed each mode o
 Each cell is the median of the 5 runs. The range of the 5 runs is in brackets. When the ranges of two modes overlap, the difference is inside the noise of the machine.
 
 <Warning>
-The run used the benchmark load gate (`--max-load 2`, `--max-wait 90`), so each runtime started only at a 1-minute load average at or below 2 (Node 1.89 after a 180 s wait, Bun 1.65, browser 1.85 after a 60 s wait). The 1-minute load average per run was 1.85 to 2.91 for Node, 1.61 to 3.37 for Bun and 1.09 to 1.85 for the browser. Use these numbers as a guide, and run the benchmark on your own hardware and service before you decide. See [Run the benchmark yourself](#run-the-benchmark-yourself).
+Each runtime started only at a 1-minute load average of 2 or less (Node 1.89 after a 180 s wait, Bun 1.65, browser 1.85 after a 60 s wait). The 1-minute load average per run was 1.85 to 2.91 for Node, 1.61 to 3.37 for Bun and 1.09 to 1.85 for the browser. Use these numbers as a guide, and measure the effect on your own service before you decide. See [How we measured](#how-we-measured).
 </Warning>
 
 The server target is a small JSON API with about 0.12 ms CPU per request. On this target, the relative cost is high. For a service with more work per request, the relative numbers below are an upper bound.
@@ -129,63 +129,17 @@ The benchmark took a snapshot every 5 s, so a short run had more than one snapsh
 
   The throughput ranges ([5721-5929] and [6786-7339]) and the CPU per request ranges of the two modes do not overlap. Istanbul needs a build step with `oxc-coverage-instrument`, and it counts only the code that you instrument. V8 mode needs no build change, but `NODE_V8_COVERAGE` must be set before the process starts. Measure both on your own service, because the Istanbul cost grows with the amount of instrumented code that runs.
 
-## Run the benchmark yourself
+## How we measured
 
-The benchmark is in `packages/beacon/bench` of the beacon source repository. It is not part of the published npm package. It needs Bun, and Node 22.18 or later. From `packages/beacon`:
+We compared each beacon setup, a mode, with a baseline without the beacon in the same run. A mode is one runtime with one beacon configuration, for example Node with `NODE_V8_COVERAGE` or Bun with Istanbul counters and error capture.
 
-```bash
-bun install            # once, at the repository root
-bun run build          # the benchmark loads the beacon from dist/
-bun run bench          # all runtimes: node, bun, browser
-```
+- **Server.** A small JSON API ran in Node and in Bun. A separate Node process sent load over 32 keep-alive connections. Each run had a 5 s warm-up and then a 20 s measured window. We measured throughput, p99 latency, CPU time per request, peak RSS, the time that each snapshot blocked the process, and the payload size per snapshot.
+- **Browser.** A small shop page ran in headless Chromium with a 4x CPU throttle. Each run was a 20 s session in a new browser context. We measured the gzip size of the JavaScript bundle, the script time at load, LCP, INP and the number of ingest requests.
+- **Order.** Each mode ran 5 times. The runs were interleaved: every run executed each mode one time, and each run started one mode later. So a slow period of the machine affected all modes, not one mode.
+- **Load gate.** Each runtime started only at a 1-minute load average of 2 or less. We recorded the load average of each run, and the [test conditions](#test-conditions) give the values.
+- **Results.** Each cell is the median of the 5 runs, with the range of the runs in brackets. We compared each mode only with the baseline of the same runtime and the same run set.
 
-A full run with the defaults takes about 30 minutes. A smoke run takes about 1 minute, but do not compare smoke runs:
-
-```bash
-bun run bench --smoke
-```
-
-To measure only the main Node modes:
-
-```bash
-bun run bench --runtimes node --modes baseline,v8,istanbul
-```
-
-| Flag | Default | Meaning |
-| :--- | :------ | :------ |
-| `--runtimes` | `node,bun,browser` | Runtimes to run, comma-separated. |
-| `--runs` | `5` | Runs per mode. |
-| `--duration` | `20` | Seconds of measured load per run (browser: session length). |
-| `--warmup` | `5` | Seconds of load before each measured window. |
-| `--connections` | `32` | Concurrent keep-alive connections of the load client. |
-| `--snapshot` | `5` | Seconds between beacon snapshots. |
-| `--modes` | all | Modes to run, comma-separated. |
-| `--cpu-throttle` | `4` | Chromium CPU slowdown factor (browser only). |
-| `--node` | `node` | Node binary for the Node server and the load client. |
-| `--bun` | the running Bun | Bun binary for the Bun server. |
-| `--out` | `bench/results` | Output directory. |
-| `--smoke` | off | 1 run, 3 s duration, 1 s warm-up, 1 s snapshots. |
-| `--max-load` | `2` | Start each runtime only when the 1-minute load average is at or below this value. |
-| `--max-wait` | `90` | Minutes to wait for `--max-load`; after that the run fails. |
-
-The mode names are `baseline`, `v8`, `v8-blocks`, `v8-errors`, `v8-profiler`, `istanbul` and `inspector-binary` for Node, `baseline`, `istanbul`, `istanbul-errors` and `istanbul-profiler` for Bun, and `plain`, `instrumented-rate-1` and `instrumented-rate-0.01` for the browser. The browser runtime needs Chromium: run `bunx playwright install chromium` if it is missing.
-
-A full run writes `<runtime>.json` to the output directory, and a smoke run writes `<runtime>.smoke.json`. Each file has these fields:
-
-- `machine`: CPU model, cores, RAM, OS and the load average at the start.
-- `runtimeVersions`: the runtime, the load client Node, the instrumenter and the beacon version.
-- `method`: runs, order, warm-up, duration, connections and the snapshot interval.
-- `modes[]`: for each mode, `metrics.<name>` with `values` (one per run, in run order), `median`, `min` and `max`.
-
-A `null` value means that the run did not measure the metric, for example a snapshot metric in the baseline. It does not mean zero. To get the overhead of a mode, compare its `median` with the `median` of the baseline in the same file, and compare the `min` and `max` ranges too.
-
-For stable numbers:
-
-1. Close other work, such as builds, test runs, browsers and IDE indexing.
-2. Connect a laptop to power and turn off power saving.
-3. Check that `machine.loadAverageAtStart` is below 1 per core.
-4. Use 5 runs or more.
-5. Compare modes from the same file only.
+The hardware and the versions are in the [test conditions](#test-conditions). The tables above list every measured mode.
 
 ## See also
 
