@@ -22,13 +22,13 @@ All numbers on this page come from one benchmark run on 2026-10-27:
 
 Each mode ran 5 times. The runs were interleaved: every run executed each mode one time, and each run started one mode later. Each server run had a 5 s warm-up, a 20 s measured window, 32 keep-alive connections from a separate Node process, and a beacon snapshot every 5 s. Each browser run was a 20 s session in a new browser context.
 
-Each cell is the median of the 5 runs. The range of the 5 runs is in brackets. When the ranges of two modes overlap, the difference is inside the noise of the machine.
+Each cell is the median of the 5 runs. The range of the 5 runs is in brackets. When the ranges of two modes overlap, the difference is inside the noise of the machine. On Node, compare the ranges without the outlier run (see below).
 
 <Warning>
-The machine had background load during the runs. The 1-minute load average was 3.4 to 11.5. Use these numbers as a guide, and run the benchmark on your own hardware and service before you decide. See [Run the benchmark yourself](#run-the-benchmark-yourself).
+Before each runtime started, the benchmark waited for a 1-minute load average below 2.0 (Node 1.74, Bun 1.90, browser 1.72). Other work on the machine made the load rise during the runs. The 1-minute load average per run was 1.7 to 17.4 for Node, 1.9 to 7.4 for Bun and 1.7 to 3.5 for the browser. The last Node runs ran during a load spike, so the range of every Node mode except the errors entry holds one low outlier run. The medians are robust to that run, but the ranges include it. Use these numbers as a guide, and run the benchmark on your own hardware and service before you decide. See [Run the benchmark yourself](#run-the-benchmark-yourself).
 </Warning>
 
-The server target is a small JSON API with about 0.14 ms CPU per request. On this target, the relative cost is high. For a service with more work per request, the relative numbers below are an upper bound.
+The server target is a small JSON API with about 0.13 ms CPU per request. On this target, the relative cost is high. For a service with more work per request, the relative numbers below are an upper bound.
 
 ## Node
 
@@ -36,13 +36,13 @@ The baseline has no beacon and no coverage.
 
 | Mode | Throughput (req/s) | vs baseline | p99 latency (ms) | CPU per request (ms) | Snapshot block (ms) | Payload per snapshot (KB) |
 | :--- | :----------------- | :---------- | :--------------- | :------------------- | :------------------ | :------------------------ |
-| Baseline | 7297 [6642-8101] | | 10.5 [9.3-11.9] | 0.137 [0.12-0.15] | none | none |
-| V8 | 5034 [4594-5409] | -31% | 14.4 [13.3-16.1] | 0.200 [0.19-0.22] | 12.9 [11.1-13.8] | 34.0 |
-| V8 + `captureBlocks` | 4898 [4531-5341] | -33% | 16.4 [13.4-18.7] | 0.204 [0.19-0.22] | 12.4 [9.8-16.1] | 66.2 |
-| V8 + errors entry | 5267 [3648-5372] | -28% | 14.0 [13.4-36.5] | 0.191 [0.19-0.25] | 11.3 [9.7-18.9] | 43.2 |
-| V8 + profiler window | 5053 [1735-5465] | -31% | 15.2 [13.7-68.3] | 0.199 [0.19-0.34] | 11.0 [9.7-28.6] | 38.9 |
-| `oxc-coverage-instrument` (Istanbul) | 5658 [5344-6516] | -22% | 14.0 [11.4-22.3] | 0.176 [0.15-0.18] | 6.2 [4.0-7.9] | 11.6 |
-| Reference: binary V8 coverage, no beacon | 6601 [5012-7166] | -10% | 11.6 [10.7-16.9] | 0.152 [0.14-0.20] | 5.2 [4.0-11.7] | 16.1 |
+| Baseline | 7886 [3107-8240] | | 9.8 [9.3-78.5] | 0.127 [0.12-0.16] | none | none |
+| V8 | 5517 [2257-5655] | -30% | 14.5 [12.8-80.7] | 0.180 [0.18-0.23] | 9.5 [9.2-11.9] | 34.6 |
+| V8 + `captureBlocks` | 5745 [2712-5952] | -27% | 12.7 [12.0-58.4] | 0.175 [0.17-0.22] | 12.1 [9.8-13.2] | 67.0 |
+| V8 + errors entry | 5514 [5317-5865] | -30% | 13.4 [12.1-14.2] | 0.182 [0.17-0.19] | 10.7 [9.9-11.0] | 43.8 |
+| V8 + profiler window | 5607 [2707-5871] | -29% | 13.7 [12.2-56.2] | 0.180 [0.17-0.21] | 9.5 [8.8-10.4] | 39.5 |
+| `oxc-coverage-instrument` (Istanbul) | 6506 [3076-7269] | -17% | 11.5 [9.9-54.5] | 0.153 [0.14-0.18] | 7.4 [4.7-8.1] | 11.6 |
+| Reference: binary V8 coverage, no beacon | 7775 [2961-7804] | -1% | 9.5 [9.4-79.6] | 0.130 [0.13-0.17] | 5.1 [4.3-7.9] | 16.1 |
 
 The modes:
 
@@ -53,7 +53,7 @@ The modes:
 - **Istanbul**: the target is built with `oxc-coverage-instrument`, and the beacon reads the Istanbul counters.
 - **Binary V8 coverage**: this mode has no beacon. It starts precise coverage through `node:inspector` with `callCount: false` and `detailed: false`, so V8 records only if a function ran. It shows how much of the V8 cost comes from call counts and block ranges. The beacon does not use this mode.
 
-Inside one snapshot, `v8.takeCoverage()` took 2.5 ms median [2.2-2.8]. The full snapshot (collect, diff, queue) blocked the event loop for 12.9 ms median in V8 mode and 6.2 ms in Istanbul mode. The peak RSS was 150 MB [144-154] for the baseline, 163 MB [156-164] for V8 and 159 MB [150-160] for Istanbul.
+Inside one snapshot, `v8.takeCoverage()` took 2.3 ms median [2.1-3.8]. The full snapshot (collect, diff, queue) blocked the event loop for 9.5 ms median in V8 mode and 7.4 ms in Istanbul mode. The peak RSS was 153 MB [139-154] for the baseline, 162 MB [156-163] for V8 and 159 MB [153-160] for Istanbul.
 
 ## Bun
 
@@ -61,12 +61,12 @@ Bun does not implement `v8.takeCoverage()`, so Bun has no V8 mode. The Istanbul 
 
 | Mode | Throughput (req/s) | vs baseline | p99 latency (ms) | CPU per request (ms) | Peak RSS (MB) | Startup (ms) | Snapshot block (ms) |
 | :--- | :----------------- | :---------- | :--------------- | :------------------- | :------------ | :----------- | :------------------ |
-| Baseline | 8560 [8410-8857] | | 9.7 [8.4-10.5] | 0.120 [0.12-0.12] | 126 [108-143] | 19.3 [15.3-24.6] | none |
-| Istanbul | 7293 [4419-7833] | -15% | 12.6 [9.5-28.5] | 0.139 [0.13-0.21] | 150 [135-157] | 42.3 [33.0-112.4] | 0.22 [0.18-0.28] |
-| Istanbul + errors entry | 7558 [4876-8142] | -12% | 10.1 [9.0-25.5] | 0.134 [0.13-0.19] | 155 [152-162] | 91.8 [34.9-184.8] | 0.23 [0.20-0.32] |
-| Istanbul + profiler window | 7284 [5444-8886] | -15% | 10.7 [8.6-22.6] | 0.139 [0.12-0.18] | 239 [218-255] | 38.4 [34.2-44.4] | 0.21 [0.20-0.83] |
+| Baseline | 9869 [7157-10029] | | 7.7 [7.3-14.6] | 0.104 [0.10-0.14] | 126 [120-133] | 21.7 [15.9-24.2] | none |
+| Istanbul | 9003 [5514-9183] | -9% | 8.4 [7.7-29.3] | 0.112 [0.11-0.17] | 152 [144-156] | 38.5 [27.8-56.3] | 0.20 [0.18-0.23] |
+| Istanbul + errors entry | 8106 [4961-9278] | -18% | 12.8 [7.7-32.8] | 0.120 [0.11-0.18] | 155 [145-165] | 34.4 [28.6-43.4] | 0.21 [0.20-0.61] |
+| Istanbul + profiler window | 8826 [8324-9017] | -11% | 8.0 [7.9-9.2] | 0.116 [0.11-0.12] | 250 [220-256] | 35.9 [34.7-42.9] | 0.22 [0.20-0.28] |
 
-On Bun, the run ranges of the beacon modes are wide. The startup time includes the instrumentation at module load. While a profiler window is open, the peak RSS is 239 MB against 150 MB for Istanbul alone. That is the clearest cost of the profiler on Bun. The payload per snapshot was 16.5 KB for Istanbul.
+On Bun, the run ranges of the Istanbul and errors entry modes are wide, and the range of each beacon mode overlaps the baseline range for throughput, p99 and CPU per request. The startup time includes the instrumentation at module load. While a profiler window is open, the peak RSS is 250 MB against 152 MB for Istanbul alone. That is the clearest cost of the profiler on Bun. The payload per snapshot was 16.5 KB for Istanbul.
 
 ## Browser
 
@@ -74,9 +74,9 @@ The browser target is a small shop page: a product grid with filters, sort, sear
 
 | Mode | JS bundle gzip (bytes) | Script at load (ms) | Script in session (ms) | LCP (ms) | INP (ms) | Ingest requests | Ingest bytes |
 | :--- | :--------------------- | :------------------ | :--------------------- | :------- | :------- | :-------------- | :----------- |
-| Plain bundle | 1498 | 17.7 [17.1-18.5] | 946 [916-1024] | 64 [60-72] | 24 | 0 | 0 |
-| Instrumented, `sampleRate: 1.0` | 12179 | 19.3 [17.8-19.5] | 992 [978-1038] | 64 [60-68] | 24 | 4 | 14091 |
-| Instrumented, `sampleRate: 0.01` | 12179 | 19.8 [18.1-20.2] | 978 [968-1027] | 68 [64-76] | 24 | 0 | 0 |
+| Plain bundle | 1498 | 19.7 [17.3-20.7] | 866 [860-868] | 72 [60-76] | 24 | 0 | 0 |
+| Instrumented, `sampleRate: 1.0` | 11923 | 21.7 [21.1-22.1] | 919 [893-934] | 76 [72-76] | 24 | 4 | 13786 |
+| Instrumented, `sampleRate: 0.01` | 11923 | 21.9 [19.9-22.4] | 913 [893-953] | 76 [68-76] | 24 | 0 | 0 |
 
 No session had a long task. LCP and INP show no difference outside the noise. The app is small, so most of the bundle growth is the beacon and the coverage map. In your app, the counter cost grows with the amount of instrumented code that runs.
 
@@ -97,15 +97,13 @@ Each beacon entry point has a min+gzip size budget. The beacon build checks it w
 | Error breakdown | `@fallow-cli/beacon/errors-breakdown` | 1664 |
 | Script chunks | `@fallow-cli/beacon/script-chunks` | 292 |
 
-The browser bundle column in the table above comes from the benchmark run. That run used a browser entry 259 bytes larger than the size in this table.
-
 ## Where the cost comes from
 
 | Source | Where | What you pay |
 | :----- | :---- | :----------- |
 | V8 precise coverage | Node with `NODE_V8_COVERAGE` | `NODE_V8_COVERAGE` starts precise coverage with call counts and block ranges for the whole process. V8 counts every call, so the cost is on each request, also between snapshots. On the benchmark this is the largest cost. |
 | Istanbul counters | Instrumented code in Node, Bun and the browser | `oxc-coverage-instrument` adds a counter update to each function, statement and branch. The cost is on each request and each interaction, and it grows with the amount of instrumented code that runs. |
-| `takeCoverage` and the snapshot diff | Each snapshot | In V8 mode, `v8.takeCoverage()` is synchronous and blocks the event loop. The beacon then compares the snapshot with the last one and queues a payload. This was 12.9 ms per snapshot in V8 mode and 6.2 ms in Istanbul mode on Node, and 0.22 ms on Bun. |
+| `takeCoverage` and the snapshot diff | Each snapshot | In V8 mode, `v8.takeCoverage()` is synchronous and blocks the event loop. The beacon then compares the snapshot with the last one and queues a payload. This was 9.5 ms per snapshot in V8 mode and 7.4 ms in Istanbul mode on Node, and 0.20 ms on Bun. |
 | Payload upload | Each snapshot with new data | One `POST /v1/ingest` per snapshot. On the benchmark, each server mode sent 720 requests per hour at the 5 s interval. The size per snapshot is in the tables above. `captureBlocks` doubled it on Node. |
 | Profiler window | Only while a window is open | The V8 CPU profiler samples at a 1 ms interval. The default is one 10 s window every 5 min. The benchmark kept one window open for the full measured time, so with the defaults the averaged cost is about 1/30 of the measured window cost. On Bun, the peak RSS grew while the window was open. |
 | Instrumentation bytes | The browser bundle | Instrumented code is larger, and the coverage map and the beacon add bytes. Every page load downloads and parses them, also a page load that the sample rate skips. |
@@ -126,10 +124,10 @@ The benchmark took a snapshot every 5 s, so a short run had more than one snapsh
 
   | Node mode | Throughput vs baseline | CPU per request | Snapshot block | Payload per snapshot |
   | :-------- | :--------------------- | :-------------- | :------------- | :------------------- |
-  | V8 | -31% | 0.200 ms | 12.9 ms | 34.0 KB |
-  | Istanbul | -22% | 0.176 ms | 6.2 ms | 11.6 KB |
+  | V8 | -30% | 0.180 ms | 9.5 ms | 34.6 KB |
+  | Istanbul | -17% | 0.153 ms | 7.4 ms | 11.6 KB |
 
-  The throughput ranges of the two modes overlap a little ([4594-5409] and [5344-6516]). The CPU per request ranges do not overlap. Istanbul needs a build step with `oxc-coverage-instrument`, and it counts only the code that you instrument. V8 mode needs no build change, but `NODE_V8_COVERAGE` must be set before the process starts. Measure both on your own service, because the Istanbul cost grows with the amount of instrumented code that runs.
+  The throughput ranges of the two modes overlap ([2257-5655] and [3076-7269]) only because each range holds the outlier run. The CPU per request ranges do not overlap. Istanbul needs a build step with `oxc-coverage-instrument`, and it counts only the code that you instrument. V8 mode needs no build change, but `NODE_V8_COVERAGE` must be set before the process starts. Measure both on your own service, because the Istanbul cost grows with the amount of instrumented code that runs.
 
 ## Run the benchmark yourself
 
