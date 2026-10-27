@@ -219,6 +219,7 @@ fallow: mutation: 8/20 mutants done (1m25s)
 | `--min-score <0-100>` | Exit with code 1 when the mutation score is below this percentage. |
 | `--verdicts <PATH>` | A verdict document that marks mutants as equivalent. See [Verdicts](#verdicts-for-equivalent-mutants). |
 | `--typecheck` | Type-check each survivor after the tests. See [Type check of survivors](#type-check-of-survivors). |
+| `--resume` | Continue an interrupted or `partial` run. The run reuses the final results in its journal and runs only the other mutants. See [Resume a run](#resume-a-run). |
 | `--allow-dirty` | Run in a git worktree with uncommitted changes. |
 | `--allow-side-effects` | Keep mutants in functions whose own body calls a file system, process, network, or database API. See [Safety rules](#safety-rules). |
 | `-o, --output-file <PATH>` | Write the report to a file after the run. |
@@ -419,6 +420,30 @@ The key covers the mutant, the content of its source file, its covering tests, t
 - A failed write of the cache file adds a `cache-write-failed` entry to `errors[]`. The run result stays.
 - The global `--no-cache` flag turns off the result cache. The run then reads and writes no entry.
 
+## Resume a run
+
+Each run writes its final results to `mutation/journal.jsonl` in the fallow cache directory, by default `.fallow/mutation/journal.jsonl`. A result is final when the mutant is `killed`, or when a retry confirmed that it `survived`. The run writes each result when it is final. An interrupted run, for example after Ctrl-C, therefore keeps its finished results. The run writes the journal also with `--no-cache`.
+
+```bash
+fallow mutation --time-budget 10m
+fallow mutation --resume
+```
+
+`fallow mutation --resume` reuses the results in the journal and runs only the other mutants:
+
+- The dry run always runs, because it finds the covering tests.
+- The journal must come from a run with the same inputs. These inputs include the fallow version, the runner, the runtime, the planned files, the runner config, the scope, the operators, and `--allow-side-effects`. A journal of other inputs exits with code 2 and `FALLOW_MUTATION_RESUME_MISMATCH`. The message names each input that differs.
+- `--max-mutants`, `--time-budget`, and `--concurrency` are not inputs. You can continue a run with other limits.
+- When a covering test file changed, the run does not reuse the journal result of that mutant. The mutant runs again, or its result comes from the [result cache](#result-cache).
+- When no journal exists, the run starts from the beginning and does not exit. The report says why.
+- `--plan --resume` exits with code 2, because a plan runs no mutant.
+- A reused result has `"resumed": true` on its entry in `mutants[]`. It counts in the score and the coverage in the same way as a new result.
+- The report has a `resume` object: `journal` (the path), `reused`, `rejected`, and `note` when the run did not read a journal. The object is absent without `--resume`. The human output prints one `Resumed:` line.
+
+A `timeout`, `flaky`, `runtime_error`, `no_coverage`, or `pending` result is never in the journal. These mutants run again in a resumed run.
+
+A `complete` run removes the journal. A `partial` run keeps it, so that a later `--resume` can continue it. An interrupted run and a run that exits with code 2 also keep the journal. A run without `--resume` replaces the journal.
+
 ## Saved report
 
 Each run saves its full JSON report to `.fallow/mutation/last-report.json` in the fallow cache directory. The cache directory has its own `.gitignore`, so the saved report does not make the worktree dirty. Each run replaces the saved report.
@@ -519,7 +544,7 @@ The JSON report lists each group under `verdicts`, together with a digest of the
 |:-----|:--------|
 | `0` | The plan, the run, or inspect finished. Survivors do not fail a run. |
 | `1` | `--min-score` or `mutation.minScore` is set, and the score is lower. |
-| `2` | Invalid input or an execution error. Examples: a dirty worktree without `--allow-dirty`, a cache directory that hides project files (`FALLOW_MUTATION_UNSAFE_CACHE_DIR`), a missing runtime or runner install, a runtime of the wrong kind for the runner (`FALLOW_MUTATION_RUNTIME_NOT_FOUND`), an invalid verdict document, a `--runner-config` file that does not exist inside the project root or a runner config with a runner other than Vitest (`FALLOW_INVALID_MUTATION_OPTIONS`), `--typecheck` without a type-aware companion (`FALLOW_MUTATION_TYPECHECK_UNAVAILABLE`), `--plan --typecheck`. |
+| `2` | Invalid input or an execution error. Examples: a dirty worktree without `--allow-dirty`, a cache directory that hides project files (`FALLOW_MUTATION_UNSAFE_CACHE_DIR`), a missing runtime or runner install, a runtime of the wrong kind for the runner (`FALLOW_MUTATION_RUNTIME_NOT_FOUND`), an invalid verdict document, a `--runner-config` file that does not exist inside the project root or a runner config with a runner other than Vitest (`FALLOW_INVALID_MUTATION_OPTIONS`), `--typecheck` without a type-aware companion (`FALLOW_MUTATION_TYPECHECK_UNAVAILABLE`), `--plan --typecheck`, `--plan --resume`, a `--resume` journal of other inputs (`FALLOW_MUTATION_RESUME_MISMATCH`). |
 
 The flag wins over the config key. A run with no score exits with `0`, also when every mutant is `no_coverage`.
 
