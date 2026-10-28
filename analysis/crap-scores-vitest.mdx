@@ -1,0 +1,299 @@
+---
+title: "CRAP scores with Vitest"
+description: "Get exact per-function CRAP scores for a TypeScript or JavaScript project that uses Vitest. Configure Vitest coverage, run fallow health, read the result, and gate new CRAP in CI."
+keywords: ["CRAP", "CRAP score", "Vitest", "coverage", "coverage-final.json", "v8", "istanbul", "untested complexity", "fallow health", "fallow audit", "TypeScript"]
+icon: "flask-vial"
+---
+
+CRAP (Change Risk Anti-Patterns) combines the cyclomatic complexity of a function with its test coverage. A complex function with few tests gets a high score. Fallow uses this formula:
+
+```text
+CRAP = CC^2 * (1 - cov/100)^3 + CC
+```
+
+`CC` is the cyclomatic complexity of the function. `cov` is the statement coverage of the function in percent.
+
+Without coverage data, fallow estimates the coverage from the module graph. This guide shows how to give fallow the real coverage from Vitest, so that each function gets an exact score.
+
+```bash
+npx vitest run --coverage
+npx fallow health --coverage coverage/coverage-final.json --max-crap 30
+```
+
+## Configure Vitest
+
+Fallow reads the Istanbul coverage map that the Vitest `json` reporter writes to `coverage/coverage-final.json`. Both Vitest coverage providers write this file.
+
+Install one provider package:
+
+<CodeGroup>
+```bash v8
+npm install --save-dev @vitest/coverage-v8
+```
+
+```bash istanbul
+npm install --save-dev @vitest/coverage-istanbul
+```
+</CodeGroup>
+
+Then add an `include` pattern to `vitest.config.ts`:
+
+```ts title="vitest.config.ts"
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  test: {
+    coverage: {
+      provider: "v8", // or "istanbul"
+      reporter: ["text", "json"],
+      include: ["src/**/*.ts"],
+    },
+  },
+});
+```
+
+| Option | Why fallow needs it |
+|:-------|:--------------------|
+| `provider` | Selects how Vitest collects coverage. Both values work. See [Provider differences](#provider-differences). |
+| `reporter` | `json` writes `coverage-final.json`. The default reporters of Vitest include `json`. When you set `reporter`, keep `json` in the list. |
+| `include` | Adds the source files that no test loads, with 0% coverage. Without it, Vitest writes only the files that a test loads. |
+
+<Warning>
+  Vitest 4 removed `coverage.all`. Vitest 4 and later ignore `all: true` and give no error. Use `coverage.include` to add the files that no test loads. In Vitest 3, `coverage.all` defaults to `true`, so you do not need `include`.
+</Warning>
+
+With Vitest 3 and the `v8` provider, a file that no test loads gets a placeholder entry with no functions. Fallow cannot match this entry, so these functions use the static estimate.
+
+When a source file is not in the coverage map, fallow uses the static estimate for its functions. The human output tells you how many functions matched:
+
+```text
+CRAP scores use Istanbul coverage where matched (4/7 functions); the rest fall back to the static estimate.
+```
+
+Vitest excludes test files from coverage by default. The functions in test files therefore always use the estimate. That is expected.
+
+## Run the analysis
+
+Run the tests with coverage, then give the coverage file to fallow:
+
+```bash
+npx vitest run --coverage
+npx fallow health --coverage coverage/coverage-final.json --max-crap 30
+```
+
+`--max-crap 30` is the default threshold. A function with a CRAP score of 30 or more is a finding, and `fallow health` exits with code 1. Change the value to make the gate stricter or less strict.
+
+`--coverage` also accepts the `coverage` directory. A relative path resolves against the project root.
+
+### Coverage file resolution
+
+When you do not pass `--coverage`, fallow looks for the coverage file in this order:
+
+1. The `FALLOW_COVERAGE` environment variable.
+2. `health.coverage` in the fallow config.
+3. `coverage/coverage-final.json`, then `.nyc_output/coverage-final.json`, in the project root.
+
+```bash
+export FALLOW_COVERAGE=coverage/coverage-final.json
+npx fallow health --max-crap 30
+```
+
+When fallow finds the file in step 3, it prints a note:
+
+```text
+note: using auto-detected coverage at /path/to/project/coverage/coverage-final.json; pass --coverage explicitly for deterministic CI scores
+```
+
+In CI, pass `--coverage` or set `FALLOW_COVERAGE`. An old coverage file on disk then cannot change the scores.
+
+### Coverage from another checkout
+
+Vitest writes absolute file paths into `coverage-final.json`. When the tests ran in a different directory, for example in a Docker container or on another CI runner, the paths do not match your project. Fallow then matches no function and prints a note:
+
+```text
+note: the coverage file describes 3 files that no analyzed file matched; check that it was generated for this project, or set --coverage-root.
+```
+
+Give the absolute prefix of the other checkout to `--coverage-root`. Fallow removes this prefix from each path and adds the project root:
+
+```bash
+npx fallow health \
+  --coverage coverage/coverage-final.json \
+  --coverage-root /home/runner/work/myapp \
+  --max-crap 30
+```
+
+You can also set `FALLOW_COVERAGE_ROOT` or `health.coverageRoot`. When the tests and fallow run in the same checkout, you do not need `--coverage-root`.
+
+## Provider differences
+
+Both providers write an Istanbul coverage map, so fallow reads them in the same way. The JSON summary shows `coverage_model: "istanbul"` and `coverage_input_format: "istanbul"` for both.
+
+| Provider | How it collects coverage |
+|:---------|:-------------------------|
+| `v8` | V8 records which byte ranges of the transformed code ran. Vitest maps the ranges back to your source files through source maps. |
+| `istanbul` | Vitest adds counters to each source file before the tests run, and reads the counters after the run. |
+
+Fallow counts the statements in each function body from the file on disk, and reads the counts from the coverage map. The coverage percent of a function can therefore differ from the Vitest text table.
+
+The CRAP score of a function can change when you change the provider or the Vitest major version. For example, Vitest 3 with `v8` records coverage per line, and Vitest 4 and later record it per statement. Use one provider and one Vitest version in CI, so that two runs give comparable scores.
+
+## Read the results
+
+```text
+● High complexity functions (2)
+  CRAP scores use Istanbul coverage where matched (4/7 functions); the rest fall back to the static estimate.
+  src/shipping.ts
+    :1 shippingCost HIGH
+          10   cyclomatic    9   cognitive   24 lines
+          80.2 ! CRAP  (11% tested)
+  src/untested.ts
+    :1 classify HIGH
+           7   cyclomatic    6   cognitive    9 lines
+          56.0 ! CRAP  (0% tested)
+```
+
+- The number before `CRAP` is the score of the function.
+- `!` marks the threshold that the function exceeds. Here, both functions exceed only the CRAP threshold.
+- `(11% tested)` is the statement coverage of the function from the coverage map. When this part is missing, the score comes from the static estimate.
+
+With real coverage, fallow can find a function that the estimate does not find. In the example, a test imports `shipping.ts`, so the estimate counts `shippingCost` as tested. The coverage map shows that the test runs only the first `return`.
+
+### Actions
+
+With `--format json`, each finding has an `actions` list. The first action that is not a suppression tells you what to do:
+
+| Action | When fallow emits it |
+|:-------|:---------------------|
+| `increase-coverage` | Tests run some of the function (`coverage_tier` is `partial` or `high`), and 100% coverage brings the score under the threshold. Add assertions for the branches that no test runs. |
+| `add-tests` | No test runs the function (`coverage_tier` is `none`), and 100% coverage brings the score under the threshold. Write tests for the function. |
+| `refactor-function` | 100% coverage cannot bring the score under the threshold, because the lowest possible score is the cyclomatic complexity. Fallow also emits it when the cyclomatic or cognitive threshold caused the finding. Split the function. |
+
+```json title="findings[] (part)"
+{
+  "path": "src/shipping.ts",
+  "name": "shippingCost",
+  "cyclomatic": 10,
+  "exceeded": "crap",
+  "crap": 80.2,
+  "coverage_pct": 11.11111111111111,
+  "coverage_tier": "partial",
+  "coverage_source": "istanbul",
+  "actions": [
+    {
+      "type": "increase-coverage",
+      "auto_fixable": false,
+      "description": "Increase test coverage for `shippingCost` (file is reachable from existing tests; add targeted assertions for uncovered branches)"
+    }
+  ]
+}
+```
+
+[Untested complexity risk](/explanations/health#untested-complexity-risk) explains the formula and the score ranges.
+
+## Gate new CRAP in CI
+
+`fallow health` fails on every function above the threshold, also on old code. To fail only on the CRAP that a change adds, use [`fallow audit`](/cli/audit). It compares the changed files with a base ref:
+
+```bash
+npx vitest run --coverage
+npx fallow audit --base main --coverage coverage/coverage-final.json --max-crap 30
+```
+
+```text
+Audit scope: 5 changed files vs main (2f5e578..HEAD)
+...
+  src/shipping.ts
+    :1 shippingCost HIGH
+          10   cyclomatic    9   cognitive   24 lines
+          80.2 ! CRAP  (11% tested)
+...
+✗ complexity: 1 finding · 5 changed files (0.85s)
+```
+
+The default gate is `new-only`. A new finding fails the audit with exit code 1. A finding that was on the base already does not fail it. When its CRAP score, cyclomatic complexity, or cognitive complexity increases, the finding is `worsened`, and the verdict is `warn` with exit code 0.
+
+- Use `--worsened error` to also fail on a worsened finding.
+- Use `--gate all` to fail on all findings in the changed files.
+
+The audit uses the same coverage resolution as `fallow health`, and it supports `--coverage-root`. Run the tests before the audit, so that the coverage file describes the head of the change. Without coverage data, a CRAP score from the estimate cannot fail a `new-only` audit. See [Estimated CRAP under new-only](/cli/audit#estimated-crap-new-only).
+
+## Show mutation scores next to CRAP
+
+Coverage shows which code ran. It does not show if a test fails when the code is wrong. [`fallow mutation`](/cli/mutation) changes the code in small steps, runs your Vitest tests against each change, and saves a report. `fallow health` can then show the mutation score of each finding under its CRAP score:
+
+```bash
+npx fallow mutation --all
+npx fallow health \
+  --coverage coverage/coverage-final.json \
+  --mutation-report .fallow/mutation/last-report.json
+```
+
+```text
+  Mutation report: 2 of 2 findings matched. The score does not change CRAP or the health score.
+  src/shipping.ts
+    :1 shippingCost HIGH
+          10   cyclomatic    9   cognitive   24 lines
+          80.2 ! CRAP  (11% tested)
+         50% mutation score (2 killed, 2 survived, 25 no coverage)
+```
+
+`fallow mutation` needs a clean git worktree. Commit your changes first, or pass `--allow-dirty`. It runs your tests many times, so it is slower than a coverage run. `fallow health` only reads the saved report. The mutation score never changes the CRAP score or a gate. See [Mutation report](/cli/health#mutation-report).
+
+## Monorepos
+
+`--coverage` takes one coverage file. Fallow looks for the auto-detected file only in the project root, not in each package.
+
+### One coverage file for all packages
+
+Use one Vitest config in the repository root that runs all packages as projects. Vitest then writes one `coverage-final.json` in the root:
+
+```ts title="vitest.config.ts"
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  test: {
+    projects: ["packages/*"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "json"],
+      include: ["packages/*/src/**/*.ts"],
+    },
+  },
+});
+```
+
+```bash
+npx vitest run --coverage
+npx fallow health --coverage coverage/coverage-final.json --max-crap 30
+```
+
+### One coverage file per package
+
+When each package runs its own Vitest, each package has its own `coverage/coverage-final.json`. Run fallow one time for each package. Use `--workspace` to scope the report to the package, and give the coverage file of that package:
+
+```bash
+npx fallow health --workspace @acme/billing \
+  --coverage packages/billing/coverage/coverage-final.json --max-crap 30
+npx fallow health --workspace @acme/shipping \
+  --coverage packages/shipping/coverage/coverage-final.json --max-crap 30
+```
+
+Do not give the coverage file of one package to a run for all packages. The functions of the other packages then use the estimate, and fallow can miss a finding there.
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="fallow health" icon="terminal" href="/cli/health">
+    All health flags, the output formats, and the JSON fields.
+  </Card>
+  <Card title="Untested complexity risk" icon="book-open" href="/explanations/health#untested-complexity-risk">
+    The CRAP formula, the score ranges, and the file-level aggregation.
+  </Card>
+  <Card title="fallow audit" icon="shield-check" href="/cli/audit">
+    Gate only the findings that a change adds.
+  </Card>
+  <Card title="fallow mutation" icon="flask" href="/cli/mutation">
+    Check whether your tests fail when the code is wrong.
+  </Card>
+</CardGroup>
