@@ -9,6 +9,7 @@ Static analysis tells you what code can run. Runtime coverage tells you what cod
 
 ```bash
 fallow coverage setup              # resumable first-run flow
+fallow coverage setup --cloud      # Fallow Cloud plan: beacon, CI steps, one commit SHA
 fallow coverage analyze --cloud --repo owner/repo
 fallow coverage upload-inventory   # push a static function inventory
 fallow coverage upload-source-maps           # upload build source maps for bundled code
@@ -29,6 +30,8 @@ fallow coverage setup --non-interactive
 fallow coverage setup --yes
 fallow coverage setup --yes --json
 fallow coverage setup --yes --json --explain
+fallow coverage setup --cloud --json
+fallow coverage setup --cloud --wait --git-sha "$DEPLOYED_SHA"
 ```
 
 ### Flags
@@ -39,6 +42,47 @@ fallow coverage setup --yes --json --explain
 | `--non-interactive` | Print instructions and do not prompt. Use it in CI, remote shells, or agent workflows. |
 | `--json` | Print deterministic setup instructions as JSON that an agent can read. Implies `--non-interactive`. It does not prompt, write files, install packages, activate a license, or make network calls. See [Agent-readable JSON](#agent-readable-json). |
 | `--explain` | With `--json`, include a `_meta` block with field definitions, enum values, warning semantics, and this docs URL. |
+| `--cloud` | Plan a Fallow Cloud setup instead of a local capture. It writes nothing. See [Fallow Cloud plan](#fallow-cloud-plan). |
+| `--wait` | With `--cloud`, read the Fallow Cloud setup state until every step is done. Reads `$FALLOW_API_KEY`. |
+| `--wait-timeout <SECS>` | With `--wait`, the longest wait. Default: `600`. |
+| `--project-id <ID>` | With `--cloud`, the Fallow Cloud project (`owner/repo`). Default: `$GITHUB_REPOSITORY`, then `$CI_PROJECT_PATH`, then the git remote. |
+| `--git-sha <SHA>` | With `--cloud`, the deployed commit that `--wait` checks. Default: `git rev-parse HEAD`. |
+| `--api-key <KEY>` | With `--wait`, the API key. Default: `$FALLOW_API_KEY`. |
+| `--api-endpoint <URL>` | With `--cloud`, the API base URL. Default: `$FALLOW_API_URL`, then `https://api.fallow.cloud`. |
+
+### Fallow Cloud plan
+
+Fallow Cloud joins runtime coverage to your code only when five things name the same commit SHA: the beacon, the static inventory, the source maps, the deployment registration, and the first runtime data. `fallow coverage setup --cloud` writes a plan that gives each step that SHA:
+
+- **Beacon snippets.** The snippets send coverage over HTTP with `coverageOrigin: "production"`. A server reads `commitSha` from `FALLOW_COMMIT_SHA`, `VERCEL_GIT_COMMIT_SHA`, `RENDER_GIT_COMMIT`, or `RAILWAY_GIT_COMMIT_SHA`. A browser bundle reads `VITE_FALLOW_COMMIT_SHA`, which the build sets. In a workspace, each member gets its own `runtimeSurface` tag.
+- **CI steps.** `cloud.ci.steps` holds GitHub Actions steps for the job that builds and deploys: a checkout with `fetch-depth: 0` (the inventory reads git history), `upload-inventory`, `upload-source-maps` for each bundled member, and the deployment registration. All of them use `$GITHUB_SHA`. `cloud.ci.workflows_detected` names the workflow files that look like a deploy.
+- **Keys.** The plan names the variables (`FALLOW_API_KEY` for CI and the server, `VITE_FALLOW_API_KEY` for an ingest-only browser key). It never holds a key value.
+
+The plan does not prompt, write files, or make network calls. With `--json`, the setup envelope gets a `cloud` object. Without `--cloud`, the envelope does not change.
+
+```json
+{
+  "cloud": {
+    "project_id": "acme/web",
+    "git_sha": "0123456789abcdef0123456789abcdef01234567",
+    "endpoint": "https://api.fallow.cloud",
+    "api_key_env": "FALLOW_API_KEY",
+    "browser_key_env": "VITE_FALLOW_API_KEY",
+    "commit_sha_env": ["FALLOW_COMMIT_SHA", "VERCEL_GIT_COMMIT_SHA", "RENDER_GIT_COMMIT", "RAILWAY_GIT_COMMIT_SHA"],
+    "ci": {
+      "provider": "github_actions",
+      "workflows_detected": [".github/workflows/deploy.yml"],
+      "steps": "- uses: actions/checkout@v4\n  with:\n    fetch-depth: 0\n...",
+      "instructions": "Add the steps to the GitHub Actions job that builds and deploys..."
+    },
+    "source_maps": { "needed": true, "dirs": ["dist"], "reason": "..." },
+    "activation_url": "https://api.fallow.cloud/v1/repos/acme%2Fweb/activation",
+    "wait_command": "fallow coverage setup --cloud --wait --project-id=acme/web --git-sha=<deployed-sha>"
+  }
+}
+```
+
+After the deploy, `--wait` reads the setup state of the deployed SHA every 10 seconds and prints each change. It exits `0` when every step is done, `1` when `--wait-timeout` passes first, and `2` on an auth or input error. With `--json`, `cloud.wait` holds the outcome (`complete`, `timeout`, or `error`) and the last setup state from Fallow Cloud. That state can get new step ids and states, so read it as open data. Its `next` field names the step to do now and, where one exists, a command.
 
 ## What setup detects automatically
 
