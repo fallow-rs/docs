@@ -86,7 +86,7 @@ The key comes from `$FALLOW_API_KEY`, else from the key that [`fallow cloud logi
 | `ok` | Fallow Cloud has production data for the file. |
 | `no_key` | No key, or Fallow Cloud refused the key. Run `fallow cloud login` or set `FALLOW_API_KEY`. |
 | `plan_required` | Your organization plan does not include production data. |
-| `unavailable` | Fallow Cloud did not answer: network, server error, timeout, or an unknown repository. |
+| `unavailable` | Fallow Cloud did not answer: network, server error, timeout, or an unknown repository. The read has one attempt and a 2 second limit, because editor hooks wait only a short time. |
 | `untracked` | Fallow Cloud has no production data for the file. This is not zero calls. |
 
 A status other than `ok` never fails the run. The static evidence stays complete.
@@ -106,7 +106,7 @@ A status other than `ok` never fails the run. The static evidence stays complete
   "functions": [
     {
       "name": "loadUser", "line": 14, "stable_id": "fallow:fn:0f3a...",
-      "match": "stable_id", "state": "called", "calls": 4120,
+      "match": "stable_id", "state": "called", "period_state": "called", "calls": 4120,
       "errors": { "groups": 1, "events": 7 },
       "cpu_ms_per_hour": 812.5, "never_run_ranges": 2,
       "summary": "loadUser ran 4,120 times."
@@ -125,6 +125,10 @@ Fallow pairs each local function with a deployed function in two steps:
 
 A local function without a pair goes to `unpaired_local`. It is new, or it moved in a way that fallow cannot follow. Fallow never pairs by name alone, because that gives the numbers of another function.
 
+`state` is the state in the current deployment. `period_state` covers the whole period, earlier deployments included. A function with `state: "never_called"` and `period_state: "called"` did not run in this deployment, but it ran in an earlier one.
+
+When the data of the file is not actionable yet, for example during the warm-up of a new deployment, Fallow Cloud withholds the `never_called` rows. The section `message` then says so, and each local function without a pair gets a note that it can still be deployed and tracked.
+
 A `null` count means "not measured", never zero. For example, `errors` is `null` when error capture did not cover the function, and `cpu_ms_per_hour` is `null` without a CPU profile.
 
 ## Compact output
@@ -137,6 +141,7 @@ finding unused-export src/services/user.ts:42 `formatUser` is never imported
 finding complexity src/services/user.ts:14 loadUser cyclomatic 21 cognitive 30
 prod loadUser:14 called 4120 calls, 1 error group (7 events), 812.5 ms CPU/h
 prod parseRow:60 never_called in 30 days
+prod formatRow:72 not called in this deployment, called earlier in 30 days
 prod newHelper:80 no production data (new or moved since deploy)
 ```
 
