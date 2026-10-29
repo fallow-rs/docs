@@ -218,6 +218,7 @@ fallow: mutation: 8/20 mutants done (1m25s)
 | `--operators <NAMES>` | The operators to use, comma-separated. Default: every operator. |
 | `--min-score <0-100>` | Exit with code 1 when the mutation score is below this percentage. |
 | `--verdicts <PATH>` | A verdict document that marks mutants as equivalent. See [Verdicts](#verdicts-for-equivalent-mutants). |
+| `--kill-matrix` | Run all covering tests with bail disabled and report redundant test candidates from complete kill evidence. |
 | `--typecheck` | Type-check each survivor after the tests. See [Type check of survivors](#type-check-of-survivors). |
 | `--resume` | Continue an interrupted or `partial` run. The run reuses the final results in its journal and runs only the other mutants. See [Resume a run](#resume-a-run). |
 | `--allow-dirty` | Run in a git worktree with uncommitted changes. |
@@ -354,6 +355,42 @@ A test that fails in the dry run is a baseline failure. Fallow lists it in `base
 When your Vitest config enables the type-check pass (`typecheck.enabled`), the run does not execute it. A mutant that only a type test detects is not counted as killed. The report adds `typecheck-not-run` to `runner.notes`, and the human output prints one line for it. The [survivor type check](#type-check-of-survivors) does not run these type tests either.
 
 A type test file (`*.test-d.ts`, `*.spec-d.ts`, or a TypeScript file below a `test-d/` directory) is not a test file of the mutation plan. No runner executes it. A project whose only test files are type tests has `no_test_files: true`, and a file that only type tests reach has no coverage.
+
+## Redundant test candidates
+
+```bash
+fallow mutation --all --kill-matrix --format json --quiet
+```
+
+The `--kill-matrix` mode runs all covering tests with bail disabled. It can increase execution time.
+Read the matrix evidence status before you review candidates. Normal mode reports `kill-matrix-disabled` and no candidates.
+Incomplete evidence also produces no candidates.
+
+`kills` and `unique_kills` are arrays of mutant IDs.
+Individual subsumers cover a candidate's full kill set. Other tests can also cover that set collectively.
+Review each candidate separately, including equal kill sets. Removing equal candidates together can remove their shared protection.
+A candidate does not prove safe removal. Baseline-failing tests cannot become candidates or subsumers.
+
+Tests with runtime coverage and no observed kills appear separately. Zero kills do not prove that a test has no assertions.
+Sole-file notes use observed instrumented-file coverage. Public-export notes use static test-file reach, without per-test export coverage claims.
+
+The `mutation` and `mutation-inspect` JSON envelopes use schema version `"2"`. The `mutation-plan` envelope and verdict document keep schema version `"1"`.
+
+The `kill_matrix` object has these fields:
+
+| Field | Meaning |
+|---|---|
+| `status` | `complete`, `incomplete`, or `unavailable`, separate from mutation completion. |
+| `reasons` | Evidence limitations, such as `kill-matrix-disabled`, `incomplete-mutant-results`, `baseline-failure`, `partial-mutation-run`, or `missing-test-file-metadata`. |
+| `tests` | Entries with `test_id`, `file`, `kills`, `unique_kills`, `subsuming_tests`, and `notes`. |
+| `candidates` | Test IDs whose observed kill sets other tests cover. |
+| `coverage_without_kills` | Test IDs with runtime coverage and no observed kills. |
+
+Each mutant and attempt records `killing_tests` and `kill_matrix_complete`. The existing `killed_by` field keeps the first observed killer. Outside matrix mode, `killing_tests` is empty.
+
+Survivors and timeouts do not count as kills. Matrix mode uses separate cache keys and journal inputs from normal mode.
+
+Matrix mode does not add the other tests of the covering test files to the retry of a survivor. A survivor that normal mode kills in that retry can stay `survived` in matrix mode, so the two modes can give different scores.
 
 ## Test reach of no-coverage mutants
 
