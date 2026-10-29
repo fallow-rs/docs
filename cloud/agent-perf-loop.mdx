@@ -1,0 +1,126 @@
+---
+title: "Agent performance loop"
+description: "Give a coding agent feedback from production. It reads the CPU time per function, makes the slowest function faster, and checks the result after the deploy."
+keywords: ["agent performance loop", "Fallow Cloud", "CPU profile", "verify_deployment", "production feedback", "coding agent", "self CPU time", "hosted MCP"]
+icon: "arrows-spin"
+---
+
+A coding agent sees the code, but it does not see production. Fallow Cloud gives the agent feedback from production. It tells the agent which functions use the most CPU time. After the next deploy, it tells the agent if the change made them faster. This page gives the loop in four steps, with the numbers of one real run on the Fallow Cloud API.
+
+## Requirements
+
+- A beacon that sends production coverage. See [Cloud beacon setup](/cloud/beacon).
+- The CPU profiler next to the beacon (`createCpuProfiler` from `@fallow-cli/beacon/profiler`). See [the beacon options](/cloud/hosted-mcp#beacon-options-for-each-signal).
+- The agent connected to the [hosted MCP server](/cloud/hosted-mcp). `get_file_context` and `verify_deployment` are only on the hosted server.
+- A Fallow Cloud organization with the continuous runtime coverage feature. See [the tools](/cloud/hosted-mcp#tools).
+- Each deploy registers its commit SHA, so that Fallow Cloud can compare two deployments.
+
+## The loop
+
+<Steps>
+  <Step title="Find the function with the most self CPU time">
+    Call `get_cloud_runtime_context` with `state: "called"`. Each function has `performance.cpu`:
+
+    ```json
+    {
+      "state": "tracked",
+      "self_ms_per_hour": 20535.26,
+      "total_ms_per_hour": 24508.03,
+      "share_of_process": 0.0643,
+      "samples": 1314
+    }
+    ```
+
+    - `self_ms_per_hour` is the CPU time inside the function itself, per hour of profiled wall time.
+    - `total_ms_per_hour` adds the time of the functions it calls.
+    - `share_of_process` is the part of the non-idle CPU samples of the process.
+    - `state` is `tracked`, `insufficient` (too few samples) or `untracked` (no profile). Use only `tracked` values.
+
+    Sort the functions on `self_ms_per_hour` and take the first one that your code controls. The time of native code (for example a database driver) counts as self time of the project function that calls it. A database call wrapper can be first only because the database is slow. To read one file, call `get_file_context` with `path`.
+  </Step>
+  <Step title="Make it faster and measure it locally">
+    Change the function and open a pull request. Measure the change locally with a benchmark before and after. The production numbers come only after the deploy, so the local benchmark is the first check.
+  </Step>
+  <Step title="Deploy and wait for profile windows">
+    The profiler records one window of 10 seconds every 5 minutes. `verify_deployment` compares CPU time when each deployment has enough windows and each side of the function has enough samples. On a deployment that ran for less than 6 hours, it needs 12 windows per deployment (about one hour) and 50 samples per side. Until then, the function has no `slower` or `faster` status.
+  </Step>
+  <Step title="Verify the deployment">
+    Call `verify_deployment` with the SHA of the deploy and the function:
+
+    ```json
+    {
+      "repo": "my-api",
+      "sha": "<commit SHA of the deploy>",
+      "functions": ["src/db/client.ts:buildRow"]
+    }
+    ```
+
+    The base is the previous deployment with production runtime. Set `base` to compare against another SHA. Each function gets a status: `ran`, `slower`, `faster`, `errors_new`, `stopped_running`, `awaiting_runtime` or `not_yet_observed`. The `cpu` block gives both sides.
+
+    Verify the function that does the work after the change. If the change moves the work into a new function, the old function can stop running. It gets `stopped_running` when both deployments ran for 6 hours or more, else `not_yet_observed`. `stopped_running` sets the verdict to `attention`. Then read the CPU time of the new function with `get_file_context` and compare it with the old function on the base deployment.
+  </Step>
+</Steps>
+
+## How verify_deployment finds slower and faster functions
+
+`slower` and `faster` compare the self CPU time per call, not per hour. The CPU time per hour also grows when the function gets more calls, with no change in the code. A night job that calls a function three times as often triples its CPU time per hour.
+
+Self CPU time per call is the self CPU time per profiled hour divided by the production calls per observed hour. A function is `slower` or `faster` when:
+
+- both sides are `tracked` and both sides have production calls,
+- the CPU time per call changed by a factor of 1.5 or more,
+- the change per call, multiplied by the calls per hour of the new deployment, is 50 ms of CPU time per hour or more.
+
+The `cpu` block gives these fields, among others:
+
+| Field | Meaning |
+|:------|:--------|
+| `headState`, `baseState` | `tracked`, `insufficient` or `untracked` for each side. |
+| `headSelfMsPerHour`, `baseSelfMsPerHour` | Self CPU time per profiled hour. |
+| `headCallsPerHour`, `baseCallsPerHour` | Production calls per observed hour. |
+| `headSelfUsPerCall`, `baseSelfUsPerCall` | Self CPU time per call, in microseconds. Null when that side has no production calls. |
+| `selfUsPerCallDelta` | The new value minus the base value. |
+
+The hosted MCP server gives these fields in snake_case.
+
+The CPU time per call is an estimate. The profile windows stand for the full observed time. The cost per call also changes with the input of each call. A function that builds one result row per call costs more per call when the rows get wider.
+
+## A real run
+
+The Fallow Cloud API runs the beacon and the profiler on itself. This is one pass through the loop.
+
+1. **Find.** On the base deployment, `toRow` in the database client had the most self CPU time of the project functions. It used 20,535 ms per hour, 6.4% of the process. The function builds one result object per database row, and it ran about 5.5 million times per hour.
+2. **Change.** The change computes the column plan one time per query and keeps one loop per row in a new function, `buildRow`. A local benchmark went from 760 to 520 ns per row.
+3. **Deploy.** The change went to production, and the profiler collected windows for almost 3 hours.
+4. **Verify.** The work moved from `toRow` to `buildRow`, so `toRow` stopped running and gets no CPU status. The comparison is `toRow` on the base deployment against `buildRow` on the new deployment.
+
+| | Base (`toRow`) | New (`buildRow`) |
+|:--|--:|--:|
+| Self CPU time per hour | 20,535 ms | 8,266 ms |
+| Production calls per hour | 5.52 million | 6.93 million |
+| Self CPU time per call | 3.72 µs | 1.19 µs |
+
+The function got more calls per hour, and its CPU time per hour still fell by 60%. The CPU time per call fell by a factor of 3.1. The local benchmark showed a factor of about 1.5. The production value is an estimate. The rows of the two deployments were not the same. Thus, use the factor as a direction, not as an exact value.
+
+In the same run, `verify_deployment` marked the database wrapper `execute` as `faster`. It went from 1,840 µs per call to 490 µs. That change does not come from this pull request. The self time of `execute` includes the native database driver, so it moves with the queries that the deployment ran. This is the case from step 1: a wrapper of native code is a poor target for the loop.
+
+## Context only
+
+The verify result is advice for the agent or for a CI comment. It does not prove that a change is correct or safe. A `confirmed` verdict means that the functions ran with no new error group, no CPU regression that the gates can show, and no function that stopped running.
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="Hosted MCP server" icon="server" href="/cloud/hosted-mcp">
+    The tools, the authentication and the beacon options for each signal.
+  </Card>
+  <Card title="Cloud beacon setup" icon="tower-broadcast" href="/cloud/beacon">
+    Send production execution counts from a browser or Node service.
+  </Card>
+  <Card title="Beacon performance and overhead" icon="gauge" href="/cloud/beacon-performance">
+    What the beacon and the profiler cost in production.
+  </Card>
+  <Card title="Agent integration" icon="robot" href="/integrations/mcp">
+    The local fallow MCP server, with static analysis and cloud tools.
+  </Card>
+</CardGroup>
