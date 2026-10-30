@@ -1,0 +1,77 @@
+---
+title: "Vercel Next.js integration"
+description: "Record observed production calls from a Next.js App Router application on Vercel."
+keywords: ["Vercel", "Next.js", "runtime coverage", "beacon"]
+icon: "cloud"
+---
+
+The Community pilot records observed calls from instrumented original-source functions in a Next.js App Router application running on Vercel's Node.js runtime. It does not capture browser or Edge execution. A missing observation is untracked, not evidence that a function is cold or safe to delete. Coverage is not a measure of the whole application.
+
+## Connect a project
+
+An organization owner opens **Settings > Vercel**, connects a Vercel installation, and selects a project. Enter a separate Fallow coverage target in `owner/repository` form for each Vercel project, even when projects share a Git repository. The integration configures `FALLOW_VERCEL_INGEST_KEY`, `FALLOW_PROJECT_ID`, and `FALLOW_ENDPOINT` for production. Do not copy the ingest key into client code.
+
+This pilot requires releases of `@fallow-cli/beacon` with the `vercel` entry and `fallow-vercel-build` command, and the Fallow CLI with `--vercel-deployment-id` support. Install those releases in the build environment when available:
+
+```bash
+npm install @fallow-cli/beacon @vercel/functions
+npm install --save-dev oxc-coverage-instrument fallow
+```
+
+Add the published Babel plugin to `.babelrc.json`, merging it with any existing configuration and adapting the include paths to your source directories:
+
+```json
+{
+  "presets": ["next/babel"],
+  "plugins": [
+    ["oxc-coverage-instrument/babel", {
+      "compat": null,
+      "include": ["app/**/*.{js,jsx,ts,tsx}", "src/**/*.{js,jsx,ts,tsx}", "lib/**/*.{js,ts}"]
+    }]
+  ]
+}
+```
+
+`compat: null` preserves inferred function names so runtime observations match the CLI inventory. The Babel plugin's default Istanbul compatibility mode assigns anonymous names to arrow functions.
+
+This retains the default Turbopack build. In your central `instrumentation.ts`, merge this with any existing registration:
+
+```ts
+export const register = async (): Promise<void> => {
+  if (process.env.NEXT_RUNTIME !== "nodejs" || process.env.VERCEL_ENV !== "production") return;
+  const apiKey = process.env.FALLOW_VERCEL_INGEST_KEY;
+  const projectId = process.env.FALLOW_PROJECT_ID;
+  const commitSha = process.env.VERCEL_GIT_COMMIT_SHA;
+  if (!apiKey || !projectId || !commitSha) return;
+  const { registerVercelCoverage } = await import("@fallow-cli/beacon/vercel");
+  registerVercelCoverage({
+    apiKey,
+    projectId,
+    commitSha,
+    endpoint: process.env.FALLOW_ENDPOINT ?? "https://api.fallow.cloud",
+  });
+};
+```
+
+Wrap your existing Vercel build command. For example, if it is `next build`:
+
+```bash
+fallow-vercel-build --project-id "$FALLOW_PROJECT_ID" -- next build
+```
+
+The wrapper runs the application build first. It preserves build failures and warns if inventory upload fails after a successful production build. It uses Vercel OIDC to authenticate the upload, with the Vercel deployment ID and `VERCEL_GIT_COMMIT_SHA`. OIDC establishes the Vercel project and environment; it does not prove the contents of the build or the reported SHA. No separate GitHub Actions workflow is needed.
+
+Deploy to production, send traffic, and check the project status in Settings. A shallow Git checkout can leave churn unknown. Observations are sent after completed responses, so cancellation or a deadline can lose observations. Source-map harvesting is not automatic. Native Marketplace listing and billing are planned separately.
+
+Unlinking stops collection and attempts to remove integration-owned environment variables. Existing coverage history remains available. Check the project status for pending cleanup or instructions to remove the variables yourself.
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="Cloud beacon setup" icon="tower-broadcast" href="/cloud/beacon">
+    Configure other Node.js or browser runtimes.
+  </Card>
+  <Card title="Runtime coverage" icon="chart-network" href="/analysis/runtime-coverage">
+    Learn how runtime observations are used.
+  </Card>
+</CardGroup>
