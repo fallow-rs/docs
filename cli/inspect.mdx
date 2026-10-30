@@ -1,7 +1,7 @@
 ---
 title: "fallow inspect"
-description: "Get all the context for one file or exported symbol before you edit it. Fallow inspect combines trace, dead-code, duplication, complexity, and security evidence in one bundle."
-keywords: ["fallow inspect", "inspect_target", "agent evidence", "trace file", "trace export", "CLI"]
+description: "Get all the context for one file or exported symbol before you edit it. Fallow inspect combines trace, dead-code, duplication, complexity, security, and optional Fallow Cloud production evidence in one bundle."
+keywords: ["fallow inspect", "inspect_target", "agent evidence", "trace file", "trace export", "production data", "compact output", "CLI"]
 icon: "search-code"
 ---
 
@@ -27,6 +27,8 @@ Choose exactly one target form:
 |:-----|:------------|
 | `--symbol-chain` | Also add the best-effort symbol-level call chain as a `symbol_chain` evidence section. This is the same data as [`fallow trace`](/cli/trace). Useful only for a symbol target. Default off, because the chain is best-effort, syntactic, and off the ranked path. |
 | `--churn` | Also add git churn evidence for the target as a `churn` evidence section. Default off, because it reads the git history and makes the command slower. When fallow cannot read the history, the section has the status `unavailable`. |
+| `--cloud` | Also add Fallow Cloud production data for a `--file` target as a `cloud` evidence section. Default off, because it sends one request to Fallow Cloud. See [Production data](#production-data). |
+| `--repo <OWNER/REPO>` | Fallow Cloud repository for `--cloud`. Default: `$FALLOW_REPO`, else the `origin` git remote. |
 
 ## Output
 
@@ -34,6 +36,7 @@ Choose exactly one target form:
 |:-------|:------------|
 | `human` | Compact target and identity summary. |
 | `json` | A `kind: "inspect_target"` bundle with the normalized target identity and the evidence sections. Use this format from agents. |
+| `compact` | Plain text of about 1 KB, one line per item, no colors. Use this format in editor hooks that add the text to the context of an agent. See [Compact output](#compact-output). |
 
 ```json title="$ fallow inspect --file src/api.ts --format json --quiet"
 {
@@ -68,9 +71,91 @@ Each evidence section has a `status` and a `scope`. The status is `ok`, `partial
 
 `inspect` accepts the project and performance flags: `--root`, `--config`, `--workspace`, `--production`, `--no-cache`, and `--threads`. For the full list, see [global flags](/cli/global-flags).
 
+## Production data
+
+With `--cloud`, fallow reads the production data of the file from Fallow Cloud and pairs it with the functions of the local file:
+
+```bash
+fallow inspect --file src/services/user.ts --cloud --format json --quiet
+```
+
+The key comes from `$FALLOW_API_KEY`, else from the key that [`fallow cloud login`](/cli/cloud) stored. The `cloud` section has its own `status`:
+
+| Status | Meaning |
+|:-------|:--------|
+| `ok` | Fallow Cloud has production data for the file. |
+| `no_key` | No key, or Fallow Cloud refused the key. Run `fallow cloud login` or set `FALLOW_API_KEY`. |
+| `plan_required` | Your organization plan does not include production data. |
+| `unavailable` | Fallow Cloud did not answer: network, server error, timeout, or an unknown repository. The read has one attempt and a 2 second limit, because editor hooks wait only a short time. |
+| `untracked` | Fallow Cloud has no production data for the file. This is not zero calls. |
+
+A status other than `ok` never fails the run. The static evidence stays complete.
+
+```json title="evidence.cloud"
+{
+  "status": "ok",
+  "message": null,
+  "repo": "acme/web",
+  "latest_sha": "abc123",
+  "period_days": 30,
+  "summary": {
+    "functions": 12, "called": 9, "never_called": 1, "untracked": 2,
+    "calls": 48211, "error_groups": 1, "error_events": 7,
+    "text": "12 functions: 9 ran, 1 never ran, 2 untracked."
+  },
+  "functions": [
+    {
+      "name": "loadUser", "line": 14, "stable_id": "fallow:fn:0f3a...",
+      "match": "stable_id", "state": "called", "period_state": "called", "calls": 4120,
+      "errors": { "groups": 1, "events": 7 },
+      "cpu_ms_per_hour": 812.5, "never_run_ranges": 2,
+      "summary": "loadUser ran 4,120 times."
+    }
+  ],
+  "unpaired_local": [
+    { "name": "newHelper", "line": 80, "note": "no production data (new or moved since deploy)" }
+  ]
+}
+```
+
+Fallow pairs each local function with a deployed function in two steps:
+
+1. The `stable_id`: a hash of the file path, the function name, and the start line.
+2. Else the name plus the position among the functions with the same name in the file. This step pairs a function that moved to another line. When the count of functions with that name changed, fallow does not pair them.
+
+A local function without a pair goes to `unpaired_local`. It is new, or it moved in a way that fallow cannot follow. Fallow never pairs by name alone, because that gives the numbers of another function.
+
+`state` is the state in the current deployment. `period_state` covers the whole period, earlier deployments included. A function with `state: "never_called"` and `period_state: "called"` did not run in this deployment, but it ran in an earlier one.
+
+When the data of the file is not actionable yet, for example during the warm-up of a new deployment, Fallow Cloud withholds the `never_called` rows. The section `message` then says so, and each local function without a pair gets a note that it can still be deployed and tracked.
+
+A `null` count means "not measured", never zero. For example, `errors` is `null` when error capture did not cover the function, and `cpu_ms_per_hour` is `null` without a CPU profile.
+
+## Compact output
+
+`--format compact` prints one line per item, with or without `--cloud`:
+
+```text title="$ fallow inspect --file src/services/user.ts --cloud --format compact"
+fallow src/services/user.ts
+finding unused-export src/services/user.ts:42 `formatUser` is never imported
+finding complexity src/services/user.ts:14 loadUser cyclomatic 21 cognitive 30
+prod loadUser:14 called 4120 calls, 1 error group (7 events), 812.5 ms CPU/h
+prod parseRow:60 never_called in 30 days
+prod formatRow:72 not called in this deployment, called earlier in 30 days
+prod newHelper:80 no production data (new or moved since deploy)
+```
+
+| Line | Content |
+|:-----|:--------|
+| `fallow <path>` | The header. Always the first line. |
+| `finding <kind> <path:line> <text>` | One static finding: dead code, complexity, duplication, or a security candidate. |
+| `prod <name:line> <text>` | One function with production data, or a local function without it. Functions with errors come first, then `never_called` functions, then functions without production data, then the rest. |
+| `cloud <status>: <text>` | The `cloud` status when it is not `ok`. |
+| `truncated <n> more` | The count of lines that the 1 KB limit left out. |
+
 ## MCP parity
 
-The MCP `inspect_target` tool uses the same CLI flow and returns the same JSON shape. When you already work in a shell or an editor command, use the CLI. When an agent is already connected to the MCP server, use MCP.
+The MCP `inspect_target` tool uses the same CLI flow and returns the same JSON shape. When you already work in a shell or an editor command, use the CLI. When an agent is already connected to the MCP server, use MCP. The `cloud` section and the `compact` format are CLI only for now.
 
 ## See also
 
@@ -80,5 +165,8 @@ The MCP `inspect_target` tool uses the same CLI flow and returns the same JSON s
   </Card>
   <Card title="MCP integration" icon="robot" href="/integrations/mcp">
     Use the `inspect_target` tool from AI coding agents.
+  </Card>
+  <Card title="fallow cloud" icon="cloud" href="/cli/cloud">
+    Store a read-only Fallow Cloud key for `--cloud`.
   </Card>
 </CardGroup>
