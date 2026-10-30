@@ -17,7 +17,10 @@ Set up fallow for each coding-agent harness in a project with one command. `fall
 ```bash
 fallow agent install --dry-run   # show the plan first
 fallow agent install             # wire every detected harness
+fallow agent status --format json
 ```
+
+Review `next_actions` after installation. Approve the project and its hooks in your harness when prompted.
 
 <Info>
   `fallow init --agents`, `fallow hooks install --target agent`, and the hand-written MCP snippet still work. `agent install` combines them. It does not replace them.
@@ -110,14 +113,21 @@ A `--dry-run` of `agent install` that plans at least one write puts an `agent-in
 
 The exit code is 2 when a step is `refused` or `failed`. All other steps still run.
 
-`agent status` reports a different shape: `surfaces[]`, each with `harness`, `step`, `path`, and a `state` of `absent`, `installed`, `stale`, or `foreign`. `stale` means that an older fallow version wrote the surface, or that the surface is installed but would not do its job. `foreign` means that the file or entry exists, but fallow did not write it. `fallow agent install --force` replaces a `foreign` surface. Without `--force`, fallow leaves it alone.
+`agent status` reports a different shape: `surfaces[]`, each with `harness`, `step`, `path`, and a `state` of `absent`, `installed`, `stale`, or `foreign`. `stale` means that the surface needs a refresh, or that its runtime is missing or unverified. `foreign` means that the file or entry exists, but fallow did not write it. `fallow agent install --force` replaces a `foreign` surface. Without `--force`, fallow leaves it alone.
 
-For Codex, the `hooks` step has two surfaces: the gate script `.codex/hooks/fallow-gate.sh` and the `AGENTS.md` routing block. A `hooks` gate is `stale` when an older fallow wrote it. An installed gate is also `stale` when its run-time prerequisites are missing. The reason is in `detail`, with a matching entry in `next_actions[]`. Two gate conditions report this way:
+### Gate readiness
 
-- `gate-requires-jq`: when `jq` is absent, the gate script prints one stderr line and exits 0, and a PreToolUse hook never shows that line.
-- `gate-path-version`: the gate runs the `fallow` that PATH resolves, which can differ from the build that installed it.
+For Codex, the `hooks` step covers the gate script and the `AGENTS.md` routing block. Check `detail` and `next_actions[]` for a `stale` gate:
 
-Branch on `state`, and not on the presence of the path.
+| Action ID | Meaning and next step |
+|:----------|:----------------------|
+| `gate-json-reader` | No native fallow JSON reader or jq was found. Upgrade fallow on PATH or install it in the project. jq supports older installations. |
+| `gate-reader-unverified` | A launcher exists, but its runtime is unverified. Review and approve the project code, then run the returned command with the gate's fallow installation. |
+| `gate-script-refresh` | The script differs from the managed template. Review its edits and the returned dry-run before replacing it. |
+| `gate-requires-jq` | An older gate requires jq. Refresh the gate with current fallow, or install jq. |
+| `gate-path-version` | PATH resolves another fallow version. Check `fallow --version` in the hook environment and update that installation. |
+
+Status inventories project launchers and package managers without executing them. It does not verify project trust or hook activation. Branch on `state` and the action ID. A missing reader makes the gate print a notice and exit 0 without auditing.
 
 ```bash
 fallow agent install --format json --quiet
