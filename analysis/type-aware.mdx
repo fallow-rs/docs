@@ -98,14 +98,59 @@ The `fallow` npm package installs an optional `fallow-type-aware` companion with
 
 ### Experimental tsrs backend
 
-Set `FALLOW_TYPE_AWARE_BACKEND=tsrs` to run the semantic pass on tsrs, a Rust port of the TypeScript 7 checker, instead of the default TypeScript-Go backend. Fallow accepts any `tsrs` from `0.18.0` up to (not including) `1.0.0`, so you can reuse the `tsrs` that your project already installs. It must be where `fallow-type-aware` can resolve it. To install the version that Fallow tests:
+Set `FALLOW_TYPE_AWARE_BACKEND=tsrs` to run the semantic pass on tsrs, a Rust port of the TypeScript 7 checker, instead of the default TypeScript-Go backend. The environment variable is the only way to select the backend. There is no `typeAware.backend` config key, and the config file rejects it as an unknown field. The backend stays opt-in while tsrs is a 0.x release.
+
+Fallow accepts any `tsrs` from `0.18.0` up to (not including) `1.0.0`, so you can reuse the `tsrs` that your project already installs. It must be where `fallow-type-aware` can resolve it. To install the version that Fallow tests:
 
 ```bash
 npm install --save-dev tsrs@0.20.1-ts7.1.0-beta
 FALLOW_TYPE_AWARE_BACKEND=tsrs npx fallow type-aware status
 ```
 
-`fallow type-aware status` and `_meta.type_aware` in the JSON output name the backend and the version that ran. A version outside the supported range makes the type-aware pass unavailable, and `type-aware status` names the range. The default backend also accepts any TypeScript 7 release that a package manager override selects. The tsrs backend refines findings, but its evidence never makes a fix eligible: guarded fixes need the evidence of the default backend at the version that Fallow tests. tsrs `0.18.0` has no Windows or macOS x64 binaries. Use `0.20.0` or later on those platforms. The VS Code extension bundles only the default backend, so use the npm or CLI install for tsrs. An unknown value makes the type-aware pass unavailable, and `type-aware status` names the known values.
+#### Select the backend on each surface
+
+Fallow reads the variable once per process. Every Fallow process that you start inherits it from its parent.
+
+| Surface | How to select tsrs |
+| --- | --- |
+| CLI, npm scripts, and CI | Set `FALLOW_TYPE_AWARE_BACKEND=tsrs` in the script or in the job `env`. |
+| MCP | Add the variable to the `env` block of the server entry in the MCP client config. |
+| LSP in other editors | Set the variable in the environment of the `fallow-lsp` process. |
+| VS Code | Start the editor with `FALLOW_TYPE_AWARE_BACKEND=tsrs` and with `FALLOW_TYPE_AWARE_BIN` set. See below. |
+
+For MCP, use an `env` block like this:
+
+```json
+{
+  "mcpServers": {
+    "fallow": {
+      "command": "fallow-mcp",
+      "env": { "FALLOW_TYPE_AWARE_BACKEND": "tsrs" }
+    }
+  }
+}
+```
+
+The VS Code extension bundles a companion that holds only the default backend. That companion cannot load tsrs. With only the backend variable set, the type-aware pass is unavailable and Fallow shows conservative syntactic findings. To use tsrs in VS Code, set both variables and start the editor from that shell:
+
+```bash
+export FALLOW_TYPE_AWARE_BACKEND=tsrs
+export FALLOW_TYPE_AWARE_BIN="$PWD/node_modules/.bin/fallow-type-aware"
+code .
+```
+
+An existing `FALLOW_TYPE_AWARE_BIN` takes precedence over the bundled companion. Use an absolute path, because Fallow resolves a relative path from the working directory. The project must have `tsrs` installed where that companion can resolve it. The extension has no setting for the backend.
+
+#### Check the selection
+
+Run `fallow type-aware status` in the same environment as the surface. It names the backend and the version that ran. `_meta.type_aware` in the JSON output names them too. The command does not read the config file. A version outside the supported range makes the type-aware pass unavailable, and `type-aware status` names the range. An unknown backend value also makes the pass unavailable, and `type-aware status` names the known values.
+
+#### Limits
+
+- The tsrs backend refines findings, but its evidence never makes a fix eligible. Guarded fixes need the evidence of the default backend at the version that Fallow tests.
+- tsrs `0.18.0` has no Windows or macOS x64 binaries. Use `0.20.0` or later on those platforms.
+- The default backend also accepts any TypeScript 7 release that a package manager override selects.
+- Fallow will consider a config key when tsrs reaches 1.0 or when the default backend moves to TypeScript 7.1 with corpus evidence for tsrs.
 
 ## See also
 
