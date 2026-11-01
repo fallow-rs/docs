@@ -1580,6 +1580,49 @@ The answer applies to the run only:
 - An `ignoreDependencies` glob that matches no declared dependency is an [unmatched config pattern](#unmatched-config-patterns), not a redundant entry. The redundant `ignoreDependencies` entries use the same dependency-report rules as the unmatched glob.
 - A `--production` run reports no redundant entry, because it checks fewer files and dependency sections.
 
+## Override rules with no effect
+
+Some `overrides[].rules` entries cannot change a result. `fallow dead-code`, `fallow audit` and the combined `fallow` run report each one as a `workspace_diagnostics[]` entry with the kind `override-rule-ineffective`. The entry changes no finding and no exit code. Each entry has these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `rule` | The canonical rule name, also when the config uses an alias |
+| `files` | The `overrides[].files` globs, as written |
+| `reason` | `project-level` or `base-rule-off`. The set of values is open, so tolerate a new value |
+
+| Reason | Meaning |
+| --- | --- |
+| `project-level` | The rule reads only the top-level severity. This covers `unused-dependencies`, `unused-dev-dependencies`, `unused-optional-dependencies`, `unlisted-dependencies`, `type-only-dependencies`, `test-only-dependencies`, `dev-dependencies-in-production`, `duplicate-exports`, `re-export-cycle` and `unused-catalog-entries` |
+| `base-rule-off` | The rule is off at top level, and the override sets `warn` or `error`. The detector does not run. This covers `unused-files`, `unused-exports`, `unused-types`, `private-type-leaks`, `unused-enum-members`, `unused-class-members`, `unresolved-imports`, `circular-dependencies` and `deprecated-exports-in-use` |
+
+The message names the mechanism that works:
+
+| Rule | Mechanism |
+| --- | --- |
+| Dependency rules | Add the package to `ignoreDependencies`, or set the top-level rule |
+| `type-only-dependencies` | Move the package to `devDependencies`, or set the top-level rule |
+| `duplicate-exports` | Add the file and export names to `ignoreExports` |
+| `re-export-cycle` | Add `// fallow-ignore-file re-export-cycle` to one file in the cycle, or set the top-level rule |
+| `unused-catalog-entries` | Add `# fallow-ignore-next-line unused-catalog-entry` in `pnpm-workspace.yaml`, or set the top-level rule |
+| A `base-rule-off` rule | Set the top-level rule on, then use an override to set `off` for the other files |
+
+```json
+{
+  "path": ".",
+  "kind": "override-rule-ineffective",
+  "rule": "dev-dependencies-in-production",
+  "files": ["tools/**"],
+  "reason": "project-level"
+}
+```
+
+The entries use the same output places as [unmatched config patterns](#unmatched-config-patterns), with these differences:
+
+- SARIF carries each entry as a `toolConfigurationNotifications[]` note with `properties.setting` set to `overrides`, plus `rule`, `files` and `reason`.
+- Markdown, the job summary, the PR comment and the review summary body show the entries in a separate `Override rules with no effect` section.
+- The LSP marks the key in `overrides[].rules`.
+- A `--production` run keeps the entries.
+
 ## JSON Schema
 
 Add the `$schema` field to get autocomplete and validation in your editor:
