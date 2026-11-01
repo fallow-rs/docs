@@ -5,7 +5,7 @@ keywords: ["fallow baselines prune", "baseline", "stale baseline", "fail-on-stal
 icon: "terminal"
 ---
 
-Use `fallow baselines prune` after you fix findings that a committed baseline holds. A fixed finding leaves its entry in the file. A whole-project run with `--fail-on-stale-baseline` then fails until someone updates the file. Prune removes the entries that match no current finding, so the stale gate passes again.
+Use `fallow baselines prune` after you fix findings that a committed baseline holds. A fixed finding leaves its entry in the file. A run with `--fail-on-stale-baseline` in the mode of the file then fails until someone updates the file. Prune removes the entries that match no current finding, so the stale gate passes again.
 
 ```bash
 fallow baselines prune
@@ -46,11 +46,29 @@ The paths resolve against the project root. A flag overrides the config path for
 
 ## Whole-project scope
 
-Prune always analyzes the whole project. A narrowed run would remove entries for findings that it did not see. So prune exits 2 on `--changed-since`, `--workspace`, `--changed-workspaces`, `--diff-file`, `--diff-stdin`, `--production` and the `FALLOW_DIFF_FILE` environment variable, and it ignores `workspaces.changedSince`. The production mode of each analysis comes from the config, as for `fallow audit`.
+Prune analyzes the whole project. A narrowed run would remove entries for findings that it did not see. So prune exits 2 on `--changed-since`, `--workspace`, `--changed-workspaces`, `--diff-file`, `--diff-stdin` and the `FALLOW_DIFF_FILE` environment variable, and it ignores `workspaces.changedSince`. Production mode is not a narrowed run for prune. Pass `--production`, or set production mode in the config as for `fallow audit`.
 
 Prune also exits 2 on the global baseline flags `--baseline`, `--save-baseline`, `--fail-on-baseline-growth` and `--baseline-base`. Name the files with the prune flags or the config.
 
 CRAP scores in a health baseline depend on coverage. Prune reads the coverage input of the config and of `FALLOW_COVERAGE`. When you saved the health baseline with `--coverage`, pass the same input to prune.
+
+## Mode of the file
+
+A prune runs in one mode, and the file must be saved in the same mode. Two modes change which findings exist: `--production` and `--include-entry-exports`. A run in another mode does not see the findings of the file, so it would remove valid entries.
+
+- Pass `--production` to prune a baseline saved with `--production`.
+- Pass `--include-entry-exports` to prune a baseline saved with `--include-entry-exports`.
+- Pass no mode flag to prune a baseline saved without them.
+
+Prune refuses a file that it cannot match to the mode of the run. It leaves the file as it is, exits 2, and prints the command to use. The refusal has the `reason_code` `scope-mismatch`.
+
+A file may have no record of a mode that the run uses. This happens with a file saved before fallow recorded the mode, and with a whole-project file. Prune refuses it as well, so `--check` can exit 2 for a project that sets production mode in the config. Review the findings of the file, then save it again in that mode:
+
+```bash
+fallow dead-code --production --save-baseline baselines/dead-code.json
+```
+
+The dead-code, health and duplication baselines record production mode when you save them with `--production`.
 
 ## Skipped files
 
@@ -84,6 +102,8 @@ For a hook manager such as Lefthook, or an existing hook, the install command pr
 | `--dead-code-baseline <PATH>` | The dead-code baseline to prune. Overrides `audit.deadCodeBaseline`. |
 | `--health-baseline <PATH>` | The health baseline to prune. Overrides `audit.healthBaseline`. |
 | `--dupes-baseline <PATH>` | The duplication baseline to prune. Overrides `audit.dupesBaseline`. |
+| `--production` | Prune in production mode. Use it for baselines saved with `--production`. |
+| `--include-entry-exports` | Prune with unused exports in entry files reported. Use it for baselines saved with `--include-entry-exports`. |
 | `--coverage <PATH>` | The coverage input for CRAP scores, as for `fallow health --coverage`. |
 | `--coverage-root <PATH>` | Rebase the file paths of the coverage input onto this root. |
 | `-f, --format <FORMAT>` | `human` (default) or `json` |
@@ -135,5 +155,5 @@ For a hook manager such as Lefthook, or an existing hook, the install command pr
 
 - `status` is `pruned`, `would-prune` (with `--check`), `unchanged`, `refused` (skipped) or `error` (the file cannot be read or written).
 - `reason` is a sentence for people. It is set for `refused` and `error`, and `null` for the other statuses.
-- `reason_code` names why a file is skipped: `parse-error`, `not-this-kind`, `legacy-keys`, `unknown-key-scheme`, `incompatible-identity`, `shared-clone-keys` or `unknown-fields`. It is `null` for `error` and for the other statuses.
-- `actions` holds `stage-baselines` for written files, `prune-baselines` after a `--check` run with entries to prune, and `resave-baseline` with the save command for each skipped file.
+- `reason_code` names why a file is skipped: `parse-error`, `not-this-kind`, `legacy-keys`, `unknown-key-scheme`, `incompatible-identity`, `shared-clone-keys`, `unknown-fields` or `scope-mismatch`. It is `null` for `error` and for the other statuses.
+- `actions` holds `stage-baselines` for written files, `prune-baselines` after a `--check` run with entries to prune, and `resave-baseline` with the save command for each skipped file. For a `scope-mismatch` refusal, the action holds the command to run. It is `prune-baselines` with the mode flags of the file when the run can prune the file, and `resave-baseline` when the file has no record of a mode that the run uses.
