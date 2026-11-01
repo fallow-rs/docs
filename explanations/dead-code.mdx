@@ -22,7 +22,7 @@ Files that no entry point reaches. No module in the project imports them, and no
 **When to act:** Almost always. Unused files make IDE indexing slower and add noise to search results.
 
 **Common false positives:**
-- **Scripts run directly** (e.g., `node scripts/seed.ts`): Add the script to `entry` in config, or call it from a `package.json` script field (fallow parses those).
+- **Scripts run directly** (e.g., `node scripts/seed.ts`): Call the script from a `package.json` script field (fallow parses those). If the script ships and runs in production, add it to `entry`. If it is a tool that does not ship, use a `framework[]` entry instead. See [Dev dependencies in production](#dev-dependencies-in-production).
 - **Files loaded by tools that fallow does not know about**: Add them to `entry` or to the relevant plugin config.
 
 ### Unused exports
@@ -910,7 +910,27 @@ The rule currently checks the root `package.json` against the import graph of th
 
 **Interaction with `--production` mode.** This rule stays on in `--production` mode. `test-only-dependencies` needs test files in the graph, but this rule does not. Production mode makes the result cleaner, because every file that fallow finds is production code. A production CI run is also where a broken production-only install matters most.
 
-**Known limitation.** A file that a `package.json` `scripts` command references counts as a runtime entry point. So fallow can still flag a dev-only helper script that value-imports a `devDependency`. To suppress such a package, add it to `ignoreDependencies`.
+**Scripts that do not ship.** A file in `entry` is a runtime root. A file that a runtime script such as `start` references is also a runtime root. If such a file value-imports a `devDependency`, fallow reports it. A file that a non-runtime script such as `report` references is not a runtime root, so it causes no finding.
+
+For a tool script that no `package.json` script runs, declare it in a `framework[]` entry. The entry points of such a plugin use the `support` role by default. A `support` file stays reachable, so fallow does not report it as unused. Its imports do not count as production imports.
+
+```json fallow.json
+{
+  "framework": [
+    {
+      "name": "tools",
+      "detection": { "type": "fileExists", "pattern": "package.json" },
+      "entryPoints": ["tools/**/*.js"]
+    }
+  ]
+}
+```
+
+Keep the same glob out of `entry`. A file that also matches `entry` stays a runtime root.
+
+A `framework[]` entry needs `detection` or `enablers`. With neither, the plugin never activates, and fallow prints a warning when it loads the config. See [Custom plugins](/frameworks/custom-plugins).
+
+`support` files stay in the graph under `--production`. The recipe does not remove them from a production run. To suppress one package, add it to `ignoreDependencies`.
 
 **Configuration and suppression.** The config key is `dev-dependencies-in-production` under `rules`. Set it to `"error"`, `"warn"` (the default), or `"off"`:
 
