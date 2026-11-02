@@ -1624,6 +1624,45 @@ The entries use the same output places as [unmatched config patterns](#unmatched
 - The LSP marks the key in `overrides[].rules`.
 - A `--production` run keeps the entries.
 
+## Requested rules that are off
+
+An issue-type flag can ask for a rule that the config sets to `off`. Fallow does not run that check, so a zero count for the rule measures nothing. `fallow dead-code` and `fallow architecture` then add one `workspace_diagnostics[]` entry for each such rule, with the kind `requested-rule-off`:
+
+| Field | Meaning |
+| --- | --- |
+| `rule` | The canonical rule name in `rules` |
+| `flag` | The canonical CLI selector of the request, for example `--unused-deps`. A typed API or MCP request reports the same selector |
+
+```json
+{
+  "path": ".",
+  "kind": "requested-rule-off",
+  "rule": "unused-dependencies",
+  "flag": "--unused-deps",
+  "message": "unused-dependencies is off in config, so --unused-deps did not check it. Set the rule to \"error\" or \"warn\" to run this check."
+}
+```
+
+An entry is advisory. It does not change the findings or the exit code. A script that passes `--unused-deps` with the rule at `off` still exits `0`. To fail the script on a finding, set the rule to `error`. A rule at `warn` reports the finding, but it does not fail the run.
+
+Fallow adds an entry only for an explicit selection:
+
+- The `fallow dead-code` filter flags, such as `--unused-files` and `--stale-suppressions`, and `fallow architecture --cycles`, `--boundaries` and `--policy`. `--cycles` checks `circular-dependencies`, `re-export-cycle` and `package-cycle`.
+- `--unused-deps` checks only `unused-dependencies`, `unused-dev-dependencies` and `unused-optional-dependencies`. The placement rules `type-only-dependencies`, `test-only-dependencies` and `dev-dependencies-in-production` give no entry, because `off` is the way to remove them from the selection.
+- `--stale-suppressions` checks only `stale-suppressions`, not `require-suppression-reason`.
+- `--private-type-leaks`, `--absent-component-props` and `--deprecated-exports-in-use` turn their rule on, so they give no entry.
+- Production mode turns `unused-dev-dependencies` and `unused-optional-dependencies` off. A production run gives no entry for these two rules.
+- A run with no selection, a bare `fallow architecture`, the bare `fallow` run and `fallow audit` give no entry.
+
+The entries use the same output places as [unmatched config patterns](#unmatched-config-patterns), with these differences:
+
+- Human, compact, CodeClimate and `github-annotations` print one `Note:` line on stderr for each entry. `--quiet` removes the line, and the machine formats keep the entry.
+- SARIF carries each entry as a `toolConfigurationNotifications[]` note with `properties.setting` set to `rules`, plus `rule` and `flag`.
+- Markdown, the job summary, the PR comment and the review summary body show the entries in a separate `Requested checks that did not run` section.
+- The LSP shows no diagnostic for the entry.
+- The MCP tools add one sentence to the root `warnings[]` array.
+- `--lean` keeps the first entry of the kind plus a `count`. Run without `--lean` to see each rule.
+
 ## JSON Schema
 
 Add the `$schema` field to get autocomplete and validation in your editor:
