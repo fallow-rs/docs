@@ -523,6 +523,23 @@ The change adds a comment line with a suppression. Audit reports these markers: 
 - A file below a fixture or generated directory (`fixture`, `fixtures`, `__fixtures__`, `__snapshots__`, `generated`, `__generated__`) does not report, because a tool writes it or a test reads it as data. The match uses the directory name only.
 - Only a suppression that names `added-suppression` hides this finding. A new blanket `fallow-ignore` comment cannot hide itself.
 
+A finding for a `fallow-ignore` comment has a `suppression` object with `kinds`, `reason`, and `security_without_reason`. Write the reason after `--`. Every kind accepts this syntax:
+
+```ts
+// fallow-ignore-next-line security-sink -- the HTML is a constant template
+el.innerHTML = html;
+```
+
+```json
+"suppression": {
+  "kinds": ["security-sink"],
+  "reason": "the HTML is a constant template",
+  "security_without_reason": false
+}
+```
+
+When the comment hides `security-sink` or `security-client-server-leak` and gives no reason, `security_without_reason` is `true`, and the message says so. The review brief evidence then reads `fallow-ignore added (security-sink, no reason)`. A blanket comment without a kind does not set the flag. The signal is advisory: the severity, the verdict, and the exit code do not change. To find existing security suppressions without a reason, run [`fallow suppressions --format json`](/cli/suppressions) and select the markers with `reason_present: false`.
+
 | Severity | Default |
 |:---------|:--------|
 | Warn | Yes |
@@ -652,7 +669,7 @@ added-suppression:src/index.ts:2:@ts-ignore,severity=warn
 {
   "kind": "audit",
   "schema_version": 14,
-  "version": "3.38.1",
+  "version": "3.39.0",
   "command": "audit",
   "verdict": "fail",
   "changed_files_count": 12,
@@ -721,7 +738,7 @@ added-suppression:src/index.ts:2:@ts-ignore,severity=warn
 }
 ```
 
-The audit `schema_version` is 13. Version 13 follows the embedded health contract, where the `targets[].category` enum gained `resolve_hidden_coupling`.
+The audit `schema_version` is 14. Version 14 follows the embedded health contract, where the runtime coverage totals are null for a partial capture.
 
 ### Key fields
 
@@ -902,7 +919,7 @@ The decision surface is the ranked set of `coupling-boundary`, `public-api-contr
 
 ### JSON envelope
 
-`fallow review --format json` returns `decisions`, `focus`, `deltas`, `impact_closure`, `partition`, and `graph_facts`. When the project has a CODEOWNERS file, it also returns `ownership`. When the diff changes a value export, it also returns `test_reach`. The brief `schema_version` is 13. Consumers can use it to detect contract changes.
+`fallow review --format json` returns `decisions`, `focus`, `deltas`, `impact_closure`, `partition`, and `graph_facts`. When the project has a CODEOWNERS file, it also returns `ownership`. When the diff changes a value export, it also returns `test_reach`. The brief `schema_version` is 14. Consumers can use it to detect contract changes.
 
 `deltas` also has the dependency keys that the decision surface reads: `dependency_added` (`<manifest>::<name>`) and `dependency_major_bumped` (`<manifest>::<name>@<from>-><to>`). The envelope names what changed even when the cap collapses the decision. Both keys are always present, as empty arrays when nothing changed.
 
@@ -913,9 +930,16 @@ The decision surface is the ranked set of `coupling-boundary`, `public-api-contr
 | `test-weakened` | A [`weakened-tests`](#weakened-tests) finding: a skip or focus marker, removed test cases, or fewer assertions | `it.skip added`, `test cases: 2 -> 1`, `assertions: 3 -> 1` |
 | `threshold-lowered` | A `weakened-tests` finding of kind `coverage-threshold` | `lines: 90 -> 70` |
 | `suppression-added` | An [`added-suppression`](#diff-risk-rules) finding | `eslint-disable added` |
-| `security-check-removed` | A security scan step that the change removes from a CI file | |
+| `security-check-removed` | A security scan step that the change removes from a CI file, or a security sink that the change replaces with a sink of the same class in the same source file | `new Function sink replaced by vm.runInNewContext` |
 
-The first three kinds come from the `diff_risk` findings of the same run, so the brief and the `diff_risk` section agree. They follow the rule severities and the suppressions: when you set `weakened-tests` or `added-suppression` to `off`, or suppress a finding with a `fallow-ignore` comment, the brief drops the signal. They also follow the diff-risk scope. A test that moves to another changed test file is not a removed test. A threshold signal comes only from a test-runner, coverage, or Fallow config file. A suppression signal comes only from a source or style file. Only files under the analysis root (`--root`) give these signals. The `security-check-removed` scan stays local to the brief. The JSON keys and the `kind` values are the same as before. The `evidence` text is a free string that follows the diff-risk evidence, so do not parse it.
+The first three kinds come from the `diff_risk` findings of the same run, so the brief and the `diff_risk` section agree. They follow the rule severities and the suppressions: when you set `weakened-tests` or `added-suppression` to `off`, or suppress a finding with a `fallow-ignore` comment, the brief drops the signal. They also follow the diff-risk scope. A test that moves to another changed test file is not a removed test. A threshold signal comes only from a test-runner, coverage, or Fallow config file. A suppression signal comes only from a source or style file. Only files under the analysis root (`--root`) give these signals. The `security-check-removed` scan stays local to the brief.
+
+A sink substitution matters because a rule that flags one sink does not flag the other. A rule that flags `new Function` does not flag `vm.runInNewContext`, so the swap silences the rule and keeps the risk. The sink classes are:
+
+- code execution: `eval`, `new Function`, `vm.runIn*`, `vm.compileFunction`, and `new vm.Script`;
+- HTML: `innerHTML`, `outerHTML`, `srcdoc`, `srcDoc`, `insertAdjacentHTML`, `setHTMLUnsafe`, `createContextualFragment`, `document.write`, and `dangerouslySetInnerHTML`.
+
+A sink that moves into an object key under a JSX spread, a computed member such as `globalThis['eval']`, or an alias gives evidence such as `dangerouslySetInnerHTML sink moved into an object key`. A sink that only moves in the file, or that goes away, gives no signal. Test files do not take part. The JSON keys and the `kind` values are the same as before. The `evidence` text is a free string that follows the diff-risk evidence, so do not parse it.
 
 `impact_closure` reports the blast radius as a magnitude, a sample, and a distribution instead of one long list:
 
