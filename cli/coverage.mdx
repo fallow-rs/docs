@@ -2,7 +2,7 @@
 title: "fallow coverage: find unused code with runtime coverage"
 sidebarTitle: "fallow coverage"
 description: "Runtime coverage shows which code runs in production and which code you can delete. fallow coverage analyzes it and uploads source maps and the inventory."
-keywords: ["fallow coverage", "coverage setup", "upload-inventory", "upload-source-maps", "source maps", "fallow-cov", "runtime coverage", "CLI", "production coverage"]
+keywords: ["fallow coverage", "coverage setup", "upload-inventory", "upload-source-maps", "source maps", "fallow-cov", "runtime coverage", "CLI", "production coverage", "review-packet", "deployment-changes"]
 icon: "wand-magic-sparkles"
 ---
 
@@ -14,6 +14,8 @@ fallow coverage setup --cloud      # Fallow Cloud plan: beacon, CI steps, one co
 fallow coverage analyze --cloud --repo owner/repo
 fallow coverage upload-inventory   # push a static function inventory
 fallow coverage upload-source-maps           # upload build source maps for bundled code
+fallow coverage review-packet      # production facts of the changed functions
+fallow coverage deployment-changes # what changed in production between two deployments
 ```
 
 ## `setup`
@@ -231,6 +233,93 @@ Steps 2 and 3 refuse to guess when the answer is ambiguous. In these cases, the 
 To list the functions that stay unmatched, pass `--debug-unmatched`.
 
 The `actions[].type` of each finding uses canonical kebab-case values: `delete-cold-code` for `verdict=safe_to_delete`, and `review-runtime` for `verdict=review_required`. The sidecar can add other protocol-specific values. Treat an unknown value as a future extension, not as a schema violation.
+
+The `runtime_coverage` block holds the joined findings. It does not hold every per-function field of the cloud runtime context, for example `errors`, `performance.cpu`, `performance.browser`, `branches` and `covered_by_test`. To read these fields, use the [hosted MCP server](/cloud/hosted-mcp#runtime-context-fields) or [`review-packet`](#review-packet).
+
+## `review-packet`
+
+`fallow coverage review-packet` reads the production facts of the changed code from Fallow Cloud. It sends a set of files or functions to `POST /v1/coverage/:repo/review-packet` and prints the cloud answer as JSON. It runs no local analysis and does not fetch the runtime context of the full repository, so the answer stays small. Use it in a code review or in a pull request job.
+
+```bash
+# The source files changed against the base
+fallow coverage review-packet
+
+# Selected files and functions
+fallow coverage review-packet --file src/checkout.ts --function src/cart.ts:addItem
+```
+
+Without `--file` and `--function`, fallow sends the source files that changed against the base. Fallow finds the base like [`fallow audit`](/cli/audit) does:
+
+1. `--base <REF>` (an alias of `--changed-since`)
+2. `$FALLOW_AUDIT_BASE`
+3. The merge-base with the upstream branch or the remote default branch
+
+When no source file changed, the command stops with exit code 2. Pass `--file`, `--function` or `--base`.
+
+### Review-packet flags
+
+| Flag | Description |
+|:-----|:------------|
+| `--file <PATH>` | A repo-relative file to include. Repeatable. 1000 files at most. |
+| `--function <FILE:NAME[:LINE]>` | A function to include, as `FILE:NAME` or `FILE:NAME:LINE`. Repeatable. 1000 functions at most. |
+| `--base <REF>` | The base for the changed files when you pass no `--file` and no `--function`. |
+| `--repo <OWNER/REPO>` | The repository. Falls back to `$FALLOW_REPO`, then to the parsed `origin`. |
+| `--api-key <KEY>` | Fallow Cloud API key. Falls back to `$FALLOW_API_KEY`, then to the key that [`fallow cloud login`](/cli/cloud) stored. A read-only key works. |
+| `--api-endpoint <URL>` | Override the API base URL. |
+| `--project-id <ID>` | Optional ID that selects a monorepo or project. |
+| `--coverage-period <DAYS>` | Observation window, 1 through 90 days. Default: 30. |
+| `--commit-sha <SHA>` | Optional commit SHA of the deployment to read. |
+
+The JSON has one row per function in `functions`. Each row has the `tracking_state`, `period_tracking_state`, `hit_count`, `repo_path`, `covered_by_test`, `errors`, blast radius, complexity and churn of the function. The answer also has an `evidence_window` and a `prod_hot_untested` list: functions that ran in production and that no test called. Files and functions that Fallow Cloud does not know go into `not_found`. See [the runtime-context fields](/cloud/hosted-mcp#runtime-context-fields) for the meaning of each field.
+
+## `deployment-changes`
+
+`fallow coverage deployment-changes` reads how production behavior changed between two deployments. It reads `GET /v1/coverage/:repo/deployments/:sha/changes` and prints the cloud answer as JSON.
+
+```bash
+# The deployment of HEAD against the previous deployment with production runtime
+fallow coverage deployment-changes
+
+# One deployment against a selected base, only the functions that stopped
+fallow coverage deployment-changes --sha <deploy-sha> --base <base-sha> --change stopped
+```
+
+Each function gets one change kind:
+
+| Kind | Meaning |
+|:-----|:--------|
+| `new_called` | New in this deployment, and it ran. |
+| `new_not_called` | New in this deployment, and it did not run yet. |
+| `heated_up` | It runs at a higher rate than in the base deployment. |
+| `cooled_down` | It runs at a lower rate than in the base deployment. |
+| `stopped` | It ran in the base deployment and does not run now, while the base rate predicts calls. |
+| `unchanged` | No significant change. |
+
+When the two deployments cannot be compared, `comparable` is `false` and `reason` tells why. Examples are a deployment that ran for less than 6 hours, or too little runtime on one side. Then the report lists only new functions that already ran. It never reports a stop or a rate change on that evidence. `newErrorGroups` lists the error groups that the deployment saw first.
+
+### Deployment-changes flags
+
+| Flag | Description |
+|:-----|:------------|
+| `--sha <SHA>` | Commit SHA of the deployment. Default: `git rev-parse HEAD`. |
+| `--base <SHA>` | Commit SHA of the base deployment. Default: the previous deployment with production runtime. |
+| `--change <KIND>` | Show only one change kind: `stopped`, `new_not_called`, `heated_up`, `cooled_down`, `new_called` or `unchanged`. |
+| `--limit <N>` | Page size, 1 through 200. |
+| `--cursor <CURSOR>` | Read the next page. Use the `meta.cursor` value of the previous page while `meta.hasMore` is `true`. |
+| `--repo <OWNER/REPO>` | The repository. Falls back to `$FALLOW_REPO`, then to the parsed `origin`. |
+| `--api-key <KEY>` | Fallow Cloud API key, in the same order as `review-packet`. A read-only key works. |
+| `--api-endpoint <URL>` | Override the API base URL. |
+
+### Exit codes of the cloud reads
+
+`review-packet` and `deployment-changes` use the same exit codes. On an error, they print a JSON object with `error`, `message` and `exit_code`.
+
+| Code | Meaning |
+|:----:|:--------|
+| `0` | The cloud answered. The JSON is on stdout. |
+| `2` | Bad input, for example a `--function` value that is not `FILE:NAME`, a `--limit` out of range, or no changed source files. |
+| `3` | No API key, an invalid key, a plan without the feature, or a repository or deployment that Fallow Cloud does not know. |
+| `7` | Network or server error. |
 
 ## Sidecar installation
 

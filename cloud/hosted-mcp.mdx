@@ -133,12 +133,39 @@ Fallow Cloud never reports missing data as zero. Each signal has a state, and a 
 | Dependencies | `tracked`, `insufficient`, `untracked` |
 | Branch ranges | `observed`, `insufficient`, `untracked` |
 | Errors | `tracked`, `untracked` |
+| Browser performance | `tracked`, `insufficient`, `untracked` |
 
 - `untracked` means that the beacon sent no data for this signal. It does not mean zero calls or zero errors.
 - `insufficient` means that some data arrived, but too little to draw a conclusion.
 - `tracked` (or `observed` for branch ranges) means that the data is complete enough to read.
 
 An empty error list is proof of no errors only when the state is `tracked`.
+
+### Runtime-context fields
+
+`get_cloud_runtime_context` gives these fields in addition to the usage fields. `get_cloud_review_packet` gives `repo_path`, `period_tracking_state`, `covered_by_test`, `errors` and `evidence_window` too. `get_file_context` gives the same signals in a compact form.
+
+| Field | Values | Meaning |
+|:------|:-------|:--------|
+| `repo_path` | path or `null` | The path in your checkout. `null` when the path is absolute and Fallow Cloud cannot remove the runtime prefix. |
+| `period_tracking_state` | `called`, `never_called`, `untracked` | The state over the full period, earlier deployments included. `tracking_state` is the state in the current deployment only. Use `period_tracking_state` for a delete decision. |
+| `covered_by_test` | `true`, `false`, `null` | `true` when a beacon with `coverageOrigin: "test"` or `"ci"` called the function. `false` when such a beacon tracked it with zero calls. Both values need production data for the function. `null` means unknown, not "untested". |
+| `errors` | `state`: `tracked`, `untracked` | The error groups of the function in the window: `groups`, `events` and the `top` group. The counts are `null` when the state is `untracked`. |
+| `performance.cpu` | `state`: `tracked`, `insufficient`, `untracked` | CPU time from the profiler: `self_ms_per_hour`, `total_ms_per_hour`, `share_of_process` and `samples`. `insufficient` below 10 samples. |
+| `performance.browser` | `state`: `tracked`, `insufficient`, `untracked` | Script time in long animation frames per hour of visible page time: `long_frame_ms_per_hour`, `forced_layout_ms_per_hour`, `entries` and `share_of_script_time`. A server function is always `untracked`. |
+| `branches` | `state`: `observed`, `insufficient`, `untracked` | The source ranges of the function that never ran: `ranges_total`, `ranges_never_run` and `never_run`. `insufficient` below 20 calls. |
+| `evidence_window` | object, one per answer | The runtime of the current deployment: `first_observed_at`, `last_observed_at`, `observed_hours` and `deployments_in_period`. |
+
+`performance` is `null` for a function without a `stable_id`. `branches` is `null` when branch data is off on the server.
+
+Each signal needs its beacon option. Without the option, the signal stays `untracked`. See [the beacon options](#beacon-options-for-each-signal).
+
+The hosted server returns every field in this table. The fallow CLI does not:
+
+- `fallow coverage review-packet` prints the cloud JSON as it is, so it returns the fields of the review packet.
+- The local `get_cloud_runtime_context` tool and `fallow coverage analyze --cloud` join the cloud rows with the local analysis. Their `runtime_coverage` block does not have `covered_by_test`, `errors`, `performance` or `branches`.
+
+To read every field from a local agent, connect the agent to the hosted server too.
 
 ### Text and structured content
 
@@ -192,6 +219,7 @@ Function usage comes from every beacon. The other signals need a beacon option:
 | Errors | `withErrorCapture` from `@fallow-cli/beacon/errors` | Node, Bun, browsers |
 | CPU time and production callers | `createCpuProfiler` from `@fallow-cli/beacon/profiler` | Node, Bun |
 | Dependencies | No option with V8 coverage. With Istanbul counters, set `loadedModulePaths`. | Node, Bun |
+| Browser performance | `createBrowserPerformance` from `@fallow-cli/beacon/performance` | Browsers with the Long Animation Frames API (Firefox and Safari send no data) |
 
 To capture errors, wrap the beacon configuration:
 

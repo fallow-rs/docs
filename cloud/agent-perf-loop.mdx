@@ -2,7 +2,7 @@
 title: "Production CPU feedback for coding agents"
 sidebarTitle: "Agent performance loop"
 description: "Give a coding agent the production CPU time per function. The agent makes the slowest function faster and checks the result with verify_deployment."
-keywords: ["agent performance loop", "Fallow Cloud", "CPU profile", "verify_deployment", "production feedback", "coding agent", "self CPU time", "hosted MCP", "production CPU profiling"]
+keywords: ["agent performance loop", "Fallow Cloud", "CPU profile", "verify_deployment", "production feedback", "coding agent", "self CPU time", "hosted MCP", "production CPU profiling", "Claude Code hook", "PostToolUse", "file context"]
 icon: "arrows-spin"
 ---
 
@@ -104,6 +104,107 @@ The Fallow Cloud API runs the beacon and the profiler on itself. This is one pas
 The function got more calls per hour, and its CPU time per hour still fell by 60%. The CPU time per call fell by a factor of 3.1. The local benchmark showed a factor of about 1.5. The production value is an estimate. The rows of the two deployments were not the same. Thus, use the factor as a direction, not as an exact value.
 
 In the same run, `verify_deployment` marked the database wrapper `execute` as `faster`. It went from 1,840 µs per call to 490 µs. That change does not come from this pull request. The self time of `execute` includes the native database driver, so it moves with the queries that the deployment ran. This is the case from step 1: a wrapper of native code is a poor target for the loop.
+
+## File context after each read (Claude Code hook)
+
+In Claude Code, a `PostToolUse` hook can give the agent the production data of a file each time it reads or edits that file. The agent then sees the CPU time, the error groups and the branches that never ran before it changes the code. The hook calls `GET /v1/coverage/:repo/file-context?format=text`. That is the text form of `get_file_context`.
+
+Save this script as `fallow-file-context.mjs`. It needs Node.js 18 or later and has no dependencies.
+
+```js
+#!/usr/bin/env node
+// Claude Code PostToolUse hook: adds the Fallow Cloud production context of a source file.
+import { isAbsolute, relative, resolve, sep } from "node:path";
+
+const SOURCE = /\.(?:[cm]?[jt]sx?|vue|svelte|astro)$/;
+const SKIP = /(?:^|\/)(?:node_modules|dist|build|coverage|\.git)\//;
+
+const main = async () => {
+  const apiKey = process.env.FALLOW_API_KEY;
+  const repo = process.env.FALLOW_REPO;
+  if (!apiKey || !repo) return;
+  let input = "";
+  for await (const chunk of process.stdin) input += chunk;
+  const event = JSON.parse(input);
+  const filePath = event.tool_input?.file_path;
+  if (typeof filePath !== "string") return;
+  const root = process.env.FALLOW_REPO_ROOT ?? event.cwd ?? process.cwd();
+  const path = relative(root, resolve(root, filePath)).split(sep).join("/");
+  if (path.startsWith("../") || isAbsolute(path)) return;
+  if (!SOURCE.test(path) || SKIP.test(path)) return;
+  const api = (process.env.FALLOW_API_URL ?? "https://api.fallow.cloud").replace(/\/+$/, "");
+  const query = new URLSearchParams({ path, format: "text", maxBytes: "4000" });
+  const response = await fetch(
+    `${api}/v1/coverage/${encodeURIComponent(repo)}/file-context?${query}`,
+    {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "x-fallow-accept-capture-policy": "positive_only",
+      },
+      signal: AbortSignal.timeout(2000),
+    },
+  );
+  if (!response.ok) return;
+  if (response.headers.get("x-fallow-file-state") !== "observed") return;
+  const text = (await response.text()).trim();
+  if (text.length === 0) return;
+  const output = { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: text } };
+  process.stdout.write(`${JSON.stringify(output)}\n`);
+};
+
+main()
+  .catch(() => undefined)
+  .finally(() => process.exit(0));
+```
+
+Add the hook to `.claude/settings.json` (project) or `~/.claude/settings.json` (user):
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Read|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /path/to/fallow-file-context.mjs",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Set these variables in the environment of Claude Code:
+
+| Variable | Value |
+|:---------|:------|
+| `FALLOW_API_KEY` | A read-only API key (`fallow_read_k1_...`). Required. A live key also works, but it can write data. |
+| `FALLOW_REPO` | The repository as Fallow Cloud stores it, for example `owner/repo`. Required. |
+| `FALLOW_REPO_ROOT` | The root of the repository. Set it when you start Claude Code in a subdirectory, for example a package of a monorepo. Default: the working directory of the session. |
+| `FALLOW_API_URL` | Default: `https://api.fallow.cloud`. |
+
+How the hook works:
+
+- It sends only the repository-relative path of a source file. It skips files outside the repository, `node_modules`, build output and files that are not code.
+- It adds text only when the file has production data (the `x-fallow-file-state: observed` response header).
+- The server limits the text to the `maxBytes` value of the script (4000). Over the limit, the text leaves out the functions with the least production signal.
+- The server puts the text inside a notice line and two delimiter lines. The notice tells the agent to read the text as data, not as instructions.
+- The `x-fallow-accept-capture-policy: positive_only` header is necessary for a repository with a linked [Vercel project](/cloud/vercel). In that text, a function without a call is `untracked`, not `never_called`.
+- It stops after 2 seconds. On every error, it prints nothing and exits with code 0, so it never blocks the agent.
+
+Because the hook is silent on an error, a wrong key or repository looks like a file without data. Test the key and the repository one time before you add the hook:
+
+```bash
+curl -s -H "Authorization: Bearer $FALLOW_API_KEY" \
+  -H "x-fallow-accept-capture-policy: positive_only" \
+  "https://api.fallow.cloud/v1/coverage/$(node -p 'encodeURIComponent(process.env.FALLOW_REPO)')/file-context?path=src/index.ts&format=text"
+```
+
+A text block tells you that the key and the repository are correct. A JSON error has a `code` that tells you what is wrong.
 
 ## Context only
 
