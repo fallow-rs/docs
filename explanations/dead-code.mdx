@@ -229,6 +229,42 @@ class UserService {
 
 **Configuration:** The `usedClassMembers` config option marks specific member names as always used. Use it for convention-based methods that DI frameworks or third-party libraries call reflectively (e.g., `agInit`, `connectedCallback`). Custom plugin definitions can also add names to this allowlist through their `usedClassMembers` field.
 
+### Unused namespace members
+
+An exported member of an exported TypeScript namespace that no code reads.
+
+| Severity | Default |
+|:---------|:--------|
+| Warning | Yes |
+
+**What it detects:** A member of `export namespace N { ... }` or of `export declare namespace N { ... }` in a `.ts` file that no code reads as `N.member`. A nested namespace member has a dotted name, for example `Outer.Inner.x`. When a nested namespace is unused, fallow reports the namespace and not each member in it. A namespace that merges with a class, a function, or an enum of the same name is checked too.
+
+**Usage it counts:** A qualified read as a value or as a type (`N.a`, `N.Inner.T`, `typeof N.a`), destructuring (`const { a } = N`), an alias (`import x = N.a`), a read through a namespace import (`ns.N.a`), and a reference inside the namespace body (`export const b = a`). A re-export of `N` carries the reads of its consumers.
+
+**Abstain heuristics (false-positive safe):** When the namespace object leaves its chain, every member counts as used: an argument (`register(N)`), an alias (`const M = N`), a spread, `Object.keys(N)`, or `keyof typeof N`. The same rule applies to a nested namespace (`register(N.Inner)`). Fallow does not check declaration files (`.d.ts`), `declare global`, module augmentations (`declare module "x"`), namespaces without `export`, or a namespace that an entry point exports.
+
+```typescript
+export namespace Legacy {
+  export const used = 1;     // Used: read as Legacy.used in app.ts
+  export const unused = 2;   // Unused: no code reads Legacy.unused
+  export namespace Inner {
+    export const deep = 1;   // Used: read as Legacy.Inner.deep
+  }
+}
+```
+
+**When to act:** Remove the member. When only the namespace body uses the member, remove its `export` keyword. There is no auto-fix, because a member can be a function, a class, or a nested namespace over many lines. For generated code, turn the rule off for those files in `overrides`:
+
+```json
+{
+  "overrides": [
+    { "files": ["**/*.graphql.ts"], "rules": { "unused-namespace-members": "off" } }
+  ]
+}
+```
+
+Suppress one member with `// fallow-ignore-next-line unused-namespace-member`.
+
 ### Unused store members
 
 A Pinia store member that no code in the project accesses. A store member is a `state`, `getters`, or `actions` key, or a key that a setup store returns.
