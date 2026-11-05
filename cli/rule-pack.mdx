@@ -1,0 +1,113 @@
+---
+title: "fallow rule-pack: create, list, and test rule packs"
+sidebarTitle: "fallow rule-pack"
+description: "Manage declarative fallow rule packs (policy as code). Create a pack from a template, list the configured rules, and test a pack against your project."
+keywords: ["fallow rule-pack", "rule packs", "policy as code", "banned imports", "banned calls", "rulePacks", "architecture policy", "CLI"]
+icon: "terminal"
+---
+
+A rule pack is a JSON or JSONC file with project policy rules, for example a banned import, a banned call, or a banned side effect. The `rulePacks` config key lists the packs. Fallow reports a broken rule as a `policy-violation` finding in [`fallow architecture`](/cli/architecture) and in [`fallow dead-code`](/cli/dead-code).
+
+`fallow rule-pack` helps you write and check packs. It has four subcommands:
+
+| Subcommand | What it does |
+|:-----------|:-------------|
+| [`init`](#rule-pack-init) | Creates a pack file from a template and adds it to the config. |
+| [`list`](#rule-pack-list) | Lists the configured packs and their rules. |
+| [`test`](#rule-pack-test) | Runs one pack, or all configured packs, against the project and prints the matches. |
+| [`schema`](#rule-pack-schema) | Prints the JSON Schema of pack files. |
+
+```bash
+fallow rule-pack init
+fallow rule-pack test rule-packs/team-policy.jsonc
+fallow rule-pack list --format json
+```
+
+For the pack format and the rule kinds, see the [`rulePacks` config key](/configuration/overview#config-fields) and [Policy violations](/explanations/dead-code#policy-violations).
+
+## `rule-pack init`
+
+Creates a pack file from a built-in template. Then it adds the path of the file to `rulePacks` in your config file.
+
+```bash
+fallow rule-pack init [NAME] [--template <TEMPLATE>] [--dir <DIR>] [--no-config]
+```
+
+| Argument or flag | Description |
+|:-----------------|:------------|
+| `[NAME]` | The name of the pack. The default is the template name. For the `starter` template, the default is `team-policy`. |
+| `--template <TEMPLATE>` | The template to copy. Default: `starter`. |
+| `--dir <DIR>` | The directory of the pack file, relative to the project root. Default: `rule-packs`. |
+| `--no-config` | Write only the pack file. Do not change the config file. |
+
+The command writes `<DIR>/<NAME>.jsonc`. When that file exists, the command stops with exit code 2 and does not overwrite it. Keep pack files in a committed directory. Do not put them in `.fallow/`, because that directory is gitignored.
+
+| Template | Rules |
+|:---------|:------|
+| `starter` | Example `banned-import` and `banned-call` rules to edit. |
+| `ai-safe-repo` | No dynamic code execution, no shell or process calls, and no raw HTML sinks. |
+| `side-effect-free-domain` | Keeps domain and shared utility code free of IO side effects. |
+| `clean-architecture` | The domain layer does not import IO adapters or frameworks. Use it together with the [boundaries config](/configuration/boundaries). |
+| `next-app-router` | Keeps Pages Router APIs out of Next.js App Router code. |
+
+When the project has no config file, the command prints the `rulePacks` line to add by hand. It updates `.fallowrc.json`, `.fallowrc.jsonc`, `fallow.toml`, and `.fallow.toml`. When it cannot update the file safely, it prints the line to add.
+
+## `rule-pack list`
+
+Lists the configured packs. For each pack, it shows the source file, the description, and each rule with its id, effective severity, kind, and patterns.
+
+```bash
+fallow rule-pack list
+fallow rule-pack list --format json
+```
+
+The JSON output has `kind: "rule-pack-list"` and one entry in `packs[]` for each pack. Each rule has `id`, `kind`, `severity`, `patterns`, `files`, `exclude`, and `message`. A `banned-import` rule with `allowNames` also has that field. With no configured packs, `packs` is an empty array and the command exits 0.
+
+## `rule-pack test`
+
+Runs pack rules against the project and prints each match. Use it while you write a pack.
+
+```bash
+fallow rule-pack test                                  # all configured packs
+fallow rule-pack test rule-packs/team-policy.jsonc     # one pack file, also when the config does not list it
+fallow rule-pack test --format json
+```
+
+| Argument | Description |
+|:---------|:------------|
+| `[PACK]` | The path of one pack file to test alone. Default: all configured packs. |
+
+The output groups the matches by rule, with the path, line, column, and matched token of each match. It also lists the rules with no match. With `--format json`, the output has `kind: "rule-pack-test"`, a `rules[]` summary with the finding count for each rule, and a `findings[]` list.
+
+When `rules.policy-violation` is `off` in your config, the test run uses `warn` for that run. The command then prints a note on stderr, and the JSON output has `forced_severity: true`.
+
+`rule-pack test` exits 0 when it reports matches. It is a tool to write packs, not a gate. It exits 2 when no pack is configured and you pass no `[PACK]`, and when a pack file is not valid. To fail CI on policy violations, run [`fallow architecture --policy`](/cli/architecture). An error-severity finding then exits with code 1.
+
+## `rule-pack schema`
+
+Prints the JSON Schema of pack files. The output is equal to [`fallow rule-pack-schema`](/cli/rule-pack-schema).
+
+```bash
+fallow rule-pack schema > rule-pack-schema.json
+```
+
+## Options
+
+The subcommands accept the [global flags](/cli/global-flags), for example `--root`, `--config`, `--format` (`human` or `json`), and `--quiet`. `--config` selects the config file that `init` updates and that `list` and `test` read.
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="fallow architecture" icon="terminal" href="/cli/architecture">
+    Gate policy violations, cycles, and boundaries in CI.
+  </Card>
+  <Card title="fallow guard" icon="terminal" href="/cli/guard">
+    See the rule-pack policies that apply to a file before you edit it.
+  </Card>
+  <Card title="Policy violations" icon="book-open" href="/explanations/dead-code#policy-violations">
+    Read what a policy violation means and how to fix it.
+  </Card>
+  <Card title="fallow rule-pack-schema" icon="terminal" href="/cli/rule-pack-schema">
+    Print the JSON Schema of rule pack files.
+  </Card>
+</CardGroup>
