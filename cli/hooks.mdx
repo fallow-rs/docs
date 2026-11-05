@@ -1,0 +1,122 @@
+---
+title: "fallow hooks: install Git and agent hooks"
+sidebarTitle: "fallow hooks"
+description: "Install, remove, and inspect the fallow-managed Git pre-commit hook and the Claude Code and Codex gate that runs fallow audit before git commit and git push."
+keywords: ["fallow hooks", "pre-commit hook", "git hook", "agent gate", "Claude Code hook", "Codex hook", "husky", "lefthook", "CLI"]
+icon: "terminal"
+---
+
+`fallow hooks` manages two kinds of hooks. Both run [`fallow audit`](/cli/audit) on the changed code:
+
+- The **Git** target writes a shell-level pre-commit hook. It checks the commits of people.
+- The **agent** target writes a `PreToolUse` gate for Claude Code and Codex. It blocks an agent `git commit` or `git push` when the audit verdict is `fail`.
+
+You can use both together.
+
+```bash
+fallow hooks status
+fallow hooks install --target git
+fallow hooks install --target agent
+fallow hooks uninstall --target agent
+```
+
+| Subcommand | What it does |
+|:-----------|:-------------|
+| [`status`](#hooks-status) | Shows the installed hook state. It changes nothing. |
+| [`install`](#hooks-install) | Installs a fallow-managed hook. |
+| [`uninstall`](#hooks-uninstall) | Removes a fallow-managed hook. |
+
+## `hooks status`
+
+Shows the state of four hook surfaces: the Git pre-commit hook (`git`), the Claude Code gate (`claude`), the Codex `AGENTS.md` routing block (`codex`), and the Codex gate (`codex_gate`).
+
+```bash
+fallow hooks status
+fallow hooks status --format json
+```
+
+```text
+Git hook: installed (.git/hooks/pre-commit)
+Claude hook: not installed
+Codex hook: not installed
+Codex block: not installed
+```
+
+For the JSON fields, see [Inspect hook state](/integrations/claude-hooks#inspect-hook-state). An agent reads `user_edited` before it changes a hook. When `user_edited` is `true`, the agent asks before it overwrites the file.
+
+## `hooks install`
+
+```bash
+fallow hooks install --target <git|agent> [OPTIONS]
+```
+
+| Flag | Applies to | Description |
+|:-----|:-----------|:------------|
+| `--target <TARGET>` | both | Required. `git` writes a pre-commit hook in `.git/hooks/` or `.husky/`. `agent` writes the Claude Code or Codex gate. |
+| `--branch <BRANCH>` | `git` | The fallback base ref of the hook when the branch has no upstream. Default: the default branch of `origin`, else `main`. |
+| `--prune-baselines` | `git` | Run `fallow baselines prune` before the audit and stage the pruned baseline files. See [Prune baselines](/cli/init#prune-baselines). |
+| `--agent <AGENT>` | `agent` | Install only the gate of one harness: `claude` or `codex`. Default: detect from the `.claude/` and `.codex/` directories. |
+| `--user` | `agent` | Write the gate to your home directory (`~/.claude/`, `~/.codex/`), not to the project. |
+| `--gitignore-claude` | `agent` | Add `.claude/` to the `.gitignore` of the project when the command installs the Claude Code gate. |
+| `--dry-run` | both | Print what the command would write. Change no files. |
+| `--force` | both | Overwrite an existing managed hook, or a hook that you edited. |
+
+### Git target
+
+`fallow hooks install --target git` finds your hook manager:
+
+- With a `.husky/` directory, it writes `.husky/pre-commit`.
+- With Lefthook (a `.lefthook/` directory, `lefthook.yml`, or `lefthook.json`), it writes no file. It prints the `pre-commit` command to add to your Lefthook config.
+- Else it writes `.git/hooks/pre-commit`.
+
+`fallow init --hooks` does the same. For what the generated hook runs, see [Pre-commit hook](/cli/init#pre-commit-hook).
+
+The fallback base ref of the hook is the `--branch` value. Without `--branch`, it is the default branch of `origin`, else `main`.
+
+When the pre-commit file exists, the command stops with exit code 2. This is also true for a hook that fallow wrote earlier. The command then prints the block to add to your hook by hand. To replace the file, pass `--force`.
+
+### Agent target
+
+`fallow hooks install --target agent` writes `.claude/settings.json` and `.claude/hooks/fallow-gate.sh`. When the project has a `.codex/` directory, it also writes the Codex gate and an `AGENTS.md` routing block. When neither `.claude/` nor `.codex/` exists, it installs the Claude Code gate. For the gate behavior, the block message, and the version floor, see [Claude Code hooks](/integrations/claude-hooks).
+
+[`fallow agent install`](/cli/agent) installs the same gate together with the skill and the MCP registration.
+
+## `hooks uninstall`
+
+```bash
+fallow hooks uninstall --target <git|agent> [OPTIONS]
+```
+
+| Flag | Applies to | Description |
+|:-----|:-----------|:------------|
+| `--target <TARGET>` | both | Required. The hook surface to remove: `git` or `agent`. |
+| `--agent <AGENT>` | `agent` | Remove only the gate of one harness: `claude` or `codex`. Default: every surface that fallow finds. |
+| `--user` | `agent` | Remove the gate from your home directory, not from the project. |
+| `--dry-run` | both | Print what the command would remove. Change no files. |
+| `--force` | both | Also remove a hook script or Git hook that you edited. Without this flag, the command keeps such a file. |
+
+Uninstall removes only what fallow wrote. Handlers and hooks that you added stay. A second run prints `unchanged` or `not present` and exits 0.
+
+## Exit codes
+
+| Code | Meaning |
+|:-----|:--------|
+| `0` | The command ran, also when there was nothing to change. |
+| `2` | Invalid input, for example an existing pre-commit file without `--force`, an invalid `settings.json`, or a repository without a `.git` directory. |
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="Claude Code hooks" icon="shield-check" href="/integrations/claude-hooks">
+    Read how the agent gate blocks commits and pushes.
+  </Card>
+  <Card title="fallow init" icon="terminal" href="/cli/init">
+    Create a config, and read what the Git pre-commit hook runs.
+  </Card>
+  <Card title="fallow agent" icon="terminal" href="/cli/agent">
+    Wire fallow into each agent harness in one pass.
+  </Card>
+  <Card title="fallow audit" icon="shield-check" href="/cli/audit">
+    Read the verdicts that both hooks use.
+  </Card>
+</CardGroup>
