@@ -224,6 +224,27 @@ The `fallow` npm package includes the `fallow-mcp` launcher. You can also instal
 | `impact_closure` | Trace the impact closure for one file (`fallow dead-code --impact-closure <path> --format json`). Returns the transitive set of affected files that are not in the diff, and the coordination gaps for modules that use the file contract. Supports `path`, `root`, `config`, `production`, `workspace`, `no_cache`, and `threads`. Use it as evidence to plan a review. It does not prove that the affected files are wrong. Each `coordination_gap[]` entry has `search_visibility`, `reason`, and `search_as` for the consumed symbols. `search_symbol` names the `consumed_symbols` entry that these fields describe, `default` for a default export. |
 | `impact_all` | Combines all tracked projects on this machine into one cross-repo value report (`fallow impact --all --format json`). Runs no analysis. Reads the per-project histories in the user config dir and returns `kind: "impact-cross-repo"` with `project_count`, `tracked_count`, `unreadable_count`, a `totals` sum over all tracked projects (also repos that are now deleted from disk), and a `projects[]` array. Each row has a hashed `project_key` (always present, never a filesystem path), an optional `label` (the folder name of the repo), `last_recorded`, and the same per-project `report` shape as `impact`. Rows from older stores have no `label`, so use `project_key` for those. Use this tool for all projects together. Use `impact` (with `root`) for one project. `sort` sets the row order (`recent` (default), `resolved`, `contained`, or `name`). `limit` caps the rows, but `totals` still cover every project. The report counts enabled projects with no recorded history but does not list them. Read-only. The enable, disable, default, and reset commands that change state are not available. This is a local developer signal: it is empty in CI and is not a CI metric. |
 
+### Rust workspaces
+
+The MCP server analyzes a Rust workspace through [`cargo fallow`](https://github.com/fallow-rs/cargo-fallow). A root with a `Cargo.toml` and no `package.json` takes the Rust route. Each routed tool runs `cargo-fallow` and returns its report with `language: "rust"`.
+
+| Tool | Rust route |
+|:-----|:-----------|
+| `analyze` | `cargo fallow check --only deps --only visibility`. The partial run has no health score. |
+| `find_dupes` | `cargo fallow dupes` |
+| `check_health` | `cargo fallow complexity`. The result has no score. |
+| `check_architecture` | `cargo fallow boundaries`. The result has `kind: "boundaries"`. |
+| `mutation_plan` | `cargo fallow mutants --list`. Without `paths` or `changed_since`, the plan covers the whole package, not the changed code. |
+| `mutation_inspect` | `cargo fallow mutants --inspect <id> --no-build`, which reads only the cached coverage map. |
+
+`mutation_plan` and `mutation_inspect` take a `package` parameter on this route. Neither tool compiles or runs tests.
+
+- A parameter that the Rust route cannot honor gives `FALLOW_RUST_UNSUPPORTED_PARAMS`.
+- `project_info` and `code_execute` give `FALLOW_RUST_UNSUPPORTED_TOOL`.
+- A missing binary gives `FALLOW_RUST_BINARY_NOT_FOUND`. Set `CARGO_FALLOW_BIN` to name the binary.
+
+A root with both a `Cargo.toml` and a `package.json` keeps the JavaScript route. The result then has a `warnings` entry that points to `cargo fallow`.
+
 ### Runtime source-map confidence
 
 When the response `capabilities` array has `function_identity_v2`, cloud runtime tools can add source-map confidence metadata. Function list responses use `resolutionStatus` and `mappingQuality`. Runtime-context responses use `resolution_status` and `mapping_quality`. These fields tell you how much to trust the source map. They do not tell you if the function ran.
@@ -250,7 +271,7 @@ When the response `capabilities` array has `function_identity_v2`, cloud runtime
 {
   "kind": "dead-code",
   "schema_version": 10,
-  "version": "3.39.0",
+  "version": "3.40.0",
   "elapsed_ms": 42,
   "total_issues": 1,
   "unused_exports": [
@@ -409,6 +430,7 @@ The combined output has all dead-code issue types, the duplication findings, and
 |:---------|:------------|
 | `FALLOW_BIN` | Path to the fallow CLI binary for CLI-backed calls. The MCP server checks these in order: this env var, a binary next to `fallow-mcp`, then `fallow` in `PATH`. It has no effect on typed in-process calls. |
 | `FALLOW_TIMEOUT_SECS` | Timeout in seconds (default: `120`) for typed and CLI-backed calls. The similar-code tools have their own default of 900 seconds, and this variable overrides it too. A typed call that times out returns `FALLOW_MCP_API_TIMEOUT`. A CLI call that times out kills the process tree and returns `FALLOW_MCP_SUBPROCESS_TIMEOUT`. Raise it for very large codebases. |
+| `CARGO_FALLOW_BIN` | Path to the `cargo-fallow` binary of the [Rust route](#rust-workspaces). The MCP server checks these in order: this env var, a binary next to `fallow-mcp`, then `cargo-fallow` in `PATH`. |
 | `FALLOW_DIFF_FILE` | Path to a unified diff. The analysis tools report only the findings on changed lines. See [Diff and ref from the environment](#diff-and-ref-from-the-environment). |
 | `FALLOW_CHANGED_SINCE` | Git ref. The analysis tools report only the files changed since this ref. See [Diff and ref from the environment](#diff-and-ref-from-the-environment). |
 | `FALLOW_MCP_WARM_SESSION` | Set to `0`, `false`, `off`, or `no` to turn off the in-memory store of parsed files (on by default). With the store on, a typed call on files that did not change since an earlier call does no parse work. A changed, added, or removed file makes the call parse the changed files again. The store holds at most 4 file lists and 256 MiB of source. It does not change any answer, and it does not apply to CLI-backed calls. |
