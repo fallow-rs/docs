@@ -154,15 +154,15 @@ Each catalogue finding has `kind: "tainted-sink"`, a `category` (the catalogue i
 |:---------|:----|:-----------|
 | `dangerous-html` | 79 | `innerHTML` / `outerHTML` / `insertAdjacentHTML` / `dangerouslySetInnerHTML` / `Range.createContextualFragment` / iframe `srcdoc` (`frame.srcdoc`, `setAttribute("srcdoc", ...)`, JSX `srcDoc`, Vue `:srcdoc`, Svelte `srcdoc`, Angular `[srcdoc]`) |
 | `template-escape-bypass` | 79 | template-engine `SafeString(...)` wrapping a non-literal value |
-| `command-injection` | 78 | `child_process` `exec` / `execSync` / `spawn` / `spawnSync` (import-provenance gated) |
+| `command-injection` | 78 | `child_process` `exec` / `execSync` / `spawn` / `spawnSync` / `execFile` / `execFileSync` (import-provenance gated; `execFile` runs no shell, so it reports only when the argument or the module reads untrusted input) / `shelljs` `shell.exec` |
 | `code-injection` | 94 | `eval` / `Function` and `new Function` / string `setTimeout` and `setInterval` / `vm.runInNewContext`, `vm.runInThisContext`, `vm.runInContext`, `vm.compileFunction`, `new vm.Script` / `src`, `text`, `textContent` or `innerText` on a `document.createElement("script")` local (callee `HTMLScriptElement.<property>`) |
 | `dynamic-regex` | 1333 | `RegExp(...)` / `new RegExp(...)` with a non-literal pattern |
 | `redos-regex` | 1333 | vulnerable regex literals tested with source-backed input |
 | `resource-amplification` | 400 | source-backed size into `Array(...)` / `new Array(...)` / `Buffer.alloc*` / `String.prototype.repeat` / `padStart` / `padEnd` (directly `Math.min`-clamped sizes stay quiet) |
 | `dynamic-module-load` | 95 | dynamic `require(...)` |
 | `sql-injection` | 89 | `query` / `execute` with concatenation or interpolation, raw escape hatches (`sql.raw`, Prisma unsafe raw, Knex raw, `sequelize.literal`) |
-| `ssrf` | 918 | `fetch` / `got` / `ky` / `needle` / `request` / `axios` / `superagent` / `undici` / `http(s).request` |
-| `path-traversal` | 22 | `path.join` / `path.resolve` / `node:fs` path methods / route `sendFile` |
+| `ssrf` | 918 | `fetch` / `got` and its method calls / `ky` / `needle` / `request` / `axios` and `axios.put`, `axios.patch`, `axios.delete`, `axios.head` / a bare `axios()` call with a template, a concatenation or a call result as its URL (an `axios(config)` call stays quiet) / `superagent` / `undici` / `http(s).request` / `http.get` and `https.get` imported from the Node modules |
+| `path-traversal` | 22 | `path.join` / `path.resolve` / `node:fs` and `node:fs/promises` path methods, also as named imports and destructured `require()` bindings, and the `fs` write, append, delete and copy calls (these report only when the argument or the module reads untrusted input) / route `sendFile` |
 | `header-injection` | 113 | response `setHeader` / `writeHead` (a `writeHead` headers object with only literal names and literal values is not a candidate) |
 | `open-redirect` | 601 | `res.redirect` / `location.href` / `location.assign` / `window.open` |
 | `postmessage-wildcard-origin` | 346 | `postMessage(..., "*")` |
@@ -179,12 +179,12 @@ Each catalogue finding has `kind: "tainted-sink"`, a `category` (the catalogue i
 | `deprecated-cipher` | 327 | `crypto.createCipher` / `createDecipher` (no IV, MD5-based KDF) |
 | `insecure-randomness` | 338 | `crypto.pseudoRandomBytes(...)` |
 | `unsafe-buffer-alloc` | 1188 | `Buffer.allocUnsafe` / `allocUnsafeSlow` (uninitialized memory) |
-| `unsafe-deserialization` | 502 | `js-yaml` `load` / `node-serialize` |
+| `unsafe-deserialization` | 502 | `js-yaml` `load` and `loadAll` / `node-serialize` |
 | `prototype-pollution` | 1321 | `__proto__` writes and recursive merge sources |
 | `zip-slip` | 22 | archive extraction destination paths |
 | `nosql-injection` | 943 | Mongo / Mongoose query object passthrough |
-| `ssti` | 1336 | template engine compile / render calls |
-| `xxe` | 611 | XML parse calls |
+| `ssti` | 1336 | template engine compile / render calls, for example `Handlebars.compile`, `pug.render`, `_.template` and `lodash.template` |
+| `xxe` | 611 | XML parse calls, for example `libxmljs.parseXml` |
 | `secret-pii-log` | 532 | source-backed secrets or request PII reaching logs |
 | `hardcoded-secret` | 798 | provider-prefix credentials and high-entropy literals assigned to secret-shaped identifiers (include-required) |
 | `secret-to-network` | 201 | a non-public `process.env` / `import.meta.env` secret reaching a network call body (`fetch` / `axios` / `got` / ...) via same-identifier flow (include-required) |
@@ -196,8 +196,8 @@ Each catalogue finding has `kind: "tainted-sink"`, a `category` (the catalogue i
 | `angular-trusted-html` | 79 | Angular `bypassSecurityTrust*` (enabler-gated) |
 | `nextjs-open-redirect` | 601 | Next.js `redirect` / `permanentRedirect` (enabler-gated) |
 | `dom-document-write` | 79 | `document.write` / `document.writeln` |
-| `jquery-html` | 79 | jQuery `.html(value)` (enabler-gated) |
-| `route-send-file` | 22 | Express / Fastify / Hono route `sendFile` (enabler-gated) |
+| `jquery-html` | 79 | jQuery `.html(value)` / `$.parseHTML` / `jQuery.parseHTML` (enabler-gated) |
+| `route-send-file` | 22 | Express / Fastify / Hono route `sendFile` / Express `res.download` and `response.download` (enabler-gated) |
 
 <Note>
   The catalogue is deliberately conservative. A non-literal argument is a signal to verify, not proof of a vulnerability. Fallow does not prove that the value is attacker-controlled or that it reaches the sink unsanitized. The agent does the verification.
@@ -283,7 +283,7 @@ The editor diagnostics and [`fallow viz`](/cli/viz) show the same result. The ba
 {
   "kind": "security",
   "schema_version": 8,
-  "version": "3.39.0",
+  "version": "3.40.0",
   "elapsed_ms": 42,
   "config": {
     "rules": {
@@ -407,7 +407,7 @@ Each finding also has a `candidate` record, an optional `taint_flow` triple, and
 The `candidate` record has three slots:
 
 - `source_kind`: the kind of untrusted input that reaches the sink, as a stable catalogue source id such as `"http-request-input"`, `"process-env"`, `"process-argv"`, `"message-event-data"`, or `"location-input"`. Absent when no untrusted source matched (always absent for `client-server-leak`). Treat an unknown id as an untrusted source of unknown kind. Never drop a candidate because its id is unknown.
-- `sink`: a complete description of the sink site (`path`, `line`, `col`, `category`, `cwe`, and the captured `callee`). You can act on `candidate.sink` without reading the rest of the finding. URL-category sinks (SSRF, open redirect) can add `url_shape` when the shape is statically visible: `"fixed-origin-dynamic-path"` (a fixed origin with a dynamic path or query, the less alarming shape) or `"dynamic-origin"` (the origin itself is dynamic). The static prefix must complete the authority. A dynamic value directly after the host, in the port, or after userinfo makes the shape `"dynamic-origin"`. A `/`, `?`, or `#` after the host completes it. A relative URL counts as fixed-origin only when a path segment comes before the dynamic value: `` `/path/${id}` `` is fixed-origin, `` `/${id}` `` is `"dynamic-origin"`.
+- `sink`: a complete description of the sink site (`path`, `line`, `col`, `category`, `cwe`, and the captured `callee`). You can act on `candidate.sink` without reading the rest of the finding. For a named import or a destructured `require()` binding of `node:child_process`, `node:fs`, `node:fs/promises` or `node:vm`, the callee names the module: `const { execSync } = require("child_process"); execSync(cmd)` gives `node:child_process.execSync`. A default or namespace import keeps its written callee, such as `fs.readFile`. URL-category sinks (SSRF, open redirect) can add `url_shape` when the shape is statically visible: `"fixed-origin-dynamic-path"` (a fixed origin with a dynamic path or query, the less alarming shape) or `"dynamic-origin"` (the origin itself is dynamic). The static prefix must complete the authority. A dynamic value directly after the host, in the port, or after userinfo makes the shape `"dynamic-origin"`. A `/`, `?`, or `#` after the host completes it. A relative URL counts as fixed-origin only when a path segment comes before the dynamic value: `` `/path/${id}` `` is fixed-origin, `` `/${id}` `` is `"dynamic-origin"`.
 - `boundary`: whether the flow crosses a `client_server` boundary (a `"use client"` file in the trace) or a `cross_module` boundary (the source reaches the sink across one or more import hops). It also has an `architecture_zone` (`from`/`to`) when the anchor is part of a declared architecture-boundary violation.
 
 There is no `impact` field. The verifying agent decides exploitability. Fallow flags candidates with structural evidence and a review-priority tier from `severity`.

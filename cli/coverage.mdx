@@ -234,7 +234,7 @@ To list the functions that stay unmatched, pass `--debug-unmatched`.
 
 The `actions[].type` of each finding uses canonical kebab-case values: `delete-cold-code` for `verdict=safe_to_delete`, and `review-runtime` for `verdict=review_required`. The sidecar can add other protocol-specific values. Treat an unknown value as a future extension, not as a schema violation.
 
-The `runtime_coverage` block holds the joined findings. It does not hold every per-function field of the cloud runtime context, for example `errors`, `performance.cpu`, `performance.browser`, `branches` and `covered_by_test`. To read these fields, use the [hosted MCP server](/cloud/hosted-mcp#runtime-context-fields) or [`review-packet`](#review-packet).
+The `runtime_coverage` block holds the joined findings. In cloud mode, each finding and each hot path also has a `cloud_context` object. It holds the fields of the cloud runtime-context row that fallow does not read itself, for example `errors`, `performance.cpu`, `performance.browser`, `branches`, `covered_by_test` and `test_hit_count`. A blast-radius entry from the cloud has `production_callers`, `caller_sites` and the caller counts in its `cloud_context`. `runtime_coverage.cloud_context` holds the top-level fields of the response, for example `capabilities` and `page`. These signals are context only and do not change a verdict. A `null` count or an `untracked` state means not measured, never zero. The MCP tool `get_cloud_runtime_context` runs this command, so it returns them too. The [hosted MCP server](/cloud/hosted-mcp#runtime-context-fields) and [`review-packet`](#review-packet) also read these fields.
 
 ## `review-packet`
 
@@ -365,9 +365,17 @@ fallow coverage upload-inventory \
 | `--allow-dirty` | Upload even when the working tree has uncommitted changes. Without this flag, fallow refuses the upload with exit code 10. With it, fallow prints a warning, because the inventory comes from the working copy and can differ from the git SHA. |
 | `--exclude-paths <GLOB>` | More globs to skip. Fallow applies them after the configured fallow ignore rules. Repeatable. |
 | `--path-prefix <PREFIX>` | Prefix that fallow adds in front of each `filePath`, so the static inventory paths have the same shape as the paths from the runtime beacon. Required for containerized deployments. The beacon reports the absolute V8 path inside the container (for example, `/app/src/foo.ts`). By default, the inventory has repo-relative paths (`src/foo.ts`). Must start with `/` and use POSIX separators. See [Path prefix](#path-prefix-containerized-deployments) for common values. |
-| `--with-callers` | Also upload importer edges (the modules that import each declaration) with the inventory. The dashboard then shows the callers of untracked code. The inventory rows also have per-function complexity and per-file churn. |
+| `--with-callers` | Also upload importer edges (the modules that import each declaration) with the inventory. The dashboard then shows the callers of untracked code. The inventory rows also have per-function complexity and per-file churn. The upload also has the entry routes that can reach each function. See [Entry routes](#entry-routes). |
 | `--dry-run` | Print what fallow would upload, and exit. No network call. |
 | `--ignore-upload-errors` | Treat network and server errors as warnings (exit 0). Validation, payload-size, and auth errors still fail. |
+
+### Entry routes
+
+With `--with-callers`, the upload body (version 4) has a top-level `routes` array and a `routeIds` array for each function. The `nextjs`, `remix`, `sveltekit` and `nuxt` plugins find the route files. Fallow takes each route pattern from the file name, never from a request path. A route handler gives one route for each exported HTTP method.
+
+Reach follows the runtime imports of the module graph. So a route in `routeIds` means that the route can reach the function, not that a request did reach it.
+
+The upload keeps at most 500 routes and at most 50 route ids for each function. When the total grows too large, fallow lowers the cap for each function. Each cut shows in the `routeLimits` field of the upload body and in a warning.
 
 ### Function naming
 
