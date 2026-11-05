@@ -89,6 +89,16 @@ blocked, report the pull request, the blocker, and the next action.
 
 Sign each commit with `git commit -S -s`. The DCO check requires the sign-off.
 
+## Write for the reader
+
+Write code comments, docs, commit messages, PR text, and changelog entries
+for a reader who did not see the session. Do not put the conversation, the
+prompt, discarded attempts, or the edit history into them. Describe the code
+as it is now. For a regression, state what breaks without the code, and link
+the issue. `scripts/check-comment-quality.mjs` blocks narration and history
+comments in the `.githooks/pre-commit` hook, the Documentation CI workflow,
+and Claude edits.
+
 ## Verifying changes
 
 Run the checks in [CONTRIBUTING.md](CONTRIBUTING.md#before-submitting).
