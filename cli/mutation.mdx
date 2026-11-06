@@ -20,13 +20,15 @@ Fallow reports evidence. It does not write tests and it does not propose code ch
 fallow mutation
 ```
 
-## Three commands
+## Commands
 
 | Command | Runs project code | JSON `kind` |
 |:--------|:------------------|:------------|
 | `fallow mutation --plan` | No | `mutation-plan` |
 | `fallow mutation` | Yes, the project tests | `mutation` |
+| `fallow mutation --recheck` | Yes, the project tests | `mutation` |
 | `fallow mutation inspect <mutant_id>` | No | `mutation-inspect` |
+| `fallow mutation tasks` | No | `mutation-tasks` |
 
 Only `fallow mutation` without `--plan` runs code. Project config cannot start a run, and the MCP server cannot start a run.
 
@@ -226,6 +228,9 @@ fallow: mutation: 8/20 mutants done (1m25s)
 | `--kill-matrix-for <TARGET>` | Check whether the named tests are redundant, without a full kill matrix. A target is a test file or a test ID (`file::name`). Repeat the flag for each target. Cannot be used with `--kill-matrix`. See [Check named tests](#check-named-tests). |
 | `--typecheck` | Type-check each survivor after the tests. See [Type check of survivors](#type-check-of-survivors). |
 | `--resume` | Continue an interrupted or `partial` run. The run reuses the final results in its journal and runs only the other mutants. See [Resume a run](#resume-a-run). |
+| `--recheck` | Rerun the open tasks of a saved report against the current tests. See [Recheck after new tests](#recheck-after-new-tests). |
+| `--report <PATH>` | The saved report of `--recheck`. Default: the report of the last run. |
+| `--mutant <ID>` | Recheck only these mutant ids, comma-separated or repeated. |
 | `--allow-dirty` | Run in a git worktree with uncommitted changes. |
 | `--allow-side-effects` | Keep mutants in functions whose own body calls a file system, process, network, or database API. See [Safety rules](#safety-rules). |
 | `-o, --output-file <PATH>` | Write the report to a file after the run. |
@@ -566,6 +571,63 @@ The report holds no source text. Inspect reads the current file and finds the mu
 
 Inspect exits with code 2 when no run saved a report, or when the id is not in the report.
 
+## Open tasks
+
+`fallow mutation tasks` lists the open tasks of a saved report as one batch. A task is a `survived` or `no_coverage` mutant: a small change to the code that made no test fail. Give the batch to a coding agent, or use it yourself, to write the missing tests. It runs no code.
+
+```bash
+fallow mutation tasks
+```
+
+```text
+Mutation tasks: 2 open (2 survived)
+
+Each item is a small change to the code that made no test fail. Write tests that pass on the current code and fail on the changed code. One test can cover several items. Skip an item when no input can detect the change; a verdict document (`--verdicts`) can mark it as equivalent.
+
+1. src/math/inRange.ts:48, function inRange (survived) [a4b41e7dd2a29e55]
+   current: if (minimum >= maximum) {
+   changed: if (minimum > maximum) {
+   tests: src/math/inRange.spec.ts
+
+2. src/math/inRange.ts:52, function inRange (survived) [3450287e93650287]
+   current: return minimum <= value && value < maximum;
+   changed: return minimum < value && value < maximum;
+   tests: src/math/inRange.spec.ts
+```
+
+- Without `--report`, the command reads the report of the last run, as `inspect` does. A `--plan` document has no test results, so the command refuses it.
+- Each task holds the source lines before and after the change, and no other source text. The lines come from the current file. When the file changed after the run, the task is `stale` and shows no code.
+- `--format markdown` puts the lines in a fenced block. `--format json` gives the `mutation-tasks` envelope: each task has `mutant_id`, `file`, `line`, `column`, `operator`, `function`, `status`, `original_lines`, `mutated_lines` and `covering_test_files`.
+- The command exits with code 0, also when the batch has tasks. To gate a run, use `--min-score`.
+
+## Recheck after new tests
+
+`fallow mutation --recheck` reruns the open tasks of a saved report against the current tests. With `tasks`, it gives a loop: list the tasks, write tests, recheck, and the mutants that still survive are the next batch.
+
+```bash
+fallow mutation src/utils.ts       # run, and save the report
+fallow mutation tasks              # the open tasks as one batch
+# write or change tests
+fallow mutation --recheck          # rerun the open tasks
+fallow mutation tasks              # what is still open
+```
+
+- `--mutant <ID>` rechecks only these ids, with any status. Without it, the recheck runs each `survived` and `no_coverage` mutant of the report.
+- A recheck proves a change of the tests only. When a selected file changed after the report, the recheck exits with code 2 and `FALLOW_MUTATION_SOURCE_CHANGED`. An uncommitted change to a file that is not a test file exits with code 2 and `FALLOW_MUTATION_NON_TEST_CHANGE`. A change that you committed after the report to another file, for example a module that a selected file imports or the runner config, is not detected. Run `fallow mutation` again after such a commit.
+- The other mutants of the selected files are `pruned` with the reason `not-selected`. They do not count in the score.
+- The report gets a `recheck` object. For each rechecked mutant, it gives the earlier status, the new status and an `outcome`:
+
+| `outcome` | Meaning |
+|:----------|:--------|
+| `killed` | A test now fails on the mutant. |
+| `survived` | Each covering test still passes on the mutant. |
+| `no_coverage` | No test reaches the mutant. |
+| `tests_fail_on_original` | A test of the run fails on the original code, so the run proves no survivor. Fix that test first. |
+| `unsettled` | The mutant has no final result, for example `runtime_error` or `flaky`. |
+
+- A recheck without `--mutant` replaces the saved report, so `tasks` then lists the mutants that are still open. A recheck with `--mutant` keeps the saved report.
+- `--recheck` cannot be combined with a scope flag, `--plan`, `--resume`, `--allow-dirty`, `--max-mutants` or `--min-score`. The score of a recheck covers only the rechecked mutants.
+
 ## Verdicts for equivalent mutants
 
 Some mutants do not change the behavior of the code. No test can detect them. You can mark them in a verdict document:
@@ -633,16 +695,17 @@ A CLI flag wins over the config. No config key starts a run or keeps side-effect
 
 ## MCP tools
 
-The [MCP server](/integrations/mcp) has two read-only tools. Neither tool runs tests.
+The [MCP server](/integrations/mcp) has three read-only tools. No tool runs tests.
 
 - `mutation_plan` returns the plan envelope: each mutant's id, location, operator, disposition, and static test files. It takes `changed_since`, `all`, `paths`, `max_mutants`, and `operators`.
 - `mutation_inspect` shows one mutant of a saved report. It takes `mutant_id` and an optional `report`. Without `report`, it reads the report of the last run.
+- `mutation_tasks` returns the open tasks of a saved report, the same JSON as `fallow mutation tasks --format json`. It takes an optional `report`.
 
 A run needs the CLI command `fallow mutation`, which executes your tests. An agent should ask you before it starts a run.
 
 ## Current limits
 
-- The output formats are `human` and `json`. There is no SARIF, CodeClimate, LSP, or CI gate output.
+- The output formats are `human` and `json`, plus `markdown` for `tasks`. There is no SARIF, CodeClimate, LSP, or CI gate output.
 - `--workspace` and `--changed-workspaces` are not supported. Pass a package directory as a path.
 - A run executes the mutants that a verdict marks. Fallow applies the verdicts after the run.
 - The in-process mode of `node:test` (`isolation: "none"`) is not supported.
