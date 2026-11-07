@@ -27,6 +27,7 @@ fallow mutation
 | `fallow mutation --plan` | No | `mutation-plan` |
 | `fallow mutation` | Yes, the project tests | `mutation` |
 | `fallow mutation --recheck` | Yes, the project tests | `mutation` |
+| `fallow mutation --compare <PATH>` | Yes, the project tests | `mutation` |
 | `fallow mutation inspect <mutant_id>` | No | `mutation-inspect` |
 | `fallow mutation tasks` | No | `mutation-tasks` |
 
@@ -231,6 +232,7 @@ fallow: mutation: 8/20 mutants done (1m25s)
 | `--recheck` | Rerun the open tasks of a saved report against the current tests. See [Recheck after new tests](#recheck-after-new-tests). |
 | `--report <PATH>` | The saved report of `--recheck`. Default: the report of the last run. |
 | `--mutant <ID>` | Recheck only these mutant ids, comma-separated or repeated. |
+| `--compare <PATH>` | Compare this run with a saved complete report. See [Compare with a saved report](#compare-with-a-saved-report). |
 | `--allow-dirty` | Run in a git worktree with uncommitted changes. |
 | `--allow-side-effects` | Keep mutants in functions whose own body calls a file system, process, network, or database API. See [Safety rules](#safety-rules). |
 | `-o, --output-file <PATH>` | Write the report to a file after the run. |
@@ -376,7 +378,7 @@ fallow mutation --all --kill-matrix --format json --quiet
 
 The `--kill-matrix` mode runs all covering tests with bail disabled. It can increase execution time.
 Read the matrix evidence status before you review candidates. Normal mode reports `kill-matrix-disabled` and no candidates.
-Incomplete evidence also produces no candidates.
+With `--kill-matrix`, incomplete evidence produces no candidates. With `--kill-matrix-for`, only the tests of complete targets can be candidates.
 
 `kills` and `unique_kills` are arrays of mutant IDs.
 Individual subsumers cover a candidate's full kill set. Other tests can also cover that set collectively.
@@ -417,7 +419,10 @@ fallow mutation --all --kill-matrix-for "src/cart.test.ts::adds an item" --forma
 - Each mutant runs its target tests with bail disabled. Then it runs its other covering tests with bail enabled, up to the first failure.
 - `kill_matrix.tests` has only the target tests. `subsuming_tests` is empty, because bail hides the other killers.
 - Each target test has the field `target_only_kills`. It lists the kills that only other targets share, each as `{ mutant_id, targets }`. The test stays redundant only while one of those `targets` stays in the suite.
-- `kill_matrix.targets` lists each target as `{ target, test_ids }`, with the dry-run test IDs that the target selects. The field is absent outside target mode.
+- `kill_matrix.targets` lists each target as `{ target, test_ids, status, reasons }`. `test_ids` are the dry-run test IDs that the target selects. The field is absent outside target mode.
+- Each target has its own evidence `status`: `complete` or `incomplete`. A target is `incomplete` with the reason `incomplete-mutant-results` when one of its tests covers a mutant with incomplete evidence. The run-wide reasons `partial-mutation-run`, `baseline-failure` and `missing-test-file-metadata` make each target incomplete.
+- Only the tests of a complete target can be candidates. One incomplete mutant removes only the candidates of the targets that cover it.
+- The top-level `kill_matrix.status` is `incomplete` when any evidence is incomplete. Thus `candidates` can have entries while the top-level `status` is `incomplete`. The human report shows the status and the reasons of each target.
 
 A target that selects no test of the dry run stops the command with exit code 2 and `FALLOW_MUTATION_TARGET_UNMATCHED`. The same error applies when the runner cannot run single tests. `--kill-matrix-for` and `--kill-matrix` cannot be used together.
 
@@ -627,7 +632,44 @@ fallow mutation tasks              # what is still open
 | `unsettled` | The mutant has no final result, for example `runtime_error` or `flaky`. |
 
 - A recheck without `--mutant` replaces the saved report, so `tasks` then lists the mutants that are still open. A recheck with `--mutant` keeps the saved report.
+- A `--mutant` id that the report does not have exits with code 2 and `FALLOW_MUTATION_UNKNOWN_MUTANT`. A report without an open task exits with code 2 and `FALLOW_MUTATION_NOTHING_TO_RECHECK`.
 - `--recheck` cannot be combined with a scope flag, `--plan`, `--resume`, `--allow-dirty`, `--max-mutants` or `--min-score`. The score of a recheck covers only the rechecked mutants.
+
+## Compare with a saved report
+
+`fallow mutation --compare <PATH>` compares the run with a saved report. It shows if a change of the tests weakens the detection of mutants: a mutant that a test killed before and that survives now.
+
+```bash
+fallow mutation src/utils.ts --format json -o before.json   # save a report
+# change, move or remove tests, then commit
+fallow mutation src/utils.ts --compare before.json
+```
+
+- The saved report is a `fallow mutation --format json` report. Keep it in a file of its own, because each run replaces the [saved report](#saved-report) of the last run.
+- The compare matches the mutants of the two runs by `mutant_id`. A mutant id stays the same until its enclosing function changes, so an edit of a test file keeps the ids. Run the two runs over the same files.
+- The saved report and the run must have `completion.status: complete`. A saved report that is not complete exits with code 2 and `FALLOW_MUTATION_COMPARE_INCOMPLETE` before the run starts. A run that is not complete writes its report without a `compare` object, then exits with code 2 and the same code.
+- A regression does not change the exit code. To fail a CI job on a regression, read `compare.regressed` of the JSON output.
+- `--compare` cannot be combined with `--plan` or `--recheck`. A verdict document applies before the compare, so an `equivalent` mutant is not a regression.
+
+The report gets a `compare` object with these fields:
+
+| Field | Meaning |
+|:------|:--------|
+| `report_sha256` | The SHA-256 digest of the saved report. |
+| `compared` | The number of mutant ids in both runs. |
+| `regressed`, `inconclusive`, `added`, `removed` | The number of mutants with each `change`. |
+| `mutants` | Each mutant with a change, sorted by file, line and mutant id. A mutant in both runs without a change is not in the list. |
+
+Each entry of `mutants` has `mutant_id`, `file`, `line`, `change`, `previous_status` (absent for `added`), `status` (absent for `removed`) and `previous_killing_tests`. `previous_killing_tests` holds the `killing_tests` of the saved report, else its `killed_by`.
+
+| `change` | Meaning |
+|:---------|:--------|
+| `regressed` | The saved report detects the mutant (`killed` or `timeout`), and this run does not (`survived` or `no_coverage`). |
+| `inconclusive` | The mutant is `flaky` in one of the two runs, so the compare of this mutant proves nothing. |
+| `added` | Only this run has the mutant id. |
+| `removed` | Only the saved report has the mutant id. |
+
+The human output adds a compare section after the run report. Each regressed mutant names the test that killed it in the saved report. When no mutant id is in both runs, the section says so, because the compare checked no mutant.
 
 ## Verdicts for equivalent mutants
 
@@ -667,7 +709,7 @@ The JSON report lists each group under `verdicts`, together with a digest of the
 |:-----|:--------|
 | `0` | The plan, the run, or inspect finished. Survivors do not fail a run. |
 | `1` | `--min-score` or `mutation.minScore` is set, and the score is lower. |
-| `2` | Invalid input or an execution error. Examples: a dirty worktree without `--allow-dirty`, a cache directory that hides project files (`FALLOW_MUTATION_UNSAFE_CACHE_DIR`), a missing runtime or runner install, a runtime of the wrong kind for the runner (`FALLOW_MUTATION_RUNTIME_NOT_FOUND`), an invalid verdict document, a `--runner-config` file that does not exist inside the project root or a runner config with a runner other than Vitest (`FALLOW_INVALID_MUTATION_OPTIONS`), `--typecheck` without a type-aware companion (`FALLOW_MUTATION_TYPECHECK_UNAVAILABLE`), `--plan --typecheck`, `--plan --resume`, a `--resume` journal of other inputs (`FALLOW_MUTATION_RESUME_MISMATCH`), a `--kill-matrix-for` target that selects no test (`FALLOW_MUTATION_TARGET_UNMATCHED`). |
+| `2` | Invalid input or an execution error. Examples: a dirty worktree without `--allow-dirty`, a cache directory that hides project files (`FALLOW_MUTATION_UNSAFE_CACHE_DIR`), a missing runtime or runner install, a runtime of the wrong kind for the runner (`FALLOW_MUTATION_RUNTIME_NOT_FOUND`), an invalid verdict document, a `--runner-config` file that does not exist inside the project root or a runner config with a runner other than Vitest (`FALLOW_INVALID_MUTATION_OPTIONS`), `--typecheck` without a type-aware companion (`FALLOW_MUTATION_TYPECHECK_UNAVAILABLE`), `--plan --typecheck`, `--plan --resume`, a `--resume` journal of other inputs (`FALLOW_MUTATION_RESUME_MISMATCH`), a `--kill-matrix-for` target that selects no test (`FALLOW_MUTATION_TARGET_UNMATCHED`), a `--recheck` that the [recheck rules](#recheck-after-new-tests) stop, a `--compare` with a saved report or a run that is not complete (`FALLOW_MUTATION_COMPARE_INCOMPLETE`). |
 
 The flag wins over the config key. A run with no score exits with `0`, also when every mutant is `no_coverage`.
 
