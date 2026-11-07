@@ -192,7 +192,7 @@ Fallow reports workspace-discovery problems as `workspace_diagnostics[]` entries
 | `malformed-pnpm-workspace-yaml` | `pnpm-workspace.yaml` exists but failed to parse as YAML. Fallow skips the catalog checks and ignores the file's override entries until you fix the syntax. pnpm install can accept a file that `pnpm add` and YAML formatters reject, for example a quoted value or a `[...]` list whose next line is not indented deeper than its key. Includes the parse error. |
 | `undeclared-workspace` | A directory contains `package.json` but is not declared as a workspace. A `package.json` with no `name` and no dependency field, such as `{"type":"module"}`, does not count, because it only sets the module type of the files next to it. |
 | `workspace-pattern-dir-missing` | A positive workspace pattern names a directory that does not exist, for example `vite` or `vite/packages/*` for a repository that CI clones into the workspace. The entry has the `pattern`, and `path` is the file that declares it. The packages in that directory can use catalog entries, so the run does not report `unused-catalog-entries` while such a pattern exists. Unresolved catalog references and empty catalog groups are still reported. The entry has `degrades_analysis: true` and prints one stderr warning for each declaring file. To get the check back, create the directory before the run or remove the pattern. A directory that exists but holds no package does not give this entry. A pattern with no literal directory, such as `**/pkg`, never gives it. |
-| `nested-project-root` | A directory has its own `package.json` and `pnpm-workspace.yaml`, and no root workspace pattern declares it. Fallow analyzes it as a workspace. Its `package.json` owns its files and dependencies and activates its framework plugins. The undeclared-workspace scan does not look inside it, and its `catalog:` references are not checked against the root catalog. This entry is information only. Fallow looks for such a directory up to two levels below the root, only when the root declares workspace patterns. `ignorePatterns` excludes it. |
+| `nested-project-root` | A directory has its own `package.json` and `pnpm-workspace.yaml`, and no root workspace pattern declares it. Fallow analyzes it as a workspace. Its `package.json` owns its files and dependencies and activates its framework plugins. The members that the `packages` list of its `pnpm-workspace.yaml` declares are workspaces too. The undeclared-workspace scan does not look inside it, and the `catalog:` references of the project and its members resolve against its own catalog, not against the root catalog. This entry is information only. Fallow looks for such a directory up to two levels below the root, only when the root declares workspace patterns. `ignorePatterns` excludes it. |
 | `excluded-by-default-ignore` | A built-in discovery ignore pattern (`**/dist/**`, `**/build/**`, `**/coverage/**` or one of the minified-bundle globs) removed at least one candidate source file. Fallow reports one entry per pattern, never per file. The entry has the `pattern`, an exact `file_count`, and a `directory_count` of the distinct locations where the pattern matched. `path` is the project-relative matched directory that lost the most files. It is anchored at the deepest matching segment, so `fallow --root <path>` recovers the files. A `!<path>/**` exception in `ignorePatterns` brings the files back in the same run, and a lifted file is not counted. Fallow never reports `**/node_modules/**`. Source discovery emits this entry, so it appears in `dead-code`, `check`, `audit` and `health` JSON. `--explain-skipped` prints the same counts on stderr. A run that found no source files prints one warning without the flag. |
 | `bun-lockb-override-resolution-skipped` | The root `package.json` declares overrides and has the legacy binary `bun.lockb` next to it. Fallow found no parseable text lockfile (`bun.lock`, `pnpm-lock.yaml`, `package-lock.json`, `npm-shrinkwrap.json`) to use instead. As a result, fallow skips the `unused-dependency-overrides` check, and the check reports nothing. A `yarn.lock` or an unparseable `bun.lock` next to the `bun.lockb` does not prevent the skip. To fix it, run `bun install --save-text-lockfile` (bun 1.2 or newer) to write a text `bun.lock`. If the repository no longer uses bun, delete the stale `bun.lockb`. The override analysis emits this entry, not workspace discovery. It appears in `dead-code`, `check`, and `health` JSON and as one stderr warning. |
 | `bun-lock-override-resolution-skipped` | The root `package.json` declares overrides and the text `bun.lock` does not parse. Fallow found no other parseable lockfile (`pnpm-lock.yaml`, `package-lock.json`, `npm-shrinkwrap.json`) to use instead. As a result, fallow skips the `unused-dependency-overrides` check, and the check reports nothing. To fix it, run `bun install` to write the lockfile again. The override analysis emits this entry, not workspace discovery. It appears in `dead-code`, `check`, and `health` JSON and as one stderr warning. |
@@ -280,20 +280,34 @@ Active plugins:
 
 ```bash title="$ fallow list --entry-points"
 Found 42 entry points
-src/app/layout.tsx                   (Plugin: nextjs)
-src/app/page.tsx                     (Plugin: nextjs)
-src/instrumentation.ts               (Plugin: nextjs)
-src/proxy.ts                         (Plugin: nextjs)
-src/lib/utils.test.ts                (Plugin: vitest)
-e2e/auth.setup.ts                    (Plugin: playwright)
-.storybook/main.ts                   (Plugin: storybook)
-drizzle.config.ts                    (Plugin: drizzle)
-scripts/db-migrate.ts                (PackageJsonScript)
-scripts/db-seed.ts                   (PackageJsonScript)
+src/app/layout.tsx (nextjs)
+src/app/page.tsx (nextjs)
+src/instrumentation.ts (nextjs)
+src/proxy.ts (nextjs)
+src/lib/utils.test.ts (vitest)
+e2e/auth.setup.ts (playwright)
+.storybook/main.ts (storybook)
+drizzle.config.ts (drizzle)
+scripts/db-migrate.ts (package.json script `db:migrate`)
+scripts/db-seed.ts (package.json script `db:seed`)
 ...
 ```
 
 Each entry point shows how fallow found it. The plugin name tells you which framework plugin detected it.
+
+A plugin name tells you which framework plugin detected the entry point. For an entry point that a `package.json` script runs, the output names the script key. When two scripts run the same file, the output names the script with the first key in alphabetical order.
+
+The JSON output gives each item of `entry_points[]` a `path` and a `source`. An entry point from a script has the `source` `package.json script` and the optional field `script` with the script key:
+
+```json title="$ fallow list --entry-points --format json"
+{
+  "entry_point_count": 2,
+  "entry_points": [
+    { "path": "scripts/build.js", "source": "package.json script", "script": "build" },
+    { "path": "src/index.ts", "source": "package.json main" }
+  ]
+}
+```
 
 ## See also
 
