@@ -317,7 +317,7 @@ A run with no executed mutant has no score (`null` in JSON).
 | Status | Meaning | In score | In coverage |
 |:-------|:--------|:---------|:------------|
 | `killed` | A covering test failed. | Yes | Yes |
-| `timeout` | The run passed its timeout, also in a second run with twice the time when the time budget allowed it. The mutant counts as detected. | Yes | Yes |
+| `timeout` | The run passed its timeout, or a test stayed in an endless loop. Most timeouts also get a second run with twice the time, see [Retries](#retries). The mutant counts as detected. | Yes | Yes |
 | `survived` | Each covering test passed, also in a second run when the time budget allowed it. | Yes | Yes |
 | `no_coverage` | No test reaches the mutant. | No | Yes |
 | `runtime_error` | The runner failed for a reason outside the tests. | No | Yes |
@@ -334,7 +334,7 @@ A `pruned` mutant has a reason. One of the reasons:
 
 ### Retries
 
-A `survived` or `timeout` mutant runs a second time in a new runner process. Host load can make a test time out, so one timeout is not proof that your tests detect the mutant. The second run of a timeout gets twice the time. A mutant with `"retried": true` in JSON got both runs. A `survived` or `timeout` mutant without the field got no second run, because the time budget ended first. With `--time-budget`, the mutant runs keep time free for these second runs, so the [result cache](#result-cache) stores the confirmed survivors. A repeat run with the same budget then continues with the next mutants. A survivor without a second run is not stored, so a repeat run does it again.
+A `survived` or `timeout` mutant runs a second time in a new runner process. Host load can make a test time out, so one timeout is not proof that your tests detect the mutant. The second run of a timeout gets twice the time. A mutant with `"retried": true` in JSON got both runs. A `survived` or `timeout` mutant without the field got no second run, because the time budget ended first, or because it is a loop timeout of short tests (see below). With `--time-budget`, the mutant runs keep time free for these second runs, so the [result cache](#result-cache) stores the confirmed survivors. A repeat run with the same budget then continues with the next mutants. A survivor without a second run is not stored, so a repeat run does it again.
 
 | First run | Second run | Final status |
 |:----------|:-----------|:-------------|
@@ -347,6 +347,8 @@ A `survived` or `timeout` mutant runs a second time in a new runner process. Hos
 | `timeout` | `survived` | `flaky` |
 
 - A `killed` result gets no retry. A failed test is a fact about the mutant.
+- With Vitest, a mutant that keeps a test in an endless loop stops in under a second. The test stops when it uses more CPU time than a loop budget: 1.5 times the time of its covering tests in the baseline run, plus 500 ms. The check runs when the loop passes through code of your source files. Waiting time and other processes on the host do not count, because the budget counts the CPU time of the test thread. A loop timeout of covering tests that take 200 ms or less in the baseline run gets no second run, because the budget is then at least four times the work of the tests. Each other timeout gets the second run. On a Node.js version without `process.threadCpuUsage` (before 22.19 and 23.9), the budget counts wall time, and each loop timeout gets the second run.
+- A loop budget can also stop a mutant that only makes a test do much more work. Its status is then `timeout` in place of `killed` or `survived`.
 - A `survived` result with a `timeout` second run stays `survived`. The first run finished all tests with the mutant active, and host load alone can make the second run time out.
 - The second run of a survivor runs each test of the files of its covering tests. The first run uses only the tests that executed the mutated code in the baseline run. A test can read a value that an earlier test of its file computed and cached, so it does not execute that code itself. A kill by such a test is `killed` when the same tests pass in a run with no active mutant. When they do not pass, the mutant stays `survived` and the failed tests are baseline failures. `covering_tests` stays the tests that reached the mutant in the baseline run, so `killed_by` can name a test that is not in that list.
 - The second run of a survivor stops at the first test that fails, and that test decides the result. The tests of each file run in file order.
