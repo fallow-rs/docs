@@ -30,6 +30,7 @@ fallow mutation
 | `fallow mutation --compare <PATH>` | Yes, the project tests | `mutation` |
 | `fallow mutation inspect <mutant_id>` | No | `mutation-inspect` |
 | `fallow mutation tasks` | No | `mutation-tasks` |
+| `fallow mutation export` | No | a `mutation-testing-report-schema` document |
 
 Only `fallow mutation` without `--plan` runs code. Project config cannot start a run, and the MCP server cannot start a run.
 
@@ -609,6 +610,37 @@ Each item is a small change to the code that made no test fail. Write tests that
 - Each task holds the source lines before and after the change, and no other source text. The lines come from the current file. When the file changed after the run, the task is `stale` and shows no code.
 - `--format markdown` puts the lines in a fenced block. `--format json` gives the `mutation-tasks` envelope: each task has `mutant_id`, `file`, `line`, `column`, `operator`, `function`, `status`, `original_lines`, `mutated_lines` and `covering_test_files`.
 - The command exits with code 0, also when the batch has tasks. To gate a run, use `--min-score`.
+
+## Export to a mutation dashboard
+
+`fallow mutation export` writes a saved report in the open `mutation-testing-report-schema` format, schema version 2. Mutation dashboards and HTML report viewers read this format, so you can keep the dashboard that your team uses. It runs no code.
+
+```bash
+fallow mutation src/utils.ts                     # run, and save the report
+fallow mutation export -o mutation-report.json   # the report in the schema format
+```
+
+- Without `--report`, the command reads the report of the last run, as `inspect` does. A `--plan` document has no test results, so the command refuses it with exit code 2.
+- The format holds the full source of each mutated file. Each mutated file must be as the run saw it. When a file changed after the run, the command exits with code 2 and names each file and the cause.
+- The output is JSON with `--format human` and with `--format json`.
+- Lines and columns are 1-based. A column counts UTF-16 code units, the unit of a source string in a browser.
+
+The schema has fewer statuses than fallow. The export maps each status so that a mutant counts as killed or survived only when the run showed it:
+
+| fallow status | Schema status | Reason in `statusReason` |
+|:--------------|:--------------|:-------------------------|
+| `killed` | `Killed` | none |
+| `timeout` | `Timeout` | none |
+| `survived` | `Survived` | none, or the partial-run note |
+| `no_coverage` | `NoCoverage` | none, or the partial-run note |
+| `runtime_error` | `RuntimeError` | the runner failed outside the tests |
+| `compile_error` | `CompileError` | the mutated file does not type-check |
+| `flaky` | `Ignored` | a second run changed the result |
+| `pruned` | `Ignored` | the static rule that removed the mutant |
+| `equivalent` | `Ignored` | a verdict marks the mutant as equivalent |
+| `pending` | `Pending` | the mutant did not run |
+
+A partial run can miss kills. In a partial run, each `Survived` and `NoCoverage` mutant gets a `statusReason` that names the reasons and says that the result is not conclusive. `config.completion` holds the completion of the report. A dashboard counts `NoCoverage` in its score, and fallow does not, so the dashboard score can be lower than `summary.score`.
 
 ## Recheck after new tests
 
