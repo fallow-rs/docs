@@ -44,12 +44,23 @@ By default, fallow mutates only the changed code against the base ref. It finds 
 | `--diff-file <PATH>` | Use a unified diff for the changed lines. Pass `-` to read stdin. |
 | `--all` | Mutate every source file. |
 | `<PATH>...` | Mutate only these files or directories. |
+| `--function-scope` | Widen each changed line to the whole function that holds it. See [Function scope](#function-scope). |
 
 The changed-code scope, `--all`, and paths are exclusive. `--workspace` and `--changed-workspaces` exit with code 2, because the plan cannot narrow to a workspace yet. To mutate one package, pass its directory as a path:
 
 ```bash
 fallow mutation packages/billing
 ```
+
+### Function scope
+
+The changed-code scope mutates only the added lines of the diff. A change to a parameter or a signature line holds no mutant, so the default scope can select nothing for it. `--function-scope`, or `mutation.functionScope: true` in the config, widens the scope:
+
+- Each added line selects all mutants of the innermost function that holds it. A parameter line, a signature line, and a body line select the same function.
+- When no function holds the line, the largest function that starts on the line counts, for example `export function f() {`. A line outside each function, for example a top-level `const`, selects only its own mutants.
+- A mutant of a nested function is part of the outer function.
+- The ranking still puts the mutants on added lines first.
+- `--all` and paths do not use the option, and the flag is an error with them. `--recheck` does not accept the flag. No flag turns the config key off.
 
 ### Source files
 
@@ -218,12 +229,13 @@ fallow: mutation: 8/20 mutants done (1m25s)
 | Flag | Description |
 |:-----|:------------|
 | `--max-mutants <N>` | Run at most N covered mutants, in rank order. Uncovered mutants do not count. The others are `pending`. |
-| `--time-budget <DURATION>` | Stop starting mutants after this time, for example `90s`, `10m`, or `1h`. The others are `pending`. The run stops new mutants early, to keep time for the [retries](#retries) of its survivors and timeouts. A run that started continues until its timeout, so the command can end a little after the budget. |
+| `--mutants-per-line <N>` | Keep at most N planned mutants on each source line. The others are `pending`. See [Mutants per line](#mutants-per-line). |
+| `--time-budget <DURATION>` | Stop starting mutants after this time, for example `90s`, `10m`, or `1h`. The others are `pending`. The run starts the mutants with the lowest estimated test time first. The estimate is the sum of the dry-run times of the covering tests. Static mutants stay last. The run stops new mutants early, to keep time for the [retries](#retries) of its survivors and timeouts. A run that started continues until its timeout, so the command can end a little after the budget. |
 | `--setup-timeout <DURATION>` | Wait this long for each runner process to start, finish its dry run or reload (default `2m`). Use a longer value, for example `5m`, on a slow or busy host. |
 | `--runner-config <PATH>` | The Vitest config file of the run. The file must be inside the project root. See [Runner config](#runner-config). |
 | `--concurrency <N>` | The number of test processes. Default: half the logical cores. |
 | `--runtime <PATH>` | The JavaScript runtime: a name to look up on `PATH`, or a file path. Default: `node` for `node-test`, `bun` for `bun-test`, and `node`, then `bun`, for Vitest. See [Runners](#runners). |
-| `--operators <NAMES>` | The operators to use, comma-separated. Default: every operator. |
+| `--operators <NAMES>` | The operators to use, comma-separated. Default: the default set. A list replaces the default set. See [Operators](#operators). |
 | `--min-score <0-100>` | Exit with code 1 when the mutation score is below this percentage. |
 | `--verdicts <PATH>` | A verdict document that marks mutants as equivalent. See [Verdicts](#verdicts-for-equivalent-mutants). |
 | `--kill-matrix` | Run all covering tests with bail disabled and report redundant test candidates from complete kill evidence. |
@@ -243,30 +255,74 @@ The global flag `--no-cache` turns off the [result cache](#result-cache) for one
 
 ### Operators
 
+The operators are in two sets. A run that names no operator uses the default set. The opt-in operators run only when `--operators`, `mutation.operators`, or the MCP `operators` parameter names them. A list that names an operator replaces the default set, so `--operators regex-literal,regex-assertion` runs only those two. To add an opt-in operator to the defaults, name each default operator and the opt-in operator.
+
+Default set:
+
 | Operator | Change |
 |:---------|:-------|
-| `arithmetic-operator` | `a + b` to `a - b`, and the other arithmetic pairs. |
-| `relational-operator` | `a < b` to `a <= b`, and the other relational pairs. |
-| `logical-operator` | `a && b` to `a \|\| b`, and the reverse. |
-| `negate-condition` | A condition to its negation. |
-| `unary-operator` | A unary operator removed or changed. |
+| `arithmetic-operator` | `a + b` to `a - b`, and the other arithmetic pairs. In a compound assignment, `+=` and `-=`, `*=` and `/=`, `<<=` and `>>=`, `&=` and `\|=` swap, and `%=` becomes `*=`. |
+| `relational-operator` | `a < b` to `a <= b`, and the other relational pairs. An equality also becomes its constant results: `a === b` to `a !== b`, `false`, and `true`. |
+| `logical-operator` | `a && b` to `a \|\| b`, and the reverse. `??` becomes `&&`, `&&=` and `\|\|=` swap, and `??=` becomes `&&=`. |
+| `negate-condition` | A condition to its negation. The test of an `if`, a `? :`, or a loop becomes `true` and `false`. An operand of `&&` becomes `true`, and an operand of `\|\|` becomes `false`. |
+| `unary-operator` | `!x`, `-x`, and `~x` to `x`. `-x` and `+x` swap. |
 | `update-operator` | `i++` to `i--`, and the reverse. |
 | `removed-call` | A call statement removed. |
-| `return-value` | A return value changed. |
+| `return-value` | `return expr` and the concise body of `x => expr` to `undefined`. |
 | `boolean-literal` | `true` to `false`, and the reverse. |
-| `string-literal` | A string literal emptied or filled. |
+| `string-literal` | A string or template literal emptied or filled. |
 | `optional-chaining` | `a?.b` to `a.b`. |
 | `regex-literal` | One token of a regular expression literal changed. |
 | `removed-chain-link` | One call link of a fluent chain in a module-level `const` removed, for example `z.number().int()` to `z.number()`. |
 
+Opt-in set:
+
+| Operator | Change |
+|:---------|:-------|
+| `block-statement` | The statements of a non-empty block or function body removed. |
+| `array-literal` | `[x]` to `[]`, and `[]` to `["fallow"]`. |
+| `object-literal` | A non-empty object literal to `{}`. |
+| `method-expression` | A method call to its pair, or the call removed. |
+| `switch-case` | The statements of a `case` or `default` clause removed. |
+| `call-expression` | A call in an expression position to `(void 0)`. |
+| `throw-statement` | `throw new X(...)` removed. |
+| `regex-constructor` | The `regex-literal` and `regex-assertion` changes of a `new RegExp("...")` pattern. |
+| `regex-assertion` | A lookaround negated, or `\b` and `\B` swapped. |
+
+The opt-in operators follow the StrykerJS mutator set. They make many more mutants, and many of them are equivalent or killed by any test that runs the code. These rules apply to them:
+
+- `block-statement`: the directive prologue of a function body stays, so the body keeps its strictness. In a constructor, a body or block with a `super(...)` call keeps its statements, because each instance creation would throw. A class `static` block gives no mutant.
+- `block-statement` and `switch-case`: the range gives no mutant when it holds a declaration at its own top level (`let`, `const`, `class`, `function`, `var`, or a TypeScript declaration), or a `var` or function declaration at any depth outside a nested function. Such a declaration would change its scope in the instrumented code.
+- `array-literal` and `object-literal`: a destructuring pattern and an assignment target give no mutant.
+- `method-expression`: `startsWith` and `endsWith`, `every` and `some`, `toLowerCase` and `toUpperCase`, `toLocaleLowerCase` and `toLocaleUpperCase`, `trimEnd` and `trimStart`, and `min` and `max` swap. The date setters `setDate` and `setTime`, `setFullYear` and `setMonth`, `setHours` and `setMinutes`, `setSeconds` and `setMilliseconds`, and their UTC forms swap. `charAt`, `filter`, `reverse`, `slice`, `sort`, `substr`, `substring`, and `trim` are removed with their call: `s.trim()` becomes `s`. A call in an optional chain and a call on `super` give no mutant.
+- `switch-case`: the clause falls through to the next clause.
+- `call-expression`: a call statement, a returned call, and a concise arrow call body give no mutant, because `removed-call` or `return-value` gives the same result. This is also true when the run does not select those two operators. A call in an optional chain, a `super(...)` call, a `require(...)` call, and a logging call give no mutant. The replacement is always `(void 0)`, so `f() + 1` becomes `(void 0) + 1`.
+- `throw-statement`: only a `throw` of a `new` expression is removed.
+- `regex-constructor`: the pattern must be a string literal, and the flags a string literal or absent. The callee is `RegExp`, with or without `new`.
+- `regex-assertion`: `\b` in a character class is a backspace, so it gives no mutant.
+
 The `regex-literal` operator gives one mutant for each of these tokens:
 
-- A `^` anchor at the start of the pattern is removed.
-- A `$` anchor at the end of the pattern is removed.
+- A `^` anchor at the start of an alternative is removed: at the start of the pattern, or right after `(`, `(?:`, or `|`. A `^` in a lookbehind stays.
+- A `$` anchor at the end of an alternative is removed: at the end of the pattern, or right before `)` or `|`.
+- A `+`, `*`, or `?` quantifier is removed, together with its lazy `?`, for example `/\/+$/` to `/\/$/`. When the removal joins two tokens into another token, an empty group takes the place of the quantifier: `/(a)\1?2/` becomes `/(a)\1(?:)2/`.
+- A `{n,m}` or `{n,}` quantifier becomes `{n}`.
 - A character class is negated, for example `[a-z]` to `[^a-z]`, and the reverse. A pattern with the `v` flag gets no negation.
 - A class escape gets the opposite case: `\d` to `\D`, `\w` to `\W`, and `\s` to `\S`, and the reverse.
 
-The flags of the regular expression do not change.
+The flags of the regular expression do not change. A mutated literal that does not parse is dropped.
+
+These rules apply to the other operators:
+
+- `negate-condition`: a loop test that is a comparison or a logical expression becomes `false` only, because `true` gives an endless loop. A plain loop test such as `while (x)` keeps both mutants. `for (init;; update)` gets the test `false`.
+- `negate-condition`: only an operand of `&&` or `||` that is a comparison or a `!x` gets a mutant. For `dir === "." && !path.includes("/")`, the mutants are `true && !path.includes("/")` and `dir === "." && true`.
+- `relational-operator`: an `==` or `===` loop test gets no `true` constant.
+- `arithmetic-operator`: an expression with a string or template operand gets no mutant. This applies to `*`, `/`, and `%`, and also to `+` and `-`.
+- `unary-operator`: `-x` becomes `+x` only when `x` is not a number literal.
+- `return-value`: a concise body that is already `undefined`, a `void` expression, or a boolean literal gets no mutant. A call body gets the `removed-call` mutant.
+- `string-literal`: a tagged template gets no mutant, because the tag reads the raw parts. A template in a type position gets no mutant.
+
+When two rules give the same text at the same place, the result is one mutant. An existing mutant keeps its id.
 
 The `removed-chain-link` operator removes one link of a fluent call chain. For `export const quantitySchema = z.number().int().positive();` it gives one mutant without `.int()` and one mutant without `.positive()`, so a validation schema without a literal or an operator still gets mutants. A link is a call `r.m(args)` with a static member `.m` and a receiver `r` that is also a call, so the root call `z.number()` is not a link. The call must be in the initializer of a `const` declaration that no function encloses. A `let` or `var` declaration, a `const` in a function body, and a chain with an optional link (`?.`) get no mutant. A link that only adds metadata, such as `.describe()` in zod, gives an equivalent mutant: mark it with an `equivalent` [verdict](#verdicts-for-equivalent-mutants).
 
@@ -279,6 +335,22 @@ A zero comparison on the length of a known array gets no equivalent mutant from 
 A conditional lookup in an array before `.filter(Boolean)` gets no `true` mutant from `negate-condition`. In `["base", align ? alignment[align] : ""].filter(Boolean)`, a truthy `align` takes the same branch in the mutant. For a falsy `align`, the mutant reads `alignment[align]`, which is `undefined`, and `filter(Boolean)` drops it as it drops `""`, so no test can detect the mutant. Fallow skips it only when the conditional is a direct element of an array literal with a `.filter(Boolean)` call that is not optional, the test is a local name, the consequent is `obj[test]` or `obj?.[test]` with the same name as key, and the alternate is `""`, an empty template, `null`, `undefined`, `false`, `0`, or `0n`. The object must be a local `const` object literal that is not exported, with plain properties only and no key that a falsy value converts to (`undefined`, `null`, `false`, `0`, `NaN`, or the empty string), and each use of it must be a member read. The `false` mutant still runs. A template literal, a `.join` without `.filter(Boolean)`, a `.filter((v) => v)` callback, a spread, getter, or `__proto__` key, a write to the object, a local `Boolean` binding, a `with` statement, and a direct `eval` call keep the `true` mutant.
 
 Fallow has no absolute-value operator (`x` to `-x`). Without type information, that operator applies to each operand of each arithmetic or relational expression. These expressions already get mutants, so the extra mutants add run time and little new information.
+
+### Mutants per line
+
+`--mutants-per-line <N>`, or `mutation.mutantsPerLine` in the config, keeps at most N planned mutants on each source line. The flag wins over the config key. N must be at least 1.
+
+```bash
+fallow mutation --mutants-per-line 2
+```
+
+- The plan makes the choice, before the dry run and before `--max-mutants`. The result cache does not change it.
+- A line keeps its mutants in this operator order: `relational-operator`, `negate-condition`, `arithmetic-operator`, `logical-operator`, `unary-operator`, `update-operator`, `return-value`, `removed-call`, `optional-chaining`, `boolean-literal`, `string-literal`, `regex-literal`, and `removed-chain-link`, then the opt-in operators `method-expression`, `call-expression`, `throw-statement`, `switch-case`, `regex-assertion`, `regex-constructor`, `array-literal`, `object-literal`, and `block-statement`. A stable hash of the mutant id orders the mutants of one operator, so a second run on the same code keeps the same mutants.
+- Each mutant that the limit leaves out is `pending` with `pending_reason: "sampled-out"`. The run does not execute it. `--plan` shows the same status and reason.
+- A left-out mutant that no test covers is `no_coverage`, so the coverage does not depend on the limit.
+- `summary.sampled_out` and `plan.counts.sampled_out` give the number of left-out mutants. They are part of the `pending` count.
+- The completion is `partial` with the reason `sampled-out` when a left-out mutant stays `pending`.
+- `--recheck` does not accept the flag. A run of selected mutant ids never samples.
 
 ## Safety rules
 
@@ -324,7 +396,7 @@ A run with no executed mutant has no score (`null` in JSON).
 | `runtime_error` | The runner failed for a reason outside the tests. | No | Yes |
 | `flaky` | The second run changed whether the tests detect the mutant. | No | Yes |
 | `compile_error` | The mutant survived the tests, but it adds a type error to its file. Only `--typecheck` sets this status. | No | Yes |
-| `pending` | The mutant did not run, because the mutant limit or the time budget ended first. | No | Yes |
+| `pending` | The mutant did not run, because the mutant limit or the time budget ended first, or because `--mutants-per-line` left it out (`pending_reason: "sampled-out"`). | No | Yes |
 | `equivalent` | A verdict marks the mutant as equivalent to the original code. | No | No |
 | `pruned` | A static rule removed the mutant, for example `side-effect-sink`, `dead-code`, or `generated`. | No | No |
 
@@ -359,11 +431,18 @@ A `survived` or `timeout` mutant runs a second time in a new runner process. Hos
 
 ### Completion
 
-`completion.status` is `complete` or `partial`. Only a `complete` run makes an empty survivor list conclusive. A `partial` run lists its reasons, for example `mutant-limit`, `time-budget`, `runtime-error`, `baseline-failure`, `typecheck-failed`, or `test-files-not-discovered`.
+`completion.status` is `complete` or `partial`. Only a `complete` run makes an empty survivor list conclusive. A `partial` run lists its reasons, for example `mutant-limit`, `time-budget`, `sampled-out`, `runtime-error`, `baseline-failure`, `typecheck-failed`, or `test-files-not-discovered`.
 
 The reason `test-files-not-discovered` means that the runner did not list a test file that the plan maps statically. For example, the test file is included only by a second Vitest config. The tests of that file never run. The `errors` entry with the same code names each such file. A survivor or a `no_coverage` mutant that such a file reaches is then not proof of a test gap. To include the file, select its config with [`--runner-config`](#runner-config).
 
 Two tests with the same full name, for example from `test.each` without unique titles, get one test ID each: the runner adds a number such as ` (2)` to the second one, in report order. The kills and survivors of these IDs can belong to the other test, so they are not reliable. The `errors` entry `duplicate-test-ids` names each such ID, and the human output shows it as a warning. Only tests that ran count, so a skipped or todo twin makes no duplicate. The run does not stop, and the results of the other tests stay valid. To remove the warning, give each test a unique title.
+
+A skipped or todo test, for example `it.skip`, runs no assertion, so it cannot kill a mutant. The changed-code scope warns about these tests in each runner test file that the diff adds, changes, or removes a line in:
+
+- A scan of the syntax tree finds the tests, so a change to the tests alone starts no runner.
+- The scan finds `it`, `test`, `describe`, and `suite` with `.skip` or `.todo`, the `xit`, `xtest`, and `xdescribe` aliases, and the `node:test` options `{ skip: true }` and `{ todo: true }`. A condition that the run decides, such as `it.skipIf(flag)` or `{ skip: process.env.CI }`, is not a skipped test.
+- The `errors` entry `skipped-tests` names up to ten of these tests with file, line, and name. The human output shows it as a warning.
+- The run does not stop, and the completion and the exit code do not change. A run with `--all` or paths gives no such warning, and `--plan` does not show it.
 
 A `partial` run does not change the exit code. The run exits with `0`, with `1` when the score is lower than `--min-score`, or with `2` when baseline failures leave no mutant with a test result.
 
@@ -461,6 +540,9 @@ fallow mutation --typecheck
 - It compares the type errors of the mutated file with the type errors of the original file. An error that the original file already has does not count.
 - A survivor with a new type error gets the status `compile_error`. `type_error_codes` lists the TypeScript error codes, sorted, at most 8. The mutant leaves the score, and it counts as covered.
 - The check reads only the mutated file. A mutant that breaks only another file stays `survived`.
+- A survivor that removes an optional-chaining link (`a?.b` to `a.b`, `a?.()` to `a()`, `a?.[k]` to `a[k]`) can get an advisory hint. When the declared type of `a` excludes `null` and `undefined`, and the mutated file type-checks, the survivor gets `equivalence_hint: "type-non-nullish"`. The status stays `survived`, and the score does not change. The human report and `fallow mutation tasks` show one line under the survivor.
+- The hint needs `strictNullChecks` (or `strict`) and `noUncheckedIndexedAccess` in the `tsconfig.json` of the file, and a TypeScript file. It reads the declared type, not the narrowed type. It does not apply to `any`, `unknown`, a type parameter, a union with `null` or `undefined`, an assertion (`as`, `<T>x`, `x!`), an element access, or a binding that code assigns after its declaration.
+- The hint is not a verdict, and it can be wrong. For example, a method that a caller detaches loses its `this`, so `this?.value` returns `undefined` and `this.value` throws. Read the code, then record an equivalent mutant with a [verdict](#verdicts-for-equivalent-mutants). A verdict removes the hint.
 - A survivor that the check cannot check stays `survived`. The reasons are `no-project` (no `tsconfig.json` includes the file), `not-type-checked` (`// @ts-nocheck`, or a JavaScript file without `checkJs`), `source-changed`, `file-missing`, and `unsupported-file` (a Vue, Svelte or Astro component, which the checker cannot read).
 - The run looks for the companion before the tests start. When no trusted companion exists, the run exits with code 2 and `FALLOW_MUTATION_TYPECHECK_UNAVAILABLE`. Fallow finds the companion in the same way as for `--type-aware`: `FALLOW_TYPE_AWARE_BIN`, the npm wrapper, or the companion next to the fallow executable.
 - When the companion fails after the tests, the survivors keep the status `survived`. The report then has an error with the code `typecheck-failed`, and the completion is `partial` with the reason `typecheck-failed`.
@@ -474,6 +556,7 @@ With the option on, the report has a `typecheck` object:
 | `survivors` | The number of survivors before the check. |
 | `checked` | The number of survivors that the check checked. |
 | `compile_errors` | The number of survivors that do not type-check. |
+| `hinted` | The number of mutants in the final report with an `equivalence_hint`. `checked` also counts them. |
 | `skipped` | A list of `{ reason, count }` for the survivors that the check did not check. |
 
 The report also has `summary.counts.compile_error`, `functions[].counts.compile_error`, and `timings.typecheck_ms`. Without the option, the `typecheck` object is absent and no mutant gets `compile_error`.
@@ -509,7 +592,8 @@ fallow mutation --resume
 
 - The dry run always runs, because it finds the covering tests.
 - The journal must come from a run with the same inputs. These inputs include the fallow version, the runner, the runtime, the planned files, the runner config, the scope, the operators, and `--allow-side-effects`. A journal of other inputs exits with code 2 and `FALLOW_MUTATION_RESUME_MISMATCH`. The message names each input that differs.
-- `--max-mutants`, `--time-budget`, and `--concurrency` are not inputs. You can continue a run with other limits.
+- `--max-mutants`, `--mutants-per-line`, `--time-budget`, and `--concurrency` are not inputs. You can continue a run with other limits.
+- `--function-scope` can add mutants, so a resume that changes the option can exit with code 2.
 - When a covering test file changed, the run does not reuse the journal result of that mutant. The mutant runs again, or its result comes from the [result cache](#result-cache).
 - When no journal exists, the run starts from the beginning and does not exit. The report says why.
 - `--plan --resume` exits with code 2, because a plan runs no mutant.
@@ -764,6 +848,8 @@ Set project defaults in the [`mutation` config section](/configuration/overview#
     "operators": ["arithmetic-operator", "relational-operator", "regex-literal"],
     "minScore": 80,
     "concurrency": 4,
+    "mutantsPerLine": 2,
+    "functionScope": true,
     "typecheck": true,
     "runnerConfig": "vitest.integration.config.mjs"
   }
