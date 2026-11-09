@@ -1,7 +1,7 @@
 ---
-title: "fallow architecture: circular dependencies and boundaries"
+title: "fallow architecture: cycles, boundaries and shared state"
 sidebarTitle: "fallow architecture"
-description: "Find circular dependencies, re-export cycles, package cycles, and boundary violations in TypeScript and JavaScript projects with fallow architecture."
+description: "Find import cycles and boundary violations, or inspect an opt-in shared-state inventory in TypeScript and JavaScript projects."
 keywords: ["fallow architecture", "architecture", "circular dependencies", "import cycles", "boundaries", "boundary violations", "rule packs", "policy", "CLI", "find circular dependencies"]
 icon: "terminal"
 ---
@@ -20,7 +20,7 @@ fallow architecture --cycles
 fallow architecture --boundaries --changed-since main
 ```
 
-The command runs the same analysis as [`fallow dead-code`](/cli/dead-code) with only these issue types selected. The JSON output has `kind: "architecture"` and its own `schema_version` (1). With `--group-by`, the kind is `architecture-grouped`. The arrays, the finding ids, the actions, the exit codes, the gate outcomes, and the baselines are the same as on `dead-code`.
+By default, the command runs the same analysis as [`fallow dead-code`](/cli/dead-code) with only these issue types selected. The JSON output has `kind: "architecture"` and its own `schema_version` (2). With `--group-by`, the kind is `architecture-grouped`. The arrays, the finding ids, the actions, the exit codes, the gate outcomes, and the baselines are the same as on `dead-code`.
 
 <Info>
   Run [`fallow guard`](/cli/guard) before an edit to see the rules that apply to a file. Run `fallow architecture` after the edit to find the violations in the code.
@@ -35,6 +35,7 @@ The command runs the same analysis as [`fallow dead-code`](/cli/dead-code) with 
 | `--cycles` | Circular dependencies, re-export cycles, and package cycles |
 | `--boundaries` | Boundary violations, boundary coverage, and forbidden calls |
 | `--policy` | Rule-pack policy violations |
+| `--shared-state` | Shared-state inventory, separate from findings |
 
 Without a selection flag, the command reports all architecture issue types. You can combine the flags, for example `--cycles --policy`.
 
@@ -49,6 +50,27 @@ When a selection flag asks for a rule that the config sets to `off`, fallow does
 | `--finding-id <ID>` | Report only the findings with this `finding_id`. Repeat the flag or pass a comma-separated list. See [`finding_id_query`](/cli/dead-code#finding-id-query). |
 
 The [global flags](/cli/global-flags) work as on `dead-code`. These include `--format`, `--quiet`, `--changed-since`, `--workspace`, `--baseline`, and `--save-baseline`.
+
+## Shared-state inventory
+
+```bash
+fallow architecture --shared-state --format json
+fallow architecture --shared-state --cycles
+```
+
+The first command selects only the inventory. Add `--cycles`, `--boundaries` or `--policy` to include those findings. Ordinary runs do not collect the inventory.
+
+Imported writes identify direct property assignments, updates and deletions through imported values, with their resolved declarations. For custom properties of `window`, `globalThis`, `self` or `global`, each group lists reads and writes to the same property in different non-test files. These sites do not establish a shared runtime or execution order.
+
+The inventory uses static property keys. Aliases, dynamic keys, inferred mutator calls, `Object.assign`, destructuring targets and iteration targets are excluded. Review observations against the source before changing ownership or initialization.
+
+Observations do not enter finding totals, health scores, baselines or automatic fixes. Parse and completeness gates still apply. In JSON, inspect `shared_state.complete` and `shared_state.truncated`. Completeness covers supported syntax; it does not imply that every runtime interaction was found.
+
+Human, JSON and Markdown output support the inventory. Saved JSON can render as Markdown. Other formats, SARIF sidecars, `--group-by` and `--finding-id` are refused, even for an empty inventory.
+
+Suppress intentional sites with `fallow-ignore-next-line shared-state` or `fallow-ignore-file shared-state`. Use `sharedStateAllowlist` in your config to exclude an exact global name and property pair. For example, `[["window", "analyticsQueue"]]` excludes `window.analyticsQueue`.
+
+When any site matches a file, workspace or diff filter, the output keeps all reads and writes in that global group.
 
 ## Relation to `fallow dead-code`
 
@@ -82,7 +104,7 @@ In `--format json`, the findings are in the same arrays as in `dead-code` output
 ```json title="$ fallow architecture --boundaries --format json (excerpt)"
 {
   "kind": "architecture",
-  "schema_version": 1,
+  "schema_version": 2,
   "boundary_violations": [
     {
       "from_path": "src/ui/App.ts",
@@ -123,7 +145,12 @@ fallow architecture --format json -o results.json
 fallow report --from results.json --format github-summary
 ```
 
-`fallow report` reads the `architecture` and `architecture-grouped` kinds and renders them in every report format, the same as a direct run.
+`fallow report` reads the `architecture` and `architecture-grouped` kinds. Results without an inventory support every report format. A result containing `shared_state` supports Markdown only:
+
+```bash
+fallow architecture --shared-state --format json -o inventory.json
+fallow report --from inventory.json --format markdown
+```
 
 ## Examples
 
