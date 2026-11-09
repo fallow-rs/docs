@@ -148,6 +148,11 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
         | `only` | -- | Without `command`, or with `command: audit`: run only these analyses (comma-separated: `dead-code`, `architecture`, `dupes`, `health`). For audit it replaces the `audit.*` selection |
         | `skip` | -- | Without `command`, or with `command: audit`: skip these analyses (comma-separated: `dead-code`, `architecture`, `dupes`, `health`) |
         | `args` | -- | More arguments to pass to fallow. With `command: audit`, the action rejects `--fail-on-stale-baseline` with exit 2. An audit analyzes only the files that changed against its base, so it cannot judge a whole-project baseline. |
+        | `mutation` | `false` | Run [`fallow mutation`](/cli/mutation) before the analysis, and add a "Mutation testing" section to the PR comment and the job summary. The step runs your tests, so install the dependencies in an earlier step. See [Mutation testing](#mutation-testing). |
+        | `mutation-scope` | `changed` | `changed` (the lines that the PR adds), `all`, or files and directories relative to `root`, separated by spaces or commas |
+        | `mutation-time-budget` | `10m` | Time budget of the run, for example `90s`, `10m`, or `1h`. A run that the budget stops is partial, and the next run continues from the result cache. Empty means no budget. |
+        | `mutation-max-mutants` | -- | Maximum number of covered mutants that the run executes |
+        | `mutation-min-score` | -- | Fail the job when the mutation score is below this percent. Empty uses `mutation.minScore` of the config, or no gate. |
       </Step>
       <Step title="Upload SARIF (optional)">
         To get inline annotations on the PR diff, upload the results to GitHub Code Scanning:
@@ -296,6 +301,10 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
         | `FALLOW_THREADS` | `""` | Number of parser threads |
         | `FALLOW_ONLY` / `FALLOW_SKIP` | `""` | Without `FALLOW_COMMAND`, or with `FALLOW_COMMAND: audit`: run only, or skip, these analyses (comma-separated) |
         | `FALLOW_ARGS` | -- | More arguments (space-separated). With `FALLOW_COMMAND=audit`, the template rejects `--fail-on-stale-baseline` with exit 2. An audit analyzes only the files that changed against its base, so it cannot judge a whole-project baseline. |
+        | `FALLOW_MUTATION` | `"false"` | Run [`fallow mutation`](/cli/mutation) before the analysis, and add a "Mutation testing" section to the MR comment. The job runs your tests, so install the dependencies first. See [Mutation testing](#mutation-testing). |
+        | `FALLOW_MUTATION_SCOPE` | `changed` | `changed` (the lines that the MR adds), `all`, or files and directories relative to `FALLOW_ROOT`, separated by spaces or commas |
+        | `FALLOW_MUTATION_TIME_BUDGET` | `10m` | Time budget of the run. A stopped run is partial, and the next run continues from the result cache. Empty means no budget. |
+        | `FALLOW_MUTATION_MAX_MUTANTS` / `FALLOW_MUTATION_MIN_SCORE` | `""` | Maximum number of covered mutants that the run executes, and the minimum mutation score in percent. A lower score fails the job. |
 
         <Info>
         In MR pipelines, the template passes `--changed-since`, so the analysis covers only the files that the merge request changes. You do not need to configure this.
@@ -716,6 +725,43 @@ Run fallow in CI to catch changed-code risk, cleanup opportunities, duplication,
 <Tip>
 In a PR or MR, the GitHub Action and the GitLab CI template check only the changed files. You do not need to configure this.
 </Tip>
+
+### Mutation testing
+
+[`fallow mutation`](/cli/mutation) shows where your tests miss a small change in the code. The GitHub Action and the GitLab template can run it before the analysis. The step is off by default.
+
+```yaml
+# GitHub Actions
+- uses: actions/checkout@v6
+- uses: actions/setup-node@v6
+  with:
+    node-version: 24
+- run: npm ci
+- uses: fallow-rs/fallow@v3
+  with:
+    comment: true
+    mutation: true
+```
+
+```yaml
+# GitLab CI
+fallow:
+  extends: .fallow
+  variables:
+    FALLOW_COMMENT: "true"
+    FALLOW_MUTATION: "true"
+  script:
+    - npm ci
+    - bash /tmp/fallow-run.sh
+```
+
+- **Scope and budget.** The default scope is the lines that the pull request or merge request adds, with a `10m` time budget. A run that the budget stops says "Partial run", and the next run continues from the result cache.
+- **One comment.** The sticky comment and the job summary get one "Mutation testing" section: the killed, survived, no-coverage and not-measured counts, the score, the budget state, and the first 5 survivors with a `fallow mutation inspect <id>` command.
+- **Clean worktree.** `fallow mutation` refuses a dirty git worktree, and the CI step never passes `--allow-dirty`. Run code generation and build steps before the Fallow step, and commit or ignore each file that they write. A package manager store inside the project, such as `.pnpm-store/`, must be in `.gitignore`.
+- **Exit codes.** The analysis and the comment run first. Then a failed `mutation-min-score` fails the job with exit code 1, and a tool failure of `fallow mutation` (exit code 2) fails it with exit code 2 and the error message.
+- **Forks and secrets.** The step runs the tests of the checked-out code. On GitHub it runs only for the `pull_request`, `push`, `schedule`, `workflow_dispatch`, and `merge_group` events. It refuses `pull_request_target`, `issue_comment`, `workflow_run`, and other events that give the job the secrets of the base repository. Never check out the head of a fork pull request in a `pull_request_target` job. On GitLab, the job refuses a fork merge request pipeline that runs in the target project. The run removes `GH_TOKEN`, `GITHUB_TOKEN`, `GITLAB_TOKEN`, and the GitHub OIDC and runtime tokens from the environment of the tests. Other secrets in the job environment stay visible to your tests.
+- **Cache.** The result cache (`.fallow/mutation/results.json`) goes through `actions/cache` and the GitLab job cache, with a key on the lockfiles and the runner config. A fork pull request never saves it.
+- **Report file.** The step writes `fallow-mutation.json`, `fallow-mutation-tasks.json`, and `fallow-mutation-status.json`. The GitLab job keeps them as artifacts. On GitHub, add an `actions/upload-artifact` step for the `mutation-results` output. The Action also has the outputs `mutation-outcome`, `mutation-completion`, and `mutation-score`.
 
 ### Isolating parallel review jobs
 
