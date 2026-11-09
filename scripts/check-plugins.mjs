@@ -41,6 +41,23 @@ export const missingPlugins = (names, page) => {
   return names.filter((name) => !listed.has(normalize(PAGE_NAMES.get(name) ?? name)));
 };
 
+/**
+ * The file that `--capabilities <file>` names, or `undefined` without the
+ * flag. Throws when the flag has no file, so the script does not read the
+ * release from the network by mistake.
+ */
+export const capabilitiesPath = (args) => {
+  const flag = args.indexOf("--capabilities");
+  if (flag === -1) {
+    return undefined;
+  }
+  const path = args[flag + 1];
+  if (path === undefined || path.startsWith("--")) {
+    throw new Error("--capabilities needs a file path.");
+  }
+  return path;
+};
+
 const fetchJson = async (url) => {
   const response = await fetch(url);
   if (!response.ok) {
@@ -58,9 +75,8 @@ const readCapabilities = async (path) => {
 };
 
 const run = async () => {
-  const flag = process.argv.indexOf("--capabilities");
   const { source, capabilities } = await readCapabilities(
-    flag === -1 ? undefined : process.argv[flag + 1],
+    capabilitiesPath(process.argv.slice(2)),
   );
   const names = capabilities.plugins?.names;
   if (!Array.isArray(names) || names.length === 0) {

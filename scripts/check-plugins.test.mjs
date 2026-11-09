@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { listedPlugins, missingPlugins, normalize } from "./check-plugins.mjs";
+import { capabilitiesPath, listedPlugins, missingPlugins, normalize } from "./check-plugins.mjs";
 
 const PAGE = [
   "<Tabs>",
@@ -29,4 +29,11 @@ test("reads only the plugin rows of the tabs", () => {
 
 test("reports a plugin without a row and accepts a mapped page name", () => {
   assert.deepEqual(missingPlugins(["nextjs", "adonis", "vite-plus", "gulp"], PAGE), ["gulp"]);
+});
+
+test("reads the capabilities path and rejects the flag without a file", () => {
+  assert.equal(capabilitiesPath([]), undefined);
+  assert.equal(capabilitiesPath(["--capabilities", "caps.json"]), "caps.json");
+  assert.throws(() => capabilitiesPath(["--capabilities"]), /needs a file path/);
+  assert.throws(() => capabilitiesPath(["--capabilities", "--other"]), /needs a file path/);
 });
