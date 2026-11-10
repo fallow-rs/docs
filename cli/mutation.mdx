@@ -222,7 +222,7 @@ The human output shows the 10 best-ranked survivors, grouped by file. The JSON r
 The output can add these lines:
 
 - The score line adds `compile error N` when the [survivor type check](#type-check-of-survivors) found N mutants that do not type-check.
-- `Survivor type check: 2 checked, 1 does not type-check, 1 not checked (no-project 1)` after a run with `--typecheck`. When the check fails, the line says that the survivors keep the status `survived`.
+- `Survivor type check: 2 checked, 1 does not type-check, 1 not checked (no-project 1)` after a run with `--typecheck`. The line adds `, N have an equivalence hint` when the check hints N survivors. Each hinted survivor has a dim `hint:` note under it. When the check fails, the line says that the survivors keep the status `survived`.
 - `Cache: 2 results came from an earlier run. Pass --no-cache to run each mutant.` when the [result cache](#result-cache) gave at least one result.
 
 ### Progress
@@ -560,8 +560,8 @@ fallow mutation --typecheck
 - A survivor with a new type error gets the status `compile_error`. `type_error_codes` lists the TypeScript error codes, sorted, at most 8. The mutant leaves the score, and it counts as covered.
 - The check reads only the mutated file. A mutant that breaks only another file stays `survived`.
 - A survivor that removes an optional-chaining link (`a?.b` to `a.b`, `a?.()` to `a()`, `a?.[k]` to `a[k]`) can get an advisory hint. When the declared type of `a` excludes `null` and `undefined`, and the mutated file type-checks, the survivor gets `equivalence_hint: "type-non-nullish"`. The status stays `survived`, and the score does not change. The human report and `fallow mutation tasks` show one line under the survivor.
-- The hint needs `strictNullChecks` (or `strict`) and `noUncheckedIndexedAccess` in the `tsconfig.json` of the file, and a TypeScript file. It reads the declared type, not the narrowed type. It does not apply to `any`, `unknown`, a type parameter, a union with `null` or `undefined`, an assertion (`as`, `<T>x`, `x!`), an element access, or a binding that code assigns after its declaration.
-- The hint is not a verdict, and it can be wrong. For example, a method that a caller detaches loses its `this`, so `this?.value` returns `undefined` and `this.value` throws. Read the code, then record an equivalent mutant with a [verdict](#verdicts-for-equivalent-mutants). A verdict removes the hint.
+- The hint needs `strictNullChecks` (or `strict`) and `noUncheckedIndexedAccess` in the `tsconfig.json` of the file, and a TypeScript file. It reads the declared type, not the narrowed type. It does not apply to `any`, `unknown`, a type parameter, a union with `null` or `undefined`, an assertion (`as`, `<T>x`, `x!`), an element access, or a binding that code assigns after its declaration. A `declare` variable, a variable in a `.d.ts` file, and a class property without an initializer get no hint either.
+- The hint is not a verdict, and it can be wrong. For example, a method that a caller detaches loses its `this`, so `this?.value` returns `undefined` and `this.value` throws. Also, a function can declare the return type `{ b: number }` but return the result of `JSON.parse("null")`. Then `parse(s)?.b` returns `undefined` and `parse(s).b` throws. Read the code, then record an equivalent mutant with a [verdict](#verdicts-for-equivalent-mutants). A verdict removes the hint.
 - A survivor that the check cannot check stays `survived`. The reasons are `no-project` (no `tsconfig.json` includes the file), `not-type-checked` (`// @ts-nocheck`, or a JavaScript file without `checkJs`), `source-changed`, `file-missing`, and `unsupported-file` (a Vue, Svelte or Astro component, which the checker cannot read).
 - The run looks for the companion before the tests start. When no trusted companion exists, the run exits with code 2 and `FALLOW_MUTATION_TYPECHECK_UNAVAILABLE`. Fallow finds the companion in the same way as for `--type-aware`: `FALLOW_TYPE_AWARE_BIN`, the npm wrapper, or the companion next to the fallow executable.
 - When the companion fails after the tests, the survivors keep the status `survived`. The report then has an error with the code `typecheck-failed`, and the completion is `partial` with the reason `typecheck-failed`.
@@ -575,7 +575,7 @@ With the option on, the report has a `typecheck` object:
 | `survivors` | The number of survivors before the check. |
 | `checked` | The number of survivors that the check checked. |
 | `compile_errors` | The number of survivors that do not type-check. |
-| `hinted` | The number of mutants in the final report with an `equivalence_hint`. `checked` also counts them. |
+| `hinted` | The number of mutants in the final report with an `equivalence_hint`. `checked` also counts them. The field is absent when the number is 0. |
 | `skipped` | A list of `{ reason, count }` for the survivors that the check did not check. |
 
 The report also has `summary.counts.compile_error`, `functions[].counts.compile_error`, and `timings.typecheck_ms`. Without the option, the `typecheck` object is absent and no mutant gets `compile_error`.
@@ -711,7 +711,7 @@ Each item is a small change to the code that made no test fail. Write tests that
 
 - Without `--report`, the command reads the report of the last run, as `inspect` does. A `--plan` document has no test results, so the command refuses it.
 - Each task holds the source lines before and after the change, and no other source text. The lines come from the current file. When the file changed after the run, the task is `stale` and shows no code.
-- `--format markdown` puts the lines in a fenced block. `--format json` gives the `mutation-tasks` envelope: each task has `mutant_id`, `file`, `line`, `column`, `operator`, `function`, `status`, `original_lines`, `mutated_lines` and `covering_test_files`.
+- `--format markdown` puts the lines in a fenced block. `--format json` gives the `mutation-tasks` envelope: each task has `mutant_id`, `file`, `line`, `column`, `operator`, `function`, `status`, `original_lines`, `mutated_lines` and `covering_test_files`. A task of a survivor with an `equivalence_hint` also has that field, and the text and Markdown output add the `hint:` line to it.
 - The command exits with code 0, also when the batch has tasks. To gate a run, use `--min-score`.
 
 ## Export to a mutation dashboard
@@ -835,7 +835,7 @@ The `review_key` is the `mutant_id`. The id stays the same until the enclosing f
 
 | Mutant status | Verdict result |
 |:--------------|:---------------|
-| `survived`, `no_coverage`, `flaky` | The status becomes `equivalent`. The mutant leaves the score and the coverage. |
+| `survived`, `no_coverage`, `flaky` | The status becomes `equivalent`. The mutant leaves the score and the coverage. A mutant with an `equivalence_hint` loses the hint. |
 | `killed`, `timeout`, `compile_error` | The verdict is `contradicted`. A test or the type check detects the mutant, so the status stays. |
 | `pending`, `runtime_error`, `pruned` | The verdict is `deferred`. |
 | No match | The verdict is `unmatched`. |
