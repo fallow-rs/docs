@@ -377,11 +377,12 @@ This is blind-spot metadata, not a finding list. It follows the same `--file`, `
 
 ### Agent-actionable candidate record
 
-Each finding also has a `candidate` record, an optional `taint_flow` triple, and a stable `finding_id`. An agent can act on these fields without parsing the evidence string.
+Each finding also has a `candidate` record, an optional `taint_flow` triple, a location-based `finding_id`, and a line-independent `stable_finding_id`. An agent can act on these fields without parsing the evidence string.
 
 ```json
 {
   "finding_id": "9a705395d3b50465",
+  "stable_finding_id": "sec1:278f2782ef3c8732",
   "kind": "tainted-sink",
   "category": "command-injection",
   "cwe": 78,
@@ -420,7 +421,9 @@ There is no `impact` field. The verifying agent decides exploitability. Fallow f
 
 `candidate.network` is present only on `secret-to-network` candidates. Its `destination` field holds the URL of the network call when the URL is a static string literal. That case is usually intended auth to the credential's own provider. `destination` is absent when the destination is dynamic, which is the stronger exfiltration signal. Use this field to tell exfiltration from intended auth without reading the code again.
 
-`finding_id` is a stable correlation id. It is identical across runs for the same rule, path, line, and column, and it matches the SARIF `partialFingerprints["fallowSecurity/v2"]` value of the finding. The CLI, the MCP `security_candidates` tool, and the language server report the same id. An editor diagnostic has it in `data.findingId`. Two sinks on the same line get different IDs. Use it to track a candidate across runs (for example after a rebase) and to join JSON and SARIF output. IDs from earlier fallow versions hash only the rule, path, and line, so every ID changes when you upgrade. See [Finding identity migration](/cli/security-agent-verification#finding-identity-migration).
+`finding_id` is a stable correlation id. It is identical across runs for the same rule, path, line, and column, and it matches the SARIF `partialFingerprints["fallowSecurity/v2"]` value of the finding. The CLI, the MCP `security_candidates` tool, and the language server report the same id. An editor diagnostic has it in `data.findingId`. Two sinks on the same line get different IDs. Use it to join JSON and SARIF output. An edit above the sink moves its line, so the `finding_id` changes. IDs from earlier fallow versions hash only the rule, path, and line, so every ID changes when you upgrade. See [Finding identity migration](/cli/security-agent-verification#finding-identity-migration).
+
+`stable_finding_id` does not change when an edit moves the sink to another line. It hashes the rule, the project-relative path, and the exact source text of the full sink expression: the full assignment for an assignment sink, and the full call with all arguments for a call sink. Whitespace, comments, line endings, and trailing commas do not count. The text of a string literal counts as it is, so a new quote style gives a new ID. Identical sinks in one file get the suffix `~1`, `~2`, and so on, in source order. A change to the sink text or a file rename gives a new ID. Use it to track a candidate across runs (for example after a rebase) and to key stored verdicts. The field is absent when fallow does not know the exact sink text, for example for a sink in Vue, Svelte, or Angular template markup. Then key the verdict by `finding_id`. See [Finding identity migration](/cli/security-agent-verification#finding-identity-migration) for the hash input of each finding kind.
 
 ## Subcommands
 
@@ -437,21 +440,23 @@ Show only the candidates that a verifier kept. `survivors` joins the raw candida
 
 ```bash
 fallow security --format json --quiet > candidates.json
-# (run your verifier, writing verdicts.json keyed by finding_id)
+# (run your verifier, writing verdicts.json keyed by stable_finding_id)
 fallow security survivors --candidates candidates.json --verdicts verdicts.json
 ```
 
 | Flag | Description |
 |:-----|:------------|
 | `--candidates <PATH>` | Raw `fallow security --format json` candidate output (required) |
-| `--verdicts <PATH>` | Verifier verdict JSON file, one `fallow-security-verdict/v1` entry per `finding_id` (required) |
+| `--verdicts <PATH>` | Verifier verdict JSON file, one `fallow-security-verdict/v1` entry per candidate (required) |
 | `--require-verdict-for-each-candidate` | Fail with a structured exit 2 when a candidate has no matching verdict. Use it in CI that must review every candidate |
 | `-f, --format <FORMAT>` | Output format: `human` (default) or `json` |
 | `-o, --output-file <PATH>` | Write the report to a file instead of stdout |
 
 The output reports `summary.unverdicted`, so you can tell reviewed candidates from unreviewed ones. The human output separates verifier dispositions from candidates that still need review. Without `--require-verdict-for-each-candidate`, an incomplete verdict file does not fail the run. The gap shows in `summary.unverdicted`.
 
-`survivors` exits 2 when the candidate file has a duplicate `finding_id`, or when the verdict file has two verdicts for one `finding_id`. It also exits 2 when a verdict names a `finding_id` that is not in the candidate file. A verdict file from an earlier fallow version therefore fails against new candidates. Regenerate the candidates and the verdicts together.
+`survivors` exits 2 when the candidate file has a duplicate `finding_id`, or when the verdict file has two verdicts for one `finding_id`. It also exits 2 when a verdict names a `finding_id` that is not in the candidate file.
+
+The `finding_id` of a verdict can hold the `finding_id` or the `stable_finding_id` of the candidate. A verdict keyed by `stable_finding_id` keeps its candidate after edits that move the sink. A verdict keyed by `finding_id` fails after such an edit. Two verdicts for one candidate are a duplicate, also when each verdict uses a different ID. The output stays keyed by the `finding_id` of the candidate.
 
 ### blind-spots
 
