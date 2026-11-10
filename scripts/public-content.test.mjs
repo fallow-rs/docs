@@ -38,6 +38,8 @@ const commitFixture = (root) => {
     "user.name=Public Docs Test",
     "-c",
     "user.email=public-docs@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
     "commit",
     "--quiet",
     "-m",
