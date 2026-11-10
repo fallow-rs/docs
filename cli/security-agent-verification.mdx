@@ -131,11 +131,11 @@ Allowed verdicts:
 - `dismissed`: the candidate is not exploitable from the supplied evidence.
 - `needs-human-review`: the evidence is incomplete, contradictory, or blocked by missing context.
 
-Store the verifier output next to the original fallow JSON, keyed by `finding_id`. Do not write verdict fields back into the fallow output.
+Store the verifier output next to the original fallow JSON. Set the `finding_id` of each verdict to the `stable_finding_id` of the candidate, so the verdict stays valid after edits that move the sink. Do not write verdict fields back into the fallow output.
 
 ## Finding identity migration
 
-A finding ID contains the rule, the project-relative path, the line, and the column. Two sinks on the same line therefore get different IDs. The JSON output and the visualization use the same ID as `partialFingerprints["fallowSecurity/v2"]` in the security SARIF output. When you select fewer files, the remaining findings keep their IDs.
+A `finding_id` contains the rule, the project-relative path, the line, and the column. Two sinks on the same line therefore get different IDs. An edit above a sink changes its `finding_id`. The JSON output and the visualization use the same ID as `partialFingerprints["fallowSecurity/v2"]` in the security SARIF output. When you select fewer files, the remaining findings keep their IDs.
 
 When you upgrade from line-only IDs, every security finding gets a new ID, including findings that did not collide before. To migrate:
 
@@ -143,7 +143,19 @@ When you upgrade from line-only IDs, every security finding gets a new ID, inclu
 2. Refresh the evaluation labels that you key by `finding_id`.
 3. Keep old candidate and verdict pairs together for replay. Do not match old verdicts to new candidates by path and line alone.
 
-`fallow security survivors` exits 2 when a verdict names a `finding_id` that is not in the candidate file. An old verdict file with a new candidate file therefore fails.
+`fallow security survivors` exits 2 when a verdict names an ID that is not in the candidate file. An old verdict file with a new candidate file therefore fails.
+
+The `stable_finding_id` of a finding does not contain the line or the column. It hashes the rule, the project-relative path, and a name of the finding that does not depend on the line:
+
+- For a sink in script code, the name is the exact source text of the full sink expression. For an assignment, that is the full assignment with the assigned value. For a call, that is the full call with all its arguments. Whitespace, comments, line endings, a byte order mark, and a trailing comma before a closing bracket do not count. The text inside string, template, and regex literals counts as it is. For a JSX attribute sink such as `dangerouslySetInnerHTML`, the text is the attribute and not the element. Two such attributes with the same text get the same base ID, also on different elements or next to different other attributes.
+- For a hard-coded secret, the name is the name of the variable or property and the kind of the match: the provider (for example `Stripe key`) or a high-entropy value. The secret value is never part of the hash. A new value with the same kind of match keeps the ID and its verdict: one high-entropy value in place of another, or one key in place of another key of the same provider. Only a new kind of match gives a new ID, for example a known provider key in place of a high-entropy test value.
+- For a client-server leak, the name is the paths of the client file and of the module with the secret or the server-only code, and the names of the env secrets that the module reads (for example `process.env.DATABASE_PASSWORD`). A read of a different secret gives a new ID.
+
+`fallow security survivors` accepts the stable ID in the `finding_id` field of a verdict. A verdict file keyed by `stable_finding_id` stays valid after edits above a sink and after a rebase. It also stays valid after a reformat that changes only whitespace, comments, line breaks, or trailing commas. A change to the sink text or a file rename gives a new ID. A new quote style changes the text of a string literal, so it also gives a new ID. A verdict for the old ID then fails with exit code 2 and does not apply to another candidate.
+
+A finding has no `stable_finding_id` when fallow does not know the exact sink text. This is the case for a sink in Vue, Svelte, or Angular template markup, for a sink whose text does not parse on its own (for example an expression with `yield`), and for a file that fallow cannot read. Key the verdict of such a finding by `finding_id`.
+
+The hash does not include the enclosing function. When two sinks in one file have the same text, the first one in source order gets the base ID, and the next ones get the suffix `~1`, `~2`, and so on. When you delete the first sink, the second sink gets the base ID, and the verdict of the deleted sink applies to it. A new identical sink above an existing one moves the suffixes in the same way. Review such sinks again after an edit that adds or removes one of them. An inline suppression comment does not move the suffixes: the suppressed sink keeps its place in the order, so its verdict does not apply to the next identical sink.
 
 Stored review history does not transfer automatically. SARIF tools can close and reopen each security alert once. Fallow no longer emits the legacy `fallowSecurity/v1` fingerprint, because that fingerprint can merge separate sinks again.
 
@@ -153,7 +165,7 @@ To show only the candidates that the verifier kept, join the candidates and the 
 
 ```bash
 fallow security --format json --quiet > candidates.json
-# (verifier writes verdicts.json keyed by finding_id)
+# (verifier writes verdicts.json keyed by stable_finding_id)
 fallow security survivors --candidates candidates.json --verdicts verdicts.json
 ```
 
