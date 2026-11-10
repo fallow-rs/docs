@@ -29,10 +29,11 @@ fallow mutation
 | `fallow mutation --recheck` | Yes, the project tests | `mutation` |
 | `fallow mutation --compare <PATH>` | Yes, the project tests | `mutation` |
 | `fallow mutation inspect <mutant_id>` | No | `mutation-inspect` |
+| `fallow mutation inspect <mutant_id> --replay` | Yes, one export of the project | `mutation-inspect` with `replay` |
 | `fallow mutation tasks` | No | `mutation-tasks` |
 | `fallow mutation export` | No | a `mutation-testing-report-schema` document |
 
-Only `fallow mutation` without `--plan` runs code. Project config cannot start a run, and the MCP server cannot start a run.
+Only `fallow mutation` without `--plan` and `inspect --replay` run code. Project config cannot start a run, and the MCP server cannot start a run.
 
 ## Scope
 
@@ -727,6 +728,51 @@ The report holds no source text. Inspect reads the current file and finds the mu
 
 Inspect exits with code 2 when no run saved a report, or when the id is not in the report.
 
+## Replay a mutant
+
+`fallow mutation inspect <mutant_id> --replay` calls the export that holds the mutated function with one input on the current code and on the mutant, and shows the results side by side. It runs project code: the module of the file and the modules that it imports, but no test.
+
+```bash
+fallow mutation inspect 784f69d6646408c8 --replay --args '["hey"]'
+```
+
+```text
+Replay  shout("hey")
+  call  original  mutant
+  1     'HEY!'    'HEY'
+  2     'HEY!'    'HEY'
+  3     'HEY!'    'HEY'
+Witness: each side gave the same result on each call, and the sides differ. A test with this input can kill the mutant.
+Replay contract 1: the clock starts at 1767225600000 ms and moves 1 ms at each read, Math.random seed 1, a new worker for each call, 5000 ms call limit.
+```
+
+- `--args <json>` gives the arguments as a JSON array. Without `--args`, the replay uses up to 3 inputs that a `--record-args values` run recorded (see [Argument recording](#argument-recording)), and stops at the first witness.
+- `--export <name>` calls another export of the file, for example the export that calls a local function, or the export that reads a value of top-level code.
+- `--call-timeout <duration>` sets the limit of one call (default `5s`, at most `10m`).
+- The replay calls each side three times, in turns. Each call runs in a new worker with new modules, so module state never reaches the next call. The clock starts at a fixed time and moves 1 ms at each read, and `Math.random` has a fixed seed, so a value from the clock is the same on each call.
+- The Vitest and `node:test` runners replay. `bun test` does not.
+
+| `replay.verdict` | Meaning |
+|:-----------------|:--------|
+| `witness` | Each side repeats its result, and the sides differ. A test with this input can kill the mutant. |
+| `no_witness_found` | The inputs show no difference. Another input can still show one. This verdict never means that the mutant is equivalent. |
+| `unstable` | The calls of one side differ, for example from `crypto.randomUUID()`. A difference that does not repeat is never a witness. |
+| `timeout` | A call did not end in time. The mutant can hang. |
+| `not_callable` | The export is not a function. |
+| `not_replayable` | No export holds the mutant, the file is a component, or no recorded input can run. `reason` says why. |
+
+The JSON output adds the `replay` object to the `mutation-inspect` envelope, with each call (`side`, `index`, `outcome`, `value` and `text`). Arguments and results use JSON, plus objects with a `$replay` tag for values that JSON cannot hold, for example `{"$replay": "undefined"}`, `{"$replay": "bigint", "value": "12"}` and `{"$replay": "error", "name": "RangeError", "message": "..."}`.
+
+## Argument recording
+
+`fallow mutation --record-args values` records the arguments of the changed exported functions, so a replay and the [open tasks](#open-tasks) can use them. Recording is off by default.
+
+- After the mutant runs, a separate pass runs your tests once more with the exported functions wrapped. Only this pass sees the wraps, and its test results count for nothing, so recording never changes a result of the run.
+- A function keeps up to 8 distinct inputs. A function, a class instance, a proxy, a cyclic value and similar values are "not replayable", with a reason.
+- The inputs stay in `.fallow/mutation/recorded-args.json` for 7 days, in a file that only you can read. The redaction removes each input with a value under a secret key name (`token`, `password`, `authorization` and similar) or a string that looks like a secret. The redaction is a heuristic: do not record in a project whose tests pass real credentials.
+- `--record-args shapes` keeps only the argument types. A replay needs `values`.
+- The report gets a `recording` summary with counts and reasons. It never holds an argument value.
+
 ## Open tasks
 
 `fallow mutation tasks` lists the open tasks of a saved report as one batch. A task is a `survived` or `no_coverage` mutant: a small change to the code that made no test fail. Give the batch to a coding agent, or use it yourself, to write the missing tests. It runs no code.
@@ -754,6 +800,13 @@ Each item is a small change to the code that made no test fail. Write tests that
 - Without `--report`, the command reads the report of the last run, as `inspect` does. A `--plan` document has no test results, so the command refuses it.
 - Each task holds the source lines before and after the change, and no other source text. The lines come from the current file. When the file changed after the run, the task is `stale` and shows no code.
 - `--format markdown` puts the lines in a fenced block. `--format json` gives the `mutation-tasks` envelope: each task has `mutant_id`, `file`, `line`, `column`, `operator`, `function`, `status`, `original_lines`, `mutated_lines` and `covering_test_files`. A task of a survivor with an `equivalence_hint` also has that field, and the text and Markdown output add the `hint:` line to it.
+- After a `--record-args values` run, a task can have `witness`: a recorded input (`args`) with the result of the current code (`original`) and of the changed code (`mutant`), and `replay_command`. A test with these arguments that asserts the `original` value kills the mutant. The text output shows the input and both results:
+
+  ```text
+     witness: input ["hey"] gives 'HEY!' on the current code and 'HEY' on the changed code (fallow mutation inspect 784f69d6646408c8 --replay)
+  ```
+
+  The Markdown output can go into a PR comment, so it shows only that a recorded input shows a difference, and the command.
 - The command exits with code 0, also when the batch has tasks. To gate a run, use `--min-score`.
 
 ## Export to a mutation dashboard
@@ -890,7 +943,7 @@ The JSON report lists each group under `verdicts`, together with a digest of the
 |:-----|:--------|
 | `0` | The plan, the run, or inspect finished. Survivors do not fail a run. |
 | `1` | `--min-score` or `mutation.minScore` is set, and the score is lower. |
-| `2` | Invalid input or an execution error. Examples: a dirty worktree without `--allow-dirty`, a cache directory that hides project files (`FALLOW_MUTATION_UNSAFE_CACHE_DIR`), a missing runtime or runner install, a runtime of the wrong kind for the runner (`FALLOW_MUTATION_RUNTIME_NOT_FOUND`), an invalid verdict document, a `--runner-config` file that does not exist inside the project root or a runner config with a runner other than Vitest (`FALLOW_INVALID_MUTATION_OPTIONS`), `--typecheck` without a type-aware companion (`FALLOW_MUTATION_TYPECHECK_UNAVAILABLE`), `--plan --typecheck`, `--plan --resume`, a `--resume` journal of other inputs (`FALLOW_MUTATION_RESUME_MISMATCH`), a `--kill-matrix-for` run in which no target selects a test (`FALLOW_MUTATION_TARGET_UNMATCHED`), a `--kill-matrix-for` test ID target that names a duplicate test ID (`FALLOW_MUTATION_TARGET_DUPLICATE_TEST_ID`), a `--recheck` that the [recheck rules](#recheck-after-new-tests) stop, a `--compare` with a saved report or a run that is not complete (`FALLOW_MUTATION_COMPARE_INCOMPLETE`). |
+| `2` | Invalid input or an execution error. Examples: a dirty worktree without `--allow-dirty`, a cache directory that hides project files (`FALLOW_MUTATION_UNSAFE_CACHE_DIR`), a missing runtime or runner install, a runtime of the wrong kind for the runner (`FALLOW_MUTATION_RUNTIME_NOT_FOUND`), an invalid verdict document, a `--runner-config` file that does not exist inside the project root or a runner config with a runner other than Vitest (`FALLOW_INVALID_MUTATION_OPTIONS`), `--typecheck` without a type-aware companion (`FALLOW_MUTATION_TYPECHECK_UNAVAILABLE`), `--plan --typecheck`, `--plan --resume`, a `--resume` journal of other inputs (`FALLOW_MUTATION_RESUME_MISMATCH`), a `--kill-matrix-for` run in which no target selects a test (`FALLOW_MUTATION_TARGET_UNMATCHED`), a `--kill-matrix-for` test ID target that names a duplicate test ID (`FALLOW_MUTATION_TARGET_DUPLICATE_TEST_ID`), a `--recheck` that the [recheck rules](#recheck-after-new-tests) stop, a `--compare` with a saved report or a run that is not complete (`FALLOW_MUTATION_COMPARE_INCOMPLETE`), a replay of a stale mutant (`FALLOW_MUTATION_REPLAY_STALE`), a runner with no replay (`FALLOW_MUTATION_REPLAY_UNSUPPORTED`), or a replay companion that fails (`FALLOW_MUTATION_REPLAY_FAILED`). |
 
 The flag wins over the config key. A run with no score exits with `0`, also when every mutant is `no_coverage`.
 
@@ -925,7 +978,7 @@ The [MCP server](/integrations/mcp) has three read-only tools. No tool runs test
 
 - `mutation_plan` returns the plan envelope: each mutant's id, location, operator, disposition, and static test files. It takes `changed_since`, `all`, `paths`, `max_mutants`, and `operators`.
 - `mutation_inspect` shows one mutant of a saved report. It takes `mutant_id` and an optional `report`. Without `report`, it reads the report of the last run.
-- `mutation_tasks` returns the open tasks of a saved report, the same JSON as `fallow mutation tasks --format json`. It takes an optional `report`.
+- `mutation_tasks` returns the open tasks of a saved report, the same JSON as `fallow mutation tasks --format json`, with `witness` after a `--record-args values` run. It takes an optional `report`.
 
 A run needs the CLI command `fallow mutation`, which executes your tests. An agent should ask you before it starts a run.
 
