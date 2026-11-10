@@ -284,7 +284,7 @@ fallow: mutation: 8/20 mutants done (1m25s)
 | `--typecheck` | Type-check each survivor after the tests. See [Type check of survivors](#type-check-of-survivors). |
 | `--resume` | Continue an interrupted or `partial` run. The run reuses the final results in its journal and runs only the other mutants. See [Resume a run](#resume-a-run). |
 | `--recheck` | Rerun the open tasks of a saved report against the current tests. See [Recheck after new tests](#recheck-after-new-tests). |
-| `--report <PATH>` | The saved report of `--recheck`. Default: the report of the last run. |
+| `--report <PATH>` | The saved report of `--recheck`. Default: the report of the last run. A recheck without `--mutant` replaces this file. |
 | `--mutant <ID>` | Recheck only these mutant ids, comma-separated or repeated. |
 | `--compare <PATH>` | Compare this run with a saved complete report. See [Compare with a saved report](#compare-with-a-saved-report). |
 | `--allow-dirty` | Run in a git worktree with uncommitted changes. |
@@ -854,8 +854,10 @@ fallow mutation tasks              # what is still open
 
 - `--mutant <ID>` rechecks only these ids, with any status. Without it, the recheck runs each `survived` and `no_coverage` mutant of the report.
 - A recheck proves a change of the tests only. When a selected file changed after the report, the recheck exits with code 2 and `FALLOW_MUTATION_SOURCE_CHANGED`. An uncommitted change to a file that is not a test file exits with code 2 and `FALLOW_MUTATION_NON_TEST_CHANGE`. A change that you committed after the report to another file, for example a module that a selected file imports or the runner config, is not detected. Run `fallow mutation` again after such a commit.
-- The other mutants of the selected files are `pruned` with the reason `not-selected`. They do not count in the score.
-- The report gets a `recheck` object. For each rechecked mutant, it gives the earlier status, the new status and an `outcome`:
+- The run tests only the selected mutants. Each other mutant of the earlier report keeps its earlier status and evidence, and gets `carried: true`. The summary, the score and the function results count the full set. The kill matrix gives only the evidence of this run.
+- An earlier result applies only while its file is unchanged since the earlier report. An earlier kill also needs each test file of its killing tests. When a file that the recheck did not select loses an earlier result, the report leaves out its mutants, and `recheck.stale_files` names the file. Run `fallow mutation` on that file for new results.
+- The recheck does not run a carried mutant again. When you remove a test from a test file that still exists, or make a test weaker, a carried kill stays. After such a change, run `fallow mutation` without `--recheck`.
+- The report gets a `recheck` object. It gives `carried`, the number of mutants with an earlier result. For each rechecked mutant, it gives the earlier status, the new status and an `outcome`:
 
 | `outcome` | Meaning |
 |:----------|:--------|
@@ -865,9 +867,9 @@ fallow mutation tasks              # what is still open
 | `tests_fail_on_original` | A test of the run fails on the original code, so the run proves no survivor. Fix that test first. |
 | `unsettled` | The mutant has no final result, for example `runtime_error` or `flaky`. |
 
-- A recheck without `--mutant` replaces the saved report, so `tasks` then lists the mutants that are still open. A recheck with `--mutant` keeps the saved report.
+- A recheck without `--mutant` replaces the saved report. With `--report <PATH>`, it also replaces that file. Then `tasks` and `tasks --report <PATH>` list the mutants that are still open. A recheck with `--mutant` keeps both reports as they are.
 - A `--mutant` id that the report does not have exits with code 2 and `FALLOW_MUTATION_UNKNOWN_MUTANT`. A report without an open task exits with code 2 and `FALLOW_MUTATION_NOTHING_TO_RECHECK`.
-- `--recheck` cannot be combined with a scope flag, `--plan`, `--resume`, `--allow-dirty`, `--max-mutants` or `--min-score`. The score of a recheck covers only the rechecked mutants.
+- `--recheck` cannot be combined with a scope flag, `--plan`, `--resume`, `--allow-dirty`, `--max-mutants` or `--min-score`. The `mutation.minScore` gate does not apply to a recheck.
 
 ## Compare with a saved report
 
