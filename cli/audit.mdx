@@ -213,6 +213,7 @@ The comment of an inherited complexity finding also names each exceeded metric w
 | `--mark-viewed <FILE>` | Record one or more changed files as viewed in the local walkthrough ledger, then render the tour. Files that are already viewed (and still current) collapse into the Cleared panel. Repeatable. When the tree moves, the render ignores the stale marks but never deletes them. Used only on the `--walkthrough` path. |
 | `--show-cleared` | Expand the Cleared panel in the human and markdown walkthrough tour. The panel then lists each de-prioritized and already-viewed file, instead of a one-line summary. Used only on the `--walkthrough` path. |
 | `--show-deprioritized` | Expand the de-prioritized units in the weighted focus map of the brief. `--format json` always includes the `deprioritized` list. This flag only expands the human focus render, which collapses the list by default. Used only on the brief path. |
+| `--mutation-report <FILE>` | Read a saved `fallow mutation --format json` report, for example `.fallow/mutation/last-report.json`. The brief counts the surviving mutants on the added lines of each changed file in the `mutation` component of the [focus score](#focus-score). A file whose source changed since the mutation run adds nothing. Fallow only reads the file. It runs no test. Used only on the brief path. |
 
 ### Scoping
 
@@ -922,6 +923,28 @@ The brief answers "where do I look?", not "will CI block this?". It runs the sam
 | **focus** | Fallow ranks the changed-file units by a composite attention score and labels each one `review-here` or `not-prioritized`. It also gives a full `deprioritized` list. To expand that list in the human output, use [`--show-deprioritized`](#options). |
 | **structure** | The decision surface: the few structural decisions in the change that have large consequences. |
 | **direct** | The walkthrough guide for an agent (see [Agent walkthrough loop](#agent-walkthrough-loop)). |
+
+### Focus score
+
+Each focus unit has a `score` object. The score is a sum of named components, and `total` is that sum. A component that is zero is not in the JSON, so read an absent component as zero.
+
+| Component | Source | When it is present |
+|:----------|:-------|:-------------------|
+| `fan_io` | The importers and imports of the file | Always |
+| `risk_zone` | A new cross-zone edge, a wider public API, or a security taint path | Always |
+| `change_shape` | A new or wider export, or a changed contract that files outside the diff consume | Always |
+| `churn` | The commits that changed the file in the last 12 months, weighted by age (half-life of 90 days), in 3 capped bands | A git history is available, the clone is not shallow, and the file is not a test file |
+| `worsened` | The changed functions whose complexity grew against the base | A base exists |
+| `test_reach` | The changed exports that no test runs for real (`mocked-only`, `none`, or `none-file`) | The project has tests |
+| `mutation` | The surviving mutants on the added lines | You pass `--mutation-report` |
+| `runtime` | The invocations of a hot path | You pass `--runtime-coverage` |
+| `security_taint` | A security source-to-sink path touches the file | A security pass feeds the brief |
+
+Each component has a cap, so one signal cannot hide the others. The components only add to the total. No component multiplies another, so you can see which component moved a file up. The `reason` text names each present component, for example `changed often (23 recent commits), makes 1 function more complex`.
+
+Without `--mutation-report`, Fallow does not measure surviving mutants. An absent `mutation` component then does not mean that each mutant was killed.
+
+The focus score does not change `triage.risk_class`. That class depends only on the size of the change.
 
 ### Decision surface
 
