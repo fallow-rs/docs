@@ -817,7 +817,7 @@ There is no automatic prop removal or conditional-UI deletion. To keep an intent
 
 A parameter of a function that each visible call passes in the same way. Fallow reports two cases:
 
-- `identical-argument`: each call passes the same literal value, such as `true`, `null`, a number, or a string.
+- `identical-argument`: each call passes the same value. The value is a literal, such as `true`, `null`, a number, or a string, or the same immutable binding: one `const` with a literal initializer, or one enum member.
 - `never-passed`: the parameter is optional or has a default, and no call passes it. The default always applies.
 
 The rule is off by default. To enable it, pass `--constant-parameters` to `fallow dead-code`, or set `constant-parameters` to `warn` or `error` in [rules](/configuration/rules):
@@ -841,7 +841,30 @@ export const formatAmount = (value: number, compact: boolean, locale?: string) =
 
 If each call in the project is `formatAmount(total, true)`, fallow reports two findings. `compact` gets `true` at each call, and one condition tests it, so the `toLocaleString` branch cannot run. No call passes `locale`. A person decides whether the flexibility is deliberate.
 
-Each finding lists the function, the parameter, the `reason`, the `value` for `identical-argument`, the count of calls, and up to 20 of the calls. `condition_reads` counts the conditions that test the parameter. A finding with a condition read points at a branch that cannot run, so the human output lists these findings first.
+Each finding lists the function, the parameter, the `reason`, the `value` for `identical-argument`, the count of calls, and up to 20 of the calls. For an immutable binding, `value.kind` is `binding` and `value.text` is the name in the module that declares it, for example `DEFAULT_LIMIT` or `Mode.Grid`. `condition_reads` counts the conditions that test the parameter. A finding with a condition read points at a branch that cannot run, so the human output lists these findings first.
+
+#### Option keys
+
+Most functions with many settings take one options object. When the parameter is an object pattern, fallow reads each key of the pattern as its own subject:
+
+```ts src/request.ts
+export const request = (url: string, { retries = 3, signal }: Options = {}) => {
+  /* ... */
+};
+
+// each call in the project:
+request(path, { signal });
+```
+
+No call sets `retries`, so fallow reports `retries` with `never-passed`: the default `3` always applies. When each call sets a key to the same value, the reason is `identical-argument`. A finding about a key carries `option_key`, the property key. `parameter_name` is the local binding of the key: `abort` for `{ signal: abort }`.
+
+Fallow reads the keys only when it can see each of them:
+
+- The argument is an object literal with no spread, no computed key, no numeric key and no `__proto__` key. Each other argument, for example a variable, gives no key finding.
+- The parameter has no default, or the default `{}`. A default with keys can set a key that no caller passes.
+- The key is static, its value is a plain binding with or without a default, and the function does not write the binding. A key that each object inherits, such as `toString`, is skipped.
+
+A parameter typed as an object, such as `options: Options` followed by `options.retries`, gives no key finding.
 
 #### When fallow reports a parameter
 
@@ -856,13 +879,13 @@ The finding is a claim that fallow sees each caller of the function. Fallow repo
 - The function reads `arguments`, has overloads or decorators, is a generator, or its binding is reassigned.
 - The function has fewer than 2 calls.
 
-Fallow also skips a parameter that the function writes, a rest parameter, and a destructured parameter. A self-call that passes an optional parameter on blocks `never-passed`, because the parameter then carries a value through the recursion.
+Fallow also skips a parameter that the function writes, a rest parameter, and an array pattern. A recursive call that passes a parameter, or an option key, on unchanged at the same position does not count as a call for it. Such a self-call blocks `never-passed`, because the parameter then carries a value through the recursion. An accumulator that only the recursion passes, such as `total` in `sum(rest, total + x)`, gives no finding.
 
-The rule covers module-scope functions: function declarations, and `const` bindings with an arrow function or a function expression. It does not cover class methods, object methods, or constructors. Only literal values count as the same value. Fallow does not know the value of a variable, an object literal, or a computed expression, so such an argument gives no finding.
+The rule covers module-scope functions: function declarations, and `const` bindings with an arrow function or a function expression. It does not cover class methods, object methods, or constructors. Only a literal or an immutable binding counts as the same value. Two `const` bindings with the same value are two different values, and so are a binding and its literal. Fallow resolves an imported binding to the module that declares it, also through re-exports and namespace imports. Fallow does not know the value of a variable, an object literal, an array literal, or a computed expression such as `1 + 1`, so such an argument gives no finding.
 
 #### Tests and production mode
 
-In the default mode a test file is a caller, like each other file. A test that passes another value prevents the finding. With `--production`, fallow ignores test files, so a finding says that the parameter is constant in production code. A test helper in a test file gets findings in the default mode only. Use `--production` when you want to review only production code. Production mode uses the test patterns of discovery, such as `**/test/**`. A production file that matches such a pattern, for example a component in a `test` directory, is not a caller in production mode. When a finding appears only with `--production`, check the files that these patterns exclude.
+In the default mode a test file is a caller, like each other file. A test that passes another value prevents the finding. With `--production`, fallow ignores test files, so a finding says that the parameter is constant in production code. Fallow does not report a function that a test file declares, in either mode: a test helper passes fixed values on purpose. A test file is a file that matches a test pattern of production mode, such as `*.test.*`, `*.spec.*`, `__tests__/` or `test/`, below the project root. Use `--production` when you want to review only production code. Production mode uses the test patterns of discovery, such as `**/test/**`. A production file that matches such a pattern, for example a component in a `test` directory, is not a caller in production mode. When a finding appears only with `--production`, check the files that these patterns exclude.
 
 **When to act:** Read the calls and the intent of the parameter.
 
@@ -870,7 +893,9 @@ In the default mode a test file is a caller, like each other file. A test that p
 - When each call passes the default value, remove the argument from the calls.
 - Keep the parameter when it is a deliberate option, a test seam, or an API that matches a sibling function.
 
-There is no auto-fix, because the change touches the function and each call, and a default can differ from the constant. Suppress a finding with `// fallow-ignore-next-line constant-parameter` above the parameter or above the function, or set the rule to `off`.
+There is no auto-fix, because the change touches the function and each call, and a default can differ from the constant. Suppress a finding with `// fallow-ignore-next-line constant-parameter` above the parameter, above the option key, or above the function, or set the rule to `off`.
+
+At `warn`, a finding does not change the exit code of the CLI unless you pass `--fail-on-issues`. When the rule is on, the dead-code count gate of the GitHub Action counts the findings unless `fail-on-issues` is `false`.
 
 ### Unused component emits {#unused-component-emits}
 
