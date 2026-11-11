@@ -56,7 +56,7 @@ components.
 | `explanations/` | Concepts, tradeoffs, telemetry, and mental models |
 | `frameworks/` | Built-in and custom plugins |
 | `integrations/` | CI, VS Code, MCP server |
-| `migration/` | From knip and jscpd |
+| `migration/` | Migration from other tools, and comparisons with them |
 | `images/`, `logo/` | Public visual assets |
 
 Add every user-facing page to `docs.json`. `docs.json` is the source of truth
