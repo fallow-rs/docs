@@ -882,7 +882,44 @@ The finding is a claim that fallow sees each caller of the function. Fallow repo
 
 Fallow also skips a parameter that the function writes, a rest parameter, and an array pattern. A recursive call that passes a parameter, or an option key, on unchanged at the same position does not count as a call for it. Such a self-call blocks `never-passed`, because the parameter then carries a value through the recursion. An accumulator that only the recursion passes, such as `total` in `sum(rest, total + x)`, gives no finding.
 
-The rule covers module-scope functions: function declarations, and `const` bindings with an arrow function or a function expression. It does not cover class methods, object methods, or constructors. Only a literal or an immutable binding counts as the same value. Two `const` bindings with the same value are two different values, and so are a binding and its literal. Fallow resolves an imported binding to the module that declares it, also through re-exports and namespace imports. Fallow does not know the value of a variable, an object literal, an array literal, or a computed expression such as `1 + 1`, so such an argument gives no finding.
+The rule covers module-scope functions: function declarations, and `const` bindings with an arrow function or a function expression. Without type-aware mode, it does not cover class methods, object methods, or constructors. Only a literal or an immutable binding counts as the same value. Two `const` bindings with the same value are two different values, and so are a binding and its literal. Fallow resolves an imported binding to the module that declares it, also through re-exports and namespace imports. Fallow does not know the value of a variable, an object literal, an array literal, or a computed expression such as `1 + 1`, so such an argument gives no finding.
+
+#### With type evidence
+
+With `--type-aware`, fallow asks the TypeScript checker for two more kinds of finding. Fallow first selects the candidates with the rules above. The checker reads only those candidates.
+
+- `unused-default`: the parameter has a default, and each call passes a value whose type excludes `undefined`. The default never applies.
+- Methods of exported classes: the checker finds the calls through the type of the receiver, for example `this.store.save(id)`. A method can get `never-passed` or `unused-default`. Its `function_name` is `Class.method`.
+
+```ts src/format.ts
+export const pad = (text: string, width: number = 2) => text.padStart(width);
+
+// each call in the project:
+pad(label, columns.width); // the type of `columns.width` is `number`
+```
+
+Each such finding carries `evidence: "type-aware"`, and the human output adds `(type evidence)`. A type does not prove a run-time value: an `any` value, a cast, or data from outside the program can break the claim. So check the arguments before you remove the default.
+
+Fallow gives no type evidence in these cases:
+
+- The project does not set `strictNullChecks`.
+- Without `noUncheckedIndexedAccess`: an index read such as `widths[0]`, or a call result, also through a variable.
+- A variable that code writes after its declaration, or a class field that can stay unset.
+- A type assertion, an `any` value, or a `@ts-ignore`, `@ts-expect-error` or `@ts-nocheck` comment, also on the path to the argument.
+- A narrowing by a type guard function (`x is T`), or the tail of an optional chain.
+
+Fallow reports no method when one of these can hide a call:
+
+- a decorator, or an overload,
+- a method of a dependency type, also a dependency type that the class matches without `implements`,
+- a method that the platform calls by name, such as `then`, `toString` or `toJSON`,
+- a use of the method as a value, a call on an `any` receiver, or a computed member access,
+- a read of `Class.prototype`, or a `Reflect` call,
+- a file outside the TypeScript program of the class.
+
+Constructors and object methods are not covered.
+
+Without `--type-aware`, the output of the rule does not change. The editor shows only the findings that do not need type evidence. On a large monorepo with many TypeScript projects, the type-aware step can add tens of seconds.
 
 #### Tests and production mode
 
