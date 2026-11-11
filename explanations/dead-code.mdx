@@ -813,6 +813,65 @@ Each finding points to the declaration and the inspected callers. It records whe
 
 There is no automatic prop removal or conditional-UI deletion. To keep an intentional prop, suppress the finding at its declaration with `fallow-ignore-next-line absent-component-prop`, using the comment syntax of that source file. You can also set the rule to `off` for matching paths in [overrides](/configuration/overview#overrides).
 
+### Constant parameters {#constant-parameters}
+
+A parameter of a function that each visible call passes in the same way. Fallow reports two cases:
+
+- `identical-argument`: each call passes the same literal value, such as `true`, `null`, a number, or a string.
+- `never-passed`: the parameter is optional or has a default, and no call passes it. The default always applies.
+
+The rule is off by default. To enable it, pass `--constant-parameters` to `fallow dead-code`, or set `constant-parameters` to `warn` or `error` in [rules](/configuration/rules):
+
+```json .fallowrc.json
+{
+  "rules": {
+    "constant-parameters": "warn"
+  }
+}
+```
+
+For example, a module of an application has this function:
+
+```ts src/format.ts
+export const formatAmount = (value: number, compact: boolean, locale?: string) => {
+  if (compact) return shortAmount(value);
+  return value.toLocaleString(locale);
+};
+```
+
+If each call in the project is `formatAmount(total, true)`, fallow reports two findings. `compact` gets `true` at each call, and one condition tests it, so the `toLocaleString` branch cannot run. No call passes `locale`. A person decides whether the flexibility is deliberate.
+
+Each finding lists the function, the parameter, the `reason`, the `value` for `identical-argument`, the count of calls, and up to 20 of the calls. `condition_reads` counts the conditions that test the parameter. A finding with a condition read points at a branch that cannot run, so the human output lists these findings first.
+
+#### When fallow reports a parameter
+
+The finding is a claim that fallow sees each caller of the function. Fallow reports a parameter only when it can make that claim. It does not report a function in these cases:
+
+- The function is part of the public API of a package, an export of an entry point, or an export that a plugin marks as used.
+- A dynamic import, a `require`, a CommonJS export, or a framework auto-import can reach its module.
+- Code uses the function as a value: a callback, an object property, an alias, or a call through `call`, `apply`, or `bind`.
+- A template, a component file, or an HTML page with an inline script can import the function.
+- The module has a direct `eval`, or the module can be a classic script.
+- A file with a parse error can import the function.
+- The function reads `arguments`, has overloads or decorators, is a generator, or its binding is reassigned.
+- The function has fewer than 2 calls.
+
+Fallow also skips a parameter that the function writes, a rest parameter, and a destructured parameter. A self-call that passes an optional parameter on blocks `never-passed`, because the parameter then carries a value through the recursion.
+
+The rule covers module-scope functions: function declarations, and `const` bindings with an arrow function or a function expression. It does not cover class methods, object methods, or constructors. Only literal values count as the same value. Fallow does not know the value of a variable, an object literal, or a computed expression, so such an argument gives no finding.
+
+#### Tests and production mode
+
+In the default mode a test file is a caller, like each other file. A test that passes another value prevents the finding. With `--production`, fallow ignores test files, so a finding says that the parameter is constant in production code. A test helper in a test file gets findings in the default mode only. Use `--production` when you want to review only production code.
+
+**When to act:** Read the calls and the intent of the parameter.
+
+- Remove the dead branch, or remove the parameter and use the constant inside the function.
+- When each call passes the default value, remove the argument from the calls.
+- Keep the parameter when it is a deliberate option, a test seam, or an API that matches a sibling function.
+
+There is no auto-fix, because the change touches the function and each call, and a default can differ from the constant. Suppress a finding with `// fallow-ignore-next-line constant-parameter` above the parameter or above the function, or set the rule to `off`.
+
 ### Unused component emits {#unused-component-emits}
 
 An event declared with `defineEmits` in Vue `<script setup>` that no code in its own single-file component emits: no `emit('name')` in `<script>`, and no `emit('name')` or `$emit('name')` in `<template>`. This is the emit-side version of unused component props. `vue-tsc` and Volar do not find it. They check that callers use correct listeners, not that the component emits each declared event.
