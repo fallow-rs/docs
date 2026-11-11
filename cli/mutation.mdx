@@ -329,8 +329,9 @@ Opt-in set:
 | `throw-statement` | `throw new X(...)` removed. |
 | `regex-constructor` | The `regex-literal` and `regex-assertion` changes of a `new RegExp("...")` pattern. |
 | `regex-assertion` | A lookaround negated, or `\b` and `\B` swapped. |
+| `nullish-fallback` | `a ?? b` to `a`. |
 
-The opt-in operators follow the StrykerJS mutator set. They make many more mutants, and many of them are equivalent or killed by any test that runs the code. These rules apply to them:
+Most opt-in operators follow the StrykerJS mutator set. `nullish-fallback` is not in that set. The opt-in operators make many more mutants, and many of them are equivalent or killed by any test that runs the code. These rules apply to them:
 
 - `block-statement`: the directive prologue of a function body stays, so the body keeps its strictness. In a constructor, a body or block with a `super(...)` call keeps its statements, because each instance creation would throw. A class `static` block gives no mutant.
 - `block-statement` and `switch-case`: the range gives no mutant when it holds a declaration at its own top level (`let`, `const`, `class`, `function`, `var`, or a TypeScript declaration), or a `var` or function declaration at any depth outside a nested function. Such a declaration would change its scope in the instrumented code.
@@ -341,6 +342,7 @@ The opt-in operators follow the StrykerJS mutator set. They make many more mutan
 - `throw-statement`: only a `throw` of a `new` expression is removed.
 - `regex-constructor`: the pattern must be a string literal, and the flags a string literal or absent. The callee is `RegExp`, with or without `new`.
 - `regex-assertion`: `\b` in a character class is a backspace, so it gives no mutant.
+- `nullish-fallback`: the `??` token and the right operand are removed. The mutant survives when no test gives a `null` or `undefined` left operand. `logical-operator` changes `??` to `&&`, which does not remove the fallback. `a ??= b` gives no mutant. With `--typecheck`, a survivor can get the hint `type-non-nullish`.
 
 The `regex-literal` operator gives one mutant for each of these tokens:
 
@@ -386,7 +388,7 @@ fallow mutation --mutants-per-line 2
 ```
 
 - The plan makes the choice, before the dry run and before `--max-mutants`. The result cache does not change it.
-- A line keeps its mutants in this operator order: `relational-operator`, `negate-condition`, `arithmetic-operator`, `logical-operator`, `unary-operator`, `update-operator`, `return-value`, `removed-call`, `optional-chaining`, `boolean-literal`, `string-literal`, `regex-literal`, and `removed-chain-link`, then the opt-in operators `method-expression`, `call-expression`, `throw-statement`, `switch-case`, `regex-assertion`, `regex-constructor`, `array-literal`, `object-literal`, and `block-statement`. A stable hash of the mutant id orders the mutants of one operator, so a second run on the same code keeps the same mutants.
+- A line keeps its mutants in this operator order: `relational-operator`, `negate-condition`, `arithmetic-operator`, `logical-operator`, `unary-operator`, `update-operator`, `return-value`, `removed-call`, `optional-chaining`, `boolean-literal`, `string-literal`, `regex-literal`, and `removed-chain-link`, then the opt-in operators `method-expression`, `call-expression`, `throw-statement`, `switch-case`, `nullish-fallback`, `regex-assertion`, `regex-constructor`, `array-literal`, `object-literal`, and `block-statement`. A stable hash of the mutant id orders the mutants of one operator, so a second run on the same code keeps the same mutants.
 - Each mutant that the limit leaves out is `pending` with `pending_reason: "sampled-out"`. The run does not execute it. `--plan` shows the same status and reason.
 - A left-out mutant that no test covers is `no_coverage`, so the coverage does not depend on the limit.
 - `summary.sampled_out` and `plan.counts.sampled_out` give the number of left-out mutants. They are part of the `pending` count.
@@ -602,7 +604,7 @@ fallow mutation --typecheck
 - It compares the type errors of the mutated file with the type errors of the original file. An error that the original file already has does not count.
 - A survivor with a new type error gets the status `compile_error`. `type_error_codes` lists the TypeScript error codes, sorted, at most 8. The mutant leaves the score, and it counts as covered.
 - The check reads only the mutated file. A mutant that breaks only another file stays `survived`.
-- A survivor that removes an optional-chaining link (`a?.b` to `a.b`, `a?.()` to `a()`, `a?.[k]` to `a[k]`) can get an advisory hint. When the declared type of `a` excludes `null` and `undefined`, and the mutated file type-checks, the survivor gets `equivalence_hint: "type-non-nullish"`. The status stays `survived`, and the score does not change. The human report and `fallow mutation tasks` show one line under the survivor.
+- A survivor that removes an optional-chaining link (`a?.b` to `a.b`, `a?.()` to `a()`, `a?.[k]` to `a[k]`) or a nullish fallback (`a ?? b` to `a`) can get an advisory hint. For `a ?? b`, the hint does not apply when `a` is an optional chain, such as `o?.items.map(f) ?? []`. When the declared type of `a` excludes `null` and `undefined`, and the mutated file type-checks, the survivor gets `equivalence_hint: "type-non-nullish"`. The status stays `survived`, and the score does not change. The human report and `fallow mutation tasks` show one line under the survivor.
 - The hint needs `strictNullChecks` (or `strict`) and `noUncheckedIndexedAccess` in the `tsconfig.json` of the file, and a TypeScript file. It reads the declared type, not the narrowed type. It does not apply to `any`, `unknown`, a type parameter, a union with `null` or `undefined`, an assertion (`as`, `<T>x`, `x!`), an element access, or a binding that code assigns after its declaration. A `declare` variable, a variable in a `.d.ts` file, and a class property without an initializer get no hint either.
 - The hint is not a verdict, and it can be wrong. For example, a method that a caller detaches loses its `this`, so `this?.value` returns `undefined` and `this.value` throws. Also, a function can declare the return type `{ b: number }` but return the result of `JSON.parse("null")`. Then `parse(s)?.b` returns `undefined` and `parse(s).b` throws. Read the code, then record an equivalent mutant with a [verdict](#verdicts-for-equivalent-mutants). A verdict removes the hint.
 - A survivor that the check cannot check stays `survived`. The reasons are `no-project` (no `tsconfig.json` includes the file), `not-type-checked` (`// @ts-nocheck`, or a JavaScript file without `checkJs`), `source-changed`, `file-missing`, and `unsupported-file` (a Vue, Svelte or Astro component, which the checker cannot read).
@@ -618,10 +620,30 @@ With the option on, the report has a `typecheck` object:
 | `survivors` | The number of survivors before the check. |
 | `checked` | The number of survivors that the check checked. |
 | `compile_errors` | The number of survivors that do not type-check. |
-| `hinted` | The number of mutants in the final report with an `equivalence_hint`. `checked` also counts them. The field is absent when the number is 0. |
+| `hinted` | The number of mutants in the final report with the `type-non-nullish` hint. `checked` also counts them. The field is absent when the number is 0. |
 | `skipped` | A list of `{ reason, count }` for the survivors that the check did not check. |
 
 The report also has `summary.counts.compile_error`, `functions[].counts.compile_error`, and `timings.typecheck_ms`. Without the option, the `typecheck` object is absent and no mutant gets `compile_error`.
+
+
+## Constant parameter hint
+
+A `negate-condition` survivor can get the advisory hint `equivalence_hint: "constant-parameter"`. The hint needs no option.
+
+```ts
+export const load = (id: string, strict: boolean) => {
+  if (!strict) return fallback(); // each call passes `true`
+  return read(id);
+};
+```
+
+Each visible call passes `true` for `strict`, so `!strict` is always `false`. The mutant `if (false)` changes nothing for these calls, and no test can kill it through a real caller. The mutant `if (true)` changes the result, so it gets no hint.
+
+- The test of the condition must be a parameter `p`, `!p` or `!!p`: the test of an `if`, a `?:` or a loop. A test such as `p && q` gets no hint.
+- Each visible call must pass the same literal for the parameter. The hint uses the call evidence and the closed-world gate of the [`constant-parameter`](/explanations/dead-code#constant-parameters) rule, also when the rule is `off`. A function that the gate blocks gets no hint, for example a function with a value reference, an export of an entry point, or a public API export. A module that only tests reach gets no hint. A test call counts as a call.
+- An inline or file suppression of `constant-parameter` removes the hint. A severity in `rules` or `overrides` does not change it.
+- The literal decides the test value as JavaScript does: `false`, `null`, `undefined`, `0`, `-0`, `NaN` and `""` are falsy. When each call passes `undefined` for a parameter with a default value, the default applies, and the survivor gets no hint.
+- The hint is advisory. The status stays `survived`, and the score does not change. A caller outside the project can still pass another value. Read the callers, then record an equivalent mutant with a [verdict](#verdicts-for-equivalent-mutants). A verdict removes the hint.
 
 ## Result cache
 
