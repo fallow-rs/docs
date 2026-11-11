@@ -1,0 +1,85 @@
+---
+title: "ts-prune alternative: find unused exports with fallow"
+sidebarTitle: "Comparing with ts-prune"
+description: "Compare ts-prune with fallow for unused exports in TypeScript. See which ts-prune option maps to which fallow setting, and how the two tools resolve symbols."
+keywords: ["ts-prune", "ts-prune alternative", "unused exports", "find unused exports typescript", "dead code", "ts-morph", "compare ts-prune", "migrate from ts-prune"]
+icon: "scale-balanced"
+---
+
+[ts-prune](https://github.com/nadeesha/ts-prune) reads your `tsconfig.json` and reports exports that no other file in the project appears to use. Fallow reports unused exports too, together with unused files, types, dependencies, and members. This page maps the ts-prune options to fallow settings, and lists what each tool does better.
+
+<Info>
+  The ts-prune repository is not archived. The [project status](https://github.com/nadeesha/ts-prune#project-status) section of its README says that the project "has been resurrected after a long hiatus". The newest release on npm is still `0.10.3`, from December 2021.
+</Info>
+
+<Note>
+  `fallow migrate` does not read `.ts-prunerc` files or the `ts-prune` field in `package.json`. The table below shows the fallow setting for each option, so you can write the config by hand.
+</Note>
+
+## Option mapping
+
+| ts-prune | Fallow |
+|:---------|:-------|
+| `npx ts-prune` | `fallow dead-code --unused-exports --unused-types` |
+| `-p, --project <path>` | -- (fallow finds the `tsconfig.json` files itself. For the type-aware pass, use `--type-aware-project <path>`) |
+| `-i, --ignore <regexp>` (hide matching output lines) | [`ignoreExports`](/configuration/overview#ignoreexports) for named exports, or `ignoreFindings` globs for files |
+| `-s, --skip <regexp>` (leave files out of the analysis) | `ignorePatterns` globs |
+| `-e, --error` | -- (on by default: `fallow dead-code` exits with code 1 when it finds an `unused-exports` finding) |
+| `-u, --unusedInModule` | `"ignoreExportsUsedInFile": true` |
+| `// ts-prune-ignore-next` | `// fallow-ignore-next-line unused-export` |
+| tsconfig `files` as public entry points | `entry` globs. Fallow does not report the exports of an entry file, unless you pass `--include-entry-exports` |
+
+ts-prune options take JavaScript regular expressions. The fallow settings take globs.
+
+## How the two tools resolve symbols
+
+ts-prune is built with ts-morph, and it uses the TypeScript compiler to find the references to each export. Fallow parses the code with Oxc and does not run the TypeScript compiler. It builds a module graph from the entry points and follows imports and re-export chains through that graph.
+
+When a delete depends on exact TypeScript symbol identity, add `--type-aware`. Fallow then confirms each candidate with the TypeScript checker:
+
+```bash
+fallow dead-code --unused-exports --type-aware
+```
+
+See [Type-aware TypeScript analysis](/analysis/type-aware).
+
+## What ts-prune does better
+
+- **Compiler-based references by default.** ts-prune uses the TypeScript compiler on each run. Fallow uses the TypeScript checker only with `--type-aware`.
+- **One task, small output.** ts-prune does only one thing, and each result is one `file:line - exportName` line. Fallow runs more checks, and you filter them with flags such as `--unused-exports`.
+- **Regular expressions.** ts-prune filters with regular expressions. Fallow filters with globs and export names.
+
+## What fallow adds
+
+- **Unused files and dependencies.** Fallow also reports unused files, unused dependencies, unlisted dependencies, and unused enum and class members.
+- **Framework entry points.** Built-in plugins find the entry points of frameworks such as Next.js and Vite. ts-prune sees only the uses inside the configured project, so a framework export that a convention loads can show as unused.
+- **Automatic removal.** `fallow fix` removes unused exports and unused dependencies. ts-prune only reports. See [Auto-fix](/analysis/auto-fix).
+- **A native binary.** Fallow does not need Node.js for its default analysis. The current ts-prune README requires Node.js 22.18 or newer.
+- **More analyses in one run.** Fallow also reports import cycles, duplication, and complexity hotspots.
+
+## Move a ts-prune check to fallow
+
+A typical CI step runs `ts-prune --error`. To do the same with fallow, run:
+
+```bash
+fallow dead-code --unused-exports --unused-types
+```
+
+To adopt the check on a codebase that already has unused exports, save a baseline first. See [Baselines](/cli/baselines).
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="Dead code analysis" icon="magnifying-glass" href="/analysis/dead-code">
+    Find unused files, exports, and dependencies.
+  </Card>
+  <Card title="Type-aware analysis" icon="code" href="/analysis/type-aware">
+    Confirm unused symbols with the TypeScript checker.
+  </Card>
+  <Card title="Suppression" icon="comment-slash" href="/configuration/suppression">
+    Suppress one finding with an inline comment.
+  </Card>
+  <Card title="Migrating from knip" icon="right-left" href="/migration/from-knip">
+    Convert a knip config with `fallow migrate`.
+  </Card>
+</CardGroup>

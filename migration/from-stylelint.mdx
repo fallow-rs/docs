@@ -1,0 +1,119 @@
+---
+title: "stylelint and fallow: migrate selector complexity rules"
+sidebarTitle: "Migrating from stylelint"
+description: "Convert the selector complexity rules of your stylelint config to fallow styling analysis. See what fallow migrates and which rules stay in stylelint."
+keywords: ["stylelint", "migration", "css", "selector complexity", "config conversion", "migrate from stylelint", "styling analysis"]
+icon: "right-left"
+---
+
+The `fallow migrate` command reads your stylelint configuration and turns on the matching fallow styling analysis. Fallow does not replace stylelint. Stylelint keeps the formatting, ordering, naming, syntax, and vendor prefix rules. Fallow adds project-wide styling findings, for example unused styling and broken references. This page shows the steps, the rule mapping, and the limits of the conversion.
+
+## Migration workflow
+
+<Steps>
+  <Step title="Preview the migration">
+    Run `fallow migrate --dry-run` to see the generated config. The command writes no files.
+
+    ```bash
+    fallow migrate --dry-run
+    ```
+
+    fallow looks for these files in the project root, in this order: `.stylelintrc`, `.stylelintrc.json`, `.stylelintrc.jsonc`, `stylelint.config.js`, `stylelint.config.cjs`, and `stylelint.config.mjs`. Fallow uses the first file that it finds. When no file exists, fallow reads the `stylelint` field in `package.json`.
+
+    ```text title="$ fallow migrate --dry-run"
+    {
+      "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+      // Migrated from .stylelintrc.json
+      "audit": {
+        "css": true,
+        "cssDeep": true
+      },
+      "rules": {
+        "css-selector-complexity": "warn"
+      }
+    }
+
+    Migrated from: .stylelintrc.json
+
+    Warnings (2):
+      [stylelint] `color-hex-length`: color formatting stays in Stylelint (suggestion: leave this rule in Stylelint)
+      [stylelint] `selector-class-pattern`: naming conventions stay in Stylelint (suggestion: leave this rule in Stylelint)
+    ```
+  </Step>
+
+  <Step title="Generate the config">
+    When the preview looks correct, run the migration:
+
+    ```bash
+    fallow migrate            # Write .fallowrc.json
+    fallow migrate --toml     # Or output as fallow.toml
+    ```
+
+    To migrate one specific file, pass its path:
+
+    ```bash
+    fallow migrate --from config/.stylelintrc.json
+    ```
+  </Step>
+
+  <Step title="Keep stylelint">
+    Do not remove stylelint. The warnings list the rules that only stylelint enforces. Keep them in your stylelint config and in your lint step.
+  </Step>
+
+  <Step title="Run the styling analysis">
+    Run the styling analysis and examine the findings:
+
+    ```bash
+    fallow health --css    # Styling findings and CSS analytics for the project
+    fallow audit           # Styling findings for the changed files
+    ```
+  </Step>
+</Steps>
+
+## What gets migrated
+
+| stylelint | Fallow |
+|:----------|:-------|
+| `max-nesting-depth`, `selector-max-id`, `selector-max-specificity`, `selector-max-class`, `selector-max-attribute`, `selector-max-combinators`, `selector-max-compound-selectors`, `selector-max-type`, `selector-max-universal`, `no-descending-specificity`, `declaration-no-important` | [`css-selector-complexity`](/explanations/health#css-selector-complexity) set to `warn`, plus `audit.css` and `audit.cssDeep` set to `true` |
+| Formatting rules, for example `color-hex-length`, `length-zero-no-unit`, `string-quotes`, and `rule-empty-line-before` | -- (a warning tells you to keep the rule in stylelint) |
+| Naming rules: `selector-class-pattern`, `selector-id-pattern`, `custom-property-pattern` | -- (a warning tells you to keep the rule in stylelint) |
+| Ordering rules: `order/order`, `order/properties-order` | -- (a warning tells you to keep the rule in stylelint) |
+| Vendor prefix rules, for example `property-no-vendor-prefix` and `value-no-vendor-prefix` | -- (a warning tells you to keep the rule in stylelint) |
+| Syntax rules: `declaration-block-no-duplicate-properties`, `no-empty-source` | -- (a warning tells you to keep the rule in stylelint) |
+| `extends`, `plugins`, `overrides`, and other top-level keys | -- (not read) |
+
+Fallow maps a rule only when your config turns it on. A rule with the value `null`, `false`, or an empty array is off, and fallow ignores it.
+
+## Warnings and caveats
+
+**Thresholds do not transfer.** Fallow does not copy the limit of a stylelint rule. For example, `"selector-max-id": 2` and `"selector-max-id": 0` give the same fallow config. `css-selector-complexity` uses its own fixed limits: an id selector, a nesting depth of 3 or more, a `!important` use, or a structurally complex selector. See [Selector complexity](/explanations/health#css-selector-complexity).
+
+**Shared configs are not followed.** Fallow reads only the `rules` object of your own config file. Rules that come from `extends`, for example `stylelint-config-standard`, do not count. When your config has no `rules` object, the migration writes no styling settings and prints this warning:
+
+```text
+Warning (1):
+  [stylelint] `rules`: no Stylelint rules object found to map (suggestion: keep Stylelint for formatting and syntax linting)
+```
+
+**JavaScript configs must be static.** Fallow does not run `stylelint.config.js`, `.cjs`, or `.mjs`. It reads the text from the first `{` to the last `}` as one object literal. A config that uses `require()`, variables, or spread syntax does not parse, and the command exits with code 2. A brace before the object also stops the parse, for example the `/** @type {import('stylelint').Config} */` comment. In these cases, convert the config to `.stylelintrc.json`, or pass a JSON copy with `--from`.
+
+**Other rules give no warning.** Fallow warns only about a fixed list of formatting, naming, ordering, vendor prefix, and syntax rules. Other rules, for example most plugin rules, get no warning, and fallow does not migrate them.
+
+**Severity.** Fallow writes `css-selector-complexity` as `warn`. A `warn` finding shows in the output but does not fail the run. To fail the run on these findings, set the rule to `error`. See [Rules](/configuration/rules).
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="CSS analysis" icon="paintbrush" href="/analysis/css-analysis">
+    Learn what the styling analysis reports.
+  </Card>
+  <Card title="Styling findings" icon="book-open" href="/explanations/health#css-selector-complexity">
+    Read how fallow reports selector complexity.
+  </Card>
+  <Card title="fallow migrate" icon="terminal" href="/cli/migrate">
+    Read the full CLI reference for `fallow migrate`.
+  </Card>
+  <Card title="Fallow vs linters" icon="scale-balanced" href="/explanations/fallow-vs-linters">
+    Learn how fallow and a linter work together.
+  </Card>
+</CardGroup>
