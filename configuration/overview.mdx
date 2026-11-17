@@ -813,7 +813,7 @@ Configuration for `fallow dupes`:
 | `crossLanguage` | `boolean` | `false` | Find clones between `.ts` and `.js` files. Fallow removes TypeScript type annotations before it compares |
 | `ignoreImports` | `boolean` | `true` | Exclude module wiring (imports and re-exports) from clone detection. By default, fallow excludes ES imports, re-export declarations, and top-level static `require()` binding declarations. Set to `false` to count them again. Fallow still counts runtime code, local exports, side-effect or nested `require()` calls, dynamic require arguments, and mixed declarations. |
 | `ignoreSymlinks` | `boolean` | `false` | Omit clone instances whose path is a symlink, or lies under a symlinked directory, inside the project root. Set to `true` to report only duplication between real files. Fallow does not report a clone group with fewer than two remaining instances. The file and line totals and the `threshold` percentage then count only real files. With `false`, JSON output marks these instances with `is_symlink: true`. See [Symlinked files](/cli/dupes#symlinked-files). |
-| `normalization` | `object` | none | Fine-grained normalization overrides: `ignoreIdentifiers`, `ignoreStringValues`, `ignoreNumericValues` |
+| `normalization` | `object` | none | Fine-grained normalization overrides: `ignoreIdentifiers`, `consistentIdentifiers`, `ignoreStringValues`, `ignoreNumericValues`. See [Normalization overrides](/analysis/duplication#normalization-overrides) |
 | `minCorpusSizeForShingleFilter` | `number` | `1024` | Performance setting. Above this number of tokenized files, focused duplication runs (`--changed-since` or `audit`) prefilter unchanged files with k-token shingles. Below it, fallow skips the prefilter, because the shingle index costs more time than it saves. |
 | `minCorpusSizeForTokenCache` | `number` | `5000` | Performance setting. Above this number of source files, fallow uses the persistent duplication token cache under `<root>/.fallow/cache/dupes-tokens-vN/`. Below it, loading and saving the cache costs more time than it saves, so the cache stays off, also without `--no-cache`. |
 
@@ -1253,7 +1253,7 @@ Use cases:
 </Accordion>
 
 <Accordion title="circularDependencies">
-Options for the `circular-dependencies` rule. The only option is `ignoreLazyImports` (default `false`).
+Options for the `circular-dependencies` rule: `ignoreLazyImports` (default `false`) and `allow` (default `[]`).
 
 <CodeGroup>
 ```jsonc .fallowrc.json
@@ -1279,6 +1279,41 @@ With `ignoreLazyImports: true`, an import edge that loads its target on demand o
 These edges stay in the cycle graph: a top-level `await import()`, `require()`, an eager `import.meta.glob`, and an edge that also has a static import. Fallow removes the lazy edges before it counts the cycles of a group, so lazy cycles do not fill the cycle limit and hide a static cycle.
 
 A top-level `await import()` in a Vue `<script setup>` block, a Svelte instance script, or an Astro frontmatter stays lazy, because that code runs for each component instance.
+
+#### Accepted cycles
+
+`allow` lists the cycles that you accept. Each entry is the list of files of one cycle, in import order, relative to the project root. Do not repeat the first file at the end.
+
+<CodeGroup>
+```jsonc .fallowrc.json
+{
+  "circularDependencies": {
+    "allow": [
+      ["src/a.ts", "src/b.ts", "src/c.ts"]
+    ]
+  }
+}
+```
+
+```toml fallow.toml
+[circularDependencies]
+allow = [["src/a.ts", "src/b.ts", "src/c.ts"]]
+```
+</CodeGroup>
+
+An entry accepts only the cycle with exactly these files in this order. The cycle can start at any file of the entry, so the entry above also accepts `src/b.ts -> src/c.ts -> src/a.ts`. A cycle with another set of files stays reported, also when it uses an import of an accepted cycle. A `// fallow-ignore-next-line circular-dependency` comment hides each cycle through that import, also a new one.
+
+- Write each path from the project root, also in a monorepo (`packages/app/src/a.ts`).
+- The match is case-sensitive. Globs are not supported.
+- An entry needs at least 2 files and lists each file once. Otherwise the config does not load.
+- An accepted cycle does not count toward the limit of 20 listed cycles per group of files that import each other.
+
+An entry that matches no cycle gives a `circular-dependencies-allow-unmatched` diagnostic. The diagnostic shows in JSON, SARIF, Markdown and the stderr note, and it does not change the exit code. A `--production` run and a run with the rule `off` give no diagnostic. Fallow cannot check some entries, so these entries give no diagnostic:
+
+- an entry with more than 12 files, because the detector lists no cycle with more than 12 files;
+- an entry whose files are all in a group that reached the limit of 20 cycles.
+
+When you add an entry, remove the `fallow-ignore-next-line circular-dependency` comment of that cycle. Otherwise fallow reports the comment as a stale suppression.
 </Accordion>
 
 <Accordion title="effect">

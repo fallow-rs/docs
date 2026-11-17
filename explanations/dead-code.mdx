@@ -229,6 +229,54 @@ class UserService {
 
 **Configuration:** The `usedClassMembers` config option marks specific member names as always used. Use it for convention-based methods that DI frameworks or third-party libraries call reflectively (e.g., `agInit`, `connectedCallback`). Custom plugin definitions can also add names to this allowlist through their `usedClassMembers` field.
 
+`unused-class-members` does not report `protected` members. The opt-in [`unused-protected-class-members`](#unused-protected-class-members) rule checks them.
+
+### Unused protected class members {#unused-protected-class-members}
+
+`protected` class members that no code reads.
+
+| Severity | Default |
+|:---------|:--------|
+| Off | Yes (opt-in) |
+
+**What it detects:** A `protected` method or property that its class and its subclasses never read through `this` or `super`. A subclass override counts as used when the base class calls the member.
+
+```typescript
+abstract class Shape {
+  // Used: the base class calls it, so each override is used too
+  protected abstract area(): number;
+
+  // Unused: no class in the hierarchy reads it
+  protected unusedHelper(): void { ... }
+
+  describe(): string {
+    return `Area: ${this.area()}`;
+  }
+}
+```
+
+**Scope:**
+- Fallow does not check a class that is part of the public API of a package, because a consumer can subclass it.
+- Production mode ignores reads in test files, as for public members.
+- On a run with an incomplete import graph, a finding carries `reachability_caveats[]`.
+
+**Known limits:**
+- A read through a string key, such as `this["member"]()`, gives no credit. This is the same for public members.
+- The rule does not check a constructor parameter property, such as `constructor(protected readonly x: X)`.
+
+**How to turn it on:** set the rule in `rules`, or pass `--unused-protected-class-members` to report only this issue type. The flag turns the rule on at `warn` when the config sets it to `off`.
+
+```jsonc
+// .fallowrc.json
+{
+  "rules": {
+    "unused-protected-class-members": "warn"
+  }
+}
+```
+
+The JSON output lists the findings in `unused_protected_class_members`. SARIF, CodeClimate, the human report, the editor and `fallow explain` show them too. To suppress one finding, use `// fallow-ignore-next-line unused-protected-class-member`.
+
 ### Unused namespace members
 
 An exported member of an exported TypeScript namespace that no code reads.
@@ -458,6 +506,7 @@ With the full path, you can find the weakest edge to break.
 
 **When it's OK to keep:**
 - **Type-only cycles**: If the cycle uses only `import type`, there is no runtime initialization risk. Fallow automatically removes these from circular dependency reports.
+- **Intentional cycles**: list the files of the cycle in [`circularDependencies.allow`](/configuration/overview#accepted-cycles). Fallow then accepts that exact cycle and still reports a new cycle through the same imports.
 
 ### Re-export cycles {#re-export-cycles}
 
