@@ -1,0 +1,127 @@
+---
+title: "Verify agent changes with fallow"
+sidebarTitle: "Verify agent changes"
+description: "Give a coding agent checks that give evidence for each change. A verify skill runs your tests, fallow audit, and fallow mutation, and reports the result."
+keywords: ["verify", "verification loop", "agent", "Claude Code", "Codex", "skill", "fallow audit", "fallow mutation", "weakened tests", "quality gate", "agent-written code"]
+icon: "list-check"
+---
+
+An agent can report a task as done when it is not done. A check that runs on the change gives you evidence in place of a claim. When each change has checks that you trust, you can let more agents work at the same time. You then review the evidence, not every line.
+
+Fallow gives you deterministic checks for a JavaScript or TypeScript change. These checks do not replace your tests or a run of the app. Fallow finds problems that tests do not find. It also finds changes that make the tests weaker.
+
+## What each check tells you
+
+| Check | Command | What it tells you |
+|:------|:--------|:------------------|
+| Your tests and the type check | your project commands | The code does what the tests expect. |
+| A run of the app | your project commands | The feature works from end to end. |
+| Audit | `fallow audit` | The change adds no unused code, complexity, duplication, or styling problems. |
+| Diff-risk rules | `fallow audit` | The change does not skip or remove tests, lower a coverage threshold, or add a suppression comment. |
+| Mutation testing | `fallow mutation` | The tests fail when the changed code is wrong. |
+| Review brief | `fallow review` | The places in the change that a reviewer must look at first. |
+
+`fallow audit` runs no project code, so it is fast. Run it on each change. `fallow mutation` runs your tests many times. Limit it with `--max-mutants` or `--time-budget`.
+
+## Find changes that make the checks weaker
+
+An agent that cannot make a test pass can skip the test, remove an assertion, or add a suppression comment. The tests then pass, and the problem stays. The [diff-risk rules](/cli/audit#diff-risk-rules) of `fallow audit` compare the base and the head of each changed file. They report these changes:
+
+- `weakened-tests` reports a new `.skip` or `.only`, fewer test cases, and fewer assertions. It also reports a coverage or complexity threshold that is less strict. See [Weakened tests](/cli/audit#weakened-tests).
+- `added-suppression` reports a new lint, type-check, coverage, or fallow suppression comment. Fallow reports a new blanket `fallow-ignore` comment too, because only a comment that names `added-suppression` hides this finding. See [Added suppressions](/cli/audit#added-suppression).
+- `test-only-branch` reports a new test-environment check in source code. See [Test-only branches](/cli/audit#test-only-branch).
+
+These rules are `warn` by default. To make the audit fail on them, set them to `error`:
+
+```jsonc .fallowrc.json
+{
+  "rules": {
+    "weakened-tests": "error",
+    "added-suppression": "error"
+  }
+}
+```
+
+`fallow audit` reads the rules from the config file in the working tree. When a change sets a rule to `off` in `.fallowrc.json`, fallow does not report the rule change. The change can thus hide its own findings. Fallow does report a less strict threshold in the same file, such as a higher `maxCyclomatic`. To protect the config file:
+
+- Add a code owner for `.fallowrc.json`.
+- Run `fallow audit` in CI too. There, the agent cannot change the command.
+
+## Check that the tests can fail
+
+A test that passes does not prove that it checks the code. An agent can write a test that calls a function and asserts nothing useful. `fallow mutation` makes small edits to the changed code, for example `<=` to `<`. Each edit is a mutant. The command runs your tests against each mutant:
+
+```bash
+fallow mutation --max-mutants 50 --format json --quiet
+```
+
+By default, the command mutates only the code that changed against the base ref. A mutant that no test detects has the status `survived`. It shows a place where the code can be wrong while every test passes. The agent can then write a test that fails on that mutant. To make the command fail on a low score, pass `--min-score`. See [`fallow mutation`](/cli/mutation).
+
+`fallow mutation` saves the report of the last run in `.fallow/mutation/last-report.json`. `fallow review` can read this file. The review brief then shows the survived mutants on the added lines of each file:
+
+```bash
+fallow review --mutation-report .fallow/mutation/last-report.json
+```
+
+## Add a verify skill to your project
+
+A skill tells the agent which checks to run, in which order, and what to report. For Claude Code, put the file below in `.claude/skills/verify/SKILL.md`. For Codex, put it in `.agents/skills/verify/SKILL.md`. Replace the test and type-check commands with the commands of your project.
+
+````markdown .claude/skills/verify/SKILL.md
+---
+name: verify
+description: Use before you say that a change is done, before a commit, and before you open a pull request. Runs the tests, the type check, fallow audit and fallow mutation, and reports the evidence.
+---
+
+# Verify
+
+Run each step in order. When a step fails, fix the cause. Then start again at step 1.
+
+1. Run the type check: `npm run typecheck`.
+2. Run the tests: `npm test`.
+3. Run `fallow audit --format json --quiet --explain`.
+   - When the output has `"verdict": "fail"`, fix each finding with `"introduced": true`.
+   - Read the `diff_risk` section. Do not skip a test, remove an assertion, or add a suppression comment to make a check pass.
+   - When the change must skip a test, remove an assertion, or add a suppression, give the reason in the report.
+4. When the change adds or changes logic, run `fallow mutation --max-mutants 50 --format json --quiet`.
+   - For each `survived` mutant, write a test that fails on that mutant.
+   - When a `survived` mutant does not matter, give the reason in the report.
+5. When the project can run locally, run the app and use the changed feature once.
+
+When one step fails three times, do not try again. Report the step, the error, and what you tried.
+
+## Report
+
+Give these items in the report:
+
+- The command of each step and its result.
+- The audit verdict and each diff-risk finding.
+- The mutation score and each `survived` mutant that has no new test.
+- Each step that you did not run, and the reason.
+````
+
+The skill tells the agent to run the checks. It cannot stop an agent that does not use the skill. To block a commit or a push that fails `fallow audit`, also install the [Claude Code and Codex hooks](/integrations/claude-hooks):
+
+```bash
+fallow hooks install --target agent
+```
+
+## Make a rule stricter in steps
+
+When a rule blocks too often, the team starts to avoid it. Set each new rule to `warn` first. Fallow then shows the findings in the report, and the audit still exits 0. Read the findings during a few weeks. When the findings are correct, set the rule to `error`.
+
+Do the same for the CI job. First, run [`fallow audit`](/cli/audit) in CI and only read the verdict. Then make the job fail on `"verdict": "fail"`. See [Adopt Fallow in an existing repo](/adoption#7-turn-on-pr-enforcement).
+
+## See also
+
+<CardGroup cols={3}>
+  <Card title="Claude Code hooks" icon="shield-check" href="/integrations/claude-hooks">
+    Block a commit or a push that fails fallow audit.
+  </Card>
+  <Card title="fallow audit" icon="terminal" href="/cli/audit">
+    Verdicts, diff-risk rules, and the review brief of fallow review.
+  </Card>
+  <Card title="fallow mutation" icon="flask" href="/cli/mutation">
+    Scope, score, survived mutants, and exit codes.
+  </Card>
+</CardGroup>
