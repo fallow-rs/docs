@@ -29,7 +29,7 @@ Code Lens shows "imported by N files" above each export that other files import.
 - **Quick-fix code actions** to remove unused exports or delete unused files, or to copy the finding id of a dead-code or security diagnostic
 - **Refactor actions** to extract duplicates into shared functions
 - **Tree views** in the sidebar with an icon for each category, an issue count badge, and a welcome view
-- **Status bar** with color-coded severity, a tooltip with a breakdown, and command links
+- **Status bar**: one **Fallow** item with the finding count and the health grade, a hover with a breakdown, and a click menu
 - **Diagnostic documentation links**: click a diagnostic code to open its docs page
 - **Related information**: circular dependencies, duplicate exports, and code duplication diagnostics link to all related files
 - **Fix preview** with a searchable Quick Pick to review fixes and go to them
@@ -44,9 +44,9 @@ The extension also shows the rest of the fallow analysis. Each one is a sidebar 
 - **Health view** (sidebar): the project health score and grade, the top complexity findings, hotspot and refactoring candidates, and the [hidden change coupling](/explanations/health#change-coupling) pairs. Each pair shows its degree and its shared commits, and opens either file. The pairs need the git history, so they come with `fallow.health.hotspots`. A separate run computes the view when you need it. To turn it off, use `fallow.health.enabled`.
 - **Security Candidates view** (sidebar): local security candidates (`client-server-leak`, the tainted-sink CWE catalogue). These are **unverified candidates to verify**, never confirmed vulnerabilities. To turn it on, use `fallow.security.enabled`.
 - **Runtime Coverage view** (sidebar): hot paths and cleanup candidates (safe-to-delete or review-required) from a loaded coverage capture.
-- **Audit verdict** (status bar): pass, warn, or fail for your current change set, the same as `fallow audit`.
+- **Audit verdict** (on the status bar item): pass, warn, or fail for your current change set, the same as `fallow audit`.
 - **License management**: activate, view the status of, refresh, and deactivate the fallow license for continuous or multi-capture runtime coverage in the editor.
-- **Monorepo workspace scope** (status bar): a picker that limits sidebar analysis to one package. The limit also applies to the Health, Security, and Audit views. The extension passes the package as `--workspace`.
+- **Monorepo workspace scope** (status bar menu): a picker that limits sidebar analysis to one package. The limit also applies to the Health, Security, and Audit views. The extension passes the package as `--workspace`.
 
 ## Installation
 
@@ -79,18 +79,43 @@ The extension also shows the rest of the fallow analysis. Each one is a sidebar 
 
 ## Status bar
 
-The status bar shows the current issue count and duplication percentage. When the LSP server completes an analysis, it sends a custom `fallow/analysisComplete` notification, and the status bar updates. No separate CLI process runs.
+The extension shows one **Fallow** item in the status bar. The item text shows the finding count and the health grade, for example `Fallow 9 · C`. When the LSP server completes an analysis, it sends a custom `fallow/analysisComplete` notification, and the item updates. No separate CLI process runs.
 
-- **Color-coded background**: red when there are unresolved imports (errors), yellow when there are other issues (warnings), and the default color when the project is clean
-- **Rich tooltip**: hover to see all issues by category, such as unused files, exports, dependencies, circular dependencies, and clone groups
-- **Command links in tooltip**: Run Analysis, Auto-Fix, and Show Output
+The hover of the item shows:
 
-You can turn each of these status-bar items on or off:
+- the issues by category, such as unused files, exports, dependencies, circular dependencies, and clone groups;
+- the duplication percentage and the health score;
+- the audit verdict for the current change set, with a gating-candidate count. The count includes the [diff-risk findings](/cli/audit#diff-risk-rules);
+- the license state: tier, seats, features, and expiry;
+- the active workspace in a monorepo;
+- whether the findings are visible in the editor.
 
-- **Health score** segment with the project grade (toggle with `fallow.health.statusBar`)
-- **Audit verdict** for the current change set: pass, warn, or fail, color-coded, with a gating-candidate count (toggle with `fallow.audit.statusBar.enabled`). The count includes the [diff-risk findings](/cli/audit#diff-risk-rules), and the tooltip shows a diff-risk row
-- **License indicator** showing the active license state (toggle with `fallow.license.showStatusBar`)
-- **Workspace scope** picker that shows the package the analysis is limited to in a monorepo (hidden in single-package projects)
+A click on the item opens a menu. The **Fallow: Show Status Menu** command opens the same menu. The menu has these rows:
+
+- **Run analysis**
+- **Hide findings in the editor**, or **Show findings in the editor** when they are hidden. CLI and CI output do not change.
+- **Run audit**
+- **Switch workspace**, only in a monorepo
+- **Activate license** or **Refresh license**, when the license needs action
+- **Open settings**
+
+The background of the item shows the state that needs action:
+
+| State | Background |
+|:------|:-----------|
+| Audit verdict `fail`, or a failed audit run | Error |
+| Audit verdict `warn` | Warning |
+| License past its grace window (paid features blocked) | Warning |
+
+The error background wins when more than one state applies. When all findings are hidden in the editor, the item shows a closed-eye icon, also next to an audit or progress icon.
+
+The item text shows the license only when it expires within 14 days, has expired, or is not valid. License material that the CLI cannot read, for example a stale `FALLOW_LICENSE` value, shows as "license invalid". A machine with no license material shows no license state.
+
+These settings control parts of the item:
+
+- `fallow.health.statusBar`: the health grade in the item text
+- `fallow.audit.statusBar.enabled`: the audit verdict on the item. When it is off, the audit command shows the verdict in a message.
+- `fallow.license.showStatusBar`: the license state on the item
 
 ## Diagnostics
 
@@ -188,7 +213,8 @@ The extension gives `.fallowrc.json` files autocomplete and validation from the 
 | **Fallow: Load Runtime Coverage** | Point the Runtime Coverage view at a capture |
 | **Fallow: Reload Runtime Coverage** | Re-read the current coverage capture |
 | **Fallow: Clear Runtime Coverage** | Clear the loaded coverage |
-| **Fallow: Audit Changed Files** | Compute the pass/warn/fail audit verdict for the current changes |
+| **Fallow: Audit Changed Files** | Compute the pass/warn/fail audit verdict for the current changes. The verdict shows on the **Fallow** status bar item |
+| **Fallow: Show Status Menu** | Open the menu of the **Fallow** status bar item. A click on the item runs this command |
 | **Fallow: Activate License** | Activate a license (paste a token, load a file, or start a trial) |
 | **Fallow: Show License Status** | Show the current license state |
 | **Fallow: Refresh License** | Refresh the license from the server |
@@ -219,14 +245,14 @@ The extension gives `.fallowrc.json` files autocomplete and validation from the 
   | `fallow.production` | `"auto"` | Production mode for the sidebar tree and the editor diagnostics (the two stay in sync). `"auto"` uses the project config. `"on"` turns production mode on. `"off"` turns it off, also when the project config turns it on. Editor only: CLI and CI always report every finding. |
   | `fallow.packageBaselines` | `true` | Apply the per-package refs of [`workspaces.changedSince`](/configuration/workspaces#per-package-change-baselines). Set it to `false` to show every workspace package in full scope (same as `--no-package-baselines`). `fallow.changedSince` takes precedence when set. |
   | `fallow.changedSince` | `""` | Git ref. Diagnostics and the sidebar show only files changed since that ref (same as `--changed-since`). To block new issues and ignore old findings, tag a baseline commit (for example `fallow-baseline`) and set this to the tag. |
-  | `fallow.diagnostics.statusBar` | `true` | Show the **Fallow** status-bar button that hides or shows all fallow squiggles in the editor. The **Fallow: Toggle Hide All Findings** command works also when you turn the button off. Editor only: CLI and CI output do not change. |
+  | `fallow.diagnostics.statusBar` | `true` | Deprecated. This setting has no effect. To hide or show all fallow squiggles, use **Hide findings in the editor** in the menu of the **Fallow** status bar item, or the **Fallow: Toggle Hide All Findings** command. |
   | `fallow.diagnostics.severity` | `"warning"` | Show fallow editor diagnostics as `warning`, `information`, or `hint`. With `hint`, findings stay available without squiggles. Editor only: CLI and CI output do not change. |
   | `fallow.diagnostics.mutedCategories` | `[]` | Fallow diagnostic category codes to hide in the editor, such as `code-duplication` or `stale-suppression`. Commit it in `.vscode/settings.json` to share it with your team. Local mutes can still hide more categories or show a category that this list hides. Editor only: CLI and CI output do not change. |
   | `fallow.workspace` | `""` | Name of one monorepo package. Sidebar analysis and the Health, Security, and Audit views cover only that package. Empty means the whole project. Passed as `--workspace`. |
   | `fallow.health.enabled` | `true` | Show the Health view (score and grade, complexity findings, hotspot and refactoring candidates) |
   | `fallow.health.hotspots` | `true` | Show git churn hotspots in the Health view. This reads git history. Turn it off to skip that cost |
   | `fallow.health.topFindings` | `20` | Maximum number of complexity findings shown in the Health view |
-  | `fallow.health.statusBar` | `true` | Show the project health score and grade in the status bar |
+  | `fallow.health.statusBar` | `true` | Show the project health grade in the text of the **Fallow** status bar item |
   | `fallow.health.inlineComplexity` | `true` | Show a compact complexity lens (`N cyc, N cog`) above functions over the fallow health thresholds. Click the lens to show or hide the per-line `+N` breakdown for that function |
   | `fallow.complexity.breakdownEnabled` | `true` | Turns the complexity breakdown in the editor on or off: lens, per-line markers, and hovers. The breakdown shows after the Health view runs |
   | `fallow.complexity.afterText` | `false` | Show the dim per-line `+N` token for every complex function. By default, it shows only for the function you expand with its lens or select in the Health view. The hover always shows the breakdown |
@@ -234,11 +260,11 @@ The extension gives `.fallowrc.json` files autocomplete and validation from the 
   | `fallow.security.enabled` | `false` | Show local **security candidates** (`client-server-leak`, tainted-sink CWE catalogue) in the Security Candidates view. These are unverified candidates to verify, not confirmed vulnerabilities. |
   | `fallow.audit.gate` | `new-only` | Which findings change the audit verdict in the editor (same as `fallow audit --gate`) |
   | `fallow.audit.worsened` | `auto` | How a [worsened complexity finding](/cli/audit#worsened-complexity-findings) changes the audit verdict in the editor: `warn`, `error` or `off` (same as `fallow audit --worsened`). `auto` uses `audit.worsened` from the project config. Needs Fallow 3.34.2 or newer |
-  | `fallow.audit.statusBar.enabled` | `true` | Show the audit verdict (pass/warn/fail) for the current change set in the status bar |
+  | `fallow.audit.statusBar.enabled` | `true` | Show the audit verdict (pass/warn/fail) for the current change set on the **Fallow** status bar item. When off, the audit command shows the verdict in a message |
   | `fallow.audit.runOnSave` | `false` | Run the audit again when you save a JS or TS file (off by default) |
   | `fallow.coverage.capturePath` | `""` | Path to a local runtime-coverage capture (file or directory) for the Runtime Coverage view |
   | `fallow.coverage.top` | `0` | Show only the top N hot paths and findings in the Runtime Coverage view (`0` = all) |
-  | `fallow.license.showStatusBar` | `true` | Show a Fallow license indicator in the status bar |
+  | `fallow.license.showStatusBar` | `true` | Show the license state on the **Fallow** status bar item when license material is present. Turn it off to remove the license state and skip the license status check on startup |
   | `fallow.license.refreshOnStartup` | `false` | Check the license status once when the extension starts. Off by default, so there is no network call on startup |
   | `fallow.trace.server` | `off` | LSP trace level for debugging |
 </Accordion>
