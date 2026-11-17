@@ -168,6 +168,30 @@ In that case, audit reuses the findings of the current run as the base snapshot 
 
 To check if the fast path fired, run `fallow audit --base main --gate new-only --performance`. The JSON output has `base_snapshot_skipped: true|false`, and the human output prints the same value on stderr. The fast path turns on automatically when every entry in the diff qualifies. No flag turns it on or off.
 
+#### Clone groups in the verdict {#introduced-clone-group}
+
+The `introduced-clone-group` rule sets how a clone group takes part in the verdict and the exit code:
+
+| Severity | Effect |
+|:---------|:-------|
+| `warn` (default) | The clone group makes the verdict at least `warn`. The exit code stays 0. |
+| `error` | The clone group fails the audit with exit code 1. |
+| `off` | The clone group stays in the report, but it does not change the verdict. |
+
+Under `--gate new-only`, only a clone group that the change introduces counts. An inherited clone group never gates. Under `--gate all`, every clone group in the changed files follows the rule.
+
+```jsonc .fallowrc.json
+{
+  "rules": {
+    "introduced-clone-group": "error"
+  }
+}
+```
+
+With `overrides`, fallow resolves the rule for the file of each copy, and the most severe result applies. So an override cannot exempt a clone group that has a copy outside the override. To keep generated code out of the duplication analysis, use `duplicates.ignore` or `ignorePatterns`. To keep one intended copy out of the report, suppress it with `// fallow-ignore-next-line code-duplication`.
+
+The rule does not change `duplicates.threshold`. The threshold reads the same clone groups, and it can fail the run also when the rule is `off`. `fallow explain introduced-clone-group` describes the rule. Fallow also accepts the plural key `introduced-clone-groups`.
+
 #### New-only duplication demotion
 
 Under `--gate new-only`, clone-group attribution has one exception. When no instance of an introduced clone group overlaps an added line in the diff of the run, audit demotes the group to inherited. This happens when a change removes duplication elsewhere and so gives a remaining clone group a new structural key. The group is new to the report, but the change wrote no duplicated line, so the group does not fail the gate.
@@ -328,7 +352,7 @@ An audit checks the `kind` of every baseline that it loads, and reports every mi
 | **fail** | 1 | Error-severity issues found | Fix the reported issues before merging. |
 | **error** | 2 | Runtime error (invalid ref, not a git repo, config error) | Check the error message. In JSON format, audit prints `{"error": true, "message": "...", "exit_code": 2}`. |
 
-Dead code issues use the severity from your [rules configuration](/configuration/rules) (error/warn/off). [Diff-risk rules](#diff-risk-rules) use their rule severity in the same way. Complexity findings above the configured thresholds use the [complexity rules](/configuration/rules#complexity-rules). They default to `error`. With `warn`, a complexity finding gives a `warn` verdict. The thresholds come from your `fallow health` config (defaults: cyclomatic 20, cognitive 15). Duplication is a warning unless you configure a `--threshold`. With the default `new-only` gate, the report can show inherited error-severity findings while the audit exits 0. A [worsened complexity finding](#worsened-complexity-findings) makes the verdict at least `warn`, or counts like an introduced finding with `--worsened error`. A [complexity finding in a test file](#test-file-complexity) makes the verdict at least `warn` and does not fail it. The audit ignores `--fail-on-issues` and keeps its own verdict.
+Dead code issues use the severity from your [rules configuration](/configuration/rules) (error/warn/off). [Diff-risk rules](#diff-risk-rules) use their rule severity in the same way. Complexity findings above the configured thresholds use the [complexity rules](/configuration/rules#complexity-rules). They default to `error`. With `warn`, a complexity finding gives a `warn` verdict. The thresholds come from your `fallow health` config (defaults: cyclomatic 20, cognitive 15). A clone group uses the severity of the [`introduced-clone-group`](#introduced-clone-group) rule. The default is `warn`. A duplication threshold (`--threshold` or `duplicates.threshold`) can also fail the audit. With the default `new-only` gate, the report can show inherited error-severity findings while the audit exits 0. A [worsened complexity finding](#worsened-complexity-findings) makes the verdict at least `warn`, or counts like an introduced finding with `--worsened error`. A [complexity finding in a test file](#test-file-complexity) makes the verdict at least `warn` and does not fail it. The audit ignores `--fail-on-issues` and keeps its own verdict.
 
 The [parse error gate](/cli/global-flags#parse-error-gate) (`--fail-on-parse-error` or `failOnParseError`) checks every file that the audit parsed, not only the changed files. The `verdict` does not include this gate. Read `gate_outcomes` for the exit reason.
 

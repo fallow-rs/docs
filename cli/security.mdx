@@ -234,6 +234,39 @@ Fallow does not report flows through trusted local sanitizers. The detector reco
 
 Mixed HTML or SQL templates with unsanitized dynamic fragments still report as candidates. SQL identifier quoting does not count as value parameterization.
 
+### Project functions with a shallow-safe body {#shallow-safe-callees}
+
+Some catalogue rows match a callee by its name only, for example `request(url)` for `ssrf` and `merge(a, b)` for `prototype-pollution`. A project function with the same name is then a candidate too. Fallow reads the body of the function, and a call of a shallow-safe function is not a candidate.
+
+A function body is shallow-safe when it does only these things:
+
+- It calls shallow builtins of the global `Object`, such as `Object.keys`, `Object.entries`, or `Object.assign` into a new object (`Object.assign({}, ...)`).
+- It writes a member only one level deep, on an object that the function creates and never reassigns. The function creates the object with an object literal, `Object.assign({}, ...)` or `Object.create(null)`.
+
+```ts
+// src/utils/merge.ts: shallow-safe
+export function merge<T extends object>(obj: T, subset: Partial<T>): T {
+  const copy = Object.assign({}, obj);
+  for (const k in subset) {
+    copy[k] = subset[k];
+  }
+  return copy;
+}
+```
+
+Fallow applies the check in these cases:
+
+- The function is in the same file as the call.
+- The file imports the function directly from another project file, with a named, aliased or default `import`.
+
+These calls stay candidates:
+
+- A call of a function that calls any other function, also itself (a recursive merge), or `fetch`.
+- A call of a function that writes to a parameter or writes two levels deep.
+- A call of a function from an external package.
+- A call through a re-export chain, a namespace import (`utils.merge()`) or `require()`.
+- A call through a parameter or a local binding with the same name as the import.
+
 ### Enabling categories
 
 To choose which catalogue categories run, set `security.categories` in the config:
