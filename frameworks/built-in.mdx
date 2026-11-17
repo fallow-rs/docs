@@ -364,7 +364,8 @@ A method call on a Durable Object stub credits the method of the Durable Object 
 The stub can come from one of these receivers:
 
 - the `env` import of `cloudflare:workers`;
-- `this.env` in a class that extends `DurableObject<Env>`, `WorkerEntrypoint<Env>` or `WorkflowEntrypoint<Env>` of `cloudflare:workers`.
+- `this.env` in a class that extends `DurableObject<Env>`, `WorkerEntrypoint<Env>` or `WorkflowEntrypoint<Env>` of `cloudflare:workers`;
+- the `env` parameter of a handler in an object of the type `ExportedHandler<Env>`. The type can come from `satisfies`, `as` or a variable annotation. Fallow gives the second parameter of a handler such as `fetch` or `queue` the type `Env`.
 
 ```ts
 import { env } from "cloudflare:workers";
@@ -377,7 +378,52 @@ export async function join(name: string): Promise<void> {
 
 An inline call, as in the example, and a stub in a local variable both give credit. In a monorepo, each Worker package uses the nearest `worker-configuration.d.ts` file.
 
-Known limit: a stub at the top level of a module, such as `const stub = env.ROOM.getByName("x")`, gives no credit. Create the stub in a function body.
+```ts
+export default {
+  async fetch(request, env): Promise<Response> {
+    // Credits Room.sayHello() through the ROOM binding of Env
+    return new Response(await env.ROOM.getByName("a").sayHello());
+  },
+} satisfies ExportedHandler<Env>;
+```
+
+Known limits:
+
+- A stub at the top level of a module, such as `const stub = env.ROOM.getByName("x")`, gives no credit. Create the stub in a function body.
+- Fallow matches the type name `ExportedHandler` and does not check for a local type with the same name.
+- A handler that names a separate function, as in `{ fetch }`, gets no `env` type.
+
+### Runtime handlers
+
+The Workers runtime calls the handler methods of a class by name, so no project code calls them. A class that extends a base class of `cloudflare:workers` gets credit for the handlers that the base class declares in `@cloudflare/workers-types`. The `unused-class-members` rule does not report these methods:
+
+| Base class | Credited methods |
+|:-----------|:-----------------|
+| `DurableObject` | `alarm`, `fetch`, `connect`, `webSocketMessage`, `webSocketClose`, `webSocketError` |
+| `WorkerEntrypoint` | `email`, `fetch`, `connect`, `queue`, `scheduled`, `tail`, `tailStream`, `test`, `trace` |
+| `WorkflowEntrypoint` | `run` |
+
+```ts
+import { DurableObject } from "cloudflare:workers";
+
+export class Room extends DurableObject<Env> {
+  // Credited: the runtime calls alarm()
+  async alarm(): Promise<void> {}
+
+  // Still reported when no code calls it
+  async unused(): Promise<void> {}
+}
+```
+
+The credit applies in these cases:
+
+- The base class comes from a named import or a namespace import, such as `cf.DurableObject`.
+- The class extends a chain of local base classes that ends at a base class of `cloudflare:workers`. A base class in the chain can be generic, and the module does not have to export it.
+- The class is a default export or a renamed export, such as `export { Room as ChatRoom }`.
+
+A base class with the same name from another module gives no credit. Other methods of the class stay reportable.
+
+Known limit: a `static` method with a handler name also gets credit, although the runtime calls only instance methods.
 
 ## Alchemy stacks
 
