@@ -525,7 +525,7 @@ A finding is not a proof of a defect. It shows a change that a reviewer must loo
 
 | Rule | Default | What it reports |
 |:-----|:--------|:----------------|
-| `weakened-tests` | `warn` | A change that makes the tests, a coverage threshold, or a rule severity weaker |
+| `weakened-tests` | `warn` | A change that makes the tests, a coverage threshold, or a rule severity weaker, or that removes paths from the analysis |
 | `added-suppression` | `warn` | A new lint, type-check, coverage, or Fallow suppression comment |
 | `test-only-branch` | `warn` | A new test-environment check in source code |
 | `diverged-clone-sibling` | `off` | An edit to one copy of duplicated code, while the other copies did not change |
@@ -549,7 +549,8 @@ The change makes the tests weaker. The `kind` field tells how:
 | `removed-tests` | A test file has fewer test cases, and the total over all changed test files also dropped |
 | `assertion-drop` | A test file has fewer `expect`, `assert`, or `should` calls, and no test case was removed |
 | `coverage-threshold` | A coverage or quality threshold is less strict |
-| `rule-severity` | A rule severity in the Fallow config file is less strict |
+| `rule-severity` | A rule severity in the Fallow config is less strict |
+| `ignore-pattern` | A new or broader `ignorePatterns` or `ignoreFindings` entry in the Fallow config, or a removed `!` exception |
 
 The test kinds read JavaScript-family test files only, such as `.test.ts` or `.spec.js` files. A test file in another language, such as a Rust integration test, can hold `it.skip` text in a string, so the rule does not read it.
 
@@ -562,22 +563,34 @@ These drops do not report either:
 
 `coverage-threshold` reads test-runner, coverage, and Fallow config files, such as `vitest.config.*`, `jest.config.*`, `.nycrc`, `.c8rc`, `package.json`, and `.fallowrc.json`. A lower `lines`, `branches`, `functions`, `statements`, `minScore`, or `minCoverage` value reports. A higher `maxCrap`, `maxCyclomatic`, or `maxCognitive` value reports too.
 
-`rule-severity` compares the `rules` and `overrides` of the Fallow config file at the project root (`.fallowrc.json`, `.fallowrc.jsonc`, `fallow.toml`, or `.fallow.toml`) before and after the change. These changes report:
+`rule-severity` compares the `rules` and `overrides` of the Fallow config before and after the change. Fallow finds the config file the same way as the loader: the first `.fallowrc.json`, `.fallowrc.jsonc`, `fallow.toml`, or `.fallow.toml` from the project root up to the git root. It follows each relative `extends` file, and reads the old version of each file from git. These changes report:
 
-- A lower severity, such as `error` to `warn` or `warn` to `off`.
+- A lower severity, such as `error` to `warn` or `warn` to `off`, in the config file or in a file that `extends` names.
 - A removed rule whose default severity is lower than the old value.
+- A removed `extends` entry that set a rule higher than the value that is left.
 - A new `overrides` entry that sets a rule lower for some paths.
 - A new or deleted config file. Fallow compares it with the default severities.
 
-A `rule-severity` finding uses the stricter of the old and the new `weakened-tests` severity. Thus a change that sets `weakened-tests` to `off` still gets this finding. A suppression comment in the config file does not hide it, and the finding has no suppression action. When the config file uses `extends`, only a rule that the file sets before and after the change compares. Fallow does not read the files that `extends` names.
+A rule that moves from one config file to another with the same severity does not report. Fallow cannot read an `npm:` package or an `https://` URL that `extends` names at the old version, nor a file that git does not track. A value that such a source can set does not compare, so Fallow reports only a change that it can prove.
+
+`ignore-pattern` compares the `ignorePatterns` and `ignoreFindings` lists of the same config chain. These changes report:
+
+- A new entry, such as `"src/checkout.test.ts"`, unless an old entry or a built-in default ignore pattern already matches its paths.
+- A broader entry, such as `src/*` to `src/**`.
+- A removed `!` exception whose paths an entry or a default still ignores.
+- An `ignoreFindings` list that changes to only `!` entries, because it then hides every other path.
+
+A removed or narrower entry does not report, because the analysis then reads more files.
+
+The finding goes on the changed config file that sets the new value, on the line that the change added. A config file in a parent directory of the project root gives a path that starts with `../`. A `rule-severity` or `ignore-pattern` finding uses the stricter of the old and the new `weakened-tests` severity. Thus a change that sets `weakened-tests` to `off` still gets this finding. A suppression comment in the config file does not hide it, and the finding has no suppression action.
 
 | Severity | Default |
 |:---------|:--------|
 | Warn | Yes |
 
-**Example:** a change turns `it('charges tax', ...)` into `it.skip('charges tax', ...)`, lowers `coverage.thresholds.lines` from 90 to 70, or sets `"unused-exports"` from `error` to `off`.
+**Example:** a change turns `it('charges tax', ...)` into `it.skip('charges tax', ...)`, lowers `coverage.thresholds.lines` from 90 to 70, sets `"unused-exports"` from `error` to `off`, or adds `"src/checkout.test.ts"` to `ignorePatterns`.
 
-**When to act:** Always look at the finding before you merge. If the weaker test or threshold is intended, suppress the finding with `// fallow-ignore-next-line weakened-tests`. Use `// fallow-ignore-file weakened-tests` for a finding about the whole file. If a lower rule severity is intended, merge the change after a review. The next change compares with the new config, so the finding does not come back.
+**When to act:** Always look at the finding before you merge. If the weaker test or threshold is intended, suppress the finding with `// fallow-ignore-next-line weakened-tests`. Use `// fallow-ignore-file weakened-tests` for a finding about the whole file. If a lower rule severity or a new ignore entry is intended, merge the change after a review. The next change compares with the new config, so the finding does not come back.
 
 ### Added suppressions {#added-suppression}
 
@@ -832,7 +845,7 @@ The audit `schema_version` is 14. Version 14 follows the embedded health contrac
 | `complexity.css_analytics` | object | Descriptive CSS analytics from the CSS analysis: specificity, token usage, context for duplicate declarations, and cleanup candidates. Use it as evidence for `styling_findings`. Do not gate on it alone. |
 | `attribution.diff_risk_introduced` | integer | The number of entries in `diff_risk.findings`. It counts under both gates (`new-only` and `all`), unlike the other `*_introduced` fields. Always present in audit-family JSON. `0` when the `diff_risk` section is absent. |
 | `diff_risk.findings[].rule` | string | `weakened-tests`, `added-suppression`, `test-only-branch`, `diverged-clone-sibling`, or `added-dependency`. See [Diff-risk rules](#diff-risk-rules). |
-| `diff_risk.findings[].kind` | string | Only on `weakened-tests`: `skip-only`, `removed-tests`, `assertion-drop`, `coverage-threshold`, or `rule-severity`. |
+| `diff_risk.findings[].kind` | string | Only on `weakened-tests`: `skip-only`, `removed-tests`, `assertion-drop`, `coverage-threshold`, `rule-severity`, or `ignore-pattern`. |
 | `diff_risk.findings[].path` | string | Root-relative path of the changed file, with forward slashes. |
 | `diff_risk.findings[].line` | integer | 1-based head line. Absent when the finding is about the whole file, for example removed tests. |
 | `diff_risk.findings[].message` | string | One sentence that states the fact. |
@@ -1023,10 +1036,10 @@ The decision surface is the ranked set of `coupling-boundary`, `public-api-contr
 |:-------|:-------|:-------------------|
 | `test-weakened` | A [`weakened-tests`](#weakened-tests) finding: a skip or focus marker, removed test cases, or fewer assertions | `it.skip added`, `test cases: 2 -> 1`, `assertions: 3 -> 1` |
 | `threshold-lowered` | A `weakened-tests` finding of kind `coverage-threshold` or `rule-severity` | `lines: 90 -> 70`, `weakened-tests: error -> off` |
-| `suppression-added` | An [`added-suppression`](#diff-risk-rules) finding | `eslint-disable added` |
+| `suppression-added` | An [`added-suppression`](#diff-risk-rules) finding, or a `weakened-tests` finding of kind `ignore-pattern` | `eslint-disable added`, `ignorePatterns: + src/a.test.ts` |
 | `security-check-removed` | A security scan step that the change removes from a CI file, or a security sink that the change replaces with a sink of the same class in the same source file | `new Function sink replaced by vm.runInNewContext` |
 
-The first three kinds come from the `diff_risk` findings of the same run, so the brief and the `diff_risk` section agree. They follow the rule severities and the suppressions: when you set `weakened-tests` or `added-suppression` to `off`, or suppress a finding with a `fallow-ignore` comment, the brief drops the signal. A `rule-severity` signal is the exception: it uses the stricter of the old and the new `weakened-tests` severity. They also follow the diff-risk scope. A test that moves to another changed test file is not a removed test. A threshold signal comes only from a test-runner, coverage, or Fallow config file. A suppression signal comes only from a source or style file. Only files under the analysis root (`--root`) give these signals. The `security-check-removed` scan stays local to the brief.
+The first three kinds come from the `diff_risk` findings of the same run, so the brief and the `diff_risk` section agree. They follow the rule severities and the suppressions: when you set `weakened-tests` or `added-suppression` to `off`, or suppress a finding with a `fallow-ignore` comment, the brief drops the signal. A `rule-severity` or `ignore-pattern` signal is the exception: it uses the stricter of the old and the new `weakened-tests` severity. They also follow the diff-risk scope. A test that moves to another changed test file is not a removed test. A threshold signal comes only from a test-runner, coverage, or Fallow config file. A suppression signal comes from a source or style file, or from a new ignore entry in the Fallow config. Only files under the analysis root (`--root`) give these signals. The `security-check-removed` scan stays local to the brief.
 
 A sink substitution matters because a rule that flags one sink does not flag the other. A rule that flags `new Function` does not flag `vm.runInNewContext`, so the swap silences the rule and keeps the risk. The sink classes are:
 
