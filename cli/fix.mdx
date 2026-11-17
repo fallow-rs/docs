@@ -157,6 +157,23 @@ Each withheld removal is a `remove_export` entry with `applied: false`, `skipped
 
 Known limit: a file that `ignorePatterns` excludes is not in the module graph. A re-export in such a file cannot hold a removal back. When an ignored file re-exports project code, run the type check after `fallow fix`.
 
+### Declarations that export more than one name
+
+One `export` keyword can export more than one name, for example `export const { a, b } = source;`, `export const [a, b] = source;`, or `export const a = 1, b = 2;`. `fallow fix` removes that keyword only when every name of the declaration is unused. This also applies when the pattern spans several lines, when the declaration does not start its line, and in the script blocks of Vue and Astro files.
+
+```ts
+// Before and after: b is unused, a is in use, so the export stays
+export const { a, b } = source;
+```
+
+When a name of the declaration is still in use, each unused name is a `remove_export` entry with `applied: false`, `skipped: true`, and `skip_reason: "shared_declaration_in_use"`. The top-level counter `skipped_shared_declarations: number` counts these entries. It is always present and separate from `skipped`. The human output and the CI step summary also show these entries. This skip does not change the exit code.
+
+```text
+Kept unused export(s) in src/store.ts: the same `export` keyword also exports a name that is in use.
+```
+
+`fallow fix` does not split the declaration. A split evaluates the initializer twice, and it changes the value of a rest element. To remove the unused name, move it to its own declaration by hand, then run `fallow fix` again.
+
 ## Incomplete source evidence
 
 Fallow still reports findings with nonempty `reachability_caveats`, but `fallow fix` does not remove them. A caveat can come from a parse error, an unreadable file, or a skipped source file, because each of these can hide a reference. `workspace_diagnostics` shows where the incomplete evidence comes from. Type-aware approval of a class method does not override this guard.
