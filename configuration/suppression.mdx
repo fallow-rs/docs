@@ -2,7 +2,7 @@
 title: "Suppress fallow findings with inline comments"
 sidebarTitle: "Inline suppression"
 description: "Suppress a fallow false positive with a fallow-ignore comment, a JSDoc tag such as @public or @internal, or @expected-unused. The rule stays on for other code."
-keywords: ["suppress", "ignore", "inline comments", "fallow-ignore", "false positives", "@public", "@internal", "@beta", "@alpha", "@expected-unused", "JSDoc", "library exports", "stale suppressions", "fallow-ignore comment"]
+keywords: ["suppress", "ignore", "inline comments", "fallow-ignore", "false positives", "@public", "@internal", "@beta", "@alpha", "@expected-unused", "JSDoc", "library exports", "stale suppressions", "fallow-ignore comment", "fallow-ignore-start", "fallow-ignore-end", "range suppression"]
 icon: "comment-slash"
 ---
 
@@ -134,6 +134,46 @@ A file-level suppression removes all functions in the file from the complexity f
 // fallow-ignore-file complexity
 ```
 
+### Suppressing one clone with a range
+
+A `fallow-ignore-next-line code-duplication` marker removes each clone instance that touches the next line. A clone of the code above often ends on that line, so the marker can also hide a neighbor clone. To suppress only one clone, put a range around the duplicated block:
+
+```ts
+// fallow-ignore-start code-duplication -- one field block per locale
+export const en = { title: "", body: "", footer: "" };
+// fallow-ignore-end code-duplication
+```
+
+`fallow dupes` applies the range in this way:
+
+- A clone that is fully inside the range is not reported.
+- A clone that reaches into the range stops at the range border. A cut part below `minTokens` or `minLines` is not reported.
+
+Wrap the whole block or function, not the line range that `fallow dupes` reports. The reported ranges of neighbor clones share border lines.
+
+Follow these rules for range markers:
+
+- Ranges support only `code-duplication`. Both markers must name it.
+- Put each marker on its own line. A marker after code on the same line has no effect.
+- Put the reason on the start marker.
+- You can use the `//`, `/* */`, JSDoc, and `<!-- -->` comment forms.
+- A marker inside a string or a template literal does not count.
+
+A range marker with a problem has no effect. `fallow dupes` and `fallow audit` report it in the human output and in the `range_marker_problems` JSON array. `fallow dead-code` does not report it, and a range marker is never a stale suppression. Each entry has `path`, `line`, and `problem`. An `unsupported_kind` entry also has `token`.
+
+| `problem` | Cause |
+|:----------|:------|
+| `unclosed_start` | A `fallow-ignore-start` has no `fallow-ignore-end` after it. |
+| `unmatched_end` | A `fallow-ignore-end` has no open `fallow-ignore-start` before it. |
+| `nested_start` | A `fallow-ignore-start` is inside an open range. The outer range applies. |
+| `missing_kind` | The marker has no issue kind. |
+| `unsupported_kind` | The marker names a kind other than `code-duplication`. In a mixed list such as `code-duplication, unused-export`, the `code-duplication` part still applies. |
+| `not_own_line` | The marker shares its line with code. |
+
+<Warning>
+A range removes an instance from a clone group or cuts a neighbor clone. That group then gets a new fingerprint and a new `ignoredClones` key, so a baseline gate can show it as new. Save the duplication baseline again after you add a range.
+</Warning>
+
 ## Reference
 
 | Comment | Scope |
@@ -143,6 +183,7 @@ A file-level suppression removes all functions in the file from the complexity f
 | `// fallow-ignore-next-line <type>, <type>` | Multiple issue types on the next line (separated by commas or spaces) |
 | `// fallow-ignore-file` | All issues in the file |
 | `// fallow-ignore-file <type>` | One issue type in the file |
+| `// fallow-ignore-start code-duplication` ... `// fallow-ignore-end code-duplication` | Clones inside the range. See [Suppressing one clone with a range](#suppressing-one-clone-with-a-range). |
 
 ### Multi-kind markers and typos
 
@@ -182,6 +223,10 @@ By default, the reason is optional. Fallow records it in the suppression hygiene
 
 With the rule at `warn` (or `error` to fail CI), fallow reports each `fallow-ignore-*` comment or `@expected-unused` tag without a `-- <reason>` as a `missing-suppression-reason` finding. You can then find the suppressions that have no reason and add one. For the rule reference, see [Rules & Severity](/configuration/rules#available-rule-names).
 
+In JSON output, a suppression without a reason is a `stale_suppressions` entry with `missing_reason: true`. For a range, fallow reads the reason of the start marker, and the entry `origin` has `is_range: true`.
+
+The GitHub Action annotates such a comment with the title "Suppression without a reason" and tells you to add the reason after `--`. In the job summary, the row says "missing reason". Do not remove the comment: the suppression is still needed.
+
 ## Issue type tokens
 
 Use these tokens in suppression comments. The **Scope** column shows where each token works: line level (`// fallow-ignore-next-line`), file level (`// fallow-ignore-file`), or both.
@@ -200,7 +245,7 @@ Use these tokens in suppression comments. The **Scope** column shows where each 
 | `unresolved-import` | Unresolved import | both |
 | `duplicate-export` | Duplicate export. A line-level marker has no effect, and fallow reports it as a stale suppression | file |
 | `duplicate-export-alias` | One binding exported under two or more names. A line-level marker above any of the names hides the finding | both |
-| `code-duplication` | Code duplication | both |
+| `code-duplication` | Code duplication. Also the only kind that a `fallow-ignore-start` range takes | both |
 | `circular-dependency` | Circular dependency | both |
 | `re-export-cycle` | Re-export cycle. Put the marker on any file in the cycle | file |
 | `package-cycle` | One import or re-export statement between workspace packages. Each statement counts on its own, also when two statements in one file import the same module. The package cycle goes away when every import on one hop is suppressed | both |
