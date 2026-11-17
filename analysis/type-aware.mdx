@@ -100,7 +100,7 @@ The result depends on `typeAware.require` and on the cause:
 | No companion found | Syntactic findings. The kinds that the pass can disprove are reported at `warn` | Exit code 2 |
 | The companion failed, timed out, or gave a partial result | Syntactic findings at their configured severity | Exit code 2 |
 
-"No companion found" means that fallow found no `fallow-type-aware` file. There is no companion next to the active `fallow` executable, and no file at the `FALLOW_TYPE_AWARE_BIN` path.
+"No companion found" means that fallow found no `fallow-type-aware` file. There is no file at the `FALLOW_TYPE_AWARE_BIN` path, no companion next to the active `fallow` executable, and no companion in the `fallow type-aware setup` directory.
 
 The kinds that the pass can disprove are `unused-export`, `unused-type`, `unused-class-member` and `private-type-leak`. Without a companion, the run lowers each `error` rule of these kinds to `warn`, in the base rules and in `overrides`. A finding that the pass could remove then does not fail the run.
 
@@ -126,18 +126,64 @@ The `fallow` launcher finds the companion next to the `fallow` package, or in th
 
 ### Homebrew, Cargo, and binary installs
 
-A `fallow` binary from Homebrew, `cargo install`, or a release archive has no npm launcher, so it does not find a global companion. On macOS and Linux, install the companion with npm, then set `FALLOW_TYPE_AWARE_BIN` to it:
+A `fallow` binary from Homebrew, `cargo install`, or a release archive has no npm launcher, so it does not find a global companion. On macOS and Linux, run `fallow type-aware setup` once:
 
 ```bash
-npm install --global fallow-type-aware@<fallow version>
-export FALLOW_TYPE_AWARE_BIN="$(npm prefix --global)/bin/fallow-type-aware"
+fallow type-aware setup
 ```
 
-Set the variable in the environment that starts fallow. For a terminal, add it to your shell profile. For an editor that starts `fallow-lsp`, set it in the environment of the editor. Update the companion when you update `fallow`, because the versions must match.
+You do not need this step when you install `fallow` from npm. The npm launcher finds the companion package itself.
 
-On Windows, the npm launcher starts the companion through Node. Install `fallow` and the companion from npm: `npm install --global fallow@<version> fallow-type-aware@<version>`.
+The command does these steps:
 
-`fallow type-aware status` checks discovery, package version, protocol version, and backend version. It does not analyze the project.
+1. It runs `node` from `PATH` to read the platform and the architecture. The companion runs on Node.js 20 or later. An x64 Node on an arm64 Mac gets the x64 bundle.
+2. It shows the bundle, the source URL, and the target directory, and asks for approval. Pass `--yes` when no terminal is available.
+3. It downloads the bundle of its own fallow version from the GitHub release of fallow. The download honors `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`, and `FALLOW_CA_BUNDLE`.
+4. It verifies the signature of the bundle with the release key in the binary, before it unpacks the bundle.
+5. It installs the companion into a user directory that has the fallow version in its name.
+
+| Platform | Directory |
+|:---------|:----------|
+| macOS | `~/Library/Application Support/fallow/fallow-type-aware/<version>/` |
+| Linux | `$XDG_DATA_HOME/fallow/fallow-type-aware/<version>/`, else `~/.local/share/fallow/fallow-type-aware/<version>/` |
+
+The setup bundles are available from the first fallow release that contains the setup command. An older release has no bundle to download.
+
+For a machine with no access to GitHub, copy the bundle and its `.sig` file to the machine. Then install from the file:
+
+```bash
+fallow type-aware setup --from fallow-type-aware-<platform>-<arch>.tar.gz
+```
+
+The signature file must be next to the bundle, as `<file>.sig`.
+
+The companion still needs `node` on `PATH` each time it starts. An editor can start `fallow-lsp` with a shorter `PATH` than your shell. Then the companion reports that Node.js 20 or later must be on `PATH`.
+
+After a fallow upgrade, the installed companion stays in use while it uses the same wire protocol as the new fallow version. When the protocol changes, `fallow type-aware status` tells you to run `fallow type-aware setup` again. A companion of an older protocol stops with `unsupported protocol_version`. Fallow then adds this hint: run `fallow type-aware setup`, or install the companion of the current fallow version from npm.
+
+To remove the companions of other fallow versions, run:
+
+```bash
+fallow type-aware cleanup
+```
+
+The command keeps the companion that fallow uses now. It also removes the temporary directories that an interrupted setup leaves. It asks for approval, or needs `--yes`.
+
+On Windows, `fallow type-aware setup` has no bundle. The npm launcher starts the companion through Node. Install `fallow` and the companion from npm: `npm install --global fallow@<version> fallow-type-aware@<version>`.
+
+On every platform, you can also set `FALLOW_TYPE_AWARE_BIN` to a trusted companion executable. Set it in the environment that starts fallow, for example your shell profile or the environment of your editor.
+
+### How fallow finds the companion
+
+Fallow does not search `node_modules` or `PATH` for the companion. It checks these locations in this order:
+
+1. The path in `FALLOW_TYPE_AWARE_BIN`.
+2. A companion next to the active `fallow` executable.
+3. The `fallow type-aware setup` directory. Fallow prefers the install of its own version. Otherwise it uses the newest install with the same wire protocol.
+
+The npm launcher, the Node bindings, and the VS Code extension find the companion package themselves, and pass it through `FALLOW_TYPE_AWARE_BIN`.
+
+`fallow type-aware status` checks discovery, protocol version, and backend version, and reports where fallow found the companion. It does not analyze the project. See [fallow type-aware](/cli/type-aware).
 
 ### Experimental tsrs backend
 

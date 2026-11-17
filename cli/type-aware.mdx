@@ -1,14 +1,18 @@
 ---
-title: "fallow type-aware: check the TypeScript companion"
+title: "fallow type-aware: check and install the TypeScript companion"
 sidebarTitle: "fallow type-aware"
-description: "Check that the optional fallow-type-aware companion is installed and compatible before you use --type-aware. The status command does not analyze the project."
-keywords: ["fallow type-aware", "type-aware status", "TypeScript companion", "fallow-type-aware", "typescript-go", "tsrs", "CLI"]
+description: "Check that the optional fallow-type-aware companion is installed and compatible, and install it for a fallow binary that does not come from npm."
+keywords: ["fallow type-aware", "type-aware status", "TypeScript companion", "fallow-type-aware", "typescript-go", "tsrs", "type-aware setup", "type-aware cleanup", "CLI"]
 icon: "terminal"
 ---
 
-`fallow type-aware` inspects the optional TypeScript semantic companion, `fallow-type-aware`. The `--type-aware` flag of `dead-code`, `fix`, `health`, and other commands uses this companion. For what type-aware mode does, see [Type-aware TypeScript analysis](/analysis/type-aware).
+`fallow type-aware` inspects and installs the optional TypeScript semantic companion, `fallow-type-aware`. The `--type-aware` flag of `dead-code`, `fix`, `health`, and other commands uses this companion. For what type-aware mode does, see [Type-aware TypeScript analysis](/analysis/type-aware).
 
-The command has one subcommand, `status`.
+The command has three subcommands:
+
+- `status` reports if the companion is available.
+- `setup` installs the companion for a fallow binary that does not come from npm.
+- `cleanup` removes the companions of other fallow versions that `setup` installed.
 
 ## `type-aware status`
 
@@ -22,7 +26,7 @@ fallow type-aware status --format json --quiet
 The human output is one line:
 
 ```text
-[OK] Type-aware companion: available (3.43.2, protocol 7, TypeScript 7.0.2)
+[OK] Type-aware companion: available (3.43.2, protocol 8, TypeScript 7.0.2)
 ```
 
 When the companion is not available, the output says so and gives an `Action:` line with the fix, for example the `npm install` command for the matching companion version.
@@ -38,7 +42,7 @@ The JSON output has `kind: "type-aware-status"`:
   "discovery_source": "npm-wrapper",
   "companion_path": "fallow-type-aware.mjs",
   "package_version": "3.43.2",
-  "protocol_version": 7,
+  "protocol_version": 8,
   "backend_family": "typescript-go",
   "backend_version": "7.0.2",
   "remediation": null
@@ -47,8 +51,8 @@ The JSON output has `kind: "type-aware-status"`:
 
 | Field | Meaning |
 |:------|:--------|
-| `available` | `true` only when fallow found the companion, its package and protocol versions match this fallow build, and its backend version is in the supported range. |
-| `discovery_source` | How fallow found the companion: `installed-sibling`, `environment-override` (you set `FALLOW_TYPE_AWARE_BIN`), or a launcher marker such as `npm-wrapper` or `github-action`. `null` when discovery failed. |
+| `available` | `true` only when fallow found the companion, its protocol version matches this fallow build, and its backend version is in the supported range. A companion of another fallow version is available when it uses the same protocol. |
+| `discovery_source` | How fallow found the companion: `environment-override` (you set `FALLOW_TYPE_AWARE_BIN`), `installed-sibling` (next to the active fallow executable), `setup-directory` (installed by `fallow type-aware setup`), or a launcher marker such as `npm-wrapper` or `github-action`. `null` when discovery failed. |
 | `companion_path` | The companion path, relative to the project root when it is inside the root. Otherwise only the file name. |
 | `package_version` | The `fallow-type-aware` package version that the companion reported. |
 | `protocol_version` | The protocol version of the companion. When the companion did not answer, the version that this fallow build uses. |
@@ -59,9 +63,45 @@ Run the command in the same environment as the surface that you check, for examp
 
 `type-aware status` exits 0 also when the companion is not available. Read `available` to decide. It accepts only `human` and `json` output. Other formats exit with code 2.
 
+When the companion uses an older protocol, the `remediation` names `fallow type-aware setup` and the npm install of the companion for this fallow version.
+
+## `type-aware setup`
+
+Installs the companion for a `fallow` binary from Homebrew, `cargo install`, or a release archive, on macOS and Linux. You do not need it when you install `fallow` from npm.
+
+```bash
+fallow type-aware setup
+fallow type-aware setup --yes
+fallow type-aware setup --from fallow-type-aware-<platform>-<arch>.tar.gz
+```
+
+The command downloads the bundle of its own fallow version from the GitHub release. It verifies the signature with the release key in the binary, and installs the companion into a versioned user directory. Node.js 20 or later must be on `PATH`, because the command reads the platform from `node` and the companion runs on Node. The bundles are available from the first fallow release that contains the setup command.
+
+| Flag | Effect |
+|:-----|:-------|
+| `--yes` | Install without the approval prompt. Required when no terminal is available. |
+| `--from <file>` | Install a bundle file that you copied to the machine, in place of the download. The signature must be next to it as `<file>.sig`. |
+
+On success, the command prints the install directory. When the installed companion is not usable, the command fails and names the reason. Only one setup can run at a time.
+
+Windows has no setup bundle. Install `fallow` and the companion from npm. For the full procedure, see [Homebrew, Cargo, and binary installs](/analysis/type-aware#homebrew-cargo-and-binary-installs).
+
+## `type-aware cleanup`
+
+Removes the companions of other fallow versions from the setup directory. It keeps the companion that fallow uses now, and removes the temporary directories that an interrupted setup leaves.
+
+```bash
+fallow type-aware cleanup
+fallow type-aware cleanup --yes
+```
+
+| Flag | Effect |
+|:-----|:-------|
+| `--yes` | Remove without the approval prompt. Required when no terminal is available. |
+
 ## Options
 
-`fallow type-aware status` has no flags of its own. It accepts the [global flags](/cli/global-flags), for example `--root`, `--format`, and `--quiet`.
+`fallow type-aware status` has no flags of its own. All subcommands accept the [global flags](/cli/global-flags), for example `--root`, `--format`, and `--quiet`.
 
 ## See also
 
