@@ -132,7 +132,7 @@ Fallow excludes env values that are public by convention:
 
 The output counts dynamic `import()` edges that the graph cannot follow as unresolved edge files. An empty finding list with a non-zero unresolved count does not mean that the code is clean.
 
-The rule needs at least one `"use client"` file as a starting point. Some projects mark no client code with this directive, for example a React Router Framework Mode app or a Vite SPA. In such a project the rule checks nothing. Fallow then adds a `client-server-leak-no-client-roots` entry to `workspace_diagnostics`, and the human output prints a blind-spot line.
+The rule needs at least one `"use client"` file as a starting point. Some projects mark no client code with this directive, for example a Vite SPA. A React Router Framework Mode app gets its starting points from the React Router plugin (see below). In such a project the rule checks nothing. Fallow then adds a `client-server-leak-no-client-roots` entry to `workspace_diagnostics`, and the human output prints a blind-spot line.
 
 A zero leak count in that run does not mean that no secret reaches client code. `fallow security` always runs the rule, so the entry appears in each such project. Other commands add the entry only when the config sets the rule to `warn` or `error`.
 
@@ -145,6 +145,21 @@ Fallow checks the same client cone (the modules that `"use client"` files reach)
 The sink set is narrow on purpose, to avoid false positives. Fallow excludes a module that comes in only through `next/dynamic(() => import('./x'), { ssr: false })`, the sanctioned client-only escape hatch. An import that does not run its target is not followed either: `require.resolve('./x')` gives only a path, and a webpack asset loader request (`raw-loader!./x.js`) gives the text, the bytes or a URL of the file. The human output gives this category its own label, and SARIF uses the rule id `security/server-only-import`.
 
 The secret-leak check and the server-only check are independent. A client cone that reads a secret and also reaches server-only code produces one finding for each check.
+
+### React Router Framework Mode
+
+React Router code has no `"use client"` directive. When the React Router plugin is active, fallow takes the starting points of the rule from the React Router file conventions:
+
+- **Route modules are client roots.** A route module is a file that `app/routes.ts` names, `app/root.tsx`, or a route file of the route directory. A helper file next to a `route.tsx` file is not a root. It is client code only when a route imports it. Test files are not roots.
+- **Only client code counts.** React Router removes `loader`, `action`, `middleware` and `headers` from the client build. Fallow does the same. An import, a re-export or a `process.env.X` read that only these exports use is not followed. This is also true when another module imports the route file.
+- **`.client` modules are client roots.** A `*.client.*` file or a file under a `.client/` directory runs only in the browser.
+- **`.server` modules are sinks.** A client root that reaches a `*.server.*` file or a file under a `.server/` directory gets a `server-only-import` finding. React Router fails the build for such an import. Fallow shows it earlier, in the editor and in `--gate new`, with the import trace.
+
+The `.client` and `.server` rules apply only in the packages where React Router is active.
+
+Example: `app/routes/home.tsx` renders a component that imports `app/lib/billing.ts`, and `billing.ts` reads `process.env.STRIPE_SECRET_KEY`. Fallow reports `home.tsx` with the trace `home.tsx -> billing.ts`. If only the `loader` of `home.tsx` uses `billing.ts`, fallow reports nothing.
+
+Limit: an env read in another form, such as `const { SECRET } = process.env` in a `loader`, counts for the whole route module. To silence such a finding after you check it, add `// fallow-ignore-file security-client-server-leak` at the top of the route file.
 
 ## Rule: tainted-sink (catalogue)
 
