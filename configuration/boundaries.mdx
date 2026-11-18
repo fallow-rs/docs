@@ -83,7 +83,7 @@ When no preset matches your architecture, define zones yourself. Each zone has t
 | `patterns` | `string[]` | Glob patterns relative to the project root, or relative to `root` when set. A single `*` matches inside one directory, so use `**` for nested files. See [Path globs](/configuration/overview#path-globs) |
 | `autoDiscover` | `string[]` | Directories where each immediate child directory becomes a separate zone named `parent/child` |
 | `root` | `string?` | Optional subtree. Fallow resolves `patterns` and `autoDiscover` paths relative to this root |
-| `publicApi` | `boolean` | Marks the files of the zone as the public entry files of a module. See [Public entry files](#public-entry-files) (optional, default `false`) |
+| `publicApi` | `string[]` | Globs of the public entry files of the zone. Other zones may import only these files. See [Public entry files](#public-entry-files) (optional) |
 
 <CodeGroup>
 ```jsonc .fallowrc.json
@@ -237,7 +237,7 @@ allow = []
 - **No rule entry** means the zone is unrestricted. It can import from any zone.
 - **Empty `allow` list** means the zone is isolated. It cannot import from other zones.
 - Only zones with an explicit rule entry have restrictions.
-- **Re-export chains**: a named or default import through a barrel file is judged against the zone of the module that declares the symbol. The finding names the barrel in `via_path`. The chain stops at a file in a `publicApi` zone, see [Public entry files](#public-entry-files). Namespace and side-effect imports are judged by the direct target. See [re-export chains](/analysis/boundaries#re-export-chains).
+- **Re-export chains**: a named or default import through a barrel file is judged against the zone of the module that declares the symbol. The finding names the barrel in `via_path`. The chain stops at a public entry file, see [Public entry files](#public-entry-files). Namespace and side-effect imports are judged by the direct target. See [re-export chains](/analysis/boundaries#re-export-chains).
 - **Every analyzed file**: rules also apply to a file that no entry point reaches.
 
 <Tip>
@@ -246,19 +246,19 @@ Start with rules for your lowest-level zones (the zones that should import from 
 
 ## Public entry files
 
-A module can expose one public entry file, and other modules then import only that file. Mark the zone of the entry files with `publicApi: true`:
+A module can expose public entry files, and other modules then import only those files. List the entry files of a zone in `publicApi`:
 
 <CodeGroup>
 ```jsonc .fallowrc.json
 {
   "boundaries": {
     "zones": [
-      { "name": "billing-public", "patterns": ["src/modules/billing/public.ts"], "publicApi": true },
-      { "name": "billing", "patterns": ["src/modules/billing/**"] },
+      { "name": "billing", "patterns": ["src/modules/billing/**"], "publicApi": ["src/modules/billing/index.ts"] },
+      { "name": "payments", "patterns": ["src/modules/payments/**"], "publicApi": ["src/modules/payments/index.ts"] },
       { "name": "orders", "patterns": ["src/modules/orders/**"] }
     ],
     "rules": [
-      { "from": "orders", "allow": ["billing-public"] }
+      { "from": "orders", "allow": ["billing"] }
     ]
   }
 }
@@ -266,13 +266,14 @@ A module can expose one public entry file, and other modules then import only th
 
 ```toml fallow.toml
 [[boundaries.zones]]
-name = "billing-public"
-patterns = ["src/modules/billing/public.ts"]
-publicApi = true
-
-[[boundaries.zones]]
 name = "billing"
 patterns = ["src/modules/billing/**"]
+publicApi = ["src/modules/billing/index.ts"]
+
+[[boundaries.zones]]
+name = "payments"
+patterns = ["src/modules/payments/**"]
+publicApi = ["src/modules/payments/index.ts"]
 
 [[boundaries.zones]]
 name = "orders"
@@ -280,25 +281,46 @@ patterns = ["src/modules/orders/**"]
 
 [[boundaries.rules]]
 from = "orders"
-allow = ["billing-public"]
+allow = ["billing"]
 ```
 </CodeGroup>
 
-`src/modules/billing/public.ts` re-exports `createInvoice` from `src/modules/billing/invoice.ts`. Without `publicApi`, fallow judges an import of `createInvoice` from `orders` as `orders → billing`, because `invoice.ts` declares the symbol. With `publicApi`, fallow stops the re-export chain at `public.ts` and judges the import as `orders → billing-public`. The rule allows that import.
+With this config:
 
-**What `publicApi` does not allow:**
+- `orders` may import `src/modules/billing/index.ts`. The rule allows the zone, and the file is a public entry file.
+- A direct import of `src/modules/billing/invoice.ts` from `orders` is a violation with `reason: "internal_file"`. The `public_api_paths` field names the entry files to import instead.
+- An import of any `payments` file from `orders` is a violation with `reason: "disallowed_zone"`, because no rule allows the zone. Fallow reports one finding for that import.
+- `index.ts` re-exports `createInvoice` from `invoice.ts`. Fallow follows the re-export chain only to `index.ts`, and judges the import by `index.ts`.
 
-- A direct import of `src/modules/billing/invoice.ts` from `orders` is still a violation.
-- An import through a barrel outside a `publicApi` zone is still judged by the module that declares the symbol.
-- When `shared/index.ts` re-exports from `public.ts`, the chain also stops at `public.ts`. The finding then names `public.ts` in `to_path` and `shared/index.ts` in `via_path`.
+The check applies to each file of another zone, also to a zone without a rule. Imports inside one zone are always allowed.
+
+### Public entry files with autoDiscover
+
+On an `autoDiscover` zone, each glob is relative to each discovered folder. Each module then gets its own entry file:
+
+```jsonc .fallowrc.json
+{
+  "boundaries": {
+    "zones": [
+      { "name": "modules", "autoDiscover": ["src/modules"], "publicApi": ["index.ts"] }
+    ],
+    "rules": [
+      { "from": "modules/orders", "allow": ["modules/billing"] }
+    ]
+  }
+}
+```
+
+Here `src/modules/billing/index.ts` is the entry file of `modules/billing`, and `src/modules/payments/index.ts` is the entry file of `modules/payments`. The rule allows `modules/billing` and not `modules/payments`.
 
 **Notes:**
 
-- Put the `publicApi` zone before the zone of its module. A file gets the first zone that matches it. When the module zone comes first, the `publicApi` zone matches 0 files, and fallow warns about it.
-- A `publicApi` zone without a rule can re-export from any zone. To limit what an entry file may re-export, add a rule for the `publicApi` zone, for example `{ "from": "billing-public", "allow": ["billing"] }`. Fallow then reports a re-export from another module on the entry file.
-- The entry file has its own zone, so `billing → billing-public` is a cross-zone import. When `billing` has a rule, add `billing-public` to its `allow` list. When `billing-public` has a rule, add `billing` to its `allow` list, because the entry file re-exports from `billing`.
+- On a zone with `patterns`, the globs use the same base as `patterns`: the project root, or `root` when the zone sets it.
+- A file is a public entry file only when it is in the zone and matches a glob. When no file of a zone matches its globs, fallow warns, because each import into the zone from another zone is then a violation.
+- A zone can have more than one glob, for example `["index.ts", "*.routes.ts"]` for lazy-loaded routes.
+- When a public entry file re-exports from another zone, fallow checks that re-export on the entry file.
+- When the `autoDiscover` zone also has `patterns`, the files that only those patterns match get no public entry files.
 - `publicApi` applies only to the boundary check. It does not change the `public_api` field of dead-code findings.
-- A zone cannot set `publicApi` together with `autoDiscover`, because that makes every file of each module public. Declare a separate `publicApi` zone with a pattern such as `src/modules/*/public.ts` before the `autoDiscover` zone.
 
 ## Type-only imports across boundaries
 
