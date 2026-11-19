@@ -22,6 +22,7 @@ import {
   checkSize,
   compareBaseline,
   describeDiagram,
+  flowchartLabelProblems,
   nextBaseline,
   parseArguments,
   summarize,
@@ -526,7 +527,7 @@ test("the line budgets match the page types in PAGE-TYPES.md", () => {
 
 const mermaid = (source) => `\`\`\`mermaid\n${source}\n\`\`\``;
 const chain = (count) =>
-  ["flowchart LR", ...Array.from({ length: count - 1 }, (_, index) => `  n${index}["step ${index}"] --> n${index + 1}`)].join("\n");
+  ["flowchart LR", ...Array.from({ length: count - 1 }, (_, index) => `  n${index}["step ${index}"] --> n${index + 1}["step ${index + 1}"]`)].join("\n");
 
 test("diagram counts the nodes of a flowchart, without labels, shapes and subgraphs", () => {
   const source = [
@@ -574,4 +575,55 @@ test("diagram reports an unsupported type, too many nodes, styling and a third d
   assert.match(found[3].message, /own style/u);
   assert.match(found[4].message, /4 diagrams\. The limit is 2/u);
   assert.deepEqual(lines(found), [6, 11, 26, 32, 26]);
+});
+
+test("diagram reports an id that an edge uses before a later line gives it a label", () => {
+  const source = [
+    "flowchart LR",
+    '  main["src/index.ts"] -->|"import formatPrice"| bPrice',
+    '  subgraph barrel["src/lib/index.ts"]',
+    '    bPrice["formatPrice"]',
+    "  end",
+  ].join("\n");
+  const problems = flowchartLabelProblems(source);
+  assert.equal(problems.length, 1);
+  assert.equal(problems[0].line, 4);
+  assert.match(problems[0].message, /node "bPrice" gets its label after line 2 uses it/u);
+  const text = page(mermaid(source));
+  assert.deepEqual(lines(checkDiagrams("concepts/a.mdx", text)), [10]);
+});
+
+test("diagram accepts nodes defined before their edges, a relabel and ids that never get a label", () => {
+  const source = [
+    "flowchart TD",
+    '  a["Agent edits code"]',
+    '  b{"Verdict?"}',
+    "  a --> b",
+    '  b -->|fail| a["Agent edits code"]',
+    "  b -- pass --> done",
+    "  x --> y",
+  ].join("\n");
+  assert.deepEqual(flowchartLabelProblems(source), []);
+});
+
+test("diagram reports markup characters in a label and a long subgraph title", () => {
+  const source = [
+    "flowchart TD",
+    '  lib["lib: src/lib/**"]',
+    '  run["safe_to_delete"]',
+    "  code[`fallow`]",
+    '  lib -->|"a *b*"| run',
+    '  subgraph codegen["tools/codegen is not a workspace"]',
+    '    gen["index.js"]',
+    "  end",
+    '  subgraph ok["packages/web app"]',
+    "  end",
+  ].join("\n");
+  const problems = flowchartLabelProblems(source);
+  assert.deepEqual(
+    problems.map((problem) => problem.line),
+    [2, 3, 4, 5, 6],
+  );
+  assert.match(problems[0].message, /\*, _ or backtick/u);
+  assert.match(problems[4].message, /more than 3 words/u);
 });

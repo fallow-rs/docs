@@ -442,7 +442,19 @@ decision with branches. Do not use a diagram to repeat a table or a list.
 - Give a diagram at most 11 nodes. A subgraph is a box around nodes and does
   not count.
 - Put a label with special characters in quotes: `a["src/index.ts"]`. Keep
-  labels short, because the layout does not wrap text.
+  labels short, because the layout does not wrap text. Aim for 4 words or
+  fewer in each label.
+- Do not put `*`, `_` or a backtick in a label. The renderer reads them as
+  markup. Write `src/lib`, not `src/lib/**`.
+- Give each node its label before an edge uses its id, on the line of the
+  node or on an earlier line. The renderer keeps the first definition of a
+  node, so a label on a later line does not show.
+- Give a subgraph a short title: three words at most. A long title is wider
+  than its box.
+- Put at most 4 nodes in one row. A wide diagram shrinks the text. Use
+  `flowchart TD` when a story has many steps side by side.
+- Let the direction follow the story: from the top down or from left to
+  right. Use at most one edge back to an earlier step.
 - Do not use `style`, `classDef`, `class`, `linkStyle`, `:::` or `click`. The
   site sets the colors.
 - Put at most two diagrams on a page.
@@ -450,8 +462,9 @@ decision with branches. Do not use a diagram to repeat a table or a list.
   The text around the diagram names the same facts, so that a reader who
   cannot see the picture misses nothing.
 
-The `diagram` check enforces the type, the node limit, the styling rule and
-the limit of two diagrams.
+The `diagram` check enforces the type, the node limit, the styling rule, the
+limit of two diagrams, the label order, the markup characters in a label and
+the length of a subgraph title.
 
 ## Ending
 
@@ -494,7 +507,7 @@ whole lines. Do not edit, merge or invent a line.
 | `ending` | No card grid after the last H2, and at most 3 links under "Next", "Reference" or "Related". Tutorial, concept, analysis, guide and rule pages only. |
 | `em-dash` | No em dash outside code. |
 | `mdx-syntax` | No text that stops the MDX build of the site. Outside code blocks, code spans, MDX comments and escapes, a `<` must start a known component or HTML tag, a closing tag or an autolink. A `{` or `}` must be part of an MDX comment, an explicit heading id or an attribute of a tag (`cols={2}`). Each known tag closes, and no line starts with `import` or `export`. Table cells and link text count as prose. Write the text in backticks, or escape it as `\<` or `\{`. |
-| `diagram` | Each `mermaid` block is a `flowchart`, a `sequenceDiagram` or a `stateDiagram-v2`, has at most 11 nodes, and sets no style, class or click action. A page has at most two diagrams. The node count includes each name outside quotes, shapes and edge labels, so it is never too low. See [Diagrams](#diagrams). |
+| `diagram` | Each `mermaid` block is a `flowchart`, a `sequenceDiagram` or a `stateDiagram-v2`, has at most 11 nodes, and sets no style, class or click action. A page has at most two diagrams. In a flowchart, no edge uses a node id before a later line gives the node its label, no label has `*`, `_` or a backtick, and no subgraph title has more than three words. The node count includes each name outside quotes, shapes and edge labels, so it is never too low. See [Diagrams](#diagrams). |
 | `inbound-links` | Each entry of `scripts/inbound-links.json` resolves to a page and to an explicit heading id. |
 
 Pages that existed before a rule can break it. The baseline

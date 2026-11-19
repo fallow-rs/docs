@@ -549,6 +549,65 @@ const stateNodes = (lines) => {
 
 const NODE_COUNTERS = { flowchart: flowchartNodes, sequenceDiagram: sequenceNodes, "stateDiagram-v2": stateNodes };
 
+const NODE_WITH_SHAPE = /([A-Za-z_]\w*)\s*(?=[[({]|>(?!>))/gu;
+const SUBGRAPH_LINE = /^\s*subgraph\s+([A-Za-z_]\w*)\s*(?:\[\s*"?([^"\]]*)"?\s*\])?/u;
+const LABEL_TEXT = /"([^"\n]*)"|\|([^|\n]*)\||\[([^\]"\n]*)\]/gu;
+const LABEL_MARKUP = /[*_`]/u;
+export const SUBGRAPH_TITLE_WORDS = 3;
+
+/**
+ * The label problems of a flowchart, each with its line in the diagram
+ * source (the type line is line 1):
+ *
+ * - An id that an edge uses before a later line gives it a label. The site
+ *   renderer keeps the first definition, so the node shows its id.
+ * - A label with `*`, `_` or a backtick, which the renderer reads as markup.
+ * - A subgraph title of more than SUBGRAPH_TITLE_WORDS words, which is wider
+ *   than its box.
+ */
+export const flowchartLabelProblems = (source) => {
+  const lines = source.split("\n");
+  const problems = [];
+  const firstUse = new Map();
+  const labeled = new Set();
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    if (index === 0 || trimmed === "" || trimmed.startsWith("%%")) {
+      return;
+    }
+    for (const match of line.matchAll(LABEL_TEXT)) {
+      const label = match[1] ?? match[2] ?? match[3];
+      if (LABEL_MARKUP.test(label)) {
+        problems.push({ line: index + 1, message: `The label "${label}" has a *, _ or backtick, which the renderer reads as markup. Write it in plain words.` });
+      }
+    }
+    const bare = line.replace(QUOTED, '""').replace(/\|[^|]*\|/gu, " ");
+    const subgraph = line.match(SUBGRAPH_LINE);
+    const defined = subgraph === null ? [...bare.matchAll(NODE_WITH_SHAPE)].map((match) => match[1]) : [subgraph[1]];
+    if (subgraph !== null && subgraph[2] !== undefined && subgraph[2].trim().split(/\s+/u).length > SUBGRAPH_TITLE_WORDS) {
+      problems.push({ line: index + 1, message: `The subgraph title "${subgraph[2].trim()}" has more than ${SUBGRAPH_TITLE_WORDS} words. Use a short title, because a long title is wider than its box.` });
+    }
+    for (const id of defined) {
+      if (!labeled.has(id) && firstUse.has(id)) {
+        problems.push({ line: index + 1, message: `The node "${id}" gets its label after line ${firstUse.get(id)} uses it, so the site shows the id. Define each node with its label before an edge uses it.` });
+      }
+      labeled.add(id);
+    }
+    if (subgraph !== null) {
+      return;
+    }
+    const plain = bare
+      .replace(/\[[^\]]*\]|\([^)]*\)|\{[^}]*\}|(?<=\w)>[^\]]*\]/gu, " ")
+      .replace(/<?[-=.]{2,}[>xo]?/gu, " ");
+    for (const [word] of plain.matchAll(IDENTIFIER)) {
+      if (!FLOWCHART_KEYWORDS.has(word) && !labeled.has(word) && !firstUse.has(word)) {
+        firstUse.set(word, index + 1);
+      }
+    }
+  });
+  return problems;
+};
+
 /** The type and the node count of one Mermaid diagram source. */
 export const describeDiagram = (source) => {
   const lines = diagramLines(source);
@@ -577,6 +636,11 @@ export const checkDiagrams = (path, text) => {
     }
     if (DIAGRAM_STYLING.test(block[1])) {
       found.push(violation("diagram", path, line, "The diagram sets its own style, class or click action. Remove it: the site sets the colors."));
+    }
+    if (type === "flowchart") {
+      for (const problem of flowchartLabelProblems(block[1])) {
+        found.push(violation("diagram", path, line + problem.line, problem.message));
+      }
     }
   }
   if (blocks.length > DIAGRAM_PAGE_LIMIT) {
