@@ -14,6 +14,7 @@ fallow coverage setup --cloud      # Fallow Cloud plan: beacon, CI steps, one co
 fallow coverage analyze --cloud --repo owner/repo
 fallow coverage upload-inventory   # push a static function inventory
 fallow coverage upload-source-maps           # upload build source maps for bundled code
+fallow coverage upload-static-findings       # push static dead-code findings for the source view
 fallow coverage review-packet      # production facts of the changed functions
 fallow coverage deployment-changes # what changed in production between two deployments
 ```
@@ -362,6 +363,7 @@ fallow coverage upload-inventory \
 | `--api-endpoint <URL>` | Override the base URL. Use it for staging and on-prem deployments. |
 | `--project-id <ID>` | Project identifier, for example `owner/repo` or a bare name such as `my-app`. |
 | `--git-sha <SHA>` | The commit SHA for this inventory. Max 64 chars, `[A-Za-z0-9._-]` only. |
+| `--vercel-deployment-id <DEPLOYMENT_ID>` | Bind the upload to a Vercel deployment. Default: `$VERCEL_DEPLOYMENT_ID`, but only when `$VERCEL=1`. With Vercel OIDC authentication, Fallow Cloud checks the deployment against the git SHA. |
 | `--allow-dirty` | Upload even when the working tree has uncommitted changes. Without this flag, fallow refuses the upload with exit code 10. With it, fallow prints a warning, because the inventory comes from the working copy and can differ from the git SHA. |
 | `--exclude-paths <GLOB>` | More globs to skip. Fallow applies them after the configured fallow ignore rules. Repeatable. |
 | `--path-prefix <PREFIX>` | Prefix that fallow adds in front of each `filePath`, so the static inventory paths have the same shape as the paths from the runtime beacon. Required for containerized deployments. The beacon reports the absolute V8 path inside the container (for example, `/app/src/foo.ts`). By default, the inventory has repo-relative paths (`src/foo.ts`). Must start with `/` and use POSIX separators. See [Path prefix](#path-prefix-containerized-deployments) for common values. |
@@ -451,6 +453,31 @@ first 5 of 14,280 entries:
   ... and 14,275 more
 ```
 
+## `upload-static-findings`
+
+`fallow coverage upload-static-findings` runs the static analysis and POSTs the dead-code findings to Fallow Cloud. It sends the unused exports and the unused files under the current project and git SHA. Fallow Cloud shows them on the source view, next to the runtime coverage.
+
+```bash
+FALLOW_API_KEY=fallow_live_... \
+  fallow coverage upload-static-findings --git-sha "$GITHUB_SHA"
+```
+
+Each upload replaces the findings that Fallow Cloud has for the same git SHA, so each run sends the complete set. This command runs the full analysis, so it is slower than `upload-inventory`. A config or parse error of the analysis gives exit code 10.
+
+### Static-findings flags
+
+| Flag | Description |
+|:-----|:------------|
+| `--api-key <KEY>` | Fallow Cloud API key. Default: `$FALLOW_API_KEY`. Use a live API key, not a publishable ingest key. **Use `$FALLOW_API_KEY` on shared CI runners.** |
+| `--api-endpoint <URL>` | Override the base URL. Default: `$FALLOW_API_URL`, then `https://api.fallow.cloud`. |
+| `--project-id <ID>` | Project identifier, for example `owner/repo`. Default: `$GITHUB_REPOSITORY`, then `$CI_PROJECT_PATH`, then `git remote get-url origin` parsed to `owner/repo`. |
+| `--git-sha <SHA>` | The commit SHA for these findings. Default: `git rev-parse HEAD`. |
+| `--allow-dirty` | Upload even when the working tree has uncommitted changes. The findings then come from the working copy and can differ from the git SHA. |
+| `--dry-run` | Print what fallow would upload, and exit. No network call. |
+| `--ignore-upload-errors` | Treat network and server errors as warnings (exit 0). Validation, payload-size, and auth errors still fail. |
+
+The exit codes are the same as the [exit codes of `upload-inventory`](#exit-codes).
+
 ## `upload-source-maps`
 
 For bundled or compiled code, source maps let Fallow Cloud show runtime coverage on your original source files. Compiled code includes a Node service that `tsc` builds to `dist/`. The production beacon reports coverage against the deployed JavaScript files. The cloud resolver uses the uploaded source maps to map those bundle positions back to the original source files. `fallow coverage upload-source-maps` finds the source maps in a build output directory and POSTs each map to Fallow Cloud under the current repo and git SHA.
@@ -469,6 +496,7 @@ FALLOW_API_KEY=fallow_live_... \
 | `--exclude <GLOB>` | `**/node_modules/**` | Exclude glob, repeatable. |
 | `--repo <NAME>` | `package.json` `repository.url`, then `git remote get-url origin` parsed to `owner/repo` | Repo identifier in `/v1/coverage/:repo/source-maps`. Must match the `projectId` of the beacon (and the `--project-id` that you pass to `upload-inventory`). If your beacon reports a bare name, pass `--repo <bare-name>`. |
 | `--git-sha <SHA>` | `$GITHUB_SHA`, `$CI_COMMIT_SHA`, `$COMMIT_SHA`, then `git rev-parse HEAD` | The commit SHA that the beacon reports for the deployed build. Must be 7-40 hex chars. |
+| `--vercel-deployment-id <DEPLOYMENT_ID>` | `$VERCEL_DEPLOYMENT_ID`, but only when `$VERCEL=1` | Bind the upload to a Vercel deployment. With Vercel OIDC authentication, Fallow Cloud checks the deployment against the git SHA. |
 | `--endpoint <URL>` | `$FALLOW_API_URL` or `https://api.fallow.cloud` | Override for staging or enterprise deployments. |
 | `--strip-path <BOOL>` | `true` | Upload only the basename as `fileName`, for example `dist/assets/app.js.map` -> `app.js.map`. When runtime coverage reports bundle paths with directories (for example, `assets/app.js`), set `--strip-path=false`. When two maps have the same basename, for example two `index.js.map` files in different directories, fallow sends each of them under its path in the build directory, so that no map replaces another. |
 | `--dry-run` | `false` | Print what fallow would upload. Does not read `FALLOW_API_KEY` and makes no network calls. |
