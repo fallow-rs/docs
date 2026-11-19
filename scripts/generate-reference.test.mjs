@@ -139,6 +139,18 @@ test("cuts a description at a word boundary", () => {
   assert.ok(long.startsWith("Reference: "));
 });
 
+test("gives each rule page its own description, also when issue types share a summary", () => {
+  const shared = { issue_types: [
+    { id: "a", explanation: { name: "Dangerous HTML sink", summary: "Catalogue security candidate for CWE-79" } },
+    { id: "b", explanation: { name: "JQuery HTML sink", summary: "Catalogue security candidate for CWE-79" } },
+    { id: "c", explanation: { name: "Unused file", summary: "File is not reachable from any entry point" } },
+  ] };
+  assert.equal(ruleDescription(shared.issue_types[0], shared), "Reference: Dangerous HTML sink (catalogue security candidate for CWE-79)");
+  assert.equal(ruleDescription(shared.issue_types[2], shared), "Reference: File is not reachable from any entry point");
+  const descriptions = CONTRACT.issue_types.map((issue) => ruleDescription(issue, CONTRACT));
+  assert.equal(new Set(descriptions).size, descriptions.length);
+});
+
 test("renders a doc comment: joined paragraphs, kept fences, headings as bold lines", () => {
   const doc = "First line\nsecond line.\n\n# Examples\n\n```json\n{ \"a\": 1 }\n```\n- item one\n  continued\n- item two";
   assert.equal(renderDoc(doc), "First line second line.\n\n**Examples**\n\n```json\n{ \"a\": 1 }\n```\n\n- item one continued\n- item two");

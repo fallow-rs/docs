@@ -747,7 +747,19 @@ export const cutAtWord = (text, limit) => {
 
 const ruleSummary = (issue) => replaceDashes(issue.explanation?.summary || issue.description || "").trim();
 
-export const ruleDescription = (issue) => cutAtWord(`Reference: ${ruleSummary(issue)}`, DESCRIPTION_LIMIT);
+const lowerFirst = (text) => (/^[A-Z][a-z]/u.test(text) ? `${text.charAt(0).toLowerCase()}${text.slice(1)}` : text);
+
+/**
+ * The description of a rule page: the summary of the issue type. Some issue
+ * types share one summary, for example the security candidates of one CWE.
+ * Their descriptions then start with the title, so that each page has its own.
+ */
+export const ruleDescription = (issue, contract = { issue_types: [] }) => {
+  const summary = ruleSummary(issue);
+  const shared = contract.issue_types.some((other) => other.id !== issue.id && ruleSummary(other) === summary);
+  const text = shared ? `${ruleTitle(issue)} (${lowerFirst(summary)})` : summary;
+  return cutAtWord(`Reference: ${text}`, DESCRIPTION_LIMIT);
+};
 
 const yamlString = (value) => JSON.stringify(value);
 
@@ -834,7 +846,7 @@ export const newRulePage = (contract, issue, configLink) =>
   [
     "---",
     `title: ${yamlString(ruleTitle(issue))}`,
-    `description: ${yamlString(ruleDescription(issue))}`,
+    `description: ${yamlString(ruleDescription(issue, contract))}`,
     `keywords: ${JSON.stringify(ruleKeywords(issue))}`,
     `icon: ${yamlString(categoryIcon(issue))}`,
     "---",
@@ -879,7 +891,7 @@ export const updateRulePage = (contract, issue, existing, file, configLink) => {
   if (blocks.length !== 1 || blocks[0].argument !== issue.id) {
     throw new Error(`${file}:1: a rule page needs exactly one block ${startMarker("rule", issue.id)}.`);
   }
-  const withFields = setFrontmatter(existing, { title: ruleTitle(issue), description: ruleDescription(issue) }, file);
+  const withFields = setFrontmatter(existing, { title: ruleTitle(issue), description: ruleDescription(issue, contract) }, file);
   return replaceBlocks(withFields, (block) => renderBlock(contract, block, { configLink }), file);
 };
 
