@@ -428,7 +428,7 @@ whole lines. Do not edit, merge or invent a line.
 | `link-target` | Each internal link points to a page, and each anchor to a heading on that page. |
 | `nav-complete` | `docs.json` lists each page once, and each listed page exists. |
 | `page-size` | The line budget of the page type, and 50,000 characters for each page. |
-| `history-text` | No version history or roadmap wording outside code. |
+| `history-text` | No version history or roadmap wording outside code. The check skips generated blocks: the text in a block comes from the tool, so fix the wording in the tool. |
 | `hidden-content` | No `Warning`, `Note`, `Info` or requirement inside an `Accordion` or a `Tab`. |
 | `frontmatter` | `title` and `description` exist, the page uses only the allowed keys, and the description has at most 160 characters and differs from the title. |
 | `components` | Only the components that the site renders. |

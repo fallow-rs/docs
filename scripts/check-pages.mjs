@@ -306,8 +306,17 @@ export const checkSize = (path, text) => {
 const blankMatches = (text, patterns) =>
   patterns.reduce((current, pattern) => current.replace(pattern, (match) => " ".repeat(match.length)), text);
 
+// The text of a generated block comes from the tool contracts. An edit in
+// the page does not survive the next generator run, so history wording in a
+// block is a defect of the tool text, and the fix belongs in the tool.
+// Only `history-text` skips these blocks: the other rules still check them.
+const GENERATED_BLOCK = /^\{\/\* generated:start [^\n]*\*\/\}$[\s\S]*?^\{\/\* generated:end \*\/\}$/gmu;
+
+/** Blanks each generated block but keeps its line breaks, so line numbers stay true. */
+export const blankGenerated = (text) => text.replace(GENERATED_BLOCK, (block) => block.replace(/[^\n]/gu, ""));
+
 export const checkHistory = (path, text) => {
-  const body = blankMatches(stripCode(text), HISTORY_EXCEPTIONS);
+  const body = blankMatches(blankGenerated(stripCode(text)), HISTORY_EXCEPTIONS);
   const found = [];
   for (const pattern of HISTORY_PATTERNS) {
     for (const match of body.matchAll(pattern)) {

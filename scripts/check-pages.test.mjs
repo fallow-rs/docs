@@ -168,6 +168,19 @@ test("history-text reports version history and roadmap wording", () => {
   );
 });
 
+test("history-text skips generated blocks and checks the text around them", () => {
+  const page = [
+    "{/* generated:start rule stale-suppression */}",
+    "The export is now used.",
+    "{/* generated:end */}",
+    "",
+    "The flag is now an alias.",
+  ].join("\n");
+  const found = checkHistory("rules/stale-suppression.mdx", page);
+  assert.deepEqual(found.map((entry) => entry.line), [5]);
+  assert.deepEqual(checkEmDash("rules/a.mdx", page.replace("now used", `now${String.fromCodePoint(0x2014)}used`)).length, 1);
+});
+
 test("history-text ignores the known false positives", () => {
   assert.deepEqual(
     history(
