@@ -383,8 +383,9 @@ whole lines. Do not edit, merge or invent a line.
 
 Pages that existed before a rule can break it. The baseline
 `scripts/check-pages.baseline.json` records these violations for each rule
-and each file: a count, or a size for `page-size`. A file may not get worse
-than its baseline. A file without an entry must pass.
+and each file: a count, or a size ceiling for `page-size`. The ceiling is the
+size of the page plus 5 percent, so a small correction to a large page passes.
+A file may not get worse than its baseline. A file without an entry must pass.
 
 - When you fix a violation, run
   `node scripts/check-pages.mjs --update-baseline`. The check fails until

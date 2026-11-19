@@ -569,16 +569,26 @@ export const checkProject = ({ pages, docsJson, inboundJson, assetExists = () =>
 
 /**
  * The baseline of a list of violations. A count rule records the number of
- * violations per file. `page-size` records the measured size per file.
+ * violations per file. `page-size` records a ceiling per file: the measured
+ * size plus some room, so that a small correction to a page that is already
+ * too large does not fail, while steady growth does.
  */
-export const buildBaseline = (violations) => {
+const SIZE_HEADROOM = 1.05;
+const sizeCeiling = (size) => Math.ceil(size * SIZE_HEADROOM);
+
+export const buildBaseline = (violations) => collectBaseline(violations, sizeCeiling);
+
+// The same shape with the measured sizes, to compare the pages with a baseline.
+const measuredBaseline = (violations) => collectBaseline(violations, (size) => size);
+
+const collectBaseline = (violations, toSize) => {
   const rules = Object.fromEntries(RULES.map((rule) => [rule, {}]));
   for (const found of violations) {
     const entries = rules[found.rule];
     entries[found.path] =
       found.measure === undefined
         ? (entries[found.path] ?? 0) + 1
-        : { ...entries[found.path], [found.measure.name]: found.measure.value };
+        : { ...entries[found.path], [found.measure.name]: toSize(found.measure.value) };
   }
   for (const rule of RULES) {
     rules[rule] = Object.fromEntries(
@@ -624,14 +634,13 @@ const differences = (from, to) => {
  * higher than the current state. `--update-baseline` lowers them.
  */
 export const compareBaseline = (violations, baseline) => {
-  const current = flatten(buildBaseline(violations));
+  const current = flatten(measuredBaseline(violations));
   const allowed = flatten(baseline);
   const worse = differences(current, allowed);
-  const stale = differences(allowed, current).map(({ value, limit, ...entry }) => ({
-    ...entry,
-    value: limit,
-    limit: value,
-  }));
+  // A size entry is a ceiling, so it is stale only when the page passes the rule.
+  const stale = differences(allowed, current)
+    .filter((entry) => entry.rule !== "page-size" || entry.limit === 0)
+    .map(({ value, limit, ...entry }) => ({ ...entry, value: limit, limit: value }));
   return { worse, stale };
 };
 
@@ -692,7 +701,17 @@ export const nextBaseline = (violations, baseline, allowRegression) => {
   if (worse.length > 0 && !allowRegression) {
     return { ok: false, worse };
   }
-  return { ok: true, baseline: buildBaseline(violations) };
+  const next = buildBaseline(violations);
+  if (!allowRegression) {
+    // A size ceiling never rises in a normal update.
+    for (const [path, measures] of Object.entries(next.rules["page-size"])) {
+      const previous = baseline.rules?.["page-size"]?.[path] ?? {};
+      for (const name of Object.keys(measures)) {
+        if (previous[name] !== undefined) measures[name] = Math.min(measures[name], previous[name]);
+      }
+    }
+  }
+  return { ok: true, baseline: next };
 };
 
 const readBaseline = async () => {

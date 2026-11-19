@@ -360,10 +360,10 @@ const VIOLATIONS = [
   { rule: "page-size", path: "analysis/b.mdx", line: 251, message: "", measure: { name: "lines", value: 300 } },
 ];
 
-test("the baseline counts violations per file and records sizes", () => {
+test("the baseline counts violations per file and records a size ceiling", () => {
   const { rules } = buildBaseline(VIOLATIONS);
   assert.deepEqual(rules["history-text"], { "cli/a.mdx": 2 });
-  assert.deepEqual(rules["page-size"], { "analysis/b.mdx": { lines: 300 } });
+  assert.deepEqual(rules["page-size"], { "analysis/b.mdx": { lines: 315 } });
   assert.deepEqual(rules["em-dash"], {});
 });
 
@@ -383,17 +383,27 @@ test("a file within its baseline passes, and a file above it or without an entry
       ["em-dash", "guides/new.mdx", 1, 0],
     ],
   );
-  const grown = [VIOLATIONS[0], VIOLATIONS[1], { ...VIOLATIONS[2], measure: { name: "lines", value: 301 } }];
-  assert.equal(compareBaseline(grown, baseline).worse[0].measure, "lines");
+  const sized = (value) => [VIOLATIONS[0], VIOLATIONS[1], { ...VIOLATIONS[2], measure: { name: "lines", value } }];
+  assert.deepEqual(compareBaseline(sized(315), baseline), { worse: [], stale: [] });
+  assert.equal(compareBaseline(sized(316), baseline).worse[0].measure, "lines");
 });
 
 test("a file better than its baseline is stale until the baseline is lowered", () => {
   const baseline = buildBaseline(VIOLATIONS);
   const { stale } = compareBaseline([VIOLATIONS[0]], baseline);
   assert.deepEqual(stale.map((entry) => [entry.rule, entry.path, entry.measure, entry.value, entry.limit]), [
-    ["page-size", "analysis/b.mdx", "lines", 0, 300],
+    ["page-size", "analysis/b.mdx", "lines", 0, 315],
     ["history-text", "cli/a.mdx", "count", 1, 2],
   ]);
+});
+
+test("a size below its ceiling is not stale, and an update does not raise the ceiling", () => {
+  const baseline = buildBaseline(VIOLATIONS);
+  const smaller = [VIOLATIONS[0], VIOLATIONS[1], { ...VIOLATIONS[2], measure: { name: "lines", value: 280 } }];
+  assert.deepEqual(compareBaseline(smaller, baseline), { worse: [], stale: [] });
+
+  const larger = [VIOLATIONS[0], VIOLATIONS[1], { ...VIOLATIONS[2], measure: { name: "lines", value: 310 } }];
+  assert.deepEqual(nextBaseline(larger, baseline, false).baseline.rules["page-size"], { "analysis/b.mdx": { lines: 315 } });
 });
 
 test("updating the baseline refuses to raise a number unless regressions are allowed", () => {
