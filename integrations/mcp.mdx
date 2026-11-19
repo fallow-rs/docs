@@ -106,6 +106,29 @@ The hosted MCP server of Fallow Cloud is a separate product. It reads production
 - Only `fix_apply` changes source files. Call `fix_preview` first.
 - The `get_cloud_*` tools, and `inspect_target` with `cloud: true`, read production data from Fallow Cloud. They send the repository name, and for some tools the file paths and function names that you select. All other tools work only on the local project.
 
+### Run-level warnings {#run-level-warnings}
+
+A tool that the CLI handles runs fallow with `--quiet`, so the caller does not get the lines that the CLI writes to stderr. The server writes the same facts as plain sentences into the root `warnings[]` array of the response:
+
+| Sentence | Source in the response |
+|:--|:--|
+| A baseline that matched fewer entries than it holds, or that the run did not judge because the scope was only part of the project. | `baseline_staleness` |
+| A baseline file that the command cannot read as its own format. When the file names the command that saved it, the sentence names that command. Pass a different path, and do not save the baseline again. | `baseline_staleness.unrecognised_format`, `baseline_staleness.saved_by` |
+| Each gate that reported `fail` or `warn`, with the values that the gate compared. | `gate_outcomes` |
+| All diagnostics that made the analysis less complete, in one sentence. | `workspace_diagnostics` |
+| All [requested rules that are off](/configuration/overview#requested-rules-that-are-off), in one sentence. A zero count for these rules does not mean that the check passed. | `workspace_diagnostics` |
+| `client-server-leak` with no `"use client"` file to start from. A zero leak count then does not mean that no secret reaches client code. | `workspace_diagnostics` |
+| The [requests that the run did not apply](/cli/global-flags#request-outcomes). A request that changes the scope makes the report wider than you asked for. An output file that the run did not write gets its own sentence, and the report stays complete. | `request_outcomes` |
+| A request that the run applied to an empty scope. The report has no findings because the run analyzed nothing, not because the code is clean. | `request_outcomes` |
+
+Read the sentence about an unrecognised baseline format first, because such a file suppresses nothing. The staleness sentence also says that the run would fail the `--fail-on-stale-baseline` gate. `audit` leaves this part out, because its `stale-baseline` gate does not apply to the baselines that it loads.
+
+- The tools that the server runs in its own process add the same sentences, so a tool gives the same answer on both routes.
+- The sentences do not move or remove a field. `gate_outcomes`, `baseline_staleness`, `workspace_diagnostics` and `request_outcomes` stay in their places.
+- A sentence is added to a `warnings` array that the command wrote. A run with nothing to report adds no sentence.
+- A warning never makes the call an error, and an error stays an error.
+- `get_hot_paths`, `get_blast_radius`, `get_importance`, `get_cleanup_candidates` and `get_token_blast_radius` always return a `warnings` array, also when it is empty.
+
 ### Scope from the environment {#diff-and-ref-from-the-environment}
 
 `FALLOW_DIFF_FILE` (a path to a unified diff) and `FALLOW_CHANGED_SINCE` (a git ref) in the environment of the server scope the analysis tools to the change. When the server cannot use one of them, the call does not fail. The tool then reports on the full project, and its `request_outcomes` has a `not-applied` entry with the reason. `audit` and `decision_surface` read `FALLOW_CHANGED_SINCE` as their base ref, so a ref that does not resolve fails these calls.
@@ -179,6 +202,24 @@ The server has these tools. The `fallow://tools` resource gives the same list wi
 | `impact_closure` | Trace the transitive affected-but-not-in-diff set and coordination gaps for one file. | `fallow dead-code --impact-closure <path>` |
 | `trace_dependency` | Trace where a dependency is imported, whether scripts or CI use it, and how the code uses each imported name. | `fallow dead-code --trace-dependency <package>` |
 | `trace_clone` | Deep-dive a duplicate-code clone group by location or fingerprint. | `fallow dupes --trace <file:line>` |
+
+### Runtime source-map confidence {#runtime-source-map-confidence}
+
+The runtime context from Fallow Cloud can tell how well a source map connects a function to its original source. `get_cloud_runtime_context` copies each row field of the cloud into the `cloud_context` of the finding or hot path. When the `capabilities` array of the response has `function_identity_v2`, a row can have two of these fields:
+
+- `resolution_status`: how the cloud found the original position of the function.
+- `mapping_quality`: how much you can trust the file path and the line number.
+
+The fields tell you how much to trust the location. They do not tell you if the function ran.
+
+| `resolution_status` and `mapping_quality` | Meaning | What to do |
+|:--|:--|:--|
+| `resolved` and `high` | The source map gives the original source of the generated position. | Trust the file path and the line number. Edit the original source. |
+| `fallback` and `medium` | A source map exists, but it does not cover this generated position. | Use the file-level signal as an estimate. Before a precise edit, ask the developer to build with denser source maps. |
+| `unresolved` and `low` | Nobody uploaded a source map for this bundle and commit. | Before you act on a file-level coverage signal, ask the operator to upload the source map. |
+| `null` and `null` | The row has no confidence data. | Read the row as a row without confidence data. Do not lower it to `low` without other evidence. |
+
+Other values of `resolution_status` can occur, for example `native` with `high`. Let `mapping_quality` decide what you do.
 
 ### Resources {#resources}
 
