@@ -5,7 +5,7 @@ keywords: ["similar code", "semantic duplication", "function similarity", "local
 icon: "code-compare"
 ---
 
-Two functions can do the same job with different names and different code. [`fallow dupes`](/analysis/duplication) does not find them, because it compares the code itself. `fallow similar-code` compares the meaning of whole functions with a model that runs on your machine. Use it after `fallow dupes`, to find logic that you can possibly merge.
+Two teams often solve one problem twice, with different code. For example, one function trims and lower-cases the email address of an order form. Another function cleans the email address of an imported order with a regular expression. When a new email rule arrives, the fix reaches one function, and the other keeps the bug. [`fallow dupes`](/analysis/duplication) does not find this pair, because it compares the code itself. `fallow similar-code` compares the meaning of whole functions with a model that runs on your machine. Use it after `fallow dupes`, to find logic that you can merge after a review.
 
 ```bash
 npx fallow similar-code
@@ -17,7 +17,9 @@ npx fallow similar-code
 
 The analysis is opt-in. It is not part of bare `fallow`, `fallow audit`, `fallow dupes`, CI gates, SARIF output or the editor diagnostics. It adds no issue type, and a candidate does not change the exit code.
 
-## Before you start
+## What fallow finds
+
+### Before the first run
 
 The analysis needs two parts that the `fallow` package does not install:
 
@@ -27,19 +29,19 @@ The analysis needs two parts that the `fallow` package does not install:
    npm install --save-dev fallow-similar-code@<fallow version>
    ```
 
-2. The pinned model. The first download needs your confirmation:
+2. The pinned model, a download of about 324 MB. The first download needs your confirmation:
 
    ```bash
    npx fallow similar-code setup --local
    ```
 
-   Before it asks, setup shows the model, the license and the download size. Project config and agents cannot approve the download for you.
+   Before it asks, setup shows the model, the license and the download size. Project config and agents cannot approve the download for you. Without a terminal, setup stops unless you pass `--yes`.
 
-To check that both parts are ready, run `fallow similar-code status`. A `fallow` binary from Homebrew or `cargo install` finds the `fallow-similar-code` program only in its own directory. [`fallow similar-code`](/cli/similar-code) explains that setup.
+To check that both parts are ready, run `fallow similar-code status`. Its `Ready` line says `yes` or `no`, and when a part is missing, a `Next` line names the step. A `fallow` binary from Homebrew or `cargo install` finds the `fallow-similar-code` program only in its own directory. [`fallow similar-code`](/cli/similar-code) explains that setup.
 
 After setup, the analysis runs offline. The source of your functions stays on your machine. Fallow stores the computed vectors in a cache in your user directory, with one namespace for each project. `fallow similar-code cache clear --yes` removes them and keeps the model.
 
-## What fallow finds
+### The report
 
 The human report has this form. Each candidate is a pair of functions, with the command that inspects it:
 
@@ -70,7 +72,7 @@ An empty list proves that no candidate exists only when the completion is `Compl
 
 Fallow takes each function of at least `similarCode.minLines` lines (default 3). The model turns each function into a vector, and fallow compares the vectors of each pair. A pair with a score at or above `similarCode.threshold` (default 0.8) is a candidate.
 
-To narrow the search, use the scope options of the other analyses:
+A large project gives many pairs, so narrow the search with the scope options of the other analyses:
 
 ```bash
 npx fallow similar-code --file src/orders/normalize.ts
@@ -82,7 +84,7 @@ npx fallow similar-code --threshold 0.88 --min-lines 6 --top 20
 
 ## Act on a candidate
 
-The review has three steps: save the candidates, inspect one candidate, and record a verdict.
+A candidate is not a finding, so you record your decision in a file of your own. The review has three steps:
 
 1. Save the candidates as JSON:
 
@@ -127,25 +129,30 @@ The review has three steps: save the candidates, inspect one candidate, and reco
 
 Each judgment is `true`, `false` or `null` (unknown). `refactor_safe: true` needs `behaviorally_equivalent: true`, and that needs `candidate_worthy: true`. The outcome is one of `same-responsibility`, `related-but-distinct`, `intentional-duplication`, `unrelated` and `needs-human-review`.
 
-To join the candidates and the verdicts, and to fail when a candidate has no verdict, run:
-
-```bash
-npx fallow similar-code review --candidates similar-code.json \
-  --verdicts verdicts.json --require-verdict-for-each-candidate
-```
-
 When you merge two functions, run your tests and `fallow dupes` again.
 
 ### With an agent
 
 The MCP server has two read-only tools: `find_similar_code` and `inspect_similar_code`. Neither tool downloads the model, changes code or writes a verdict. When setup is missing, the agent must ask you to run the setup. When the behavior is not clear, the agent must give the outcome `needs-human-review`. See [MCP server](/integrations/mcp).
 
-## Limits
+## Fail a run
 
-- A high score means that two functions read alike to the model. It does not test their behavior.
-- The model compares whole functions. It does not find a shared block inside two large functions. `fallow dupes` finds those.
-- A score depends on the model and the settings. Do not compare scores between projects, and do not use a score as a quality limit.
-- Config can set the threshold, the minimum size and the `ignore` globs. It cannot choose another model, another provider or a remote service.
+A candidate never changes the exit code, so the search itself cannot fail a run. The review can: to join the candidates and the verdicts, and to fail when a candidate has no verdict, run:
+
+```bash
+npx fallow similar-code review --candidates similar-code.json \
+  --verdicts verdicts.json --require-verdict-for-each-candidate
+```
+
+A candidate without a verdict then makes the command exit with code 2. [`fallow similar-code`](/cli/similar-code) has the other exit codes.
+
+## What fallow cannot see
+
+- How two functions behave. A high score means that they read alike to the model, and the model runs no code.
+- A shared block inside two large functions. The model compares whole functions, and `fallow dupes` finds those blocks.
+- A meaning of a score outside one project. A score depends on the model and the settings. Do not compare scores between projects, and do not use a score as a quality limit.
+
+Config can set the threshold, the minimum size and the `ignore` globs. It cannot choose another model, another provider or a remote service.
 
 ## Reference
 

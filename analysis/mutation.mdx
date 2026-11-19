@@ -5,58 +5,77 @@ keywords: ["fallow mutation", "mutation testing", "mutation score", "surviving m
 icon: "flask"
 ---
 
-Line coverage tells you which code your tests run. It does not tell you if a test fails when that code is wrong. `fallow mutation` makes small changes to your code, runs your tests against each change, and reports the changes that no test detects.
+Your test suite passes, and the coverage report says that the tests run each line. But a test that runs a line does not always check its result. Somebody changes `>=` to `>` in that line, and every test still passes. Line coverage cannot show this gap. `fallow mutation` makes small changes to your code, runs your tests against each change, and reports the changes that no test detects.
 
 ```bash
 npx fallow mutation
 ```
 
-Mutation testing is opt-in. It runs your tests, so it is slower than the other analyses. Bare `fallow`, `fallow audit` and `fallow health` never run it.
+Mutation testing is opt-in. It runs your tests many times, so it is slower than the other analyses. Bare `fallow`, `fallow audit` and `fallow health` never run it.
 
 ## What fallow finds
 
-A small project has two pricing functions and a `node:test` file with two tests:
+This example adds a file `src/lib/pricing.ts` with two functions to the demo project, and a test file `src/lib/pricing.test.ts` with one test for each function. It also updates Vitest to version 4, because fallow does not support the Vitest 2 of the demo. Run fallow on the new file:
+
+```ts
+// src/lib/pricing.ts
+export const applyDiscount = (total: number, percent: number): number => {
+  if (percent <= 0) return total;
+  return Math.round(total * (1 - percent / 100));
+};
+
+export const shippingCost = (total: number): number => (total >= 5000 ? 0 : 495);
+```
 
 ```bash
-npx fallow mutation --all
+npx fallow mutation src/lib/pricing.ts
 ```
 
 ```text
 Mutation testing (ran the project tests)
-Scope: all source files
-Score 85.7%  killed 12  survived 2  timeout 0  complete
-Coverage 100.0%  no coverage 0
+Scope: the given paths
+Score 69.2%  killed 9  survived 4  timeout 0  complete
+Coverage 92.9%  no coverage 1
 
-● Survived (2)
-  src/pricing.js
-    #3 2:15  applyDiscount  relational-operator  if (percent <= 0) return total; -> if (percent < 0) return total;
-      id a9de53766d655afd
-      covered by 1 test: src/pricing.test.js::discount
-    #14 6:47  shippingCost  relational-operator  ...t shippingCost = (total) => (total >= 5000 ? 0 : 495); -> ...t shippingCost = (total) => (total > 5000 ? 0 : 495);
-      id 502f8dc444e3ebcf
-      covered by 1 test: src/pricing.test.js::shipping
+● Survived (4)
+  src/lib/pricing.ts
+    #2 2:7  applyDiscount  negate-condition  if (percent <= 0) return total; -> if (false) return total;
+      id f73493d4d103bf6f
+      covered by 1 test: src/lib/pricing.test.ts::discount
+    #3 2:15  applyDiscount  relational-operator  if (percent <= 0) return total; -> if (percent == 0) return total;
+      id 89b6132f47593839
+      covered by 1 test: src/lib/pricing.test.ts::discount
+    #4 2:15  applyDiscount  relational-operator  if (percent <= 0) return total; -> if (percent < 0) return total;
+      id cc6df8e855ee87fa
+      covered by 1 test: src/lib/pricing.test.ts::discount
+    #14 6:63  shippingCost  relational-operator  ... (total: number): number => (total >= 5000 ? 0 : 495); -> ... (total: number): number => (total > 5000 ? 0 : 495);
+      id c479a45156663278
+      covered by 1 test: src/lib/pricing.test.ts::shipping
+
+● No coverage (1): no test reaches these mutants
+  src/lib/pricing.ts  1 mutant  test reach: 1 direct
 
 Next
-  Inspect a survivor (runs no code): fallow mutation inspect a9de53766d655afd
+  Inspect a survivor (runs no code): fallow mutation inspect f73493d4d103bf6f
 ```
 
-A **mutant** is one small change to the code, for example `<=` to `<`. When a test fails, the test detected the change, and the mutant is killed. When each test passes, the mutant survived. Each survivor is a finding of the issue type [`mutation-survived`](/rules/mutation-survived).
+Each `->` shows one small change to the code, for example `>=` to `>`. Fallow calls such a change a **mutant**. When a test fails, the test detected the change, and the mutant is killed. When each test passes, the mutant survived. Each survivor is a finding of the issue type [`mutation-survived`](/rules/mutation-survived).
 
 | Part | Meaning |
 |:--|:--|
-| `Score 85.7%` | The **mutation score**: the share of the tested mutants that a test detects. |
-| `killed 12  survived 2` | The status counts. A timeout also counts as detected. |
+| `Score 69.2%` | The **mutation score**: the share of the tested mutants that a test detects. |
+| `killed 9  survived 4` | The status counts. A timeout also counts as detected. |
 | `complete` | All planned mutants ran. A `partial` run lists its reason, for example a time budget. |
-| `Coverage 100.0%` | The share of the mutants that a test reaches. |
+| `Coverage 92.9%` | The share of the mutants that a test reaches. |
 | `#3 2:15 applyDiscount relational-operator` | One survivor: its rank, line and column, function, and kind of change. |
 | `->` | The original line and the changed line. |
 | `covered by 1 test` | The tests that ran the changed code and still passed. |
 
-Both survivors show a boundary that no test checks. No test calls `applyDiscount` with `0` percent, and no test calls `shippingCost` with exactly `5000`.
+The survivors show boundaries that no test checks. No test calls `applyDiscount` with a negative percent, and no test calls `shippingCost` with exactly `5000`.
 
 ## How fallow decides
 
-By default, fallow mutates only the code that your branch changes against the base branch, as [`fallow audit`](/analysis/changed-code) does. Add `--all` for each source file, or pass paths.
+A run on the demo took about one second, because it had 14 mutants and one test file. By default, fallow mutates only the code that your branch changes against the base branch, as [`fallow audit`](/analysis/changed-code) does. Add `--all` for each source file, or pass paths as above.
 
 Fallow then runs these steps:
 
@@ -66,7 +85,7 @@ Fallow then runs these steps:
 
 Fallow detects the test runner of your project: Vitest, `node:test` or `bun test`. For Vitest, fallow checks the installed version against a supported range, and a run stops when the version is outside it. `fallow mutation --plan` and [`fallow doctor`](/cli/doctor) report that version before a run.
 
-The score counts only the mutants that ran: killed and timeout, divided by killed, timeout and survived. A mutant that no test reaches gets the status `no_coverage`. It does not lower the score. The coverage value reports it.
+The score counts only the mutants that ran: killed and timeout, divided by killed, timeout and survived. A mutant that no test reaches gets the status `no_coverage`. It does not lower the score, and the coverage value reports it.
 
 ### Safety
 
@@ -79,47 +98,9 @@ A run executes your project tests, so fallow applies these rules:
 
 Do not write the report with `> report.json`. The shell creates the file first, and the worktree check then refuses the run. Use `-o .fallow/mutation.json`.
 
-## Act on a finding
+### Cost and scope
 
-Look at one survivor. This command runs no code:
-
-```bash
-npx fallow mutation inspect a9de53766d655afd
-```
-
-```text
-Mutant a9de53766d655afd  fresh
-src/pricing.js:2:15  applyDiscount  relational-operator  (report: survived)
--    2 |   if (percent <= 0) return total;
-+    2 |   if (percent < 0) return total;
-
-● Covering tests (1)
-  src/pricing.test.js::discount
-```
-
-Then decide:
-
-| Situation | Action |
-|:--|:--|
-| The changed code gives a wrong result, and no test checks it. | Add an assertion for the input that tells the two versions apart. Here: `applyDiscount(1000, 0)`. |
-| The changed code gives the same result for each input. | The mutant is **equivalent**. Record it in a verdict file, and pass the file with `--verdicts`. |
-| No test reaches the code (`no_coverage`). | Write a first test for the function. |
-
-After you add tests, run `fallow mutation --recheck`. It runs only the open mutants of the last report (`survived` and `no_coverage`) against your new tests. The [`fallow-mutation` agent skill](/integrations/agent-skills) lets a coding agent do these steps.
-
-## Set a limit
-
-By default, survivors do not fail a run: it exits with code 0. Set a minimum score to fail it:
-
-```bash
-npx fallow mutation --min-score 80
-```
-
-The run exits with code 1 when the score is lower than 80 percent. Set the same value as `mutation.minScore` in your config file. A run with no tested mutant has no score and exits with code 0.
-
-## Cost and scope
-
-A run executes your tests many times. These options keep a run short:
+On a real project, a run executes your tests many times. These options keep a run short:
 
 - The default scope is the changed code. Run `fallow mutation --plan` to see the number of mutants before a run.
 - `--max-mutants <N>` runs at most N mutants, in rank order. `--time-budget 10m` stops new mutants after 10 minutes.
@@ -128,9 +109,55 @@ A run executes your tests many times. These options keep a run short:
 
 The GitHub Action and the GitLab template run mutation testing only when you turn it on. See [CI integrations](/integrations/ci).
 
+## Act on a finding
+
+Look at one survivor. This command runs no code:
+
+```bash
+npx fallow mutation inspect cc6df8e855ee87fa
+```
+
+```text
+Mutant cc6df8e855ee87fa  fresh
+src/lib/pricing.ts:2:15  applyDiscount  relational-operator  (report: survived)
+-    2 |   if (percent <= 0) return total;
++    2 |   if (percent < 0) return total;
+
+● Covering tests (1)
+  src/lib/pricing.test.ts::discount
+```
+
+This mutant is different from the other three. For a percent of 0, the formula on line 3 also returns the total, so no input tells the two versions apart. Decide for each survivor:
+
+| Situation | Action |
+|:--|:--|
+| The changed code gives a wrong result, and no test checks it. | Add an assertion for the input that tells the two versions apart. Here: `applyDiscount(1000, -10)` for `#2` and `#3`, and `shippingCost(5000)` for `#14`. |
+| The changed code gives the same result for each input, as `#4` does. | The mutant is **equivalent**. Record it in a verdict file, and pass the file with `--verdicts`. |
+| No test reaches the code (`no_coverage`). | Write a first test for the function. |
+
+After you add tests, run `fallow mutation --recheck`. It runs only the open mutants of the last report (`survived` and `no_coverage`) against your new tests. With the two assertions above, the recheck ends with the equivalent mutant only:
+
+```text
+Recheck of the earlier report
+     4  killed
+     1  still survived
+```
+
+The [`fallow-mutation` agent skill](/integrations/agent-skills) lets a coding agent do these steps.
+
+## Fail a run
+
+By default, survivors do not fail a run: it exits with code 0. A minimum score turns the score into a gate:
+
+```bash
+npx fallow mutation --min-score 80
+```
+
+The first run of the demo, with a score of 69.2 percent, then exits with code 1. Set the same value as `mutation.minScore` in your config file. A run with no tested mutant has no score and exits with code 0. The default scope already limits a run to the changed code; [Changed code and baselines](/concepts/changed-code) explains how fallow finds that code.
+
 To show the mutation score next to the CRAP score of each complex function, pass a saved report to [`fallow health --mutation-report`](/analysis/health).
 
-## Limits
+## What fallow cannot see
 
 - The score describes only the mutants that ran. A score of 100 percent on 20 mutants says nothing about the rest of the code.
 - A survivor is not always a missing test. Some mutants are equivalent: no input tells them apart from the original code.

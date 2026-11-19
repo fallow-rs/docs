@@ -5,39 +5,52 @@ keywords: ["fallow security", "security candidates", "command injection", "path 
 icon: "shield"
 ---
 
-A request value that goes into a shell command, or a server secret that a browser bundle reads, is a risk. `fallow security` finds the places in your code where this can happen. Each result is a **candidate**: a place to check, not a confirmed vulnerability. The analysis is opt-in, and it runs only with this command:
+A value from the command line goes into a shell command, and nothing checks it. Somebody who controls that value can then run any command on your server, and no test of the normal case shows it. `fallow security` finds the places in your code where unsafe input can reach a dangerous call, or where a server secret can reach a browser bundle. Each result is a **candidate**: a place to check, not a confirmed vulnerability.
 
 ```bash
 npx fallow security
 ```
 
+The analysis is opt-in: it runs only with this command, and `fallow audit` and bare `fallow` do not report its candidates. It runs no code. Its cost is the review: each candidate needs a person or a coding agent to check it.
+
 ## What fallow finds
 
-A small Express app has a route that passes a URL parameter to a shell command, and an unused helper that writes HTML:
+This example adds two files to the demo project. `src/reports/archive.ts` passes its argument to `exec()`, and `src/index.ts` calls it with `process.argv[2]`. `src/lib/banner.ts` writes HTML, and no file imports it.
+
+```ts
+// src/reports/archive.ts
+import { exec } from "node:child_process";
+
+export const archiveReports = (target: string): void => {
+  exec(`tar -czf ${target} reports/`);
+};
+```
 
 ```text
 Security review: 2 items to check.
 These are unverified security candidates, not confirmed vulnerabilities. Check whether the listed code can run with unsafe input, secrets, or settings, and whether anything blocks the risk.
 
-[H] high OS command injection sink (CWE-78)  src/routes/reports.ts:6
-    evidence: Untrusted source reaches this sink (an argument traces to http request input). Non-literal command passed to node:child_process.exec(). Candidate for verification: confirm the command/args are not attacker-controlled.
+[M] medium OS command injection sink (CWE-78)  src/reports/archive.ts:4
+    evidence: Non-literal command passed to node:child_process.exec(). Candidate for verification: confirm the command/args are not attacker-controlled.
     code path: reachable from a runtime entry point (blast radius 1)
-    input path: this module is reachable from a module that receives untrusted input via 0 import hops
+    input path: this module is reachable from a module that receives untrusted input via 1 import hop
     input import trace:
-      src/routes/reports.ts:5 (untrusted source)
-      src/routes/reports.ts:6 (sink site)
+      src/index.ts:7 (source module)
+      src/reports/archive.ts:4 (sink site)
     import trace:
-      src/routes/reports.ts:6 (sink site)
+      src/reports/archive.ts:4 (sink site)
     Next: check whether unsafe input, secrets, or settings can reach this risky call without a safe guard. If not, mark it as a false positive.
 
-[L] low Dangerous HTML sink (CWE-79)  src/lib/banner.ts:4
+[L] low Dangerous HTML sink (CWE-79)  src/lib/banner.ts:2
     evidence: Non-literal value assigned to el.innerHTML. Candidate for verification: confirm the value is not attacker-controlled, or is sanitized, before it reaches the DOM.
     dead-code: also reported as unused-file; delete this file instead of hardening the sink
     code path: not reached from any runtime entry point (blast radius 0)
     import trace:
-      src/lib/banner.ts:4 (sink site)
+      src/lib/banner.ts:2 (sink site)
     Next: first verify the dead-code finding. If the code is safe to remove, delete it. Otherwise check and harden the risky call.
 
+[I] Blind spot: 9 call sites use code patterns that fallow could not resolve, such as dynamic dispatch, computed members, or aliased bindings.
+    Most unresolved callees: dynamic-dispatch in src/index.ts.
 [I] Blind spot: no file has a top-level "use client" directive and no framework plugin supplies a client root, so the client-server-leak rule had no starting point. Its zero count does not mean that no secret reaches client code.
 
 Result: 2 security items to check. Review the listed evidence and trace before changing code.
@@ -45,21 +58,21 @@ Result: 2 security items to check. Review the listed evidence and trace before c
 
 | Part | Meaning |
 |:--|:--|
-| `[H] high` | The review priority: `high`, `medium` or `low`. It tells you what to check first. It is not a measure of the risk. |
+| `[M] medium` | The review priority: `high`, `medium` or `low`. It tells you what to check first. It is not a measure of the risk. |
 | `OS command injection sink (CWE-78)` | The category of the dangerous call, with its number in the CWE list of weakness types. Each category has a rule page, for example [`command-injection`](/rules/command-injection) and [`dangerous-html`](/rules/dangerous-html). |
 | `evidence` | Why fallow reports the place, and what you must confirm. |
 | `code path` | Whether an [entry point](/concepts/entry-points) reaches the file. |
 | `input import trace` | The path from the untrusted input to the dangerous call. |
 | `dead-code` | The file is also an unused file. Delete it, and the candidate goes away. |
-| `Blind spot` | A part of the analysis that had nothing to check. A zero count there does not mean safe code. |
+| `Blind spot` | A part of the analysis that had nothing to check, or code that fallow could not follow. A zero count there does not mean safe code. |
 
 ## How fallow decides
 
-Fallow looks for two kinds of candidates.
+The two candidates above are both sinks, and the first one also has untrusted input on its path. Fallow looks for two kinds of candidates.
 
 A **sink** is a call or an assignment that is dangerous with an unsafe value: `exec()`, `innerHTML`, `eval()`, a SQL `query()`, a `fetch()` to a computed URL, and others. Fallow has a catalogue of sinks, grouped in categories with a CWE number. A sink becomes a candidate when its argument is not a literal. Some categories check literal values, for example `rejectUnauthorized: false` or a `postMessage` to the origin `"*"`.
 
-A **client-server leak** ([`client-server-leak`](/rules/client-server-leak)) is a file with a top-level `"use client"` directive that reaches a non-public `process.env` value through its imports. Fallow follows the imports from each client file. Public names such as `NEXT_PUBLIC_*` and `VITE_*` are not secrets. A client file that reaches a server-only module, for example one that imports `node:fs`, is a `server-only-import` candidate.
+A **client-server leak** ([`client-server-leak`](/rules/client-server-leak)) is a file with a top-level `"use client"` directive that reaches a non-public `process.env` value through its imports. Fallow follows the imports from each client file. Public names such as `NEXT_PUBLIC_*` and `VITE_*` are not secrets. A client file that reaches a server-only module, for example one that imports `node:fs`, is a `server-only-import` candidate. The demo has no client file, and the second blind spot says so.
 
 For each candidate, fallow adds three facts that set the priority:
 
@@ -67,45 +80,42 @@ For each candidate, fallow adds three facts that set the priority:
 - **Reachability.** Fallow checks whether an entry point reaches the file of the sink.
 - **Boundaries.** Fallow checks whether the path crosses from server code to client code, or crosses an [architecture](/analysis/architecture) boundary.
 
-A candidate gets `high` when an entry point reaches a sink with an argument from a source, when the path crosses a boundary, or when [runtime coverage](/analysis/runtime-coverage) shows that the code runs often. Another candidate with untrusted input gets `medium`. Each other candidate gets `low`.
-
-Fallow reads syntax. It does not run the code and does not prove that a value reaches the sink without a check. Thus, each candidate needs verification.
+A candidate gets `high` when an entry point reaches a sink with an argument from a source. A crossed boundary also gives `high`, and so does [runtime coverage](/analysis/runtime-coverage) that shows that the code runs often. Another candidate with untrusted input gets `medium`. Each other candidate gets `low`. The `exec()` call gets `medium`, because the source is in `src/index.ts` and only an import connects it to the sink. Fallow does not prove that a value reaches the sink without a check, so each candidate needs verification.
 
 ## Act on a finding
 
-Read the trace, and open the code at each step. Then decide:
+Read the trace, and open the code at each step. In the demo, `process.argv[2]` goes into `archiveReports` with no check, so the first row of this table applies:
 
 | Situation | Action |
 |:--|:--|
 | An attacker can control the value, and nothing checks it. | Fix the code: validate the input, use a fixed list of values, or use an API without a shell or without HTML. |
 | A check or a sanitizer exists that fallow does not see. | Put `// fallow-ignore-next-line security-sink` above the line, and add the reason. |
-| The file is also unused. | Delete the file. |
+| The file is also unused. | Delete the file, as for `src/lib/banner.ts`. |
 
 A coding agent can verify the candidates for you. Run `fallow security --format json --surface` to get each candidate with its trace. The agent checks each candidate and writes a verdict file. Then `fallow security survivors` shows only the candidates that the agent kept. Fallow makes no model calls itself. [Verify security candidates with an agent](/cli/security-agent-verification) has the input and the verdict format.
 
-## Set a limit
+## Fail a run
 
-By default, `fallow security` reports and exits with code 0. To check a pull request, gate only the new candidates:
+By default, `fallow security` reports and exits with code 0, also when old code has many candidates. The option `--gate new` fails a run only on the candidates that a change adds. In the demo, a branch adds the two files above:
 
 ```bash
 npx fallow security --gate new --changed-since main
 ```
 
 ```text
-Gate: REVIEW REQUIRED, 1 new security item in changed lines. fallow has not confirmed a vulnerability.
+Gate: REVIEW REQUIRED, 2 new security items in changed lines. fallow has not confirmed a vulnerability.
 ```
 
-The run exits with code 8 when the change adds a candidate on a changed line. Candidates in old code do not fail the gate. Exit code 8 is only for this gate, so a CI job can allow it without a hidden error. Use `--gate newly-reachable --changed-since main` to fail when the change makes an old candidate reachable from an entry point.
+The run exits with code 8 when the change adds a candidate on a changed line. Candidates in old code do not fail the gate. Exit code 8 is only for this gate, so a CI job can allow it without a hidden error. Use `--gate newly-reachable --changed-since main` to fail when the change makes an old candidate reachable from an entry point. [Changed code and baselines](/concepts/changed-code) explains how fallow finds the changed lines.
 
 To fail on each candidate in some paths, set the rule to `error` in your config file. For example, the rule `security-sink` can be `error` for `src/api/**` with an `overrides` entry. See [Rules](/configuration/rules).
 
-## Limits
+## What fallow cannot see
 
 - A candidate is not a vulnerability. The `high` priority means "check this first".
 - Fallow cannot follow a call through dynamic dispatch or a computed member. The JSON output counts these places as `unresolved_callee_sites`. Run `fallow security blind-spots` to list them.
 - The client-server leak check needs `"use client"` files, or the React Router plugin. Without them, it checks nothing and says so.
 - The catalogue does not find a weakness in logic, for example a missing permission check.
-- `fallow audit` and bare `fallow` do not report security candidates.
 
 ## Reference
 

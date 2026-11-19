@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   ANCHOR_FILE,
   CLI_CONTRACT,
+  ENVIRONMENT_PAGE,
   CONFIG_CONTRACT,
   END,
   PAGE_CHARACTER_LIMIT,
@@ -17,14 +18,21 @@ import {
   cleanToolText,
   coverageRows,
   cutAtWord,
+  defaultSentences,
+  describeArgument,
   describeSchema,
   escapeCell,
   escapeParagraph,
   escapeProse,
   findBlocks,
   firstSentences,
+  headingLevelBefore,
   indexCommands,
   indexSummary,
+  isCodeExample,
+  isMainBuild,
+  leadingCode,
+  optionIdPrefix,
   overBudgetRules,
   parseArguments,
   renderBlock,
@@ -35,7 +43,12 @@ import {
   renderDoc,
   renderEnvironment,
   renderExitCodes,
+  renderGlobalNote,
   renderGlobalOptions,
+  renderMcpResources,
+  renderMcpTools,
+  renderContractReadme,
+  renderPageBlocks,
   renderRule,
   replaceBlocks,
   replaceDashes,
@@ -115,7 +128,8 @@ test("escapes a table cell: one line and each pipe, also in code", () => {
 });
 
 test("escapes the start of a paragraph that MDX reads as a module or a block", () => {
-  assert.equal(escapeParagraph("export function a() is unused."), "`export` function a() is unused.");
+  assert.equal(escapeParagraph("export function a() is unused."), "`export function a()` is unused.");
+  assert.equal(escapeParagraph("export is a keyword."), "`export` is a keyword.");
   assert.equal(escapeParagraph("# not a heading"), "\\# not a heading");
   assert.equal(escapeParagraph("- not a list"), "\\- not a list");
 });
@@ -271,7 +285,7 @@ test("renders the options of a command: positionals, a pair row, help heading gr
       "| `--mode <MODE>` | `fast` | How to run. Values: `fast`, `slow` (alias `lazy`). |",
       "| `--cache`, `--no-cache` |  | Use the cache. Second sentence. |",
       "",
-      "### Output",
+      "### Output {#options-output}",
       "",
       "| Option | Description |",
       "|:--|:--|",
@@ -405,7 +419,8 @@ test("a rerun keeps the hand-written part of a rule page and the frontmatter it 
 
 test("the facts of a rule page link its config key to the config reference", () => {
   const page = generated.files.get("rules/unused-export.mdx");
-  assert.match(page, /\| Config key in `rules` \| \[`unused-exports`\]\(\/reference\/config[\w-]*#rules\) \|/u);
+  assert.match(page, /\| Config key in `rules` \| \[`unused-exports`\]\(\/reference\/config-rules#rules-unused-exports\) \|/u);
+  assert.match(generated.files.get("reference/config-rules.mdx"), /\| <span id="rules-unused-exports"><\/span>`unused-exports` \|/u);
   assert.match(page, /\| Suppression comment \| `\/\/ fallow-ignore-next-line unused-export` \|/u);
 });
 
@@ -487,13 +502,225 @@ test("maps each released anchor of the two explanation pages to a rule page or n
 });
 
 // ---------------------------------------------------------------------------
+// Option groups, defaults, environment groups, rule text and MCP tables
+
+const GROUPED = {
+  ...FIXTURE,
+  global_options: [
+    option({ long: "--root", value_name: "ROOT", action: "set", help: "Project root", global: true, help_heading: "Project" }),
+    option({ long: "--format", value_name: "FORMAT", action: "set", default: "human", help: "Output format", global: true, help_heading: "Output" }),
+    option({ long: "--threads", value_name: "N", action: "set", help: "Threads", global: true, help_heading: "Performance" }),
+  ],
+  commands: [
+    ...FIXTURE.commands,
+    {
+      name: "cov",
+      path: "cov",
+      about: "Coverage.",
+      usage: "fallow cov",
+      hidden: false,
+      exit_codes: [],
+      positionals: [],
+      options: [],
+      subcommands: [
+        {
+          name: "analyze",
+          path: "cov analyze",
+          about: "Analyze.",
+          usage: "fallow cov analyze",
+          hidden: false,
+          exit_codes: [],
+          positionals: [],
+          subcommands: [],
+          options: [
+            option({ long: "--input", value_name: "PATH", action: "set", help: "Input file", help_heading: "Input" }),
+            option({ long: "--json", help: "JSON", help_heading: "Output" }),
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+test("finds the level of the last heading before a block, outside code fences", () => {
+  const text = "# A\n\n## Options\n\n```bash\n# a comment\n```\n\nX";
+  assert.equal(headingLevelBefore(text, text.length), 2);
+  assert.equal(headingLevelBefore("no heading", 5), 1);
+  const page = `## Subcommands\n\n### analyze {#analyze}\n\n${startMarker("cli-options", "cov analyze")}\n${END}\n`;
+  assert.equal(findBlocks(page, "cli/cov.mdx")[0].level, 3);
+});
+
+test("puts the option groups of a subcommand one level below its heading, with ids that name the subcommand", () => {
+  assert.equal(optionIdPrefix("fallow"), "options");
+  assert.equal(optionIdPrefix("dupes"), "options");
+  assert.equal(optionIdPrefix("coverage analyze"), "analyze-options");
+  assert.equal(optionIdPrefix("similar-code cache clear"), "cache-clear-options");
+  const block = renderCliOptions(GROUPED, "cov analyze", { level: 4 });
+  assert.match(block, /^#### Input \{#analyze-options-input\}$/mu);
+  assert.match(block, /^#### Output \{#analyze-options-output\}$/mu);
+  assert.doesNotMatch(block, /^### /mu);
+});
+
+test("gives each option group of every command of the real contract an id that is unique on its page", () => {
+  const pages = new Map();
+  for (const [path] of indexCommands(CONTRACT)) {
+    const page = path === "fallow" ? "index" : path.split(" ")[0];
+    const ids = pages.get(page) ?? [];
+    ids.push(...[...renderCliOptions(CONTRACT, path).matchAll(/\{#([\w-]+)\}/gu)].map((match) => match[1]));
+    pages.set(page, ids);
+  }
+  for (const [page, ids] of pages) {
+    assert.equal(new Set(ids).size, ids.length, page);
+  }
+});
+
+test("adds the line about the global options under the last option table of a page only", () => {
+  const note = renderGlobalNote(GROUPED);
+  assert.equal(
+    note,
+    "The [global options](/cli/global-flags) are in these groups: [Project](/cli/global-flags#options-project), [Output](/cli/global-flags#options-output), [Performance](/cli/global-flags#options-performance).",
+  );
+  const page = [
+    "## Subcommands",
+    "",
+    "### demo run",
+    "",
+    startMarker("cli-options", "demo run"),
+    END,
+    "",
+    "### analyze",
+    "",
+    startMarker("cli-options", "cov analyze"),
+    END,
+    "",
+  ].join("\n");
+  const result = renderPageBlocks(GROUPED, page, "cli/x.mdx");
+  assert.equal(result.split(note).length - 1, 1);
+  assert.ok(result.indexOf(note) > result.indexOf("#### Input"));
+  assert.match(renderGlobalOptions(GROUPED), /^### Project \{#options-project\}$/mu);
+  assert.match(renderGlobalOptions(GROUPED, { level: 4 }), /^#### Output \{#options-output\}$/mu);
+});
+
+test("keeps a later sentence of a help text that states a default, unless the contract has the default", () => {
+  assert.deepEqual(defaultSentences("One. Two. Three. Defaults to `count` when omitted.", "One. Two."), ["Defaults to `count` when omitted."]);
+  assert.deepEqual(defaultSentences("One. Two. Omit to use the add-on default (5000).", "One. Two."), ["Omit to use the add-on default (5000)."]);
+  assert.deepEqual(defaultSentences("One. Two. The default branch wins.", "One. Two."), []);
+  assert.equal(describeArgument(option({ long: "--mode", help: "Match mode. Second. Third. Defaults to `count`." })), "Match mode. Second. Defaults to `count`.");
+  assert.equal(describeArgument(option({ long: "--x", default: "a", help: "X. Second. Third. Defaults to `a`." })), "X. Second.");
+});
+
+const ENV = {
+  ...FIXTURE,
+  environment_variables: [
+    { name: "FALLOW_FORMAT", group: "output", default: "human", description: "Format" },
+    { name: "FALLOW_QUIET", group: "output", default: null, description: "Quiet" },
+    { name: "FALLOW_CACHE_DIR", group: "cache", default: null, description: "Cache" },
+  ],
+};
+
+test("selects environment variables by group, and shows a default column only when a row has a default", () => {
+  const names = (argument) => selectEnvironment(ENV, argument).map((variable) => variable.name);
+  assert.deepEqual(names("group:output"), ["FALLOW_FORMAT", "FALLOW_QUIET"]);
+  assert.deepEqual(names("group:output !FALLOW_QUIET"), ["FALLOW_FORMAT"]);
+  assert.deepEqual(names("!group:output"), ["FALLOW_CACHE_DIR"]);
+  assert.deepEqual(names("FALLOW_CACHE"), ["FALLOW_CACHE_DIR"]);
+  assert.throws(() => names("group:nope"), /No environment variable has the group "nope"\. The groups are: output, cache\./u);
+  assert.equal(renderEnvironment(ENV, "group:output"), "| Variable | Default | Description |\n|:--|:--|:--|\n| `FALLOW_FORMAT` | `human` | Format |\n| `FALLOW_QUIET` |  | Quiet |");
+  assert.equal(renderEnvironment(ENV, "group:cache"), "| Variable | Description |\n|:--|:--|\n| `FALLOW_CACHE_DIR` | Cache |");
+});
+
+test("checks that the environment reference page holds each variable exactly once", () => {
+  const page = (...arguments_) => arguments_.map((argument) => `${startMarker("environment-variables", argument)}\n${END}`).join("\n\n");
+  assert.doesNotThrow(() => checkEnvironmentBlocks(ENV, page("group:output", "group:cache"), ENVIRONMENT_PAGE));
+  assert.throws(() => checkEnvironmentBlocks(ENV, page("group:output"), ENVIRONMENT_PAGE), /no block of the page holds FALLOW_CACHE_DIR/u);
+  assert.throws(() => checkEnvironmentBlocks(ENV, page("group:output", "FALLOW_FORMAT"), ENVIRONMENT_PAGE), /FALLOW_FORMAT is also in the block/u);
+  assert.doesNotThrow(() => checkEnvironmentBlocks(ENV, page("group:output"), "integrations/mcp.mdx"));
+});
+
+test("uses the display label of an issue type as the title of its rule page", () => {
+  assert.equal(ruleTitle({ id: "x", display_label: "High cyclomatic complexity", summary_label: "Old", label: "Old" }), "High cyclomatic complexity");
+  assert.equal(ruleTitle({ id: "x", summary_label: "Unused files" }), "Unused files");
+  for (const issue of CONTRACT.issue_types) {
+    assert.equal(generated.files.get(`rules/${issue.id}.mdx`).match(/^title: (.*)$/mu)[1], JSON.stringify(issue.display_label), issue.id);
+  }
+});
+
+test("marks only a leading statement of a prose example as code", () => {
+  assert.equal(leadingCode("export const formatPrice = ... exists in src/money.ts, but no module imports it."), "export const formatPrice = ...");
+  assert.equal(leadingCode("export interface LegacyProps is exported, but unused."), "export interface LegacyProps");
+  assert.equal(leadingCode("export function makeUser(): InternalUser exposes InternalUser."), "export function makeUser(): InternalUser");
+  assert.equal(leadingCode("/** @deprecated Use b. */ export function a() is still imported."), "/** @deprecated Use b. */ export function a()");
+  assert.equal(leadingCode("export is a keyword."), null);
+  assert.equal(leadingCode("src/a.ts imports src/b.ts."), null);
+  assert.equal(leadingCode("export `x` is quoted."), null);
+});
+
+test("renders an example as a code block only when the contract fences it or each of its lines is code", () => {
+  assert.equal(isCodeExample("export const formatPrice = ... exists in src/money.ts, but no module imports formatPrice."), false);
+  assert.equal(isCodeExample("A change adds `if (x) return;` to `src/a.ts`."), false);
+  assert.equal(isCodeExample("import { a } from './a';\nexport const b = a();"), true);
+  assert.equal(isCodeExample("The first line is prose.\nexport const b = a();"), false);
+  assert.equal(isCodeExample("```ts\nconst a = 1\n```"), true);
+  const contract = { ...CONTRACT, issue_types: CONTRACT.issue_types.map((issue) => (issue.id === "unused-export" ? { ...issue, explanation: { ...issue.explanation, example: "import { a } from './a';\nexport const b = a();" } } : issue)) };
+  assert.match(renderRule(contract, "unused-export"), /## Example\n\n```ts\nimport \{ a \} from '.\/a';\nexport const b = a\(\);\n```\n/u);
+  assert.match(generated.files.get("rules/unused-export.mdx"), /^`export const formatPrice = \.\.\.` exists in src\/money\.ts/mu);
+});
+
+test("writes the note of an issue type below the facts table, not in a cell", () => {
+  const page = generated.files.get("rules/unused-dependency.mdx");
+  assert.doesNotMatch(page, /\| Note \|/u);
+  assert.match(page, /\n\*\*Note\.\*\* --unused-deps controls /u);
+});
+
+const MCP = {
+  ...FIXTURE,
+  mcp_tools: [
+    { name: "analyze", description: "Full analysis {a}", cli_command: "fallow dead-code --format json --quiet" },
+    { name: "code_execute", description: "Run a snippet.", cli_command: null },
+    { name: "trace", description: "Trace a | b", cli_command: "fallow trace <file> --format json --quiet" },
+  ],
+  mcp_resources: [{ uri: "fallow://explain/{issue_type}", description: "Explain one issue type" }],
+};
+
+test("renders the MCP tools and resources tables", () => {
+  assert.equal(
+    renderMcpTools(MCP),
+    [
+      "Each CLI equivalent runs with `--format json --quiet`.",
+      "",
+      "| Tool | Description | CLI equivalent |",
+      "|:--|:--|:--|",
+      "| `analyze` | Full analysis \\{a\\}. | `fallow dead-code` |",
+      "| `code_execute` | Run a snippet. | none |",
+      "| `trace` | Trace a \\| b. | `fallow trace <file>` |",
+    ].join("\n"),
+  );
+  assert.equal(renderMcpResources(MCP), "| Resource | Content |\n|:--|:--|\n| `fallow://explain/{issue_type}` | Explain one issue type. |");
+  assert.throws(() => renderMcpTools(FIXTURE), /The contract has no mcp_tools/u);
+  for (const text of [renderMcpTools(CONTRACT), renderMcpResources(CONTRACT)]) {
+    assert.deepEqual(findBareMdx(text), []);
+  }
+});
+
+test("the contracts README says when the files come from a build of the main branch", () => {
+  const main = renderContractReadme({ version: "9.9.9" }, { mainBuild: true });
+  assert.match(main, /a build of the main branch of fallow, with the version 9\.9\.9\. No release has this version yet\./u);
+  assert.ok(isMainBuild(main));
+  assert.match(renderContractReadme({ version: "9.9.9" }), /The files come from fallow 9\.9\.9\./u);
+  const files = buildGeneratedFiles({ contract: CONTRACT, schema: SCHEMA, inbound: INBOUND, existing: (path) => (path === "contracts/README.md" ? main : undefined) }).files;
+  assert.ok(isMainBuild(files.get("contracts/README.md")));
+});
+
+// ---------------------------------------------------------------------------
 // Command line
 
 test("parses the command-line arguments", () => {
-  assert.deepEqual(parseArguments([]), { mode: "write", scopes: [], source: null });
-  assert.deepEqual(parseArguments(["rules", "reference"]), { mode: "write", scopes: ["rules", "reference"], source: null });
+  assert.deepEqual(parseArguments([]), { mode: "write", scopes: [], source: null, mainBuild: false });
+  assert.deepEqual(parseArguments(["rules", "reference"]), { mode: "write", scopes: ["rules", "reference"], source: null, mainBuild: false });
   assert.equal(parseArguments(["--check"]).mode, "check");
-  assert.deepEqual(parseArguments(["--update-contracts", "/bin/fallow"]), { mode: "update-contracts", scopes: [], source: "/bin/fallow" });
+  assert.deepEqual(parseArguments(["--update-contracts", "/bin/fallow"]), { mode: "update-contracts", scopes: [], source: "/bin/fallow", mainBuild: false });
+  assert.equal(parseArguments(["--update-contracts", "/bin/fallow", "--main-build"]).mainBuild, true);
+  assert.throws(() => parseArguments(["--main-build"]), /works only with --update-contracts/u);
   assert.throws(() => parseArguments(["--update-contracts"]), /needs a path/u);
   assert.throws(() => parseArguments(["--nope"]), /Unknown argument/u);
   assert.throws(() => parseArguments(["--check", "rules"]), /only the write mode/u);

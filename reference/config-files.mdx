@@ -15,19 +15,19 @@ The config file holds the settings of fallow. [How config works](/configuration/
 
 - Type: `string` (optional)
 
-A string pointing at fallow's JSON Schema URL, used only by editors for autocomplete and validation of the config file; it has no effect on analysis and is stripped before serialization (serde skip_serializing, writeOnly in the schema). Set it to `./node_modules/fallow/schema.json` for npm installs (version-aligned, offline, avoids VS Code's untrusted-remote-schema prompt), or `https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json` for non-npm installs; any other value is ignored by fallow.
+A string pointing at fallow's JSON Schema URL, used only by editors for autocomplete and validation of the config file; it has no effect on analysis, and fallow does not write it back when it saves a config. Set it to `./node_modules/fallow/schema.json` for npm installs (version-aligned, offline, avoids VS Code's untrusted-remote-schema prompt), or `https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json` for non-npm installs; any other value is ignored by fallow.
 
 ## `minimumVersion` {#minimumversion}
 
 - Type: `string` (optional)
 
-The lowest fallow version this config is written for, as `MAJOR.MINOR.PATCH`. An older binary stops with a message naming both versions instead of failing on the first field it does not recognize, so a config committed to a shared repository says which upgrade it needs rather than reading like a typo. Optional and unset by default; set it in the same change that adds a field introduced in a newer version. It gates nothing on its own: an unknown key still fails on a binary at or above this version, because there the key really is a typo.
+The lowest fallow version this config is written for, as `MAJOR.MINOR.PATCH`. An older binary stops with a message naming both versions instead of failing on the first field it does not recognize, so a config committed to a shared repository says which upgrade it needs rather than reading like a typo. Optional and unset by default; set it in the same change that adds a field introduced in a newer version. Only digits are accepted: a pre-release suffix such as `-beta.1` is a config error. A parent config of `extends` can set it too. It gates nothing on its own: an unknown key still fails on a binary at or above this version, because there the key really is a typo.
 
 ## `extends` {#extends}
 
 - Type: `string or string[]`
 
-A single parent config source, or an ordered array of them, to inherit before this file's own keys apply; each source is a file-relative path, an `npm:<package>` specifier, or an `https://` URL (`http://` is rejected), deep-merged in order so objects merge field-by-field while arrays and scalars in this file replace the parent's, with cycle and depth guards. Set it to share a base config across a monorepo or team; it is consumed at load and stripped before serialization (serde skip_serializing).
+A single parent config source, or an ordered array of them, to inherit before this file's own keys apply; each source is a file-relative path, an `npm:<package>` specifier, or an `https://` URL (`http://` is rejected), deep-merged in order so objects merge field-by-field while arrays and scalars in this file replace the parent's, with a cycle guard and a depth limit of 10 levels. An `https://` source loads only with `--allow-remote-extends`; fallow waits 5 seconds for it (`FALLOW_EXTENDS_TIMEOUT_SECS` changes this) and refuses a response over 1 MB. Set it to share a base config across a monorepo or team; fallow reads it at load and does not write it back when it saves a config.
 
 ## `entry` {#entry}
 
@@ -46,6 +46,7 @@ An array of project-root-relative glob patterns for files to exclude from analys
 ## `supportEntry` {#supportentry}
 
 - Type: `string[]`
+- Default: `[]`
 
 An array of project-root-relative glob patterns whose matching files are support entry points: dev scripts, tooling and setup files that run outside production. In default mode a support entry keeps its file and its imports reachable, the same as `entry`. In `--production` mode (or `production` for dead-code analysis), fallow leaves a file that only a support entry matches out of the analysis, so its imports credit no export, file or dependency. A file that also matches `entry`, a framework plugin or a package.json field stays an entry point, and a support file that production code imports stays a normal module. Use `entry` for the files that run in production. A single `*` stays within one path segment; use `**` to match across directories.
 
@@ -73,13 +74,13 @@ User conditions are matched with higher priority than the baseline, so a package
 
 resolves to the `worker` branch when `"worker"` is listed here.
 
-See [https://nodejs.org/api/packages.html#community-conditions-definitions](https://nodejs.org/api/packages.html#community-conditions-definitions) for the set of community-defined conditions.
+The [community conditions of Node.js](https://nodejs.org/api/packages.html#community-conditions-definitions) list the conditions that tools define.
 
 ## `production` {#production}
 
 - Type: `boolean or object`
 
-Enables production mode, which excludes test/spec/story/dev files from discovery and forces `unused-dev-dependencies` and `unused-optional-dependencies` to `off`. Accepts a boolean (default false) applied to all analyses, or a per-analysis object `{ deadCode?, health?, dupes?, ignore? }` that scopes production mode to individual analyses in combined `fallow` and `fallow audit` (each analysis key a boolean, default false). The object key `ignore` is a glob array of extra paths that discovery drops in production mode only. Set it to analyze only shipped code; the `--production`/`--no-production` and `--production-{dead-code,health,dupes}` CLI flags and `FALLOW_PRODUCTION*` env vars override this value (CLI flags win, then per-analysis env, then global env, then config).
+Enables production mode, which excludes test/spec/story/dev files from discovery and forces `unused-dev-dependencies` and `unused-optional-dependencies` to `off`. Accepts a boolean (default false) applied to all analyses, or a per-analysis object `{ deadCode?, health?, dupes?, ignore? }` that scopes production mode to individual analyses: `deadCode` applies to `fallow dead-code`, `health` to `fallow health` and `dupes` to `fallow dupes`, and each applies to its part of combined `fallow` and `fallow audit` (each analysis key a boolean, default false). The object key `ignore` is a glob array of extra paths that discovery drops in production mode only. Set it to analyze only shipped code; the `--production`/`--no-production` and `--production-{dead-code,health,dupes}` CLI flags and `FALLOW_PRODUCTION*` env vars override this value (CLI flags win, then per-analysis env, then global env, then config).
 
 | Key | Type | Default |
 |:--|:--|:--|
@@ -125,6 +126,7 @@ An array of project-root-relative glob patterns for files loaded at runtime by a
 ## `markupExtensions` {#markupextensions}
 
 - Type: `string[]`
+- Default: `[]`
 
 An array of file extensions, without the leading dot, for server-side template files whose text counts as CSS class references for the `unreferenced-css-class` finding of `fallow health --css`. These files are read as text only: they do not join source discovery or the module graph, so they never become unused files and their imports are not followed. Templates are more lenient than Markdown: the whole text of a template file counts as a dynamic class reference, so any class-like word in it counts as used, also a common word such as `hidden` or `title` in prose or a template tag. A Markdown file joins the reference text only when it has dynamic class syntax. The extensions `liquid`, `njk`, `hbs`, `handlebars`, `twig`, and `blade.php` are always read; set this (e.g. `["tpl", "erb"]`) for other template languages. An extension matches the end of a file name, ignoring case, so `blade.php` matches `welcome.blade.php`. Values may contain only letters, digits, `.`, `-`, and `_`. A value whose last segment is a script, stylesheet, data or asset extension (`js`, `ts`, `css`, `json`, `svg`, `xml`, `map`, and similar, so also `module.css` or `d.ts`), or a compound value that ends in a markup extension that fallow already reads (`page.html`), is a config error. The walk uses the ignore files of source discovery (`.gitignore`, `.ignore`), skips `ignorePatterns`, `health.ignore`, `node_modules`, `vendor`, and build output directories, reads only regular files, and skips files over the `--max-file-size` limit. In `extends`, a child list replaces the parent list.
 
@@ -153,7 +155,7 @@ When true, restricts this config's extends entries to file-relative paths that r
 - Type: `boolean`
 - Default: `false`
 
-When true, exports of entry-point files are subject to unused-export detection instead of being auto-credited as used, so a typo'd or stray export in a framework route or package entry (e.g. meatdata for metadata) is flagged; plugin used_exports allowlists are still honored. Boolean, defaults to false; the CLI flag --include-entry-exports applies the same behavior for one run.
+When true, exports of entry-point files are subject to unused-export detection instead of being auto-credited as used, so a mistyped or stray export in a framework route or package entry (e.g. meatdata for metadata) is flagged; the `usedExports` lists of plugins still apply. Boolean, defaults to false; the CLI flag --include-entry-exports applies the same behavior for one run.
 
 ## `autoImports` {#autoimports}
 
@@ -178,7 +180,7 @@ Overrides the location and size ceiling of fallow's persistent extraction cache 
 | Key | Type | Default |
 |:--|:--|:--|
 | [`dir`](#cache-dir) | `string` |  |
-| [`maxSizeMb`](#cache-maxsizemb) | `integer` |  |
+| [`maxSizeMb`](#cache-maxsizemb) | `integer` | `256` |
 
 ### `cache.dir` {#cache-dir}
 
@@ -189,7 +191,8 @@ Directory for fallow's persistent analysis cache. Relative paths resolve from th
 ### `cache.maxSizeMb` {#cache-maxsizemb}
 
 - Type: `integer` (optional)
+- Default: `256`
 
-Maximum size of the persistent extraction cache, in megabytes.
+Maximum size of the persistent extraction cache, in megabytes. Default 256.
 
 {/* generated:end */}

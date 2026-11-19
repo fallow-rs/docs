@@ -5,7 +5,7 @@ keywords: ["dead code", "unused files", "unused exports", "unused types", "unuse
 icon: "skull-crossbones"
 ---
 
-Code that nothing uses still costs you. People read it, tests run it, and a search shows it. `fallow dead-code` finds the files and the exports that your project does not use, so that you can delete them.
+Code that nothing uses still costs you, because people read it, tests run it, and a search shows it. In the demo project, nothing calls `cancelOrder` in `src/services/orders.ts`. It looks like part of the order API, so the next person who changes `Order` must keep it working too. `fallow dead-code` finds the files and the exports that your project does not use, so that you can delete them.
 
 ```bash
 npx fallow dead-code
@@ -13,14 +13,42 @@ npx fallow dead-code
 
 ## What fallow finds
 
+The demo project has no type alias, enum or class. To show these findings too, this page adds one file, `src/services/order-book.ts`, and imports `Channel` and `OrderBook` in `src/index.ts`:
+
+```ts
+// src/services/order-book.ts
+import type { Order } from "./orders";
+
+export type OrderStatus = "open" | "paid" | "cancelled";
+
+export enum Channel {
+  Web = "web",
+  Store = "store",
+  Phone = "phone",
+}
+
+export class OrderBook {
+  private orders: Order[] = [];
+
+  add(order: Order): void {
+    this.orders.push(order);
+  }
+
+  clear(): void {
+    this.orders = [];
+  }
+}
+```
+
+`src/index.ts` reads `Channel.Web` and `Channel.Store`, and calls `add`. The report:
+
 ```text
   3 entry points detected (2 package.json, 1 plugin)
 
 ── Unused Code ─────────────────────────────────────
 
-● Unused files (2)
+● Unused files (1)
   src/utils/legacy-currency.ts
-  src/utils/legacy-report.ts
   Files not reachable from any entry point
   https://fallow.tools/docs/explanations/dead-code/#unused-files
 
@@ -48,38 +76,32 @@ npx fallow dead-code
   src/services/order-book.ts
     :18 OrderBook.clear
 
-✗ 2 files · 3 exports · 1 type · 1 enum member · 1 class member · 1 unused dependency · 1 unlisted dependency (0.03s)
-  2 findings in unused files are hidden · --show-cascade shows them
+✗ 1 file · 3 exports · 1 type · 1 enum member · 1 class member · 1 unused dependency · 1 unlisted dependency (0.09s)
 ```
 
 | Part | Meaning |
 |:--|:--|
 | `3 entry points detected` | The [entry points](/concepts/entry-points) where fallow starts. When fallow finds none, this line starts with `⚠ No entry points detected`, and the findings are not reliable. |
-| `● Unused files (2)` | The issue type and the number of [findings](/concepts/findings) of that type. |
+| `● Unused files (1)` | The issue type and the number of [findings](/concepts/findings) of that type. |
 | `:3 formatPercent` | The line and the name of one finding. |
 | `(re-export)` | The line of a [barrel file](/concepts/entry-points) that exports the name again. One fix removes both lines. |
 | The URL | The page that explains the issue type. |
 | `To auto-fix`, `To suppress` | The command that fixes the findings, and the comment that hides one finding. |
 | `✗` | At least one finding has the [severity](/concepts/findings) `error`, so the command exits with code 1. |
-| `2 findings in unused files are hidden` | Findings inside the unused files. See [Findings in unused files](#findings-in-unused-files). |
 
-The same run also reports dependency findings, such as `left-pad` and `uuid` here. [Dependencies](/analysis/dependencies) explains them. `fallow dead-code` has more issue types, for example unresolved imports, duplicate exports and framework findings. [Issue types](/reference/issue-types) lists each one.
+The last line also counts two dependency findings, `left-pad` and `uuid`. [Dependencies](/analysis/dependencies) explains them. `fallow dead-code` has more issue types, for example unresolved imports, duplicate exports and framework findings. [Issue types](/reference/issue-types) lists each one.
 
 ## How fallow decides
 
-Fallow starts at each entry point and follows each import. [Entry points and reachability](/concepts/entry-points) explains this walk. Then fallow checks each kind of code:
+Each finding above is a fact about the module graph: fallow starts at the entry points and follows each import, also through barrel files. [Entry points and reachability](/concepts/entry-points) explains that walk. This section covers the cases that the walk alone does not settle. Fallow decides each case from the source text. The opt-in [type-aware analysis](/analysis/type-aware) adds the TypeScript type checker for the cases that syntax cannot decide.
 
-- An [unused file](/rules/unused-file) is a file that no entry point reaches. A file that only unused files import is also unused. Fallow never reports an entry point as an unused file.
-- An [unused export](/rules/unused-export) is an export of a reachable file that no file imports. Fallow follows each name through barrel files to the file that declares it.
-- An [unused type](/rules/unused-type) is an exported type alias or interface that no file uses. An `import type` counts as a use.
-- An [unused enum member](/rules/unused-enum-member) is a member of a used enum that no code reads. `Object.values(Channel)` and other uses of the whole enum count for each member.
-- An [unused class member](/rules/unused-class-member) is a method or a property that no code outside the class reads. A call inside the class itself does not count.
+### Types and enum members
 
-Fallow reads the code and does not run it. It does not use the TypeScript type checker. The opt-in [type-aware analysis](/analysis/type-aware) adds the type checker for the cases that syntax cannot decide.
+An `import type` counts as a use of a type, so [`OrderStatus`](/rules/unused-type) is unused only because no file names it. For an enum that is in use, fallow checks each member. `Channel.Phone` is an [unused enum member](/rules/unused-enum-member), because no code reads it. `Object.values(Channel)` and other uses of the whole enum count for each member.
 
 ### Class members
 
-Fallow checks public methods, public properties and static methods. It does not report these members:
+`OrderBook.clear` is an [unused class member](/rules/unused-class-member): no code outside the class calls it. A call inside the class itself does not count. Fallow checks public methods, public properties and static methods. It does not report these members:
 
 - `private` members and `#private` members.
 - `protected` members. The opt-in rule [`unused-protected-class-member`](/rules/unused-protected-class-member) checks them.
@@ -96,9 +118,16 @@ Fallow does not report the exports of an entry point, because code outside your 
 
 For `import * as m from "./m"`, fallow counts only the names that the code reads, such as `m.a`. Code that reads each key, such as `Object.keys(m)`, uses each export. [Entry points and reachability](/concepts/entry-points) has the table of import forms.
 
-### Findings in unused files
+### Findings in unused files {#findings-in-unused-files}
 
-An unused file can also hold unused exports, types and members. Fallow does not list these findings, because the delete of the file removes them. The last line of the report gives their number. To list them, add `--show-cascade`:
+An unused file can also hold unused exports, types and members. Fallow does not list these findings, because the delete of the file removes them. To see this, add a second old file, `src/utils/legacy-report.ts`, that imports `toGuilders` from `src/utils/legacy-currency.ts`. Both files are unused, and the report ends with a count:
+
+```text
+✗ 2 files · 3 exports (0.06s)
+  2 findings in unused files are hidden · --show-cascade shows them
+```
+
+To list them, add `--show-cascade`:
 
 ```bash
 npx fallow dead-code --show-cascade --unused-files --unused-exports
@@ -117,7 +146,7 @@ The [`showCascade`](/reference/config-rules#showcascade) key in the config file 
 
 ## Act on a finding
 
-First check the finding. `--trace` shows why fallow reports an export:
+A finding is a strong hint, but you delete the code, so check each finding first. `--trace` shows why fallow reports an export:
 
 ```bash
 npx fallow dead-code --trace src/services/orders.ts:cancelOrder
@@ -131,32 +160,30 @@ npx fallow dead-code --trace src/services/orders.ts:cancelOrder
   Reason: No references found, export is unused
 ```
 
-For a file, use `--trace-file`. It shows the exports of the file and the files that import it:
+`Namespace: value` tells you that `cancelOrder` is a value. For `OrderStatus`, the trace says `Namespace: type`. For a file, use `--trace-file`. It shows the exports of the file and the files that import it:
 
 ```bash
-npx fallow dead-code --trace-file src/utils/legacy-report.ts
+npx fallow dead-code --trace-file src/utils/legacy-currency.ts
 ```
 
 ```text
-  UNREACHABLE src/utils/legacy-report.ts
+  UNREACHABLE src/utils/legacy-currency.ts
 
-  Exports (1):
-    export legacyTotal [unused]
-
-  Imports from (1):
-    <- src/utils/legacy-currency.ts
+  Exports (2):
+    export toGuilders [unused]
+    export fromGuilders [unused]
 ```
 
-[Find why fallow reports a finding](/guides/trace-a-finding) shows each trace command. Then act on the finding:
+[Find why fallow reports a finding](/guides/trace-a-finding) shows each trace command. When the trace confirms the finding, pick the action that fits:
 
 | Situation | Action |
 |:--|:--|
 | Nothing uses the code. | Delete the file, the export or the member. |
 | Only the file itself uses an export. | Remove the `export` keyword and keep the code. |
-| A tool or a framework loads the code, and fallow does not know it. | Correct the entry points or the plugin. See [Fix a wrong finding](/guides/false-positives). |
+| A tool or a framework loads the code, and fallow does not know it. | Correct the entry points or the plugin. See [Fix a false positive](/guides/false-positives). |
 | You keep the code on purpose. | Add a suppression comment. See [Suppress a finding](/guides/suppress). |
 
-`fallow fix` removes unused exports and unused enum members for you. Run `fallow fix --dry-run` first. [Fix findings automatically](/guides/auto-fix) explains what it changes.
+`fallow fix` removes unused exports and unused enum members for you. Run `fallow fix --dry-run` first. [Remove unused code with fallow fix](/guides/auto-fix) explains what it changes.
 
 ### Work in this order
 
@@ -164,17 +191,17 @@ npx fallow dead-code --trace-file src/utils/legacy-report.ts
 2. Run `fallow dead-code` again.
 3. Remove the unused exports, types and members.
 
-An import in an unused file still counts as a use of an export. When you delete the file, the exports that only that file imported become unused. The second run shows them.
+The order matters, because an import in an unused file still counts as a use of an export. When you delete the file, the exports that only that file imported become unused, and the second run shows them.
 
-## Set a limit
+## Fail a run
 
-By default, each issue type on this page has the severity `error`. A finding then makes the command exit with code 1. A finding at the severity `warn` shows in the report and does not change the exit code. To fail on these findings too, add `--fail-on-issues`:
+Each issue type on this page has the severity `error` by default, so one finding makes `fallow dead-code` exit with code 1. The demo run above exits with code 1. A finding at the severity `warn` shows in the report and keeps the exit code at 0, unless you add `--fail-on-issues`:
 
 ```bash
 npx fallow dead-code --fail-on-issues
 ```
 
-To change the severity of an issue type, set its [rule](/concepts/findings) in the config file:
+To report an issue type without a failure, set its [rule](/concepts/findings) to `warn` in the config file. For example, a team that cleans the class members later:
 
 ```jsonc
 // .fallowrc.jsonc
@@ -185,16 +212,16 @@ To change the severity of an issue type, set its [rule](/concepts/findings) in t
 }
 ```
 
-An existing project often has many findings on the first run. Save a [baseline](/guides/baselines), so that fallow fails only on new findings. On a pull request, run [`fallow audit`](/analysis/changed-code). It judges only the findings that the change introduces.
+To fail only on the dead code that a change adds, see [Changed code and baselines](/concepts/changed-code).
 
-## Limits
+## What fallow cannot see
 
-- Fallow cannot follow a path that exists only when the code runs, for example `import(name)` with a variable. Name these files in `dynamicallyLoaded`.
-- Fallow cannot see code that uses a name through reflection, for example a dependency injection container that reads class names.
-- Fallow cannot see a use outside the project, for example a file that only a deploy script outside the repository runs.
+- A path that exists only when the code runs, for example `import(name)` with a variable. Name these files in `dynamicallyLoaded`.
+- A use through reflection, for example a dependency injection container that reads class names.
+- A use outside the project, for example a file that only a deploy script outside the repository runs.
 - A file that only tests import is reachable in a normal run. Use [production mode](/concepts/production-mode) to check the code that ships.
 
-[Limits of fallow](/guides/limits) lists each known limit and its workaround.
+For each known case and its workaround, see [Known limits of fallow](/guides/limits).
 
 ## Reference
 

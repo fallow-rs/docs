@@ -5,53 +5,63 @@ keywords: ["type-aware", "TypeScript", "type checker", "fallow-type-aware", "unu
 icon: "code"
 ---
 
-Fallow reads your code as syntax. It does not run the TypeScript compiler. Some TypeScript facts are not in the syntax of your files, for example a method that an interface of a package requires. The **type-aware analysis** is an opt-in analysis that uses the TypeScript type checker to confirm what syntax alone cannot decide. Turn it on with `--type-aware`.
+Fallow can report a method as unused when a package calls it through an interface. If you delete that method, the package has nothing to call, and your build or your app fails. Fallow reads your code as syntax and does not run the TypeScript compiler, so it does not see the interface in the package. The **type-aware analysis** is an opt-in analysis that uses the TypeScript type checker to confirm what syntax alone cannot decide. Turn it on with `--type-aware`. It needs one more package and adds time to each run.
 
 ## What fallow finds
 
-A job class implements the `Job` interface of a package. The package calls `run()`. Your code never calls it:
+This example adds two things to the demo project: a package `job-queue` that declares a `Job` interface, and a file `src/jobs/cleanup-job.ts`. The package calls `run()`. Your code never calls it:
 
 ```ts
-// src/cleanup-job.ts
+// src/jobs/cleanup-job.ts
 import type { Job } from "job-queue";
 
 export class CleanupJob implements Job {
   async run(): Promise<void> {
-    console.log("remove old sessions");
+    console.log("remove old orders");
   }
 }
 ```
 
 ```ts
-// src/index.ts
+// src/index.ts (added lines)
 import { schedule } from "job-queue";
-import { CleanupJob } from "./cleanup-job";
+import { CleanupJob } from "./jobs/cleanup-job";
 
 schedule(new CleanupJob());
 ```
 
-Without the type checker, fallow does not read the `Job` interface in the package. It reports `run` as unused:
+Run the same check twice, first without and then with the type checker:
 
 ```bash
 npx fallow dead-code --unused-class-members
-```
-
-```text
-● Unused class members (1)
-  src/cleanup-job.ts
-    :4 CleanupJob.run
-  Class methods or properties never referenced outside their class
-
-✗ 1 class member (0.04s)
-```
-
-With `--type-aware`, the type checker resolves `Job` to its declaration in the package. The interface requires `run`, so fallow removes the finding:
-
-```bash
 npx fallow dead-code --unused-class-members --type-aware
 ```
 
-The type-aware analysis adds these results:
+Without the type checker, fallow does not read the `Job` interface in the package, so it reports `run` as unused:
+
+```text
+  3 entry points detected (2 package.json, 1 plugin)
+
+── Unused Code ─────────────────────────────────────
+
+● Unused class members (1)
+  src/jobs/cleanup-job.ts
+    :4 CleanupJob.run
+  Class methods or properties never referenced outside their class
+
+✗ 1 class member (0.05s)
+```
+
+With `--type-aware`, the type checker resolves `Job` to its declaration in the package. The interface requires `run`, so fallow removes the finding and says why on the last line:
+
+```text
+  3 entry points detected (2 package.json, 1 plugin)
+
+✓ No issues found (0.24s)
+[W] Type-aware refinement: 1 candidate, 0 confirmed uses, 1 preserved contract, 0 candidates without static references (0 guarded fixes), 0 unresolved findings, 0 abstained findings
+```
+
+The check of a finding is the main result. The type-aware analysis also adds these results:
 
 | Result | Where |
 |:--|:--|
@@ -63,21 +73,19 @@ The type-aware analysis adds these results:
 
 ## How fallow decides
 
-Fallow first runs its normal analysis. Then it sends only the candidates to the type checker: the exports, types and class members that the normal analysis reports as unused. The type checker answers for the exact declaration. A name that only looks the same is not enough.
+The `1 candidate` in the refinement line is the method `run`. Fallow first runs its normal analysis. Then it sends only the candidates to the type checker: the exports, types and class members that the normal analysis reports as unused. The type checker answers for the exact declaration. A name that only looks the same is not enough.
 
 Each candidate gets one outcome:
 
 | Outcome | Finding |
 |:--|:--|
 | `confirmed-used` | Removed. The type checker found a reference. |
-| `contract-preserved` | Removed. An interface, an abstract member, an override or a framework contract requires the declaration. |
+| `contract-preserved` | Removed. An interface, an abstract member, an override or a framework contract requires the declaration. `run` gets this outcome. |
 | `confirmed-no-static-references` | Kept. Each project that owns the file has no reference. |
 | `retained-unresolved` | Kept. The type checker could not resolve the declaration or its project. |
 | `retained-abstained` | Kept. Dynamic code, a decorator, an overload or another known gap stops a sure answer. |
 
-Thus, the type-aware analysis removes findings of these three kinds. It never adds one. The rule `private-type-leaks` is an exception: it is `off` by default, and a type-aware run sets it to `warn` when your config does not set it. Each result also has a status: `complete`, `partial` or `unavailable`. [Evidence and its limits](/concepts/evidence) explains what static evidence can prove.
-
-`fallow fix --type-aware` removes a class member only when each owning project gives a complete negative answer, and the declaration did not change. Run it with `--dry-run` first.
+Thus, the type-aware analysis removes findings of these three kinds. It never adds one. The rule `private-type-leaks` is an exception: it is `off` by default, and a type-aware run sets it to `warn` when your config does not set it. Each result also has a status: `complete`, `partial` or `unavailable`. [Evidence levels](/concepts/evidence) explains what static evidence can prove.
 
 ## Turn it on
 
@@ -113,15 +121,21 @@ Pass `--no-type-aware` to keep one run syntactic. When fallow misses a TypeScrip
 
 A `fallow` binary from Homebrew, `cargo install` or a release archive does not find an npm package. On macOS and Linux, run `fallow type-aware setup` once. The command downloads the signed package of its own fallow version into your user directory. The package needs Node.js 20 or later on `PATH`. On Windows, install `fallow` and `fallow-type-aware` from npm. The GitHub Action and the GitLab template install the package themselves. [`fallow type-aware`](/cli/type-aware) has the details of `status`, `setup` and `cleanup`.
 
-## Cost
+### Cost
 
-The type checker builds a TypeScript program for each selected project and scans its symbols. This adds time to the run, and more time on a large project. A CLI or CI run pays this cost each time. The editor keeps the program in memory between saves. One request to the type checker can take 2 minutes at most. Change the limit with `FALLOW_TYPE_AWARE_TIMEOUT_SECS`.
+The type checker builds a TypeScript program for each selected project and scans its symbols. This adds time to the run, and more time on a large project. A CLI or CI run pays this cost each time, while the editor keeps the program in memory between saves. One request to the type checker can take 2 minutes at most. Change the limit with `FALLOW_TYPE_AWARE_TIMEOUT_SECS`.
 
-Fallow starts the type checker only when the run has a candidate for it. A run with no candidate costs nothing extra.
+Fallow starts the type checker only when the run has a candidate for it, so a run with no candidate costs nothing extra.
 
-## Set a limit
+## Act on a finding
 
-`typeAware.require` decides what happens when the type checker cannot give a complete answer:
+A finding that the type checker keeps with `confirmed-no-static-references` is stronger evidence, but it is still a static result. Before you delete it, check the cases in [What fallow cannot see](#what-fallow-cannot-see): reflection, framework registration and consumers outside your projects.
+
+`fallow fix --type-aware` removes a class member only when each owning project gives a complete negative answer, and the declaration did not change. Run it with `--dry-run` first.
+
+## Fail a run
+
+Without the package, or when the type checker fails, fallow can still report the syntactic findings. `typeAware.require` decides what happens when the type checker cannot give a complete answer:
 
 | Cause | `best-effort` (default) | `complete` |
 |:--|:--|:--|
@@ -130,9 +144,16 @@ Fallow starts the type checker only when the run has a candidate for it. A run w
 
 Start with `best-effort`. Use `--type-aware-require complete` in CI only when an incomplete answer must fail the job.
 
-`fallow audit` compares the base and the head of a change with the same type-aware setting. To keep the audit syntactic, set `audit.typeAware` to `false`.
+`fallow audit` compares the base and the head of a change with the same type-aware setting. To keep the audit syntactic, set `audit.typeAware` to `false`. [Changed code and baselines](/concepts/changed-code) explains the audit.
 
-## Svelte virtual-module exports {#svelte-virtual-module-exports}
+## What fallow cannot see
+
+- The type-aware analysis does not replace `tsc --noEmit` or a linter. Fallow does not report compiler errors or typed lint findings.
+- The type checker sees only your projects. A consumer outside them, for example a user of your published package, stays unknown. Package exports and `publicPackages` still decide which exports are public.
+- `confirmed-no-static-references` does not prove that code is unused. Reflection, framework registration and runtime behavior can use it.
+- Dynamic member access, decorators, overloads and a non-literal `import()` make fallow keep the finding.
+
+### Svelte virtual-module exports {#svelte-virtual-module-exports}
 
 The Svelte tools make a virtual TypeScript module for each `.svelte` file. The type checker that fallow uses cannot make these modules. Fallow supports a default import of a component, and a named export that the type checker can see.
 
@@ -140,15 +161,8 @@ A project can import or export again a named binding from a `.svelte` file that 
 
 Do not move valid component exports to a `.ts` file only for fallow. Use `svelte-check` for Svelte and TypeScript errors.
 
-## Limits
-
-- The type-aware analysis does not replace `tsc --noEmit` or a linter. Fallow does not report compiler errors or typed lint findings.
-- The type checker sees only your projects. A consumer outside them, for example a user of your published package, stays unknown. Package exports and `publicPackages` still decide which exports are public.
-- `confirmed-no-static-references` does not prove that code is unused. Reflection, framework registration and runtime behavior can use it.
-- Dynamic member access, decorators, overloads and a non-literal `import()` make fallow keep the finding.
-
 ## Reference
 
 - [`fallow type-aware`](/cli/type-aware): `status`, `setup` and `cleanup`.
 - [`typeAware` config](/reference/config-health#typeaware): each key and its default.
-- [Evidence and its limits](/concepts/evidence): what a static result can prove.
+- [Evidence levels](/concepts/evidence): what a static result can prove.

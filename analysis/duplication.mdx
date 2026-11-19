@@ -5,7 +5,7 @@ keywords: ["duplication", "duplicate code", "clone groups", "clone families", "c
 icon: "clone"
 ---
 
-Copied code costs you twice. Each fix must go into each copy, and people miss one. `fallow dupes` finds the copies, so that you can decide which to merge.
+Copied code costs you twice. Each fix must go into each copy, and people miss one. In the demo project, `summarizeCart` and `exportCartSummary` compute the same 5 percent discount in the same 17 lines. When the discount rule changes, a fix in one file leaves the old rule in the other. `fallow dupes` finds the copies, so that you can decide which to merge.
 
 ```bash
 npx fallow dupes
@@ -34,7 +34,7 @@ A **clone group** is one block of code that exists in two or more places. Each p
 |:--|:--|
 | `17 lines` | The length of the block. |
 | `2 instances` | The number of places that hold it. |
-| `spread 2` | How far apart the instances are. Fallow shows it only when it is above 0. |
+| `spread 2` | How far apart the instances are, in directory steps: `src/reports` and `src/utils` are two steps apart. Fallow shows it only when it is above 0. |
 | `dup:f42424e8` | The **handle** of the group. Use it to inspect or accept the group. |
 | `34 lines (20.0%)` | All copies together, as a share of the code that fallow compared. Each copy counts. |
 
@@ -42,29 +42,29 @@ Fallow puts the groups with the most to gain first: large blocks and many instan
 
 ### Clone families {#clone-families}
 
-Two files can share more than one block. A **clone family** is a set of clone groups in the same set of files. Fallow lists a family when it has two groups or more:
+Two files can share more than one block. A **clone family** is a set of clone groups in the same set of files. To see one, add a second copied function, which writes CSV lines, to both `src/utils/summary.ts` and `src/reports/export.ts`. Fallow then lists the family below the groups:
 
 ```text
-     12 lines  2 instances  dup:43bd499a
-    src/validators/customer.ts:3-14
-    src/validators/order.ts:3-14
+     17 lines  2 instances  spread 2  dup:f42424e8
+    src/reports/export.ts:3-19
+    src/utils/summary.ts:7-23
 
-     12 lines  2 instances  dup:deef7dc6
-    src/validators/customer.ts:22-33
-    src/validators/order.ts:20-31
+      8 lines  2 instances  spread 2  dup:2a315d4a
+    src/reports/export.ts:23-30
+    src/utils/summary.ts:27-34
 
 ● Clone families (1 with multiple groups)
 
-  2 groups, 24 lines across src/validators/customer.ts, src/validators/order.ts
-    → Extract shared function (12 lines) from customer.ts, order.ts
-    → Extract shared function (12 lines) from customer.ts, order.ts
+  2 groups, 25 lines across src/reports/export.ts, src/utils/summary.ts
+    → Extract shared function (17 lines) from export.ts, summary.ts
+    → Extract shared function (8 lines) from export.ts, summary.ts
 ```
 
-Here somebody probably copied `order.ts` to make `customer.ts`. For a family with 50 duplicated lines or more, fallow suggests one shared module for the family. For a smaller family, it suggests one function for each group.
+Here somebody probably copied `summary.ts` to make `export.ts`. For a family with 50 duplicated lines or more, fallow suggests one shared module for the family. For a smaller family, it suggests one function for each group.
 
 ## How fallow decides
 
-Fallow does not compare text. It parses each file and compares the code as a sequence of tokens: names, operators, values. Thus, whitespace, comments and formatting do not hide a copy.
+Fallow parses each file and compares the code as a sequence of tokens: names, operators, values. Whitespace, comments and formatting therefore do not hide a copy.
 
 A block counts when it has 5 lines and 50 tokens or more, and exists in 2 places or more.
 
@@ -78,7 +78,7 @@ A `dist/` or `build/` directory is not on this list. Exclude it with `duplicates
 
 ### Copies with other names
 
-A copy often gets new names. These two functions do the same work, but the default mode does not match them:
+A copy often gets new names. `src/reports/invoice.ts` and `src/reports/receipt.ts` do the same work, but the default mode does not match them:
 
 ```ts
 // src/reports/invoice.ts
@@ -120,7 +120,7 @@ Start with the default mode. The `semantic` mode finds more real copies, and it 
 
 ### Copies with small edits
 
-A copy can also get one more line, or lose one. Add `--near` to find functions that are at least 80 percent the same. It also ignores the names, so it finds the pair above too:
+The `semantic` mode needs the same structure, so a copy that gained or lost a line needs another check. Add `--near` to find functions that are at least 80 percent the same. It also ignores the names, so it finds the pair above too:
 
 ```bash
 npx fallow dupes --near
@@ -134,9 +134,9 @@ npx fallow dupes --near
 
 For functions that do the same job with different code, see [Similar code](/analysis/similar-code).
 
-## Act on a clone group
+## Act on a finding
 
-First look at the instances of one group:
+Before you merge two copies, look at the instances of the group. Pass the handle to `--trace`:
 
 ```bash
 npx fallow dupes --trace dup:f42424e8
@@ -148,9 +148,10 @@ npx fallow dupes --trace dup:f42424e8
     -> src/utils/summary.ts:7-23
     Suggested refactor
       Extract function, saves ~17 lines
+      Proposed name: row  (best-effort, verify before applying)
 ```
 
-The trace also prints the code of the block. Then decide. A copy is not always a problem.
+The trace also prints the code of the block. A copy is not always a problem:
 
 | Situation | Action |
 |:--|:--|
@@ -191,9 +192,9 @@ To accept one instance only, put this comment on the line above it:
 // fallow-ignore-next-line code-duplication
 ```
 
-## Set a limit
+## Fail a run
 
-Without a gate, `fallow dupes` reports and exits with code 0. A [gate](/concepts/findings) is a condition that changes the exit code to 1.
+Without a [gate](/concepts/findings), `fallow dupes` reports and exits with code 0, as in the demo run above. Two options add a gate:
 
 ```bash
 # fail when more than 5 percent of the code is duplicated
@@ -203,16 +204,16 @@ npx fallow dupes --threshold 5
 npx fallow dupes --fail-on-issues
 ```
 
-The `duplicates.threshold` key in your config file sets the same gate for each run.
+The `duplicates.threshold` key in your config file sets the same gate for each run. With `--threshold 5`, the demo run exits with code 1 and prints `Duplication (20.0%) exceeds threshold (5.0%)`.
 
-On a pull request, use [`fallow audit`](/analysis/changed-code). It marks each clone group that the change introduces, and only those groups affect its verdict. By default, a new group gives a warning, not a failure. To fail on it, set the rule `introduced-clone-group` to `error`.
+In a [changed-code check](/concepts/changed-code), a clone group that the change introduces gives a warning, not a failure. To fail on it, set the rule `introduced-clone-group` to `error`.
 
-## Limits
+## What fallow cannot see
 
-- A block below the minimum size is not a clone. Lower `--min-lines` and `--min-tokens` to see small blocks, and expect more noise.
-- Type annotations make typed `.ts` code differ from the same `.js` code. Add `--cross-language` to remove the annotations before the comparison.
-- The handle of a group depends on the mode. A handle from the default mode does not match the same group in `semantic` mode.
-- Compare the duplication share only between runs with the same mode.
+- A block below the minimum size. Lower `--min-lines` and `--min-tokens` to see small blocks, and expect more noise.
+- The same code in `.ts` and `.js`: type annotations make the two differ. Add `--cross-language` to remove the annotations before the comparison.
+- One group across two modes. The handle depends on the mode: the demo group `dup:f42424e8` is `dup:ca69f412` in `semantic` mode.
+- A trend across modes. Compare the duplication share only between runs with the same mode.
 
 ## Reference
 

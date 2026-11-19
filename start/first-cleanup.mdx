@@ -5,16 +5,34 @@ keywords: ["first cleanup", "fallow fix", "dry run", "trace", "unused export", "
 icon: "broom"
 ---
 
-On this page, you act on the dead code part of the first report. You check each finding before you remove code. Then you remove the code, with `fallow fix` and by hand, and you see the report get smaller.
+The first run of the demo project reported an unused file, three unused exports, two dependency problems, a clone group and a complex function. You do not want to delete code on trust, so each step here first asks fallow why it reports a finding, and then acts on it. You remove the dead code with `fallow fix` and by hand, and you see the report get smaller.
 
 ## Before you start
 
 - Do the [first run](/quickstart). This page uses the findings of the same demo project.
 - Commit your work, or use a copy of the project. `fallow fix` changes your files.
 
+## Delete the unused file
+
+Start with the files. When you delete a file, an export that only this file imported becomes unused, and the fix in the next steps then removes it too. `fallow fix` does not delete files, so check the file first:
+
+```bash
+npx fallow dead-code --trace-file src/utils/legacy-currency.ts
+```
+
+```text
+  UNREACHABLE src/utils/legacy-currency.ts
+
+  Exports (2):
+    export toGuilders [unused]
+    export fromGuilders [unused]
+```
+
+No entry point reaches the file, and no file uses its exports. Delete the file.
+
 ## Check an unused export
 
-Before you remove code, ask fallow why it reports the code. For an export, give the file and the name:
+The exports come next. Before you remove one, ask fallow why it reports it. Give the file and the name:
 
 ```bash
 npx fallow dead-code --trace src/services/orders.ts:cancelOrder
@@ -28,11 +46,11 @@ npx fallow dead-code --trace src/services/orders.ts:cancelOrder
   Reason: No references found, export is unused
 ```
 
-The file is [reachable](/concepts/entry-points), but no file imports `cancelOrder`. If a file used the name, the trace would name that file. [Trace a finding](/guides/trace-a-finding) shows the other trace commands.
+The file is [reachable](/concepts/entry-points), but no file imports `cancelOrder`. `Namespace: value` means that `cancelOrder` exists when the code runs. A type shows `Namespace: type`. If a file used the name, the trace would name that file. [Trace a finding](/guides/trace-a-finding) shows the other trace commands.
 
-## Preview the automatic fix
+## Fix the exports and the dependencies
 
-`fallow fix` removes unused exports, unused dependencies and unused enum members. Run it with `--dry-run` first. This changes no files:
+`fallow fix` removes unused exports, unused dependencies and unused enum members. Run it with `--dry-run` first, which changes no files:
 
 ```bash
 npx fallow fix --dry-run
@@ -40,23 +58,19 @@ npx fallow fix --dry-run
 
 ```text
 Would remove export from src/services/orders.ts:18 `cancelOrder`
-Would remove export from src/lib/format.ts:3 `formatPercent`
 Would remove export from src/lib/index.ts:1 `formatPercent`
+Would remove export from src/lib/format.ts:3 `formatPercent`
 Would remove `left-pad` from dependencies in package.json
 Dry run complete. No files were modified.
 ```
 
-## Apply the fix
+Then apply the fix. `--yes` skips the confirmation prompt, and fallow prints `Fixed 4 issue(s).`:
 
 ```bash
 npx fallow fix --yes
 ```
 
-```text
-Fixed 4 issue(s).
-```
-
-`--yes` skips the confirmation prompt. The change in your files:
+The change in your files:
 
 ```diff
 --- a/package.json
@@ -77,35 +91,38 @@ Fixed 4 issue(s).
 +const cancelOrder = (order: Order): Order => ({ ...order, quantity: 0 });
 ```
 
-The fix removes the `export` keyword and keeps the function. The change in `src/lib/format.ts` is the same. If you do not need the function, delete it yourself.
+The fix removes the `export` keyword and keeps the function. The change in `src/lib/format.ts` is the same. If you do not need the function, delete it yourself. To check a dependency before the fix removes it, run `npx fallow dead-code --trace-dependency left-pad`.
 
-## Delete the unused file
+`uuid` is the opposite case: `src/services/orders.ts` imports it, but `package.json` does not list it. `fallow fix` does not add packages, so run `npm install uuid`. Your package manager then also updates the lock file.
 
-`fallow fix` does not delete files. Check the file first:
+## Look at the clone group
 
-```bash
-npx fallow dead-code --trace-file src/utils/legacy-currency.ts
-```
+The dead code is gone. The two parts that remain need a decision from you, because fallow cannot know which copy is right. Give the handle of the clone group to `npx fallow dupes --trace dup:f42424e8`:
 
 ```text
-  UNREACHABLE src/utils/legacy-currency.ts
-
-  Exports (2):
-    export toGuilders [unused]
-    export fromGuilders [unused]
+  Clone group 1  dup:f42424e8 (17 lines, 210 tokens, 2 instances, spread 2)
+    >> src/reports/export.ts:3-19
+    -> src/utils/summary.ts:7-23
+    Suggested refactor
+      Extract function, saves ~17 lines
 ```
 
-No entry point reaches the file, and no file uses its exports. Delete the file.
+The trace also prints the 17 lines. If both files must change together, move the code into one shared function. If they only look the same today, keep both. [Duplication](/analysis/duplication) helps you decide.
 
-## Fix the dependencies
+## Look at the complex function
 
-The fix removed `left-pad` from `package.json`. To check a dependency before you remove it, run `npx fallow dead-code --trace-dependency left-pad`.
+The header of the first run named one refactoring target. Run `npx fallow health --targets` to see what to do with it:
 
-`uuid` is the opposite case: `src/services/orders.ts` imports it, but `package.json` does not list it. `fallow fix` does not add packages. Add it with your package manager. This also updates the lock file:
-
-```bash
-npm install uuid
+```text
+   17.4  pri:17.4    src/services/customers.ts
+         complexity · effort:low · confidence:high  Extract classifyCustomer (cognitive: 32) in 48-LOC file into smaller functions
 ```
+
+Split `classifyCustomer` into smaller functions when you next change it, and add a test first. [Health and complexity](/analysis/health) explains the scores.
+
+## When a finding is wrong
+
+Fallow can report code as unused when it cannot see how the code is loaded, for example by a framework or a config file. Do not delete that code: tell fallow about it, as [Handle false positives](/guides/false-positives) shows. When your project has hundreds of findings, do not fix them in one pass: [Adopt fallow in an existing project](/guides/adopt) shows how to start with new code only.
 
 ## Run fallow again
 
@@ -115,34 +132,19 @@ npx fallow
 
 ```text
 ■ Metrics: dead files 0.0% (0 of 15) · dead exports 0.0% (0 of 16) · MI 95.6 (good)
-  15 files analyzed
-  3 entry points detected (2 package.json, 1 plugin)
-
 ── Dead Code ──────────────────────────────────────
-
-✓ No issues found (0.06s)
-```
-
-The dead code part is clean. The `Failed:` line of the report names the parts that remain:
-
-```text
+✓ No issues found (0.04s)
 Failed: dupes (1 clone group), health (1 above threshold): start with src/services/customers.ts
 ```
 
-To act on them, read [Duplication](/analysis/duplication) and [Health and complexity](/analysis/health).
-
-## When a finding is wrong
-
-Fallow can report code as unused when it cannot see how the code is loaded, for example by a framework or a config file. Do not delete that code: tell fallow about it, as [Handle false positives](/guides/false-positives) shows.
-
-When your project has hundreds of findings, do not fix them in one pass. [Adopt fallow in an existing project](/guides/adopt) shows how to start with new code only.
+The dead code part is clean. The `Failed:` line names the two parts that you looked at and did not change.
 
 ## What you learned
 
+- Delete unused files first, then let `fallow fix` remove the exports and dependencies.
 - A trace tells you why fallow reports a name, a file or a package.
-- `fallow fix --dry-run` shows each change. `fallow fix --yes` applies it.
-- `fallow fix` removes exports and dependencies. You delete unused files and add missing packages yourself.
+- A clone group and a complex function need your decision. Fallow gives the facts and a suggestion.
 
 ## Next
 
-Check each pull request with fallow: [Check each pull request](/start/first-ci).
+You removed the old dead code. To stop new dead code, check each change: [Check each pull request](/start/first-ci).

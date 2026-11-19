@@ -5,13 +5,11 @@ keywords: ["finding", "issue type", "rules", "severity", "error", "warn", "off",
 icon: "scale-balanced"
 ---
 
-Fallow reports problems as findings, and each finding has a severity. The severity decides if a run fails. When you know this link, you can make fallow fail CI on the problems that matter to your team, and only report the others.
+Your first run on an existing project exits with code 1, so a CI job that runs fallow fails at once. You want to keep the report, but fail the job only on the problems that matter to your team. Each problem in the report has a severity, and the severities decide the exit code. You set them, so you choose which problems fail CI and which only show in the report.
 
-## The problem
+## Why the first run fails
 
-A first run on an existing project reports many findings. The run exits with code 1, so a CI job that runs fallow fails at once. You want to keep the report, but fail the job only on some kinds of problems.
-
-The example project gives this report (a part of it):
+The [entry points](/concepts/entry-points) of the demo project leave one file and three exports unused. The report also finds two problems with dependencies:
 
 ```bash
 npx fallow dead-code
@@ -32,18 +30,20 @@ npx fallow dead-code
     :18 cancelOrder
   Exported symbols with no known consumers
 
-✗ 1 file · 3 exports · 1 unused dependency · 1 unlisted dependency (0.03s)
+✗ 1 file · 3 exports · 1 unused dependency · 1 unlisted dependency (0.05s)
 ```
+
+The `✗` at the start of the last line means that the run failed. Each problem in it fails the run, because each one has the severity `error` by default.
 
 ## Findings and issue types
 
-A **finding** is one problem that fallow reports at one place: a file, a line, a name or a package. The report above has four findings in the two groups that it shows.
+A **finding** is one problem that fallow reports at one place: a file, a line, a name or a package. The report above shows four findings in two groups, and the last line counts two more.
 
 The **issue type** is the kind of a finding. Each finding has one issue type, for example `unused-file` or `unused-export`. The issue type tells you what the finding means and how to act on it. Each issue type has a reference page: [Issue types](/reference/issue-types) lists them all.
 
 ## Rules and severities
 
-A **rule** is the entry in the `rules` config that sets the severity of one issue type. The **severity** has one of three values:
+You cannot set a severity for one finding, but you can set it for an issue type. A **rule** is the entry in the `rules` config that sets the severity of one issue type. The **severity** has one of three values:
 
 | Severity | Fallow reports the finding | The finding fails the run |
 |:--|:--|:--|
@@ -53,31 +53,41 @@ A **rule** is the entry in the `rules` config that sets the severity of one issu
 
 Each issue type has a default severity. Most issue types that report unused code are at `error`, for example unused files, unused exports and unused dependencies. Other issue types are at `warn`, and some are `off` until you turn them on. The page of each issue type gives its default.
 
-Set the severities in your [config file](/configuration/overview). The key of a rule is often the plural form of the issue type, for example `unused-files` for `unused-file`. The page of each issue type gives its key.
+Set the severities in your [config file](/configuration/overview). The key of a rule is often the plural form of the issue type, for example `unused-exports` for `unused-export`. The page of each issue type gives its key.
 
-```json
-// .fallowrc.json
+Suppose that your team moves the order functions to a new API, and the old exports must stay until the move ends. This config file keeps the unused exports in the report, but they do not fail the run:
+
+```jsonc
+// .fallowrc.jsonc
 {
   "rules": {
-    "unused-files": "warn",
-    "unused-exports": "warn",
-    "unused-dependencies": "off",
-    "unlisted-dependencies": "warn"
+    // The export cleanup waits for the API migration.
+    "unused-exports": "warn"
   }
 }
 ```
 
-With this config file, the same project gives a report with only `warn` findings, and the run exits with code 0. The summary line starts with `⚠`:
+A run of the unused exports alone now exits with code 0. The summary line starts with `⚠`:
 
-```text
-⚠ 1 file · 3 exports · 1 unlisted dependency (0.04s)
+```bash
+npx fallow dead-code --unused-exports
 ```
 
-[Rules and severities](/configuration/rules) shows how to set a rule for some files only.
+```text
+⚠ 3 exports (0.06s)
+```
+
+The full `fallow dead-code` run still exits with code 1, because the unused file and the two dependency findings stay at `error`. Give each rule that you lower a comment with the reason, so that the team knows when to set it back. [Rules and severities](/configuration/rules) shows how to set a rule for some files only.
 
 ## Gates
 
-A **gate** is a condition that makes a command exit with code 1. These are the gates that most projects use:
+A finding at `error` is the most common reason for exit code 1, but it is not the only one. A **gate** is a condition that makes a command exit with code 1.
+
+<Warning>
+  **Bare `fallow` in a machine format exits 0 on findings.** In JSON or SARIF, the bare `fallow` command does not enforce its gates, so a CI step that runs `fallow --format json` passes with findings at `error`. Add `--fail-on-issues` to make it fail. [The bare run in a machine format](#the-bare-run-in-a-machine-format) has the details.
+</Warning>
+
+These are the gates that most projects use:
 
 | Gate | Fails when |
 |:--|:--|
@@ -86,15 +96,15 @@ A **gate** is a condition that makes a command exit with code 1. These are the g
 | A threshold | A number goes past a limit, for example `fallow dupes --threshold 5` when more than 5% of the code is duplicated. |
 | The audit verdict | A [changed-code check](/concepts/changed-code#the-changed-code-check) gives the verdict `fail`. |
 
-Other options add more gates, for example `--fail-on-regression` and `--fail-on-stale-baseline`. [Global options](/cli/global-flags) lists them. `--ci` is the same as `--format sarif --fail-on-issues --quiet`. It is a short form for a CI job that uploads SARIF.
+Most CI jobs need only the severity gate. Add `--fail-on-issues` when a finding at `warn` must fail the job too. Other options add more gates, for example `--fail-on-regression` and `--fail-on-stale-baseline`, and [Global options](/cli/global-flags) lists them. `--ci` is the same as `--format sarif --fail-on-issues --quiet`, a short form for a CI job that uploads SARIF.
 
 Exit code 1 is a result of the analysis. Fallow uses code 2 for invalid input, for example a broken config file. [Exit codes](/reference/exit-codes) lists each code.
 
 ### The bare run in a machine format
 
-The bare `fallow` command runs all analyses. In a machine format, for example JSON or SARIF, it does not enforce the gates of its findings. Thus, a tool can read the full report without a failed step.
+The bare `fallow` command runs all analyses. In a machine format, it reports the failed gates but does not enforce them, so a tool can read the full report without a failed step. On the demo project, the four forms of the command give these exit codes:
 
-| Command | Exit code on the example project |
+| Command | Exit code on the demo project |
 |:--|:--|
 | `fallow` | 1 |
 | `fallow --format json` | 0 |
@@ -109,13 +119,13 @@ The JSON run prints this line on stderr:
 
 The JSON output also has a `gate_outcomes` object. A gate with `"status": "fail"` and `"enforced": false` failed, but did not set the exit code.
 
-## Stop a finding
+## Act on a finding {#stop-a-finding}
 
-Each finding needs one of three actions:
+A severity decides what fails the run. You still have to decide what to do with each finding, and each one needs one of three actions:
 
-- **Fix the code.** Delete the unused code, or add the missing dependency. [Fix findings automatically](/guides/auto-fix) shows the fixes that fallow can apply.
-- **Teach fallow.** When fallow is wrong, tell it about your project in the config file, for example with an `entry` pattern. [Handle false positives](/guides/false-positives) gives the fix for each cause.
-- **Suppress the finding.** Keep the code, and add a comment such as `// fallow-ignore-next-line unused-export` above it. [Suppress findings](/guides/suppress) shows each comment form.
+- **Fix the code.** Delete the unused code, or add the missing dependency. [Remove unused code with fallow fix](/guides/auto-fix) shows the fixes that fallow can apply.
+- **Teach fallow.** When fallow is wrong, tell it about your project in the config file, for example with an `entry` pattern. [Fix a false positive](/guides/false-positives) gives the fix for each cause.
+- **Suppress the finding.** Keep the code, and add a comment such as `// fallow-ignore-next-line unused-export` above it. [Suppress a finding](/guides/suppress) shows each comment form.
 
 To stop old findings from failing CI before you fix them, use a [baseline](/concepts/changed-code#baselines).
 
@@ -127,6 +137,6 @@ A severity does not change how fallow finds a problem. When fallow reports code 
 
 ## Next
 
-- [Plugins](/concepts/plugins): how fallow knows the conventions of your framework.
+- Next: [Plugins](/concepts/plugins). Read it when fallow reports a file that your framework loads.
 - [Issue types](/reference/issue-types): each issue type with its default severity.
 - [Exit codes](/reference/exit-codes): each exit code of each command.

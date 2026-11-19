@@ -56,6 +56,27 @@ export const END = "{/* generated:end */}";
 const lineAt = (text, offset) => text.slice(0, offset).split("\n").length;
 
 /**
+ * The level of the last Markdown heading before `offset`, outside code
+ * fences, or 1 when the text has no heading there. A block uses it to put its
+ * own headings one level lower.
+ */
+export const headingLevelBefore = (text, offset) => {
+  let level = 1;
+  let fenced = false;
+  for (const line of text.slice(0, offset).split("\n")) {
+    if (/^\s*```/u.test(line)) {
+      fenced = !fenced;
+      continue;
+    }
+    const heading = fenced ? null : line.match(/^(#{1,6})[ \t]/u);
+    if (heading !== null) {
+      level = heading[1].length;
+    }
+  }
+  return level;
+};
+
+/**
  * The marked blocks of a file: the type, the argument, the line of the start
  * marker, and the offsets of the content between the two marker lines.
  * Throws with the file and the line when a marker has no partner or when a
@@ -96,6 +117,7 @@ export const findBlocks = (text, file) => {
       type: open.type,
       argument: open.argument,
       line: lineAt(text, open.index),
+      level: headingLevelBefore(text, open.index),
       contentStart: open.end,
       contentEnd: marker.index,
     });
@@ -205,10 +227,50 @@ export const escapeProse = (text) => mapProse(mapProse(replaceDashes(cleanToolTe
  * that word becomes code. A leading `#`, `>`, `+`, `-` or `1.` gets a
  * backslash, so that it does not start a heading, a quote or a list.
  */
-export const escapeParagraph = (text) =>
-  escapeProse(text.replace(/\s+/gu, " ").trim())
+export const escapeParagraph = (text) => {
+  const flat = text.replace(/\s+/gu, " ").trim();
+  const lead = leadingCode(flat);
+  if (lead !== null) {
+    return `${code(lead)}${escapeProse(flat.slice(lead.length))}`;
+  }
+  return escapeProse(flat)
     .replace(/^(import|export)(?=\s)/u, "`$1`")
     .replace(/^([#>+-]|\d+\.)/u, "\\$1");
+};
+
+const JS_KEYWORDS = new Set(["export", "import", "default", "const", "let", "var", "function", "class", "interface", "type", "enum", "namespace", "async", "declare", "abstract", "from", "as", "new", "extends", "implements"]);
+
+/** A word of a statement: a keyword, an identifier with a capital letter, or a token with code punctuation. */
+const isCodeToken = (token) => JS_KEYWORDS.has(token) || /[A-Z]/u.test(token) || /[(){}[\]=:;<>*'"]|\.\.\.|^\W+$/u.test(token);
+
+/**
+ * The statement at the start of a paragraph that starts with `export` or
+ * `import`, for example `export const formatPrice = ...` in "export const
+ * formatPrice = ... exists in src/money.ts". The statement runs over the
+ * keywords, identifiers and code tokens up to the first plain lowercase word.
+ * A block comment before the statement is part of it.
+ * `null` when the paragraph does not start with a statement, or when the
+ * statement has a backtick.
+ */
+export const leadingCode = (text) => {
+  const comment = text.match(/^\/\*[^`]*?\*\/(?= )/u);
+  if (comment !== null) {
+    const rest = leadingCode(text.slice(comment[0].length + 1));
+    return rest === null ? comment[0] : `${comment[0]} ${rest}`;
+  }
+  if (!/^(?:export|import)\s/u.test(text)) {
+    return null;
+  }
+  // A comma or a period after a word ends the clause. An ellipsis is code.
+  const bare = (token) => (/^\.+$/u.test(token) ? token : token.replace(/[,.]$/u, ""));
+  const tokens = text.split(" ");
+  let end = 0;
+  while (end < tokens.length && isCodeToken(bare(tokens[end]))) {
+    end += 1;
+  }
+  const statement = [...tokens.slice(0, end - 1), bare(tokens[end - 1] ?? "")].join(" ");
+  return end < 2 || statement.includes("`") ? null : statement;
+};
 
 /** {@link escapeProse} for a table cell: one line, and each `|` escaped, also in code. */
 export const escapeCell = (text) =>
@@ -412,8 +474,25 @@ const findCommand = (contract, path) => {
 
 // Only the contract default shows. A flag that the config file can set has
 // no contract default, and its effective default is in the help text.
-const optionDefault = (option) =>
-  option.default !== null && option.default !== undefined && option.default !== "" ? cellCode(option.default) : "";
+const hasDefault = (entry) => entry.default !== null && entry.default !== undefined && entry.default !== "";
+
+const optionDefault = (option) => (hasDefault(option) ? cellCode(option.default) : "");
+
+// A sentence that states the default of an option, for example "Defaults to
+// `count` when omitted." or "Omit to use the add-on default (5000)."
+const DEFAULT_SENTENCE = /^(?:\(?defaults?\b|default off\b|off by default\b|omit\b.*\bdefault\b)/iu;
+
+/**
+ * The sentences of a help text after the first two that state a default.
+ * The description cell keeps them, because the contract has no default for
+ * an option whose default comes from the config file or from an add-on.
+ */
+export const defaultSentences = (source, kept) => {
+  const all = source
+    .split(/\n[ \t]*\n/u)
+    .flatMap((paragraph) => splitSentences(paragraph.replace(/\s+/gu, " ").trim()));
+  return all.filter((sentence) => DEFAULT_SENTENCE.test(sentence) && !kept.includes(sentence.replace(/[.]$/u, "")));
+};
 
 const visibleValues = (entry) => (entry.possible_values ?? []).filter((value) => !value.hidden);
 
@@ -433,6 +512,10 @@ const mentions = (text, value) =>
 export const describeArgument = (entry) => {
   const source = replaceDashes((entry.long_help ?? entry.help ?? "").trim());
   let text = firstSentences(source);
+  if (!hasDefault(entry)) {
+    const extra = defaultSentences(source, text);
+    text = extra.length > 0 ? [terminate(text), ...extra].join(" ").trim() : text;
+  }
   const values = visibleValues(entry);
   if (values.length > 0 && !values.every((value) => mentions(text, value.name))) {
     text = `${terminate(text)} Values: ${values.map(valueLabel).join(", ")}.`.trim();
@@ -471,8 +554,20 @@ export const optionRows = (options, { includeGlobal = false } = {}) => {
 
 const OPTION_HEADERS = ["Option", "Default", "Description"];
 
-/** One table, or one `###` heading and table for each help heading in contract order. */
+/** The help headings of a list of options in contract order, without hidden options. */
+const optionGroups = (options, settings = {}) => [
+  ...new Set(optionRows(options, settings).map((row) => row.heading).filter((heading) => heading !== null)),
+];
+
+/**
+ * One table, or one heading and table for each help heading in contract
+ * order. The options without a heading come first, without a heading. A group
+ * heading has the level `level` and the explicit id `<idPrefix>-<group>`, for
+ * example `options-scope`, so that it never takes the id of another heading
+ * of the page, such as `#output`.
+ */
 export const renderOptionTables = (options, settings = {}) => {
+  const { level = 3, idPrefix = "options" } = settings;
   const rows = optionRows(options, settings);
   if (rows.length === 0) {
     return "This command has no options of its own.";
@@ -491,7 +586,7 @@ export const renderOptionTables = (options, settings = {}) => {
       lines.push("");
     }
     if (heading !== null) {
-      lines.push(`### ${escapeProse(heading)}`, "");
+      lines.push(`${"#".repeat(Math.min(level, MAX_HEADING_LEVEL))} ${escapeProse(heading)} {#${idPrefix}-${anchorId(heading)}}`, "");
     }
     const withDefault = cells.some((row) => row[1] !== "");
     lines.push(...table(withDefault ? OPTION_HEADERS : OPTION_HEADERS.filter((header) => header !== "Default"), withDefault ? cells : cells.map(([option, , text]) => [option, text])));
@@ -504,15 +599,48 @@ const positionalLabel = (positional) => {
   return cellCode(positional.required ? `<${name}>` : `[${name}]`);
 };
 
-/** The `cli-options <command>` block: positionals first, then the options. */
-export const renderCliOptions = (contract, path) => {
+/**
+ * The prefix of the group heading ids of a command. A top-level command and
+ * the root have `options`. A subcommand has its path below the top-level
+ * command first, for example `analyze-options` for `coverage analyze`, so
+ * that two commands on one page never share an id.
+ */
+export const optionIdPrefix = (path) => {
+  const below = path === "fallow" ? [] : path.split(" ").slice(1);
+  return below.length === 0 ? "options" : `${anchorId(below.join(" "))}-options`;
+};
+
+const GLOBAL_PAGE = "/cli/global-flags";
+
+/**
+ * The line under the last option table of a command page: the groups of the
+ * global options, each linked to its table on the global options page. The
+ * contract does not tell which global options a command uses, so the line
+ * names all groups and claims no more. A hand-written note below the block
+ * names the exceptions of a command.
+ */
+export const renderGlobalNote = (contract) => {
+  const groups = optionGroups(contract.global_options, { includeGlobal: true });
+  const links = groups.map((group) => `[${escapeProse(group)}](${GLOBAL_PAGE}#options-${anchorId(group)})`);
+  return `The [global options](${GLOBAL_PAGE}) are in these groups: ${links.join(", ")}.`;
+};
+
+/**
+ * The `cli-options <command>` block: positionals first, then the options.
+ * `level` is the level of the group headings. `globalNote` adds the line
+ * about the global options.
+ */
+export const renderCliOptions = (contract, path, { level = 3, globalNote = null } = {}) => {
   const command = findCommand(contract, path);
   const lines = [];
   const positionals = (command.positionals ?? []).filter((positional) => !positional.hidden);
   if (positionals.length > 0) {
     lines.push(...table(["Argument", "Description"], positionals.map((positional) => [positionalLabel(positional), describeArgument(positional)])), "");
   }
-  lines.push(renderOptionTables(command.options ?? []));
+  lines.push(renderOptionTables(command.options ?? [], { level, idPrefix: optionIdPrefix(path) }));
+  if (globalNote !== null) {
+    lines.push("", globalNote);
+  }
   return lines.join("\n");
 };
 
@@ -540,63 +668,77 @@ export const renderCliSubcommands = (contract, path) => {
   return table(["Subcommand", "Description"], rows).join("\n");
 };
 
-/** The `cli-global-options` block. */
-export const renderGlobalOptions = (contract) => renderOptionTables(contract.global_options, { includeGlobal: true });
+/** The `cli-global-options` block: one heading and table for each group of global options. */
+export const renderGlobalOptions = (contract, { level = 3 } = {}) =>
+  renderOptionTables(contract.global_options, { includeGlobal: true, level, idPrefix: "options" });
+
+const GROUP_SELECTOR = "group:";
+
+/** Whether a variable matches one selector: `group:<group>` or a name prefix. */
+const matchesSelector = (variable, selector) =>
+  selector.startsWith(GROUP_SELECTOR) ? variable.group === selector.slice(GROUP_SELECTOR.length) : variable.name.startsWith(selector);
 
 /**
- * The variables of one `environment-variables [selector...]` block. The
- * contract has no group field for a variable, so a page selects them by name
- * prefix. Each selector is a prefix that includes the matching variables, or
- * a prefix with a leading `!` that excludes them. Without an including
- * selector, the block starts from all variables. A selector that matches no
- * variable of the contract is an error, so a renamed variable shows.
+ * The variables of one `environment-variables [selector...]` block. A
+ * selector `group:<group>` matches the variables of one `group` of the
+ * contract, for example `group:cache`. Any other selector is a name prefix,
+ * for example `FALLOW_COV`. A selector with a leading `!` excludes the
+ * variables that it matches. Without an including selector, the block starts
+ * from all variables. A selector that matches no variable of the contract is
+ * an error, so a renamed variable or group shows.
  */
 export const selectEnvironment = (contract, argument = "") => {
   const selectors = argument.split(/\s+/u).filter((token) => token !== "");
   const includes = selectors.filter((token) => !token.startsWith("!"));
   const excludes = selectors.filter((token) => token.startsWith("!")).map((token) => token.slice(1));
-  const names = contract.environment_variables.map((variable) => variable.name);
-  for (const prefix of [...includes, ...excludes]) {
-    if (prefix === "" || !names.some((name) => name.startsWith(prefix))) {
-      throw new Error(`No environment variable starts with "${prefix}".`);
+  const variables = contract.environment_variables;
+  for (const selector of [...includes, ...excludes]) {
+    if (selector === "" || selector === GROUP_SELECTOR || !variables.some((variable) => matchesSelector(variable, selector))) {
+      throw new Error(
+        selector.startsWith(GROUP_SELECTOR)
+          ? `No environment variable has the group "${selector.slice(GROUP_SELECTOR.length)}". The groups are: ${[...new Set(variables.map((variable) => variable.group))].join(", ")}.`
+          : `No environment variable starts with "${selector}".`,
+      );
     }
   }
-  const matches = (name, prefixes) => prefixes.some((prefix) => name.startsWith(prefix));
-  return contract.environment_variables.filter(
-    (variable) => (includes.length === 0 || matches(variable.name, includes)) && !matches(variable.name, excludes),
-  );
+  const matches = (variable, list) => list.some((selector) => matchesSelector(variable, selector));
+  return variables.filter((variable) => (includes.length === 0 || matches(variable, includes)) && !matches(variable, excludes));
 };
 
 /** Whether a block selects the variables that the other blocks leave: no including selector. */
 const isRestSelector = (argument) => argument.split(/\s+/u).every((token) => token === "" || token.startsWith("!"));
 
+/** The reference page of the environment variables. Its blocks hold each variable. */
+export const ENVIRONMENT_PAGE = "configuration/environment.mdx";
+
 /**
  * Checks the `environment-variables` blocks of one page: no variable is in
- * two blocks. A page with a block that has no including selector lists each
- * variable of the contract, so that block must not exclude a variable that
- * no other block of the page holds.
+ * two blocks. The page {@link ENVIRONMENT_PAGE}, and a page with a block that
+ * has no including selector, list each variable of the contract: together,
+ * their blocks must hold each variable exactly once.
  */
 export const checkEnvironmentBlocks = (contract, text, file) => {
   const blocks = findBlocks(text, file).filter((block) => block.type === "environment-variables");
-  if (blocks.length < 2) {
+  const reference = file === ENVIRONMENT_PAGE;
+  if (blocks.length < 2 && !reference) {
     return;
   }
   const owner = new Map();
   for (const block of blocks) {
     for (const variable of selectEnvironment(contract, block.argument)) {
       if (owner.has(variable.name)) {
-        throw new Error(`${file}:${block.line}: ${variable.name} is also in the block on line ${owner.get(variable.name)}. Exclude it with !${variable.name}.`);
+        throw new Error(`${file}:${block.line}: ${variable.name} is also in the block on line ${owner.get(variable.name)}. Exclude it with !${variable.name}, or select by group.`);
       }
       owner.set(variable.name, block.line);
     }
   }
-  const rest = blocks.find((block) => isRestSelector(block.argument));
-  if (rest === undefined) {
+  const complete = blocks.find((block) => isRestSelector(block.argument)) ?? (reference ? blocks[0] : undefined);
+  if (complete === undefined) {
     return;
   }
   const missing = contract.environment_variables.filter((variable) => !owner.has(variable.name)).map((variable) => variable.name);
   if (missing.length > 0) {
-    throw new Error(`${file}:${rest.line}: no block of the page holds ${missing.join(", ")}. Remove the exclusion, or add the variable to a block.`);
+    throw new Error(`${file}:${complete.line}: no block of the page holds ${missing.join(", ")}. Add the group of the variable to a block, or remove the exclusion.`);
   }
 };
 
@@ -610,11 +752,56 @@ export const renderEnvironment = (contract, argument = "") => {
   if (variables.length === 0) {
     throw new Error(`The selectors "${argument}" select no environment variable.`);
   }
+  const description = (variable) => escapeCell(variable.description ?? "");
+  if (!variables.some(hasDefault)) {
+    return table(["Variable", "Description"], variables.map((variable) => [code(variable.name), description(variable)])).join("\n");
+  }
   return table(
-    ["Variable", "Description"],
-    variables.map((variable) => [code(variable.name), escapeCell(variable.description ?? "")]),
+    ["Variable", "Default", "Description"],
+    variables.map((variable) => [code(variable.name), hasDefault(variable) ? cellCode(variable.default) : "", description(variable)]),
   ).join("\n");
 };
+
+// ---------------------------------------------------------------------------
+// MCP server
+
+// Each CLI fallback of an MCP tool ends with these options. The table leaves
+// them out, and the line above the table names them once.
+const MCP_CLI_SUFFIX = " --format json --quiet";
+
+const requireList = (contract, key) => {
+  const list = contract[key];
+  if (!Array.isArray(list) || list.length === 0) {
+    throw new Error(`The contract has no ${key}. Refresh contracts/ from a fallow version that writes it.`);
+  }
+  return list;
+};
+
+/** The `mcp-tools` block: one row for each tool of the MCP server, in contract order. */
+export const renderMcpTools = (contract) => {
+  const tools = requireList(contract, "mcp_tools");
+  const suffixed = tools.every((tool) => tool.cli_command === null || tool.cli_command.endsWith(MCP_CLI_SUFFIX));
+  const command = (tool) => {
+    if (tool.cli_command === null || tool.cli_command === undefined) {
+      return "none";
+    }
+    return cellCode(suffixed ? tool.cli_command.slice(0, -MCP_CLI_SUFFIX.length) : tool.cli_command);
+  };
+  const rows = tools.map((tool) => [code(tool.name), escapeCell(terminate(replaceDashes((tool.description ?? "").trim()))), command(tool)]);
+  const lines = [];
+  if (suffixed) {
+    lines.push(`Each CLI equivalent runs with \`${MCP_CLI_SUFFIX.trim()}\`.`, "");
+  }
+  lines.push(...table(["Tool", "Description", "CLI equivalent"], rows));
+  return lines.join("\n");
+};
+
+/** The `mcp-resources` block: one row for each resource of the MCP server, in contract order. */
+export const renderMcpResources = (contract) =>
+  table(
+    ["Resource", "Content"],
+    requireList(contract, "mcp_resources").map((resource) => [code(resource.uri), escapeCell(terminate(replaceDashes((resource.description ?? "").trim())))]),
+  ).join("\n");
 
 // ---------------------------------------------------------------------------
 // Exit codes
@@ -705,7 +892,7 @@ const categoryIcon = (issue) => {
 
 /** The title of a rule page: the sentence-case label of the issue type when the contract has one. */
 export const ruleTitle = (issue) =>
-  replaceDashes(issue.summary_label || sentenceCase(issue.label || issue.explanation?.name || issue.id));
+  replaceDashes(issue.display_label || issue.summary_label || sentenceCase(issue.label || issue.explanation?.name || issue.id));
 
 /** Names that keep their capital letter inside a sentence. */
 const PROPER_NAMES = new Set(["Angular", "Astro", "Effect", "Electron", "Lit", "Next.js", "Node.js", "Nuxt", "React", "Svelte", "TypeScript", "JavaScript", "Vue"]);
@@ -805,9 +992,6 @@ export const ruleFacts = (issue, configLink = () => undefined) => {
   if ((issue.frameworks ?? []).length > 0) {
     rows.push(["Frameworks", issue.frameworks.map(code).join(", ")]);
   }
-  if (issue.note) {
-    rows.push(["Note", escapeCell(issue.note)]);
-  }
   return table(["Fact", "Value"], rows);
 };
 
@@ -815,6 +999,42 @@ const section = (heading, text) => {
   const value = (text ?? "").trim();
   return value === "" ? [] : [`## ${heading}`, "", escapeParagraph(value), ""];
 };
+
+// A line of code: it ends with code punctuation, or starts with a comment
+// or a statement keyword.
+const CODE_LINE = /(?:[;{}(),[\]]|=>)\s*$|^\s*(?:\/\/|\/\*|\*|import\s|export\s|const\s|let\s|function\s|class\s|interface\s|type\s|return\b|if\s*\(|[}\])])/u;
+
+/**
+ * Whether an example is code and not prose. The contract marks code with a
+ * fence (three backticks). Without a fence, an example is code only when it
+ * has more than one line and each line is a line of code. A one-line example
+ * is a sentence: it describes the code, with the code in code spans.
+ */
+export const isCodeExample = (text) => {
+  const value = text.trim();
+  if (value.startsWith("```")) {
+    return true;
+  }
+  const lines = value.split("\n").filter((line) => line.trim() !== "");
+  return lines.length > 1 && lines.every((line) => CODE_LINE.test(line));
+};
+
+const LANGUAGE = "ts";
+
+const exampleSection = (text) => {
+  const value = (text ?? "").trim();
+  if (value === "") {
+    return [];
+  }
+  if (!isCodeExample(value)) {
+    return section("Example", value);
+  }
+  const body = value.startsWith("```") ? renderDoc(value) : ["```" + LANGUAGE, value.replaceAll(EM_DASH, ","), "```"].join("\n");
+  return ["## Example", "", body, ""];
+};
+
+/** The note of an issue type as a paragraph below the facts table. A long note does not fit in a table cell. */
+const noteLines = (issue) => (issue.note ? ["", `**Note.** ${escapeProse(terminate(issue.note.replace(/\s+/gu, " ").trim()))}`] : []);
 
 /** The `rule <id>` block of a rule page. */
 export const renderRule = (contract, id, configLink) => {
@@ -832,11 +1052,12 @@ export const renderRule = (contract, id, configLink) => {
     `[${teaching.title}](${teaching.page}) explains how fallow finds it.`,
     "",
     ...section("Why it matters", explanation.rationale),
-    ...section("Example", explanation.example),
+    ...exampleSection(explanation.example),
     ...section("Fix", explanation.how_to_fix),
     "## Facts",
     "",
     ...ruleFacts(issue, configLink),
+    ...noteLines(issue),
   ];
   return lines.join("\n");
 };
@@ -1157,9 +1378,17 @@ const renderEnumMap = (context, { path, display, id, properties, enumMap }, out)
     ...table(
       ["Key", "Default", "Description"],
       properties.map(([name, child]) => {
+        // A table row has no heading, so an empty span gives each key an
+        // anchor. A rule page links to the row of its config key.
+        const rowId = `${id}-${anchorId(name)}`;
+        if (context.ids.has(rowId)) {
+          throw new Error(`Two config keys share the id "${rowId}": ${context.ids.get(rowId)} and ${display}.${name}.`);
+        }
+        context.ids.set(rowId, `${display}.${name}`);
+        context.locations.set([...path, name].join("."), rowId);
         const value = defaultOf(context.schema, child);
         const text = firstSentences(replaceDashes((child.description ?? "").trim()), 1);
-        return [code(name), value === undefined || value === null ? "" : cellCode(JSON.stringify(value)), escapeCell(text)];
+        return [`<span id="${rowId}"></span>${code(name)}`, value === undefined || value === null ? "" : cellCode(JSON.stringify(value)), escapeCell(text)];
       }),
     ),
     "",
@@ -1385,20 +1614,40 @@ const requireArgument = (block) => {
 export const renderBlock = (contract, block, { configLink } = {}) => {
   switch (block.type) {
     case "cli-options":
-      return renderCliOptions(contract, requireArgument(block));
+      return renderCliOptions(contract, requireArgument(block), { level: (block.level ?? 2) + 1, globalNote: block.globalNote ?? null });
     case "cli-synopsis":
       return renderCliSynopsis(contract, requireArgument(block));
     case "cli-subcommands":
       return renderCliSubcommands(contract, requireArgument(block));
     case "cli-global-options":
-      return renderGlobalOptions(contract);
+      return renderGlobalOptions(contract, { level: (block.level ?? 2) + 1 });
     case "environment-variables":
       return renderEnvironment(contract, block.argument);
+    case "mcp-tools":
+      return renderMcpTools(contract);
+    case "mcp-resources":
+      return renderMcpResources(contract);
     case "rule":
       return renderRule(contract, requireArgument(block), configLink);
     default:
-      throw new Error(`Unknown generated block type "${block.type}". Use cli-options, cli-synopsis, cli-subcommands, cli-global-options, environment-variables or rule.`);
+      throw new Error(`Unknown generated block type "${block.type}". Use cli-options, cli-synopsis, cli-subcommands, cli-global-options, environment-variables, mcp-tools, mcp-resources or rule.`);
   }
+};
+
+/**
+ * Renders each block of a hand-written page. The last `cli-options` block of
+ * the page ends with the line about the global options, so that a command
+ * page names them once, under its last option table.
+ */
+export const renderPageBlocks = (contract, text, file, { configLink } = {}) => {
+  const options = findBlocks(text, file).filter((block) => block.type === "cli-options");
+  const last = options.at(-1);
+  const note = last === undefined ? null : renderGlobalNote(contract);
+  return replaceBlocks(
+    text,
+    (block) => renderBlock(contract, last !== undefined && block.line === last.line ? { ...block, globalNote: note } : block, { configLink }),
+    file,
+  );
 };
 
 const CONFIG_KEYWORDS = ["fallow config", ".fallowrc.json", "fallow.toml", "config reference"];
@@ -1471,20 +1720,31 @@ export const buildGeneratedFiles = ({ contract, schema, inbound, existing = () =
     files.set(path, updateRulePage(contract, issue, existing(path), path, config.link));
   }
   files.set(ANCHOR_FILE, `${JSON.stringify(buildRuleAnchors(contract, inbound), null, 2)}\n`);
-  files.set(CONTRACT_README, renderContractReadme(contract));
+  files.set(CONTRACT_README, renderContractReadme(contract, { mainBuild: isMainBuild(existing(CONTRACT_README)) }));
   return { files, config };
 };
 
-/** The README of the contracts directory, with the fallow version of the contract. */
-export const renderContractReadme = (contract) =>
+const MAIN_BUILD = "a build of the main branch";
+
+/** Whether a contracts README says that the files come from a build of the main branch. */
+export const isMainBuild = (readme) => (readme ?? "").includes(MAIN_BUILD);
+
+/**
+ * The README of the contracts directory, with the fallow version of the
+ * contract. `mainBuild` says that the files come from a build of the main
+ * branch, which a release has not published yet.
+ */
+export const renderContractReadme = (contract, { mainBuild = false } = {}) =>
   [
     "# Contracts",
     "",
-    "These files are the source of the generated reference pages. `fallow schema --cli-reference` writes `cli-reference.json`: each command, option, exit code, environment variable and issue type. `fallow config-schema` writes `config-schema.json`: the JSON Schema of the config file.",
+    "These files are the source of the generated reference pages. `fallow schema --cli-reference --pretty` writes `cli-reference.json`: each command, option, exit code, environment variable, issue type and MCP tool and resource. `fallow config-schema` writes `config-schema.json`: the JSON Schema of the config file.",
     "",
-    `The files come from fallow ${contract.version}. Do not edit them by hand.`,
+    mainBuild
+      ? `The files come from ${MAIN_BUILD} of fallow, with the version ${contract.version}. No release has this version yet. Do not edit the files by hand.`
+      : `The files come from fallow ${contract.version}. Do not edit them by hand.`,
     "",
-    "To refresh them, run `node scripts/generate-reference.mjs --update-contracts <path>`. The path is a `fallow` binary or a fallow checkout. Then run `npm run docs:reference:write`.",
+    "To refresh them, run `node scripts/generate-reference.mjs --update-contracts <path>`. The path is a `fallow` binary or a fallow checkout. Add `--main-build` when the binary is a build of the main branch and not a release. Then run `npm run docs:reference:write`.",
     "",
   ].join("\n");
 
@@ -1521,7 +1781,7 @@ const plan = async () => {
   const schema = await readJson(CONFIG_CONTRACT);
   const inbound = await readJson(INBOUND_FILE);
   const rulePages = (await listDirectory("rules")).filter((name) => name.endsWith(".mdx")).map((name) => `rules/${name}`);
-  const current = new Map(await Promise.all(rulePages.map(async (path) => [path, await readIfExists(path)])));
+  const current = new Map(await Promise.all([...rulePages, CONTRACT_README].map(async (path) => [path, await readIfExists(path)])));
   const { files, config } = buildGeneratedFiles({ contract, schema, inbound, existing: (path) => current.get(path) });
   const entries = [];
   for (const [path, expected] of files) {
@@ -1543,7 +1803,7 @@ const plan = async () => {
       continue;
     }
     checkEnvironmentBlocks(contract, text, path);
-    const expected = replaceBlocks(text, (block) => renderBlock(contract, block, { configLink: config.link }), path);
+    const expected = renderPageBlocks(contract, text, path, { configLink: config.link });
     entries.push({ path, expected, actual: text, whole: false });
   }
   return { entries, orphans };
@@ -1664,7 +1924,7 @@ const withNewline = (text) => (text.endsWith("\n") ? text : `${text}\n`);
  * directory is a fallow checkout, which holds `docs/cli-reference.json` and
  * `schema.json`.
  */
-const updateContracts = async (source) => {
+const updateContracts = async (source, { mainBuild = false } = {}) => {
   const path = resolve(source);
   if (!existsSync(path)) {
     throw new Error(`${source} does not exist. Pass a fallow binary or a fallow checkout.`);
@@ -1683,7 +1943,7 @@ const updateContracts = async (source) => {
     config = await read("schema.json");
   } else {
     const run = (args) => execFileSync(path, args, { encoding: "utf8", env: FALLOW_ENV, maxBuffer: SCHEMA_OUTPUT_LIMIT });
-    cli = run(["schema", "--cli-reference"]);
+    cli = run(["schema", "--cli-reference", "--pretty"]);
     config = run(["config-schema"]);
   }
   const contract = JSON.parse(cli);
@@ -1691,7 +1951,7 @@ const updateContracts = async (source) => {
   await mkdir(resolve(ROOT, "contracts"), { recursive: true });
   await writeFile(resolve(ROOT, CLI_CONTRACT), withNewline(cli));
   await writeFile(resolve(ROOT, CONFIG_CONTRACT), withNewline(config));
-  await writeFile(resolve(ROOT, CONTRACT_README), renderContractReadme(contract));
+  await writeFile(resolve(ROOT, CONTRACT_README), renderContractReadme(contract, { mainBuild }));
   console.log(`Wrote the contracts of fallow ${contract.version}. Run npm run docs:reference:write next.`);
 };
 
@@ -1705,15 +1965,21 @@ Writes the reference that comes from the files in contracts/.
   --report                   Print, for each command, its page in cli/ and
                              the generated blocks of that page.
   --update-contracts <path>  Refresh contracts/ from a fallow binary or a
-                             fallow checkout.`;
+                             fallow checkout.
+  --main-build               With --update-contracts: the binary or checkout
+                             is a build of the main branch, not a release.`;
 
 /** Parses the command-line arguments. Throws on an unknown flag. */
 export const parseArguments = (args) => {
-  const result = { mode: "write", scopes: [], source: null };
+  const result = { mode: "write", scopes: [], source: null, mainBuild: false };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--check" || arg === "--report" || arg === "--help") {
       result.mode = arg.slice(2);
+      continue;
+    }
+    if (arg === "--main-build") {
+      result.mainBuild = true;
       continue;
     }
     if (arg === "--update-contracts") {
@@ -1734,6 +2000,9 @@ export const parseArguments = (args) => {
   if (result.scopes.length > 0 && result.mode !== "write") {
     throw new Error("A path limits only the write mode.");
   }
+  if (result.mainBuild && result.mode !== "update-contracts") {
+    throw new Error("--main-build works only with --update-contracts.");
+  }
   return result;
 };
 
@@ -1750,7 +2019,7 @@ const run = async () => {
       await report();
       return;
     case "update-contracts":
-      await updateContracts(args.source);
+      await updateContracts(args.source, { mainBuild: args.mainBuild });
       return;
     default:
       await write(args.scopes);

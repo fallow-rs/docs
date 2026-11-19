@@ -6,7 +6,7 @@ keywords: ["quickstart", "first run", "npx fallow", "read the output", "unused c
 icon: "rocket"
 ---
 
-Run one command in your project. In a few seconds, you get a report in three parts: dead code, duplication and complexity. This page shows you how to read each part.
+You have a JavaScript or TypeScript project, and you want to know what fallow finds in it. Run one command, and in a few seconds you get a report in three parts: dead code, duplication and complexity. This page reads each part with you, on a small demo project with 16 files.
 
 ## Before you start
 
@@ -24,33 +24,26 @@ npx fallow
 
 Fallow needs no config file for this run. It reads your `package.json`, turns on a [plugin](/concepts/plugins) for each framework and tool that you use, and analyzes each source file. It prints a header first, and then one part for each analysis.
 
-The examples on this page come from a small demo project with 16 files.
-
 ## Read the header
 
 ```text
 ■ Metrics: dead files 6.3% (1 of 16) · dead exports 14.3% (3 of 21) · MI 92.8 (good)
   16 files analyzed
   3 entry points detected (2 package.json, 1 plugin)
+  1 refactoring target: start with src/services/customers.ts (complexity)
 ```
 
-| Part | Meaning |
-|:--|:--|
-| `dead files` | The share of files that no entry point reaches. |
-| `dead exports` | The share of exports that no file imports. |
-| `MI` | The [maintainability index](/analysis/health), from 0 to 100. Higher is better. |
-| `entry points` | The number of files where your code starts, and how fallow found them. |
+The first line gives the share of dead files and dead exports, and the [maintainability index](/analysis/health) (MI) from 0 to 100, where higher is better. The last line names the file to refactor first, and the complexity part below says why.
 
-An [entry point](/concepts/entry-points) is a file that something outside your source code runs, for example the start of your app or a test. Fallow follows the imports from each entry point. The dead code part of the report is only as good as this line.
-
-If fallow prints `No entry points detected`, stop here. Read [Entry points and reachability](/concepts/entry-points), and tell fallow where your code starts.
+Read the third line before all others. An [entry point](/concepts/entry-points) is a file that something outside your source code runs, for example the start of your app or a test. In the demo, `package.json` names two of them, and the Vitest plugin adds the test file. Fallow follows the imports from each entry point, and a file that no import path reaches is unused ([the graph of the demo](/#how-it-works) shows this walk). The dead code part of the report is only as good as this line. If fallow prints `No entry points detected`, stop here and tell fallow where your code starts.
 
 ## Read the dead code part
 
 ```text
+── Dead Code ──────────────────────────────────────
+
 ● Unused files (1)
   src/utils/legacy-currency.ts
-  Files not reachable from any entry point
 
 ● Unused exports (3)
   src/lib/format.ts
@@ -59,17 +52,16 @@ If fallow prints `No entry points detected`, stop here. Read [Entry points and r
     :1 formatPercent (re-export)
   src/services/orders.ts
     :18 cancelOrder
-  Exported symbols with no known consumers
+
+── Dependencies ─────────────────────────────────────
 
 ● Unused dependencies (1)
   left-pad
-  Listed in dependencies but never imported
 
 ● Unlisted dependencies (1)
   uuid
-  Packages imported in code but missing from package.json
 
-✗ 1 file · 3 exports · 1 unused dependency · 1 unlisted dependency (0.09s)
+✗ 1 file · 3 exports · 1 unused dependency · 1 unlisted dependency (0.18s)
 ```
 
 Each group holds the [findings](/concepts/findings) of one issue type. A finding in a file gives the path, the line and the name. A dependency finding gives the package name.
@@ -81,9 +73,19 @@ Each group holds the [findings](/concepts/findings) of one issue type. A finding
 | [Unused dependency](/rules/unused-dependency) | `package.json` lists the package, but no file imports it. | Remove it from `package.json`. |
 | [Unlisted dependency](/rules/unlisted-dependency) | A file imports the package, but `package.json` does not list it. | Add it to `package.json`. |
 
-`formatPercent` appears twice. Line 3 of `format.ts` defines the function. Line 1 of `index.ts` exports it again for other files. Both lines are one problem: remove the name from `index.ts`, then remove the `export` keyword in `format.ts`.
+Why does `formatPercent` appear twice? Line 3 of `format.ts` defines the function. `src/lib/index.ts` is a [barrel file](/concepts/entry-points): it exports names from other files again, so that other files can import them from `./lib`:
+
+```ts
+// src/lib/index.ts
+export { formatPrice, formatPercent } from "./format";
+export { parseAmount } from "./parse";
+```
+
+No file imports `formatPercent` from either place, so both lines are one problem. When two files of your project import each other, this part also gets an `Architecture` group with the [circular dependency](/analysis/architecture).
 
 ## Read the duplication part
+
+Dead code is code that nothing uses. The next part finds code that exists twice:
 
 ```text
 ● Duplicates (1 clone groups)
@@ -92,14 +94,14 @@ Each group holds the [findings](/concepts/findings) of one issue type. A finding
     src/reports/export.ts:3-19
     src/utils/summary.ts:7-23
 
-⚠ 34 lines (20.0%) duplicated across 2 files (0.01s)
+⚠ 34 lines (20.0%) duplicated across 2 files (0.02s)
 ```
 
-A [clone group](/analysis/duplication) is one block of code that exists in two or more places. This group has 17 lines, and two files hold it. `dup:f42424e8` is the name of the group.
-
-The last line counts each copy: 2 times 17 lines is 34 lines. The percentage is the share of the code that fallow compared. By default, fallow does not compare test files such as `*.test.ts`.
+A [clone group](/analysis/duplication) is one block of code that exists in two or more places. This group has 17 lines in two files, and `dup:f42424e8` is its handle: you give it to other commands to inspect the group. The last line counts each copy, so 2 times 17 lines is 34 lines. The percentage is the share of the code that fallow compared, and by default fallow does not compare test files such as `*.test.ts`.
 
 ## Read the complexity part
+
+The last part does not look for extra code. It looks for functions that are hard to change safely:
 
 ```text
 ● High complexity functions (1)
@@ -110,15 +112,9 @@ The last line counts each copy: 2 times 17 lines is 34 lines. The percentage is 
          552.0 ! CRAP
 ```
 
-Fallow lists the functions that are hard to change safely. The `!` marks each number that is above its limit.
+The `!` marks each number that is above its limit. `cyclomatic` counts the paths through the function, and `cognitive` estimates how hard it is to read, where nested code counts more. `CRAP` combines the complexity with the test coverage, so a complex function without tests gets a high number.
 
-| Number | Meaning |
-|:--|:--|
-| `cyclomatic` | The number of paths through the function. |
-| `cognitive` | An estimate of how hard the function is to read. Nested code counts more. |
-| `CRAP` | Complexity combined with test coverage. A complex function without tests gets a high number. |
-
-Without a coverage file, fallow estimates the coverage from the imports of your tests. [Health and complexity](/analysis/health) explains each number, its limit, and how to use real coverage. The complexity part also lists a score for each file and the refactoring targets.
+The line under the heading is a hint, not an error. Fallow has no coverage file of your tests, so it estimates the coverage from the exports that your tests import. No test reaches `classifyCustomer`, so its estimated coverage is 0 and its CRAP score is 552. [Health and complexity](/analysis/health) shows how to give fallow real coverage.
 
 ## Read the result
 
@@ -129,15 +125,15 @@ Setup: `fallow init` writes a config; `fallow agent install --dry-run` previews 
 
 The `Failed:` line names each part that has findings, and the file to start with. The `Setup:` line shows while your project has no config file.
 
-The run exits with code 1, because some findings have the severity `error`. [Findings, rules and gates](/concepts/findings#gates) explains which findings fail a run. Clone groups alone do not fail the run, although the `Failed:` line names them.
+The run exits with code 1, because some findings have the severity `error`. Clone groups alone do not fail the run, although the `Failed:` line names them. [Findings, rules and gates](/concepts/findings#gates) explains which findings fail a run.
 
 ## What you learned
 
-- `npx fallow` runs three analyses in one pass: dead code, duplication and complexity.
-- The dead code part starts from the entry points.
-- A finding names a file, a line and a name, or a package.
+- One `npx fallow` gives three parts: dead code (with dependencies and cycles), duplication and complexity.
+- Check the entry points first, because the dead code part depends on them.
+- A clone group has a handle, and a complex function has a CRAP score that needs coverage to be exact.
 - The exit code is 1 when a finding fails the run.
 
 ## Next
 
-Pick one finding of each kind and act on it: [Fix your first findings](/start/first-cleanup).
+Act on one finding of each kind in the same demo project: [Fix your first findings](/start/first-cleanup).

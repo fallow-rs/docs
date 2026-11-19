@@ -13,43 +13,43 @@ npx fallow health --runtime-coverage ./coverage
 
 ## What fallow finds
 
-A small app ran 200 requests with `NODE_V8_COVERAGE=./coverage`. Then fallow read the capture:
+The demo project has an unused export, `cancelOrder`, that nothing imports. A static report cannot show a function that the app imports but never calls, so this example adds one to the demo: `refundOrder` in `src/services/orders.ts`, which `src/index.ts` calls only when the command line has `--refund`. The app then ran once without that flag, with V8 coverage on (`NODE_V8_COVERAGE=./coverage`), and fallow read the capture:
 
 ```text
 ● Runtime coverage: cold code detected
-  6 tracked, 3 hit, 3 unhit, 0 untracked (50.0% covered)
-  based on 603 traces over 0 days (0 deployments)
-  src/format.js:3 formatPercent [0 invocations, safe to delete]
-  src/orders.js:5 refundOrder [0 invocations, safe to delete]
-  src/orders.js:3 cancelOrder [0 invocations, review required]
-  hot paths:
-    src/format.js:1 formatPrice (200 invocations, p100, cost 200 at 1.00 iterations/call)
-    src/index.js:4 handle (200 invocations, p50, cost 200 at 1.00 iterations/call)
-    src/orders.js:1 createOrder (200 invocations, p0, cost 200 at 1.00 iterations/call)
+  22 tracked, 17 hit, 5 unhit, 3 untracked (77.3% covered)
+  based on 240 traces over 0 days (0 deployments)
+  src/lib/format.ts:3 formatPercent [0 invocations, safe to delete]
+  src/services/orders.ts:18 cancelOrder [0 invocations, safe to delete]
+  src/utils/legacy-currency.ts:3 fromGuilders [untracked, safe to delete]
+  src/utils/legacy-currency.ts:1 toGuilders [untracked, safe to delete]
+  src/services/orders.ts:20 refundOrder [0 invocations, review required]
+  src/math.test.ts:6 <arrow> [untracked, coverage unavailable]
+  src/math.test.ts:5 <arrow> [untracked, coverage unavailable]
+  src/utils/test-helpers.ts:1 makeAmountCases [untracked, coverage unavailable]
 
 
 Coverage intelligence
   Verdict: high-confidence-delete
-  src/format.js:3 formatPercent high-confidence-delete [static_unused, runtime_cold, no_test_path]
-    Confirm ownership, then remove cold unused code in `src/format.js:formatPercent`
-  src/orders.js:5 refundOrder high-confidence-delete [static_unused, runtime_cold, no_test_path]
-    Confirm ownership, then remove cold unused code in `src/orders.js:refundOrder`
+  src/lib/format.ts:3 formatPercent high-confidence-delete [static_unused, runtime_cold, no_test_path]
+    Confirm ownership, then remove cold unused code in `src/lib/format.ts:formatPercent`
+  src/services/orders.ts:18 cancelOrder high-confidence-delete [static_unused, runtime_cold, no_test_path]
+    Confirm ownership, then remove cold unused code in `src/services/orders.ts:cancelOrder`
 ```
 
 | Part | Meaning |
 |:--|:--|
 | `cold code detected` | The verdict of the report: `clean`, `cold-code-detected`, `hot-path-touched`, `license-expired-grace` or `unknown`. |
-| `6 tracked, 3 hit, 3 unhit` | The functions that the capture tracked, and how many of them ran. |
-| `based on 603 traces` | The number of calls in the capture. A small number gives a lower confidence. |
+| `22 tracked, 17 hit, 5 unhit` | The functions that the capture tracked, and how many of them ran. |
+| `based on 240 traces` | The number of calls in the capture. A small number gives a lower confidence. |
 | `[0 invocations, safe to delete]` | One function, its call count, and its verdict. |
-| `hot paths` | The functions with the most calls. `p100` is the rank. The cost is the calls multiplied by the work per call. |
 | `Coverage intelligence` | Findings that combine the runtime coverage with the static analysis and the tests, for example [`coverage-intelligence-delete`](/rules/coverage-intelligence-delete). |
 
-The rest of the report is the normal health report.
+The rest of the report is the normal health report. A capture with more traffic also lists the **hot paths**: the functions with 100 calls or more (`--min-invocations-hot`). No function of the demo ran that often in one run.
 
 ## How fallow decides
 
-Fallow gives each function one verdict. It combines two facts: the static result (does a reachable file use the function?) and the call count in the capture.
+Each line in the report pairs two facts: the static result (does a reachable file use the function?) and the call count in the capture. From the two, fallow gives each function one verdict:
 
 | Verdict | Meaning |
 |:--|:--|
@@ -60,15 +60,15 @@ Fallow gives each function one verdict. It combines two facts: the static result
 | `active` | The function ran above the threshold. The report does not list it. |
 | `unknown` | Fallow could not decide. |
 
-In the example, nothing uses `formatPercent` and `refundOrder`, and they did not run. `cancelOrder` has an import in `index.js`, but no request took that path.
+In the demo, nothing imports `cancelOrder`, and nothing uses `formatPercent`, so both get `safe_to_delete`. `src/index.ts` imports `refundOrder`, but the run never took the `--refund` path, so it gets `review_required`. The test file and its helper did not run in the app, so their functions get `coverage_unavailable`.
 
-The confidence of a verdict depends on the size of the capture. Below 5,000 calls, fallow gives `medium` confidence at most. Change the two limits with `--min-observation-volume` and `--low-traffic-threshold`.
+The confidence of a verdict depends on the size of the capture. Below 5,000 calls, fallow gives `medium` confidence at most, and the 240 calls of the demo give `medium`. Change the two limits with `--min-observation-volume` and `--low-traffic-threshold`.
 
 Fallow accepts a V8 coverage directory, one V8 JSON file, or one Istanbul `coverage-final.json`. When the V8 dump holds source maps, fallow maps the bundle positions back to your source files.
 
 ## Capture once on your machine
 
-A single local capture is free. Continuous monitoring and more than one capture need a license.
+The demo capture is one local capture, and a single local capture is free. Continuous monitoring and more than one capture need a license.
 
 1. Run the setup. It installs the `@fallow-cli/fallow-cov` package and writes a recipe for your framework to `docs/collect-coverage.md`:
 
@@ -90,7 +90,9 @@ The setup is resumable. Run `fallow coverage setup` again after the capture, and
 
 One capture shows one moment. A function that runs once a month does not show in a capture of one hour. Fallow Cloud collects runtime coverage from each deployment over days or weeks, with a small beacon in your app. `fallow coverage analyze --cloud` then reads the data of the last 1 to 90 days. To set it up, see [The Fallow beacon](/cloud/beacon).
 
-## Act on a verdict
+## Act on a finding
+
+The verdict and its confidence tell you what to do. In the demo, `cancelOrder` has `medium` confidence, so check it by hand before you delete it.
 
 | Verdict | Action |
 |:--|:--|
@@ -102,11 +104,11 @@ One capture shows one moment. A function that runs once a month does not show in
 
 On a pull request, add `--changed-since main` or `--diff-file <file>`. When the change touches a hot path, the report verdict is `hot-path-touched`, and the reviewer knows that the change runs often.
 
-## Set a limit
+## Fail a run
 
-With `--runtime-coverage`, a finding with the verdict `safe_to_delete`, `review_required` or `low_traffic` makes `fallow health` exit with code 1. Add `--report-only` to show the runtime coverage without a failure.
+With `--runtime-coverage`, a finding with the verdict `safe_to_delete`, `review_required` or `low_traffic` makes `fallow health` exit with code 1. Add `--report-only` to show the runtime coverage without a failure. For checks that judge only a change, see [Changed code and baselines](/concepts/changed-code).
 
-## Limits
+## What fallow cannot see
 
 - A capture holds only the paths that ran during the capture. A short capture misses rare paths, and the report says so with a `short capture` note.
 - V8 does not track each function. A function that the capture did not track gets `coverage_unavailable`. A script that the engine did not parse during the capture can be absent.
@@ -117,4 +119,4 @@ With `--runtime-coverage`, a finding with the verdict `safe_to_delete`, `review_
 
 - [`fallow coverage`](/cli/coverage): `setup`, `analyze` and the upload commands.
 - [`fallow health`](/cli/health): the runtime options and the JSON fields.
-- [Evidence and its limits](/concepts/evidence): what static and runtime evidence can prove.
+- [Evidence levels](/concepts/evidence): what static and runtime evidence can prove.

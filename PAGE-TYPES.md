@@ -281,13 +281,15 @@ one finding of it. Tool output links to these pages.
    explanation of the issue type: "What it reports", "Why it matters",
    "Example", "Fix" and "Facts". The facts table has the rows that the
    contract gives: issue type, SARIF rule id, command, default severity,
-   config key, filter option, suppression comment, fixable, opt-in,
-   frameworks and a note.
+   config key (linked to its row in the config reference), filter option,
+   suppression comment, fixable, opt-in and frameworks. The note of the
+   issue type follows the table as a paragraph.
 2. "When to keep the code": written by hand, below the block.
 
 The page path is `rules/<issue type id>.mdx`, for example
-`rules/unused-file.mdx`. The generator also owns the `title` and the
-`description` of the frontmatter. It keeps the other frontmatter keys and
+`rules/unused-file.mdx`. The generator also owns the `title` (the
+`display_label` of the issue type) and the `description` of the
+frontmatter. It keeps the other frontmatter keys and
 each line below the block.
 
 **Line budget.** 80 lines.
@@ -373,11 +375,23 @@ The generator replaces it and does not touch the rest of the page.
 | Block | Argument | Content |
 |:--|:--|:--|
 | `cli-synopsis` | The command path, for example `dupes` or `coverage upload-inventory` | The usage line in a `bash` code block. |
-| `cli-options` | The command path | The positionals, then one options table, or one `###` heading and table for each option group. Global options and hidden options stay out. |
+| `cli-options` | The command path | The positionals, then the options without a group, then one heading and table for each option group (`help_heading` in the contract). A group heading is one level below the last heading before the block: `###` under `## Options`, `####` under a `### <subcommand>` section. Its explicit id is `options-<group>` for a top-level command, and `<subcommand>-options-<group>` for a subcommand, for example `analyze-options-input`. Global options and hidden options stay out. The last `cli-options` block of a page ends with one line that links each group of the global options. |
 | `cli-subcommands` | The command path, or `fallow` for the list of all commands | One row for each subcommand. A row links to `/cli/<name>` for a top-level command, else to the heading `#<name>` on the same page. |
-| `cli-global-options` | None | The global options. |
-| `environment-variables` | Optional: one or more selectors, separated by spaces, for example `FALLOW_COV FALLOW_RUNTIME_COVERAGE_SOURCE` or `!FALLOW_COV !FALLOW_MCP`. A selector is a name prefix that includes the variables, or a prefix after `!` that excludes them. Without an including selector, the block starts from all variables. | The selected environment variables. A selector that matches no variable stops the generator. On a page with more than one block, no variable can be in two blocks. A block without an including selector is the rest block: together, the blocks of its page must then hold each variable. |
+| `cli-global-options` | None | One heading and table for each group of global options, with the id `options-<group>`, for example `options-scope`. |
+| `environment-variables` | Optional: one or more selectors, separated by spaces, for example `group:cache`, `FALLOW_COV` or `group:mcp !FALLOW_BIN`. A selector `group:<group>` matches the variables of one `group` of the contract. Any other selector is a name prefix. A selector after `!` excludes the variables that it matches. Without an including selector, the block starts from all variables. | The selected environment variables, with a "Default" column when a selected variable has a default. A selector that matches no variable stops the generator. On a page with more than one block, no variable can be in two blocks. On `configuration/environment.mdx`, and on a page with a block without an including selector, the blocks must together hold each variable. |
+| `mcp-tools` | None | One row for each tool of the MCP server: name, description and CLI equivalent. |
+| `mcp-resources` | None | One row for each resource of the MCP server: URI and content. |
 | `rule` | The issue type id, for example `unused-file` | The generated sections of a rule page. |
+
+Some rules of the generator decide how tool text looks on a page:
+
+- An option description keeps the first two sentences of the help text. A
+  later sentence that states a default stays too, for example "Defaults to
+  `count` when omitted.", unless the "Default" column shows the default.
+- A rule example is prose. The generator writes it as a code block only
+  when the contract fences it, or when it has more than one line and each
+  line is code. A statement at the start of a prose example, such as
+  `export const formatPrice = ...`, becomes one code span.
 
 The generator also writes these files in full: `rules/<id>.mdx` (a new page,
 or only the block and the `title` and `description` of a page that exists),

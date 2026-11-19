@@ -5,7 +5,7 @@ keywords: ["CI", "GitHub Actions", "pull request", "fallow audit", "verdict", "P
 icon: "shield-check"
 ---
 
-On this page, you add one workflow file to your repository. After that, fallow checks the code that each pull request changes. It posts a comment on the pull request, and it fails the check when the change adds a problem.
+Your project has findings today, and each new pull request can add more. Here, you add one workflow file, and from then on fallow checks the code that each pull request changes. It posts a comment on the pull request, and it fails the check when the change adds a problem. Old findings do not fail the check, so you can add the workflow to a project with hundreds of findings.
 
 ## Before you start
 
@@ -50,33 +50,51 @@ What each part does:
 
 The action installs the fallow version that your `package.json` names. When `package.json` does not name fallow, the action installs the latest release.
 
+In a monorepo, keep the workflow at the repository root: one job checks all workspaces, and fallow follows the imports between them. The action saves the `.fallow` folder in the GitHub Actions cache, so a later run parses only the files that changed. By default, the audit also analyzes the base of the pull request to find the old findings, and that step takes extra time. [GitHub Actions](/integrations/ci-github) shows a job for each workspace and the other inputs.
+
 ## Open a pull request
 
-Open a pull request that changes code. The audit gives one verdict:
+Open a pull request that changes code. In the demo project, a pull request adds `src/services/cart-report.ts`, with the new unused export `cartTotalCents` and a copy of a block that two other files already have. Fallow posts this comment:
 
-| Verdict | Meaning | Job |
+```markdown
+### Quality gate failed
+
+Fallow audit report, 2 findings: 1 error, 1 warning.
+
+> Gates: failed audit-verdict.
+
+<details>
+<summary>Dead code (1)</summary>
+
+| Severity | Rule | Location | Description |
+| --- | --- | --- | --- |
+| error | [`fallow/unused-export`](https://fallow.tools/docs/explanations/dead-code/#unused-exports) | `src/services/cart-report.ts:25` | Export `cartTotalCents` is never imported by other modules |
+
+</details>
+
+<details>
+<summary>Duplication (1)</summary>
+
+| Severity | Rule | Location | Description |
+| --- | --- | --- | --- |
+| warning | [`fallow/code-duplication`](https://fallow.tools/docs/explanations/duplication/#clone-groups) | `src/services/cart-report.ts:7` | 17 lines repeat in 3 places (clone group dup:f42424e8) |
+
+</details>
+```
+
+On GitHub, each `<details>` block is a collapsed table, and each rule links to a page that explains it. The comment shows only the findings on the lines that the pull request adds. The heading and the Fallow check follow the verdict of the audit:
+
+| Verdict | Meaning | Check |
 |:--|:--|:--|
 | `pass` | The change adds no finding. | Passes. |
 | `warn` | The change adds only findings at the `warn` level, for example a clone group. | Passes. |
 | `fail` | The change adds a finding at the `error` level, for example an unused export. | Fails. |
 
-For a pull request that adds an unused export, the comment starts like this:
+This pull request gets `fail` because of `cartTotalCents`, and `fallow audit` exits with code 1, so the job fails. Remove the export and push again: fallow updates the same comment, and the verdict becomes `warn`. When a pull request has no findings, fallow posts no new comment.
 
-```markdown
-### Quality gate failed
+## Why old findings do not count
 
-Fallow audit report, 1 finding: 1 error.
-
-> Gates: failed audit-verdict.
-```
-
-Below the heading, a collapsed table for each category lists each finding with its severity, its rule, its file and line, and a description. Each rule links to a page that explains it. By default, the comment shows only the findings on the lines that the pull request adds. When a pull request has no findings, fallow posts no new comment. It updates an older fallow comment to the clean result.
-
-The job fails because `fallow audit` exits with code 1 on a `fail` verdict. [Exit codes](/reference/exit-codes) lists each code.
-
-## A repository with many findings
-
-You can add this workflow to a project that has hundreds of findings. The verdict counts only the findings that the pull request adds. An old finding in a changed file does not fail the check. [Changed code](/concepts/changed-code) explains how fallow tells new findings from old ones. To fix the old findings step by step, follow [Adopt fallow in an existing project](/guides/adopt).
+The verdict counts only the findings that the pull request adds. The demo project still has `cancelOrder` and `left-pad` from the first run, but this pull request does not add them, so they do not change the verdict. An old finding in a file that the pull request changes does not fail the check either. [Changed code](/concepts/changed-code) explains how fallow tells new findings from old ones. To clean the old findings step by step, follow [Adopt fallow in an existing project](/guides/adopt).
 
 ## Other CI systems
 
@@ -92,8 +110,8 @@ The job fails on exit code 1. [CI integration](/integrations/ci) shows the setup
 
 - `command: audit` checks only the code that a pull request changes.
 - The verdict is `pass`, `warn` or `fail`. Only `fail` fails the check.
-- Old findings do not block a pull request.
+- Old findings stay in the report of a full run, but they do not block a pull request.
 
 ## Next
 
-Give your coding agent the same check: [Use fallow with a coding agent](/start/first-agent).
+The same check can run before the code reaches a pull request, in the loop of your coding agent: [Use fallow with a coding agent](/start/first-agent).
