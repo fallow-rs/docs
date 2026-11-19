@@ -196,6 +196,11 @@ const TAG = /<([A-Za-z/!][^<>\n`]*)>/gu;
 
 const wrapTags = (prose) => prose.replace(TAG, (tag) => `\`${tag}\``);
 
+/** A URI of the MCP server, such as `fallow://explain/{issue_type}`. A trailing period or comma ends the sentence, not the URI. */
+const MCP_URI = /fallow:\/\/[^\s`]*[^\s`.,;:)]/gu;
+
+const wrapUris = (prose) => prose.replace(MCP_URI, (uri) => `\`${uri}\``);
+
 /** A rustdoc intra-doc link, such as ``[`Type::field`]``, that is not a Markdown link. */
 const RUSTDOC_LINK = /\[(`[^`\n]+`)\](?![([])/gu;
 const AUTOLINK = /<(https?:\/\/[^\s<>`]+)>/gu;
@@ -215,11 +220,13 @@ const escapeCharacters = (prose) =>
     .replace(/[<{}*]/gu, (character) => `\\${character}`);
 
 /**
- * Makes tool text safe for MDX prose. A tag-like `<NAME>` becomes code, and a
- * bare `<`, `{`, `}` or `*` gets a backslash, because MDX reads `<` as JSX,
- * braces as an expression and `*` as emphasis. Code spans stay as they are.
+ * Makes tool text safe for MDX prose. A tag-like `<NAME>` and a `fallow://`
+ * URI become code, and a bare `<`, `{`, `}` or `*` gets a backslash, because
+ * MDX reads `<` as JSX, braces as an expression and `*` as emphasis. Code
+ * spans stay as they are.
  */
-export const escapeProse = (text) => mapProse(mapProse(replaceDashes(cleanToolText(text)), wrapTags), escapeCharacters);
+export const escapeProse = (text) =>
+  mapProse(mapProse(mapProse(replaceDashes(cleanToolText(text)), wrapUris), wrapTags), escapeCharacters);
 
 /**
  * {@link escapeProse} for a text that starts a paragraph. MDX reads a

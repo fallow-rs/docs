@@ -123,6 +123,14 @@ test("escapes nasty help text for MDX prose", () => {
   assert.equal(escapeProse("a C:\\{path"), "a C:\\\\\\{path");
 });
 
+test("writes a fallow:// URI as one code span, without the sentence punctuation", () => {
+  assert.equal(
+    escapeProse("Read the fallow://explain/{issue_type} URI, or fallow://tools."),
+    "Read the `fallow://explain/{issue_type}` URI, or `fallow://tools`.",
+  );
+  assert.equal(escapeProse("keep `fallow://tools` as it is"), "keep `fallow://tools` as it is");
+});
+
 test("escapes a table cell: one line and each pipe, also in code", () => {
   assert.equal(escapeCell("a | b\nc `x|y`"), "a \\| b c `x\\|y`");
 });
