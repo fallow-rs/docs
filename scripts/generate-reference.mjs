@@ -201,6 +201,39 @@ const MCP_URI = /fallow:\/\/[^\s`]*[^\s`.,;:)]/gu;
 
 const wrapUris = (prose) => prose.replace(MCP_URI, (uri) => `\`${uri}\``);
 
+/**
+ * A token that the tool text writes without backticks but that is code: a
+ * long flag (`--name`, `--name=value`), a short flag (`-x`, only between
+ * spaces or punctuation), an environment variable (`FALLOW_*`, or another
+ * name in capitals with an underscore, such as `NODE_V8_COVERAGE`) and a config
+ * or data file name (`package.json`, `.fallowrc.json`). A site font joins
+ * the two hyphens of a bare long flag into one dash. A double hyphen without
+ * a name after it, a negative number and a hyphenated word stay prose.
+ */
+const CODE_TOKEN = new RegExp(
+  [
+    String.raw`(?<![\w\-.=:@])--[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:=[^\s,;)\]]*[^\s,;.)\]])?(?![\w-])`,
+    String.raw`(?<=^|[\s(])-[A-Za-z](?=[\s,;:)]|\.(?:\s|$)|$)`,
+    String.raw`(?<![\w$])[A-Z][A-Z0-9]*_[A-Z0-9_]*[A-Z0-9](?:_\*)?(?![\w*])|(?<![\w$])FALLOW_\*`,
+    String.raw`(?<![\w\-/.@])\.?[\w-]+(?:\.[\w-]+)*\.(?:jsonc?|toml|ya?ml)(?![\w-]|\.\w)`,
+  ].join("|"),
+  "gu",
+);
+
+/** A Markdown link, an autolink or a bare URL: the token wrap skips each of them. */
+const LINK_OR_URL = /\[[^\]\n]*\]\([^)\n]*\)|<https?:\/\/[^\s<>]+>|https?:\/\/[^\s<>`)]+/gu;
+
+/** Wraps each {@link CODE_TOKEN} of a prose part in a code span. Links and URLs stay as they are. */
+export const wrapCodeTokens = (prose) => {
+  let out = "";
+  let last = 0;
+  for (const match of prose.matchAll(LINK_OR_URL)) {
+    out += prose.slice(last, match.index).replace(CODE_TOKEN, (token) => `\`${token}\``) + match[0];
+    last = match.index + match[0].length;
+  }
+  return out + prose.slice(last).replace(CODE_TOKEN, (token) => `\`${token}\``);
+};
+
 /** A rustdoc intra-doc link, such as ``[`Type::field`]``, that is not a Markdown link. */
 const RUSTDOC_LINK = /\[(`[^`\n]+`)\](?![([])/gu;
 const AUTOLINK = /<(https?:\/\/[^\s<>`]+)>/gu;
@@ -220,13 +253,14 @@ const escapeCharacters = (prose) =>
     .replace(/[<{}*]/gu, (character) => `\\${character}`);
 
 /**
- * Makes tool text safe for MDX prose. A tag-like `<NAME>` and a `fallow://`
- * URI become code, and a bare `<`, `{`, `}` or `*` gets a backslash, because
+ * Makes tool text safe for MDX prose. A tag-like `<NAME>`, a `fallow://`
+ * URI and a {@link CODE_TOKEN} (a flag, an environment variable or a file
+ * name) become code, and a bare `<`, `{`, `}` or `*` gets a backslash, because
  * MDX reads `<` as JSX, braces as an expression and `*` as emphasis. Code
  * spans stay as they are.
  */
 export const escapeProse = (text) =>
-  mapProse(mapProse(mapProse(replaceDashes(cleanToolText(text)), wrapUris), wrapTags), escapeCharacters);
+  mapProse(mapProse(mapProse(mapProse(replaceDashes(cleanToolText(text)), wrapUris), wrapTags), wrapCodeTokens), escapeCharacters);
 
 /**
  * {@link escapeProse} for a text that starts a paragraph. MDX reads a

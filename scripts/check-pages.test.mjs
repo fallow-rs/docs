@@ -7,6 +7,7 @@ import {
   LINE_BUDGETS,
   buildBaseline,
   buildIndex,
+  checkBareFlag,
   checkComponents,
   checkDiagrams,
   checkEmDash,
@@ -626,4 +627,36 @@ test("diagram reports markup characters in a label and a long subgraph title", (
   );
   assert.match(problems[0].message, /\*, _ or backtick/u);
   assert.match(problems[4].message, /more than 3 words/u);
+});
+
+// ---------------------------------------------------------------------------
+// bare-flag
+
+test("bare-flag reports a long flag in prose, a table cell, link text and the description", () => {
+  const text = [
+    "---",
+    'title: "Page"',
+    'description: "Run it with --quiet."',
+    'keywords: ["--production"]',
+    "---",
+    "",
+    "Pass --format json to get JSON.",
+    "| `--x` | Implies --score |",
+    "See [the --trend option](/cli/health#options).",
+  ].join("\n");
+  const found = checkBareFlag("cli/a.mdx", text);
+  assert.ok(found.every((entry) => entry.rule === "bare-flag"));
+  assert.deepEqual(lines(found), [3, 7, 8, 9]);
+  assert.match(found[1].message, /--format is outside code/u);
+});
+
+test("bare-flag ignores code, link targets, URLs, MDX comments and dashes that are no flag", () => {
+  const body = [
+    "Use `--quiet` or ``fallow --ci``.",
+    "```bash\nfallow dead-code --production\n```",
+    "Read [the guide](/cli/audit?x=--base) or https://example.com/a--b.",
+    "{/* generated:start cli-options --x */}",
+    "A range of 2--3, a re-export, -5, x -- y and a--b.",
+  ].join("\n");
+  assert.deepEqual(checkBareFlag("guides/a.mdx", page(body)), []);
 });

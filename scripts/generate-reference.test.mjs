@@ -131,6 +131,27 @@ test("writes a fallow:// URI as one code span, without the sentence punctuation"
   assert.equal(escapeProse("keep `fallow://tools` as it is"), "keep `fallow://tools` as it is");
 });
 
+test("writes a bare flag, an environment variable and a file name of tool text as code", () => {
+  assert.equal(escapeProse("Skip with --no-package-baselines."), "Skip with `--no-package-baselines`.");
+  assert.equal(escapeProse("Pass --format=json or --top=10, then -q."), "Pass `--format=json` or `--top=10`, then `-q`.");
+  assert.equal(escapeProse("Implies --trend and --score"), "Implies `--trend` and `--score`");
+  assert.equal(escapeProse("(alias: --output)"), "(alias: `--output`)");
+  assert.equal(escapeProse("Set FALLOW_BIN, or FALLOW_* in CI."), "Set `FALLOW_BIN`, or `FALLOW_*` in CI.");
+  assert.equal(escapeProse("a NODE_V8_COVERAGE directory"), "a `NODE_V8_COVERAGE` directory");
+  assert.equal(escapeProse("when no --base/--changed-since is passed"), "when no `--base`/`--changed-since` is passed");
+  assert.equal(escapeProse("Reads package.json and .fallowrc.jsonc."), "Reads `package.json` and `.fallowrc.jsonc`.");
+});
+
+test("keeps code spans, links, URLs, negative numbers, hyphenated words and a bare double hyphen as they are", () => {
+  assert.equal(escapeProse("keep `--quiet` and `FALLOW_BIN`"), "keep `--quiet` and `FALLOW_BIN`");
+  assert.equal(escapeProse("See [the --quiet flag](/cli/global-flags#quiet)."), "See [the --quiet flag](/cli/global-flags#quiet).");
+  assert.equal(escapeProse("See https://example.com/a--b/x.json now"), "See https://example.com/a--b/x.json now");
+  assert.equal(escapeProse("A delta of -5 or -0.5 is a re-export of e-mail."), "A delta of -5 or -0.5 is a re-export of e-mail.");
+  assert.equal(escapeProse("a--b and x -- y"), "a--b and x, y");
+  assert.equal(escapeProse("Run -- then"), "Run, then");
+  assert.equal(escapeProse("src/data.json.ts, a/b--c, CI and V8"), "src/data.json.ts, a/b--c, CI and V8");
+});
+
 test("escapes a table cell: one line and each pipe, also in code", () => {
   assert.equal(escapeCell("a | b\nc `x|y`"), "a \\| b c `x\\|y`");
 });
@@ -677,7 +698,7 @@ test("renders an example as a code block only when the contract fences it or eac
 test("writes the note of an issue type below the facts table, not in a cell", () => {
   const page = generated.files.get("rules/unused-dependency.mdx");
   assert.doesNotMatch(page, /\| Note \|/u);
-  assert.match(page, /\n\*\*Note\.\*\* --unused-deps controls /u);
+  assert.match(page, /\n\*\*Note\.\*\* `--unused-deps` controls /u);
 });
 
 const MCP = {

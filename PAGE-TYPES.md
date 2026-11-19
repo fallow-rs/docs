@@ -393,6 +393,11 @@ Some rules of the generator decide how tool text looks on a page:
 - An option description keeps the first two sentences of the help text. A
   later sentence that states a default stays too, for example "Defaults to
   `count` when omitted.", unless the "Default" column shows the default.
+- A flag (`--name`, `--name=value`, a short flag between spaces), an
+  environment variable (a name in capitals with an underscore, such as
+  `FALLOW_BIN`) and a config or data file name (`package.json`) in tool
+  text become code spans. Text in code, in a link or in a URL stays as it
+  is.
 - A rule example is prose. The generator writes it as a code block only
   when the contract fences it, or when it has more than one line and each
   line is code. A statement at the start of a prose example, such as
@@ -506,6 +511,7 @@ whole lines. Do not edit, merge or invent a line.
 | `components` | Only the components that the site renders. |
 | `ending` | No card grid after the last H2, and at most 3 links under "Next", "Reference" or "Related". Tutorial, concept, analysis, guide and rule pages only. |
 | `em-dash` | No em dash outside code. |
+| `bare-flag` | No long flag such as `--quiet` outside code, link targets, URLs and MDX comments, also in the description. The site font joins its two hyphens into one dash. Write the flag in backticks. |
 | `mdx-syntax` | No text that stops the MDX build of the site. Outside code blocks, code spans, MDX comments and escapes, a `<` must start a known component or HTML tag, a closing tag or an autolink. A `{` or `}` must be part of an MDX comment, an explicit heading id or an attribute of a tag (`cols={2}`). Each known tag closes, and no line starts with `import` or `export`. Table cells and link text count as prose. Write the text in backticks, or escape it as `\<` or `\{`. |
 | `diagram` | Each `mermaid` block is a `flowchart`, a `sequenceDiagram` or a `stateDiagram-v2`, has at most 11 nodes, and sets no style, class or click action. A page has at most two diagrams. In a flowchart, no edge uses a node id before a later line gives the node its label, no label has `*`, `_` or a backtick, and no subgraph title has more than three words. The node count includes each name outside quotes, shapes and edge labels, so it is never too low. See [Diagrams](#diagrams). |
 | `inbound-links` | Each entry of `scripts/inbound-links.json` resolves to a page and to an explicit heading id. |

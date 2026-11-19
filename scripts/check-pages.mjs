@@ -35,6 +35,7 @@ export const RULES = [
   "components",
   "ending",
   "em-dash",
+  "bare-flag",
   "mdx-syntax",
   "diagram",
   "inbound-links",
@@ -461,6 +462,39 @@ export const checkEmDash = (path, text) => {
 };
 
 // ---------------------------------------------------------------------------
+// bare-flag
+
+const FRONTMATTER_BLOCK = /^---\n[\s\S]*?\n---(?:\n|$)/u;
+const NOT_PROSE = [
+  /\{\/\*[\s\S]*?\*\/\}/gu,
+  /\]\([^)\n]*\)/gu,
+  /\b(?:href|src)="[^"\n]*"/gu,
+  /<https?:\/\/[^\s<>]+>|https?:\/\/[^\s<>)\]]+/gu,
+];
+const BARE_FLAG = /(?<![\w\-.=:@])--[a-z][a-z0-9]*(?:-[a-z0-9]+)*/gu;
+
+/** The frontmatter with each line blanked except the description, which the site shows as the lead paragraph. */
+const blankFrontmatter = (text) =>
+  text.replace(FRONTMATTER_BLOCK, (block) =>
+    block
+      .split("\n")
+      .map((line) => (line.startsWith("description:") ? line : line.replace(/./gu, " ")))
+      .join("\n"),
+  );
+
+/**
+ * Reports a long flag in prose outside code, link targets, URLs and MDX
+ * comments. The site font joins the two hyphens of a bare `--name` into one
+ * long dash, so a reader cannot copy the flag.
+ */
+export const checkBareFlag = (path, text) => {
+  const body = blankMatches(blankFrontmatter(stripCode(text)), NOT_PROSE);
+  return [...body.matchAll(BARE_FLAG)].map((match) =>
+    violation("bare-flag", path, lineAt(body, match.index), `The flag ${match[0]} is outside code, and the site font joins its hyphens into a dash. Write it in backticks.`),
+  );
+};
+
+// ---------------------------------------------------------------------------
 // mdx-syntax
 
 export const checkMdxSyntax = (path, text) =>
@@ -746,6 +780,7 @@ export const checkProject = ({ pages, docsJson, inboundJson, assetExists = () =>
       ...checkComponents(path, text),
       ...checkEnding(path, text),
       ...checkEmDash(path, text),
+      ...checkBareFlag(path, text),
       ...checkMdxSyntax(path, text),
       ...checkDiagrams(path, text),
     );
