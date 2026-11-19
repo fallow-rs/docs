@@ -229,6 +229,21 @@ codes of one command.
 **Never on this page.** Concept text, tutorials, and advice on when to use
 the command. The teaching page owns that text.
 
+**The one exception.** `cli/security-agent-verification.mdx` is a protocol
+page, not the page of one command. It stays in `cli/`, because released
+fallow versions link to this path. Its sections, in this order:
+
+1. One sentence: what the protocol joins.
+2. A link to the teaching page.
+3. "Steps": the numbered steps of the protocol.
+4. "Input": the file that the protocol reads.
+5. "Output": the file that the reviewer writes, and its fields.
+6. "Result": what the join command gives.
+7. "Finding identity": how the ids stay stable.
+8. "Related": at most 3 links.
+
+No other page in `cli/` may use this order.
+
 ```mdx
 ---
 title: "fallow dupes"
@@ -361,7 +376,7 @@ The generator replaces it and does not touch the rest of the page.
 | `cli-options` | The command path | The positionals, then one options table, or one `###` heading and table for each option group. Global options and hidden options stay out. |
 | `cli-subcommands` | The command path, or `fallow` for the list of all commands | One row for each subcommand. A row links to `/cli/<name>` for a top-level command, else to the heading `#<name>` on the same page. |
 | `cli-global-options` | None | The global options. |
-| `environment-variables` | Optional: a name prefix, for example `FALLOW_COV` | The environment variables. |
+| `environment-variables` | Optional: one or more selectors, separated by spaces, for example `FALLOW_COV FALLOW_RUNTIME_COVERAGE_SOURCE` or `!FALLOW_COV !FALLOW_MCP`. A selector is a name prefix that includes the variables, or a prefix after `!` that excludes them. Without an including selector, the block starts from all variables. | The selected environment variables. A selector that matches no variable stops the generator. On a page with more than one block, no variable can be in two blocks. A block without an including selector is the rest block: together, the blocks of its page must then hold each variable. |
 | `rule` | The issue type id, for example `unused-file` | The generated sections of a rule page. |
 
 The generator also writes these files in full: `rules/<id>.mdx` (a new page,
