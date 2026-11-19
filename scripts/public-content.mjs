@@ -30,16 +30,23 @@ const PUBLIC_ROOT_FILES = new Set([
   "installation.mdx",
   "quickstart.mdx",
 ]);
+// A listed directory does not have to exist. The walk skips a missing
+// directory, so the manifest stays the same until the directory gets a page.
 const CONTENT_DIRECTORIES = new Set([
   "analysis",
   "cli",
   "cloud",
+  "concepts",
   "configuration",
   "explanations",
   "frameworks",
+  "guides",
   "integrations",
   "migration",
+  "reference",
+  "rules",
   "snippets",
+  "start",
 ]);
 const ASSET_DIRECTORIES = new Set(["images", "logo"]);
 const REPOSITORY_ONLY_DIRECTORIES = new Set([

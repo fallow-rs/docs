@@ -25,6 +25,8 @@ the pages and reads `docs.json` as its navigation source.
 - `logo/`, `images/`: static assets.
 - `custom.css`: theme overrides.
 - `CONTRIBUTING.md`: canonical content placement map.
+- `PAGE-TYPES.md`: the page types, their templates, and the page rules.
+- `TERMS.md`: the terms to use, their owner pages, and the internal names to avoid.
 
 ## Key files
 
@@ -58,10 +60,19 @@ the pages and reads `docs.json` as its navigation source.
 ### Page structure
 - YAML frontmatter: `title`, `description`, `keywords`, `icon`.
 - All code blocks need language tags.
-- End every page with a "See also" CardGroup linking related pages.
+- Each page has one page type. Follow its template, its line budget, its
+  ending rule and the owner rule in [PAGE-TYPES.md](PAGE-TYPES.md).
+- Use the terms in [TERMS.md](TERMS.md).
+
+### Change rule
+- A new option appears by regeneration.
+- A concept page changes only when the concept changes.
+- A new task gets a guide.
 
 ### Components
 Tabs, Steps, Cards, CardGroup, Accordion, Info, Tip, Warning, Note, CodeGroup.
+[PAGE-TYPES.md](PAGE-TYPES.md#components) lists every component that the
+site renders, and when to use Tabs and Accordion.
 
 ## Content boundaries
 

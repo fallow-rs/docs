@@ -143,6 +143,34 @@ test("public content rejects symlinks", async () => {
   );
 });
 
+const PAGE_TYPE_DIRECTORIES = ["concepts", "guides", "reference", "rules", "start"];
+
+test("missing content directories do not fail the check or the manifest", async () => {
+  const root = await createFixture();
+  const written = await writeManifest(root);
+  const checked = await checkManifest(root);
+
+  assert.deepEqual(checked, written);
+  assert.deepEqual(
+    written.content.files.map((file) => file.path),
+    ["analysis/health.mdx", "docs.json", "index.mdx"],
+  );
+});
+
+test("public content includes pages in the page-type directories", async () => {
+  const root = await createFixture();
+  for (const directory of PAGE_TYPE_DIRECTORIES) {
+    await mkdir(join(root, directory));
+    await writeFile(join(root, directory, "page.mdx"), `# ${directory}\n`);
+  }
+
+  const manifest = await buildManifest(root);
+  const paths = manifest.content.files.map((file) => file.path);
+  for (const directory of PAGE_TYPE_DIRECTORIES) {
+    assert.ok(paths.includes(`${directory}/page.mdx`), `${directory}/page.mdx is missing`);
+  }
+});
+
 test("public content rejects MDX outside the allowlist", async () => {
   const root = await createFixture();
   await mkdir(join(root, "internal"));

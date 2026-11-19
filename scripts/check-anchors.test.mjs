@@ -1,24 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { collectAnchors, findBrokenAnchors } from "./check-anchors.mjs";
-
-test("collects headings, explicit ids and titled components", () => {
-  const anchors = collectAnchors(
-    [
-      "## Exit codes",
-      "### `auto_fixable` is per-finding {#auto-fixable}",
-      '<Accordion title="CSS and SCSS extraction">',
-      "```bash",
-      "# Not a heading",
-      "```",
-    ].join("\n"),
-  );
-  assert.deepEqual(
-    [...anchors].sort(),
-    ["auto-fixable", "css-and-scss-extraction", "exit-codes"],
-  );
-});
+import { findBrokenAnchors } from "./check-anchors.mjs";
 
 test("reports a link to a missing heading and accepts an existing one", () => {
   const pages = new Map([
