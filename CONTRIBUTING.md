@@ -22,6 +22,11 @@ the pages from a pinned commit of `main`.
 npm run check
 ```
 
+`npm run check` also runs the page checks of [PAGE-TYPES.md](PAGE-TYPES.md#checks).
+When you fix a violation on a page, run
+`node scripts/check-pages.mjs --update-baseline` and commit the lower
+baseline.
+
 When a commit changes public content, the hook refreshes and stages
 `public-content-manifest.json` for you. You need `npm run content:manifest` only
 if you skipped the hook setup above. The hook derives the manifest from the
@@ -46,21 +51,35 @@ components.
 
 ## Content placement
 
-| Directory | Content |
-|:----------|:--------|
-| Root `.mdx` pages | Landing, installation, quickstart, and adoption |
-| `analysis/` | Dead code, duplication, auto-fix, debugging |
-| `cli/` | CLI command reference |
-| `cloud/` | Public cloud and beacon workflows |
-| `configuration/` | Config files, rules, workspaces |
-| `explanations/` | Concepts, tradeoffs, telemetry, and mental models |
-| `frameworks/` | Built-in and custom plugins |
-| `integrations/` | CI, VS Code, MCP server |
-| `migration/` | Migration from other tools, and comparisons with them |
-| `images/`, `logo/` | Public visual assets |
+The directory of a page sets its page type.
+[PAGE-TYPES.md](PAGE-TYPES.md) defines each type, its sections and its line
+budget.
+
+| Content | Page type | Directory |
+|:--|:--|:--|
+| A first result in one sitting | Tutorial | `quickstart.mdx`, `start/` |
+| One idea that the analyses depend on | Concept | `concepts/` |
+| What one analysis finds and how to act on it | Analysis | `analysis/` |
+| One task in a project | Guide | `guides/` |
+| The options, output and exit codes of one command | Command reference | `cli/` |
+| One issue type | Rule reference | `rules/` |
+
+The other directories hold pages without a page type: `configuration/`,
+`explanations/`, `frameworks/`, `integrations/`, `migration/`, `reference/`
+and `cloud/`. The root also holds `index.mdx`, `installation.mdx` and
+`adoption.mdx`. `images/` and `logo/` hold public visual assets.
+
+When you change the tool:
+
+- A new option appears by regeneration.
+- A concept page changes only when the concept changes.
+- A new task gets a guide.
+
+Each fact has one owner page. Other pages link to it. Use the terms in
+[TERMS.md](TERMS.md).
 
 Add every user-facing page to `docs.json`. `docs.json` is the source of truth
-for navigation order. This table defines where new content belongs.
+for navigation order.
 
 ## Developer Certificate of Origin
 
