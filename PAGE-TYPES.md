@@ -224,10 +224,13 @@ codes of one command.
    [Generated blocks](#generated-blocks).
 4. "Options": a `cli-options` block. A command with subcommands also has a
    `cli-subcommands` block.
-5. "Output": a sample and the fields of the machine output.
-6. "Exit codes".
-7. "Examples".
-8. "Related": at most 3 links.
+5. "Option details", optional: the notes written by hand about the options,
+   each in an H3 section. Keep them out of "Options", so that the contents
+   list of the page does not mix them with the generated option groups.
+6. "Output": a sample and the fields of the machine output.
+7. "Exit codes".
+8. "Examples".
+9. "Related": at most 3 links.
 
 **Line budget.** None.
 
@@ -263,6 +266,8 @@ Link to the teaching page.
 ## Synopsis
 
 ## Options
+
+## Option details
 
 ## Output
 
