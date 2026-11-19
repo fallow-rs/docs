@@ -1,142 +1,99 @@
 ---
-title: "Fallow for Neovim: LSP diagnostics"
+title: "Neovim"
 sidebarTitle: "Neovim"
-description: "Set up fallow in Neovim with the built-in LSP client. See unused code, duplication, circular dependencies, and complexity as you edit, with code actions."
-keywords: ["Neovim", "nvim", "LSP", "language server", "fallow-lsp", "diagnostics", "vim.lsp", "editor", "Neovim LSP setup"]
+description: "Guide: connect the built-in LSP client of Neovim to fallow-lsp, and see the findings of fallow as diagnostics while you edit."
+keywords: ["Neovim", "nvim", "LSP", "language server", "fallow-lsp", "diagnostics", "vim.lsp.config", "editor"]
 icon: "terminal"
 ---
 
-Get fallow findings in Neovim while you edit, with the same results as the CLI and CI. Neovim's built-in LSP client starts `fallow-lsp`, the language server that the VS Code extension also uses. The editor does no analysis of its own.
+Connect Neovim to `fallow-lsp`, the language server of fallow, so that you see the findings of fallow while you edit. The server runs the same analysis as the CLI and CI.
 
-<Info>
-The `vim.lsp.config` and `vim.lsp.enable` API below requires Neovim 0.11+. On older versions, attach `fallow-lsp` through `nvim-lspconfig` or a manual `vim.lsp.start`.
-</Info>
+## Before you start
 
-## What works
+- Neovim 0.11 or later, for `vim.lsp.config` and `vim.lsp.enable`. On an older version, start the server with `nvim-lspconfig` or `vim.lsp.start`.
+- `fallow-lsp` on the `PATH` of Neovim. The `fallow` npm package contains it: `npm install -g fallow`.
 
-- **Real-time diagnostics** for these issues:
-  - unused files, exports, types, dependencies, and enum and class members
-  - unresolved imports, unlisted dependencies, and duplicate exports
-  - circular dependencies and code duplication
-- **Opt-in security candidate diagnostics.** These are off by default. To turn them on, raise the `security-sink` or `security-client-server-leak` rule to `warn` or `error` in your fallow config. Each candidate shows as an `information` squiggle. A candidate is unverified, so check it before you act. The hover shows the confidence signals first and points to `fallow security --file` for the full trace. A quick-fix dismisses the candidate.
-- **Opt-in component health hints.** When you raise `prop-drilling`, `thin-wrapper`, or `duplicate-prop-shape` to `warn` or `error`, each finding shows as a `hint` diagnostic on the component.
-- **Config pattern checks.** An `ignoreDependencies` glob or an `ignoreFindings` pattern that matches nothing gets an `information` diagnostic on its entry in the config file.
-- **Hover information** with the number of files that import an export, unused status, and duplicate block locations
-- **Quick-fix code actions** to remove unused exports or delete unused files
-- **Finding ids.** Each dead-code diagnostic has the stable [`finding_id`](/cli/dead-code#finding-id) of the finding in `data.findingId`. It is the same id as in `fallow dead-code --format json`, so you can join a diagnostic to a CLI or CI report. A security candidate diagnostic also has `data.findingId`, with the same id as in `fallow security --format json`.
-- **Code lens** with "imported by N files" above each used export, where Neovim shows code lens
+## Steps
 
-## Installation
+1. Check that Neovim can find the server:
 
-<Steps>
-  <Step title="Install Fallow so fallow-lsp is on your PATH">
-    ```sh
-    npm install -g fallow
-    ```
+   ```bash
+   fallow-lsp --version
+   ```
 
-    You can also add it as a project devDependency (`npm install -D fallow`) and point `cmd` at `node_modules/.bin/fallow-lsp`.
-  </Step>
-  <Step title="Confirm Neovim can see the binary">
-    ```sh
-    fallow-lsp --version
-    ```
-  </Step>
-  <Step title="Register and enable the server">
-    Add the configuration below to your Neovim config, then open a TypeScript or JavaScript project.
-  </Step>
-</Steps>
+2. Add the server to your Neovim config:
 
-## Configuration
+   ```lua
+   -- init.lua
+   vim.lsp.config("fallow", {
+     cmd = { "fallow-lsp" },
+     filetypes = { "javascript", "typescript", "javascriptreact", "typescriptreact" },
+     root_markers = { ".fallowrc.json", "package.json", ".git" },
+   })
+
+   vim.lsp.enable("fallow")
+   ```
+
+3. Open a file of a JavaScript or TypeScript project.
+
+To use the fallow of the project, set `cmd` to the absolute path of `fallow-lsp` in `node_modules/.bin/`. Neovim runs `cmd` exactly as you write it.
+
+## What you get
+
+- Diagnostics for each finding of the [dead code analysis](/analysis/dead-code), circular dependencies and duplicated code.
+- A hover on an export with the number of files that import it, and on duplicated code with the other places of the clone group.
+- Code actions that remove an unused export or delete an unused file.
+- A code lens `imported by N files` above each used export, when your config shows code lenses.
+
+Each dead-code diagnostic has the `finding_id` of the finding in `data.findingId`. It is the same id as in `fallow dead-code --format json`.
+
+The server uses the pull model of LSP 3.17, and updates the diagnostics when you save a file. The first analysis runs when the server attaches.
+
+## Options
+
+Pass options in `init_options`. Each option is optional.
 
 ```lua
+-- init.lua
 vim.lsp.config("fallow", {
-	cmd = { "fallow-lsp" },
-	filetypes = { "javascript", "typescript", "javascriptreact", "typescriptreact" },
-	root_markers = { ".fallowrc.json", "package.json", ".git" },
-	init_options = {
-		-- Every issue type is enabled by default. List only the ones you
-		-- want to turn off; any key you omit stays enabled.
-		issueTypes = {
-			["circular-dependencies"] = false,
-		},
-	},
-})
-
-vim.lsp.enable("fallow")
-```
-
-`init_options` is optional. `cmd`, `filetypes`, and `root_markers` are enough to attach the server.
-
-### Issue-type toggles
-
-To hide an issue type in the editor, set it to `false` in the LSP initialization options. Your project config does not change. The keys are fallow issue types in kebab-case, such as `unused-exports`, `unresolved-imports`, and `circular-dependencies`. To get the current list, a client can send the custom `fallow/issueTypes` request.
-
-### Scope to changed files
-
-To see diagnostics only for files changed since a git ref, pass the ref as `changedSince`. This works like `fallow dead-code --changed-since` and the VS Code `fallow.changedSince` setting. Use it to adopt fallow on a legacy codebase without a flood of old findings:
-
-```lua
-init_options = {
-	changedSince = "fallow-baseline",
-},
-```
-
-### Parse the project at startup
-
-The first analysis runs when you open the first file. To parse the project earlier, set `prewarm`. The server then parses the files when it starts, but publishes no diagnostics. The first analysis starts from the parsed files:
-
-```lua
-init_options = {
-	prewarm = true,
-},
-```
-
-`prewarm` is off by default. It needs a `package.json` in the workspace root. It also needs a client that registers watched files, because the server keeps its project session only for such a client.
-
-### Project session between saves
-
-When the client registers watched files, the server keeps one project session between saves. A save then parses only the changed files. A change to `package.json`, a `tsconfig` file, or a fallow config file loads the session again. On a large repository the kept session holds more memory between saves: about 100 MB on the Next.js repository. To load a new session on each save, set `FALLOW_LSP_REUSE_SESSION=0` for the server:
-
-```lua
-cmd_env = { FALLOW_LSP_REUSE_SESSION = "0" },
-```
-
-<Note>
-**When diagnostics appear.** Fallow uses the LSP 3.17 pull model and refreshes diagnostics on save. The first analysis runs when the server attaches. A buffer you just opened shows findings when that first pass completes, or after the next save. Some findings belong to files you have not opened, such as `package.json` for unlisted dependencies. Fallow pushes those findings, so you still see them.
-</Note>
-
-## Binary resolution
-
-Neovim runs `cmd` exactly as configured. If `fallow-lsp` is not on Neovim's `PATH`, point `cmd` at an absolute path:
-
-```lua
-vim.lsp.config("fallow", {
-	cmd = { "/absolute/path/to/fallow-lsp" },
-	filetypes = { "javascript", "typescript", "javascriptreact", "typescriptreact" },
-	root_markers = { ".fallowrc.json", "package.json", ".git" },
+  cmd = { "fallow-lsp" },
+  filetypes = { "javascript", "typescript", "javascriptreact", "typescriptreact" },
+  root_markers = { ".fallowrc.json", "package.json", ".git" },
+  init_options = {
+    issueTypes = { ["circular-dependencies"] = false },
+    changedSince = "fallow-baseline",
+    prewarm = true,
+  },
 })
 ```
 
-## Verifying the setup
+| Option | Effect |
+|:--|:--|
+| `issueTypes` | Hides an issue type in the editor when you set it to `false`. The config file of the project does not change. The keys are the issue types in kebab case. A client can get the list with the custom request `fallow/issueTypes`. |
+| `changedSince` | Shows only the findings in files that changed since this git ref, like `--changed-since` on the CLI. |
+| `prewarm` | Parses the project when the server starts, so the first analysis is faster. The server publishes no diagnostics before the first analysis. |
+| `configPath` | The path of the config file, like `--config` on the CLI. |
+| `production` | Runs in [production mode](/concepts/production-mode). |
 
-1. Open a TypeScript or JavaScript project.
-2. Run `:checkhealth vim.lsp`.
-3. Confirm `fallow` is attached:
+The server keeps one project session between saves, so a save parses only the changed files. To load a new session on each run, set `cmd_env = { FALLOW_LSP_REUSE_SESSION = "0" }` in the config of the server.
+
+## Check the result
+
+1. Run `:checkhealth vim.lsp`.
+2. Check that the `fallow` client is attached:
 
    ```vim
    :lua vim.print(vim.lsp.get_clients({ name = "fallow" }))
    ```
 
-## See also
+## If it fails
 
-<CardGroup cols={3}>
-  <Card title="VS Code extension" icon="window" href="/integrations/vscode">
-    Sidebar views, status bar, and fix preview in VS Code.
-  </Card>
-  <Card title="Agent integration" icon="robot" href="/integrations/mcp">
-    Use fallow from AI agents through the CLI and MCP.
-  </Card>
-  <Card title="Analysis areas" icon="magnifying-glass" href="/analysis/dead-code">
-    All issue types the language server reports.
-  </Card>
-</CardGroup>
+- **The client does not attach.** Neovim did not find `fallow-lsp`. Set `cmd` to an absolute path.
+- **A new buffer shows no findings.** Wait for the first analysis, or save the file.
+- **Many unused dependencies.** Install the dependencies of the project.
+
+## Related
+
+- [VS Code extension](/integrations/vscode)
+- [Configuration](/configuration/overview)
+- [Dead code](/analysis/dead-code)

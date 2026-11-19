@@ -1,14 +1,37 @@
 ---
-title: "fallow suppressions: list every fallow-ignore comment"
-sidebarTitle: "fallow suppressions"
-description: "List every finding that your team chose to ignore, and why. fallow suppressions lists each fallow-ignore marker by file with its reason and a stale count."
-keywords: ["fallow suppressions", "suppression inventory", "fallow-ignore", "tech debt governance", "stale suppressions", "CLI"]
+title: "fallow suppressions"
+description: "Reference: fallow suppressions lists each active fallow-ignore comment with its line, issue type, scope and reason."
+keywords: ["fallow suppressions", "fallow-ignore", "suppression inventory", "stale suppressions", "cli reference"]
 icon: "terminal"
 ---
 
-Use `fallow suppressions` to review what your project ignores, and to find markers that have no reason. The command lists every active `fallow-ignore-next-line`, `fallow-ignore-file`, and `fallow-ignore-start` marker in the analyzed files. It groups the markers by file, with line, kind, level, and reason. It also prints project totals and a stale count, which comes from the stale-suppression findings of this run.
+List each active suppression comment in the project, with its line, issue type, scope and reason. The command reports no findings of its own.
 
-The command is for review and governance. It does not detect issues, and it always exits 0.
+For when and how to suppress a finding, read [Suppress a finding](/guides/suppress).
+
+## Synopsis
+
+{/* generated:start cli-synopsis suppressions */}
+
+```bash
+fallow suppressions [OPTIONS]
+```
+
+{/* generated:end */}
+
+## Options
+
+{/* generated:start cli-options suppressions */}
+
+| Option | Description |
+|:--|:--|
+| `--file <PATH>` | Only list suppressions in the specified files. Accepts multiple values |
+
+{/* generated:end */}
+
+The global options `--workspace`, `--changed-workspaces` and `--changed-since` limit the list. When fallow cannot resolve the ref of `--changed-since`, the list covers the whole project, and the JSON field `request_outcomes` says so.
+
+## Output
 
 ```bash
 fallow suppressions
@@ -16,102 +39,55 @@ fallow suppressions
 
 ```text
 ● Suppression inventory (1)
-  src/util.ts
-    :1 unused-export (file-wide) reason: legacy surface for the v2 SDK migration window
+  src/reports/export.ts
+    :3 code-duplication (range to :21) reason: kept on purpose
 
 ● Totals by kind
-  unused-export: 1
+  code-duplication: 1
+
+✓ 1 suppression in 1 file, 0 without reasons, 0 stale (0.06s)
 ```
 
-A marker gives its reason after a `--` separator. The inventory reports markers without a reason, so you can require a reason on each marker:
+Each comment gives its line, its issue type and its reason. A comment for a range shows `(range to :<line>)`, and a comment for the whole file shows `(file-wide)`. A comment without an issue type shows `blanket`. A range comment without a valid end shows `(range marker, no effect)`. The last line counts the comments without a reason, and the stale comments: the [`stale-suppression`](/rules/stale-suppression) findings of this run.
 
-```typescript
-// fallow-ignore-file unused-export -- legacy surface for the v2 SDK migration window
+With `--format json`, the output has these top-level fields:
+
+| Field | Content |
+|:--|:--|
+| `kind` | `"suppression-inventory"` |
+| `schema_version` | The version of this output format. |
+| `summary` | `total`, `files`, `without_reason`, `stale`, and `by_kind` with a `count` for each issue type. |
+| `files` | One object for each file: `path`, and `suppressions` with `line`, `kind`, `level`, `origin`, `reason`, `reason_present`. |
+
+`level` is `line`, `file` or `range`. A range has `end_line`, or a `problem` field when the comment has no effect. A blanket comment has `kind: null`. The [JSON output reference](/reference/json-output) has each field.
+
+## Exit codes
+
+| Code | Meaning |
+|:--|:--|
+| `0` | The list completed. The command never fails on a suppression. |
+| `2` | Invalid input. |
+
+See [Exit codes](/reference/exit-codes).
+
+## Examples
+
+```bash
+# List each suppression in the project
+fallow suppressions
+
+# List the suppressions in two files
+fallow suppressions --file src/a.ts --file src/b.ts
+
+# List the suppressions in the files that changed since main
+fallow suppressions --changed-since main
+
+# Count the suppressions without a reason
+fallow suppressions --format json --quiet | jq '.summary.without_reason'
 ```
 
-## Options
+## Related
 
-| Flag | Description |
-|:-----|:------------|
-| `--file <PATH>` | List suppressions only in the specified files. Repeatable. |
-| `-w, --workspace <PATTERNS>` | Limit to one or more workspace packages |
-| `--changed-workspaces <REF>` | Limit to workspaces that contain a file changed since `REF` |
-| `--changed-since <REF>` | Limit to files changed since a git ref |
-| `-f, --format <FORMAT>` | `human` (default) or `json` |
-| `-r, --root <ROOT>` | Project root directory |
-| `-q, --quiet` | Suppress progress output on stderr |
-
-## JSON output
-
-`--format json` prints the `suppression-inventory` envelope (schema version 1). A blanket marker has no kind and suppresses everything. Its JSON has `kind: null`, and the human output shows "blanket".
-
-```json
-{
-  "kind": "suppression-inventory",
-  "schema_version": "1",
-  "summary": {
-    "total": 1,
-    "files": 1,
-    "without_reason": 0,
-    "stale": 0,
-    "by_kind": [
-      { "kind": "unused-export", "count": 1 }
-    ]
-  },
-  "files": [
-    {
-      "path": "src/util.ts",
-      "suppressions": [
-        {
-          "line": 1,
-          "kind": "unused-export",
-          "level": "file",
-          "origin": "comment",
-          "reason": "legacy surface for the v2 SDK migration window",
-          "reason_present": true
-        }
-      ]
-    }
-  ]
-}
-```
-
-### Range markers
-
-A `fallow-ignore-start` and `fallow-ignore-end` pair is one entry with `level: "range"`. `line` is the start marker, and `end_line` is the end marker. The human output shows `(range to :<end_line>)`.
-
-```json
-{
-  "line": 14,
-  "kind": "code-duplication",
-  "level": "range",
-  "end_line": 28,
-  "origin": "comment",
-  "reason": "one handler per locale",
-  "reason_present": true
-}
-```
-
-A range marker with a problem has no effect, but the inventory still lists it. The entry has `level: "range"` and a `problem` field, such as `unmatched_end`. It has no `end_line`. The human output shows `(range marker, no effect)` and the cause. For each `problem` value, see [Suppressing one clone with a range](/configuration/suppression#suppressing-one-clone-with-a-range).
-
-The `stale` count is not a new detection. Fallow takes it from the [stale-suppression findings](/explanations/dead-code#stale-suppressions) of this run. A marker is stale when it no longer matches any issue.
-
-A run with `--changed-since` also has a root [`request_outcomes`](/cli/global-flags#request-outcomes) object with the `changed-since` entry. When fallow cannot resolve the ref, the entry says so, and the inventory covers the whole project.
-
-## MCP tool
-
-Agents that use MCP get the same inventory from the `list_suppressions` tool. The tool returns this envelope unchanged. It runs a full analysis, so on large repositories, raise `FALLOW_TIMEOUT_SECS`. See [MCP integration](/integrations/mcp).
-
-## See also
-
-<CardGroup cols={2}>
-  <Card title="Inline suppression" icon="comment-slash" href="/configuration/suppression">
-    Inline suppression syntax and reasons
-  </Card>
-  <Card title="Rules & severity" icon="scale-balanced" href="/configuration/rules">
-    Rule severities, including `stale-suppressions` and `require-suppression-reason`
-  </Card>
-  <Card title="Global flags" icon="sliders" href="/cli/global-flags">
-    Flags available on all commands
-  </Card>
-</CardGroup>
+- [Suppression](/configuration/suppression): the syntax of each suppression comment.
+- [Suppress a finding](/guides/suppress): when to suppress, and when to fix.
+- [Rules](/configuration/rules): require a reason on each suppression.

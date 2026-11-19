@@ -1,0 +1,98 @@
+---
+title: "Use fallow with a coding agent"
+description: "Tutorial: set up fallow for Claude Code, Codex or Cursor with one command, and let the agent check its own changes."
+keywords: ["coding agent", "fallow agent install", "Claude Code", "Codex", "Cursor", "MCP", "AGENTS.md", "commit gate"]
+icon: "robot"
+---
+
+On this page, you set up fallow for the coding agent of your project with one command. After that, the agent runs fallow on its own changes, reads the result, and fixes what it added. A gate stops a commit that fails the check.
+
+## Before you start
+
+- You use Claude Code, Codex or Cursor in the project.
+- Fallow is a development dependency of the project: `npm install -D fallow`. The agent then uses the same fallow version as your team. [Installation](/installation) shows the other package managers.
+- You know the [changed-code check](/start/first-ci) (`fallow audit`) and its verdict.
+
+## Preview the setup
+
+Run the install with `--dry-run` first. This changes no files:
+
+```bash
+npx fallow agent install --dry-run
+```
+
+```text
+fallow agent install (dry run)
+  harnesses: claude (detected)
+
+Shared with your team (commit these):
+  AGENTS.md                                 would write    guide             scaffold with the fallow task map
+  CLAUDE.md                                 would write    guide (claude)    create with an @AGENTS.md import
+  .claude/skills/fallow                     would write    skill (claude)    embedded copy, 9 files
+  .claude/skills/fallow-setup               would write    skill (claude)    embedded copy, 5 files
+  .mcp.json                                 would write    mcp (claude)
+  .claude/settings.json                     would write    hooks (claude)    PreToolUse gate handler
+  .claude/hooks/fallow-gate.sh              would write    hooks (claude)    gate script
+
+Local to you:
+  .claude/settings.local.json               skipped        mcp (claude)      approval_not_requested: pass --approve to pre-approve the project MCP server for yourself
+```
+
+Fallow finds the agents from their folders in the project and in your home folder. It also reads the session that runs the command. This project uses Claude Code.
+
+## Install
+
+```bash
+npx fallow agent install
+```
+
+The command writes four parts for each agent that it found:
+
+| Step | What the agent gets |
+|:--|:--|
+| `guide` | `AGENTS.md` with a task map: the fallow command to run before each kind of change. Claude Code also gets a `CLAUDE.md` that imports it. |
+| `skill` | The `fallow` and `fallow-setup` [skills](/integrations/agent-skills). They tell the agent which command and which options to use. |
+| `mcp` | The [MCP server](/integrations/mcp) of fallow, registered in the config of the agent. The agent can then call fallow as typed tools. |
+| `hooks` | A gate that runs `fallow audit` before `git commit` and `git push`, and blocks the command on a `fail` verdict. Claude Code and Codex only. |
+
+Each step is optional. To skip one, add `--without` with the step name, for example `--without hooks`. Commit the files under "Shared with your team", so that each team member gets the same setup. `npx fallow agent uninstall` removes what fallow wrote. In a file that you changed, it removes only the fallow block.
+
+Claude Code asks you to approve the MCP server when it starts. To approve it for yourself in advance, run `npx fallow agent install --approve`.
+
+## Watch the loop
+
+Ask the agent for a change. In this example, the agent adds two functions to `src/services/orders.ts`, and the app uses only one of them. Before it commits, the agent runs the check that `AGENTS.md` names:
+
+```bash
+npx fallow audit --format json --quiet
+```
+
+The JSON output has a `verdict` field, and each finding has an `introduced` field. The agent reads them and finds the new unused export. If the agent tries to commit first, the gate blocks the commit and sends this text to the agent:
+
+```text
+fallow-gate: blocked by fallow 3.44.0 at ./node_modules/.bin/fallow
+fallow-gate: verdict fail, 1 finding(s) caused the block:
+  unused-export src/services/orders.ts:22 describeOrder
+```
+
+The agent removes `describeOrder`, runs the audit again, and gets the verdict `pass`. Then the commit goes through. Old findings in the same file, such as `cancelOrder`, do not block the commit.
+
+## Rules for agents that call the CLI
+
+A skill or a script that runs fallow follows these rules:
+
+- Add `--format json` and parse the JSON. Add `--quiet` to remove the progress output.
+- Run `fallow fix --dry-run --format json --quiet` before `fallow fix` changes files. Apply an approved fix with `fallow fix --yes`.
+- Exit code 0: no [gate](/concepts/findings) failed. 1: a gate failed, for example a finding. 2: invalid input or an error.
+- Bare `fallow` with `--format json` exits with 0 on findings. Add `--fail-on-issues` to fail on them.
+- Do not run `fallow watch` in an agent. It does not exit.
+
+## What you learned
+
+- `fallow agent install` sets up the guide, the skills, the MCP server and the commit gate in one pass.
+- The agent runs `fallow audit` on its own change and fixes what it added.
+- The gate blocks a commit with a `fail` verdict.
+
+## Next
+
+Compare the CLI, the skills, MCP and the gate, and choose what your agent needs: [Coding agents](/integrations/agents).

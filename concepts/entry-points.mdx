@@ -1,0 +1,181 @@
+---
+title: "Entry points and reachability"
+description: "Concept: how fallow decides that a file or an export is used. It starts at the entry points and follows each import."
+keywords: ["entry points", "reachability", "module graph", "unused files", "unused exports", "barrel files", "dynamic import"]
+icon: "diagram-project"
+---
+
+Fallow reports a file as unused when no entry point reaches it. This page explains that rule. When you know it, you can predict each dead code finding, and you can correct fallow when it is wrong.
+
+All examples use this project (a part of the files):
+
+```text
+package.json                    "main": "src/index.ts"
+                                "scripts": { "seed": "node scripts/seed.js" }
+scripts/seed.js                 imports ./seed-data.js
+src/index.ts                    imports ./lib and ./services/orders
+src/lib/index.ts                exports names from ./format
+src/lib/format.ts               exports formatPrice and formatPercent
+src/services/orders.ts
+src/utils/legacy-currency.ts
+src/math.test.ts
+```
+
+## The problem
+
+No file imports `legacy-currency.ts`, so it looks unused. But no file imports `src/index.ts` either, and that file is the start of the app.
+
+Imports alone cannot tell these two files apart. Fallow needs one more fact: where the code starts.
+
+## The module graph
+
+Fallow reads each file and records its imports and its exports. It does not run the code. The result is the **module graph**: each file is a node, and each import is a link from one file to another. An export that a file takes from another file and exports again is a link too. A series of these links is a re-export chain, and fallow follows it to the file that defines the name.
+
+Each dead code finding is a fact about this graph. The other analyses use the same graph, for example to find circular dependencies.
+
+## Entry points
+
+An **entry point** is a file that something outside your source code runs or loads. Examples are Node.js, a bundler, a test runner, a framework and a script.
+
+Fallow finds entry points in these places:
+
+| Source | Example | Label in the list |
+|:--|:--|:--|
+| `package.json` fields | `main`, `module`, `exports`, `bin`, `types`, `typings`, `source`, `browser` | `package.json main`, `package.json bin`, and so on |
+| `package.json` scripts | `"seed": "node scripts/seed.js"` makes `scripts/seed.js` an entry point | `package.json script` |
+| Framework plugins | Next.js pages, Vitest test files | The plugin name, for example `vitest` |
+| CI files | A file that a GitHub workflow or a `.gitlab-ci.yml` job runs with `node` | `scripts` |
+| Infrastructure files | A file that a `Dockerfile`, a `Procfile` or `fly.toml` runs | `infrastructure config` |
+| Your config file | The [`entry`](/reference/config-files#entry) and [`dynamicallyLoaded`](/reference/config-files#dynamicallyloaded) keys | `manual entry`, `dynamically loaded` |
+
+A [plugin](/concepts/plugins) is the part of fallow that knows one framework or tool. It adds the files that the framework loads by its conventions.
+
+When your config file, `package.json` and its scripts name no entry point, fallow uses each file named `src/index`, `src/main`, `index` or `main` (with the extension `.ts`, `.tsx`, `.js` or `.jsx`). The label is `default index`.
+
+To see the entry points of your project, run:
+
+```bash
+npx fallow list --entry-points
+```
+
+```text
+Found 3 entry points
+scripts/seed.js (package.json script `seed`)
+src/index.ts (package.json main)
+src/math.test.ts (vitest)
+```
+
+Each line gives the file and its source. Here the Vitest plugin made the test file an entry point, because `vitest` is in `devDependencies`.
+
+## Reachability
+
+Fallow starts at each entry point and follows each import. A file that this walk visits is **reachable**. A file that the walk never visits is an [unused file](/rules/unused-file).
+
+```text
+src/index.ts  ──▶  src/lib/index.ts  ──▶  src/lib/format.ts
+              ──▶  src/services/orders.ts
+scripts/seed.js ──▶ scripts/seed-data.js
+
+src/utils/legacy-currency.ts        no path from an entry point
+```
+
+The walk has one result that surprises people. A file that only an unused file imports is also unused. Two old files that import each other do not keep each other in use.
+
+## Used exports
+
+Reachability decides about files. For each export of a reachable file, fallow asks a second question: does a reachable file use this name? An export that no reachable file uses is an [unused export](/rules/unused-export).
+
+| Code in a reachable file | Exports of `./m` that count as used |
+|:--|:--|
+| `import { a } from "./m"` | `a` |
+| `import type { T } from "./m"` | `T` |
+| `import * as m from "./m"`, then `m.a` | `a` |
+| `import * as m from "./m"`, then `Object.keys(m)` | Each export |
+| `const m = require("./m")`, then `m.a` | `a` |
+| `const m = await import("./m")`, then `m.a` | `a` |
+| `import "./m"` | None. The file is reachable, and its exports are not used. |
+
+### Barrel files
+
+A **barrel file** is a file that exports names from other files again:
+
+```ts
+// src/lib/index.ts
+export { formatPrice, formatPercent } from "./format";
+```
+
+Fallow follows each name through the barrel file to the file that defines it. In the example, `src/index.ts` imports only `formatPrice`. Thus, `formatPercent` is unused. Fallow reports it in two places: in `format.ts`, and on the line of the barrel file that exports it again.
+
+### Exports of an entry point
+
+Fallow does not report the exports of an entry point. Code outside your project can use them, for example the users of your package.
+
+One case is different. For some files, a plugin knows the names that the framework reads. In a Next.js page, these names include `default`, `metadata` and `generateMetadata`. Fallow counts those names as used, and it checks the other exports of the file.
+
+To check the exports of each entry point, use the [`--include-entry-exports`](/cli/global-flags) option.
+
+## What fallow cannot follow
+
+Fallow follows a path that is in the source text. It cannot follow a path that exists only when the code runs.
+
+| Code | Result |
+|:--|:--|
+| `import("./locales/en.ts")` | Fallow follows the import. |
+| ``import(`./locales/${lang}.ts`)`` | Fallow counts each file in `./locales/` as reachable. |
+| `import("./plugins/" + name)` | Fallow counts each file in `./plugins/` as reachable. |
+| `const p = "./plugins/" + name; import(p)` | Fallow cannot follow the import. It reports the plugin files as unused. |
+
+For the last case, name the files in your config file:
+
+```jsonc
+// .fallowrc.jsonc
+{
+  "dynamicallyLoaded": ["src/plugins/*.ts"]
+}
+```
+
+Use `entry` for a file that something outside the project runs, when fallow did not find it:
+
+```jsonc
+// .fallowrc.jsonc
+{
+  "entry": ["src/workers/*.ts"]
+}
+```
+
+## Check one result
+
+When a finding surprises you, ask fallow for the reason. For an export, use `--trace` with the file and the name:
+
+```bash
+npx fallow dead-code --trace src/lib/format.ts:formatPercent
+```
+
+```text
+  UNUSED formatPercent in src/lib/format.ts
+
+  File: reachable
+  Namespace: value
+  Reason: Re-exported through 1 barrel(s) but no consumer imports it through the barrel
+
+  Re-exported through:
+    -> src/lib/index.ts as 'formatPercent' (0 ref(s))
+```
+
+For a file, use `--trace-file`:
+
+```bash
+npx fallow dead-code --trace-file scripts/seed.js
+```
+
+```text
+  REACHABLE scripts/seed.js (entry point, package.json script `seed`)
+```
+
+[Find why fallow reports a finding](/guides/trace-a-finding) shows each trace command.
+
+## Next
+
+- [Findings, rules and gates](/concepts/findings): what fallow does with each unused file and export.
+- [Plugins](/concepts/plugins): how a framework adds entry points.
+- [Production mode](/concepts/production-mode): the same walk, without tests and development tools.

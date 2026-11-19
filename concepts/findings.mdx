@@ -1,0 +1,131 @@
+---
+title: "Findings, rules and gates"
+description: "Concept: what a finding is, how a rule sets its severity, and how severities and gates decide the exit code of a fallow run."
+keywords: ["finding", "issue type", "rules", "severity", "error", "warn", "off", "gate", "exit code", "fail-on-issues", "ci"]
+icon: "scale-balanced"
+---
+
+Fallow reports problems as findings, and each finding has a severity. The severity decides if a run fails. When you know this link, you can make fallow fail CI on the problems that matter to your team, and only report the others.
+
+## The problem
+
+A first run on an existing project reports many findings. The run exits with code 1, so a CI job that runs fallow fails at once. You want to keep the report, but fail the job only on some kinds of problems.
+
+The example project gives this report (a part of it):
+
+```bash
+npx fallow dead-code
+```
+
+```text
+● Unused files (1)
+  src/utils/legacy-currency.ts
+  Files not reachable from any entry point
+  https://fallow.tools/docs/explanations/dead-code/#unused-files
+
+● Unused exports (3)
+  src/lib/format.ts
+    :3 formatPercent
+  src/lib/index.ts
+    :1 formatPercent (re-export)
+  src/services/orders.ts
+    :18 cancelOrder
+  Exported symbols with no known consumers
+
+✗ 1 file · 3 exports · 1 unused dependency · 1 unlisted dependency (0.03s)
+```
+
+## Findings and issue types
+
+A **finding** is one problem that fallow reports at one place: a file, a line, a name or a package. The report above has four findings in the two groups that it shows.
+
+The **issue type** is the kind of a finding. Each finding has one issue type, for example `unused-file` or `unused-export`. The issue type tells you what the finding means and how to act on it. Each issue type has a reference page: [Issue types](/reference/issue-types) lists them all.
+
+## Rules and severities
+
+A **rule** is the entry in the `rules` config that sets the severity of one issue type. The **severity** has one of three values:
+
+| Severity | Fallow reports the finding | The finding fails the run |
+|:--|:--|:--|
+| `error` | Yes | Yes, exit code 1 |
+| `warn` | Yes | No. `--fail-on-issues` makes it fail. |
+| `off` | No. Fallow does not look for it. | No |
+
+Each issue type has a default severity. Most issue types that report unused code are at `error`, for example unused files, unused exports and unused dependencies. Other issue types are at `warn`, and some are `off` until you turn them on. The page of each issue type gives its default.
+
+Set the severities in your [config file](/configuration/overview). The key of a rule is often the plural form of the issue type, for example `unused-files` for `unused-file`. The page of each issue type gives its key.
+
+```json
+// .fallowrc.json
+{
+  "rules": {
+    "unused-files": "warn",
+    "unused-exports": "warn",
+    "unused-dependencies": "off",
+    "unlisted-dependencies": "warn"
+  }
+}
+```
+
+With this config file, the same project gives a report with only `warn` findings, and the run exits with code 0. The summary line starts with `⚠`:
+
+```text
+⚠ 1 file · 3 exports · 1 unlisted dependency (0.04s)
+```
+
+[Rules and severities](/configuration/rules) shows how to set a rule for some files only.
+
+## Gates
+
+A **gate** is a condition that makes a command exit with code 1. Fallow has these gates:
+
+| Gate | Fails when |
+|:--|:--|
+| Severity | A finding has the severity `error`. |
+| `--fail-on-issues` | A finding has the severity `error` or `warn`. |
+| A threshold | A number goes past a limit, for example `fallow dupes --threshold 5` when more than 5% of the code is duplicated. |
+
+`--ci` is the same as `--format sarif --fail-on-issues --quiet`. It is a short form for a CI job that uploads SARIF.
+
+Exit code 1 is a result of the analysis. Fallow uses code 2 for invalid input, for example a broken config file. [Exit codes](/reference/exit-codes) lists each code.
+
+### The bare run in a machine format
+
+The bare `fallow` command runs all analyses. In a machine format, for example JSON or SARIF, it does not enforce the gates of its findings. Thus, a tool can read the full report without a failed step.
+
+| Command | Exit code on the example project |
+|:--|:--|
+| `fallow` | 1 |
+| `fallow --format json` | 0 |
+| `fallow --format json --fail-on-issues` | 1 |
+| `fallow dead-code --format json` | 1 |
+
+The JSON run prints this line on stderr:
+
+```text
+[W] Exit code 0: gates error-severity-findings (6 at or above error), health-findings (1 at or above error) failed, but bare fallow does not enforce them in --format json. To exit 1 on them, pass --fail-on-issues.
+```
+
+The JSON output also has a `gate_outcomes` object. A gate with `"status": "fail"` and `"enforced": false` failed, but did not set the exit code.
+
+## Stop a finding
+
+Each finding needs one of three actions:
+
+- **Fix the code.** Delete the unused code, or add the missing dependency. [Fix findings automatically](/guides/auto-fix) shows the fixes that fallow can apply.
+- **Teach fallow.** When fallow is wrong, tell it about your project in the config file, for example with an `entry` pattern. [Handle false positives](/guides/false-positives) gives the fix for each cause.
+- **Suppress the finding.** Keep the code, and add a comment such as `// fallow-ignore-next-line unused-export` above it. [Suppress findings](/guides/suppress) shows each comment form.
+
+To stop old findings from failing CI before you fix them, use a [baseline](/concepts/changed-code#baselines).
+
+## What a severity cannot do
+
+A rule applies to each finding of its issue type, in the whole project or in the files of an override. To keep one finding and fail on the others, suppress that finding.
+
+A severity does not change how fallow finds a problem. When fallow reports code that your project uses, change the config or the code. Do not lower the severity of the issue type.
+
+## Next
+
+- [Plugins](/concepts/plugins): how fallow knows the conventions of your framework.
+- [Issue types](/reference/issue-types): each issue type with its default severity.
+- [Exit codes](/reference/exit-codes): each exit code of each command.

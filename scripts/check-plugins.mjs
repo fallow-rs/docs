@@ -26,12 +26,13 @@ const PAGE_NAMES = new Map([
 export const normalize = (name) =>
   name.toLowerCase().replaceAll("+", "plus").replace(/[^a-z0-9]/g, "");
 
-/**
- * The normalized names of the plugin rows on the page. Only the first
- * `<Tabs>` block lists plugins. The tables after it describe config files.
- */
+// The heading after the plugin tables. The tables below it describe the
+// config of some plugins, so their rows do not count as plugin rows.
+const NOTES_HEADING = "{#plugin-notes}";
+
+/** The normalized names of the plugin rows above the notes heading. */
 export const listedPlugins = (page) => {
-  const tables = page.split("</Tabs>")[0];
+  const tables = page.split(NOTES_HEADING)[0];
   return new Set([...tables.matchAll(PLUGIN_ROW)].map(([, name]) => normalize(name)));
 };
 
@@ -92,7 +93,7 @@ const run = async () => {
     console.error(`  ${name}`);
   }
   console.error(
-    "Add a row to the matching tab. If the row uses another name, add it to PAGE_NAMES in scripts/check-plugins.mjs.",
+    "Add a row to the matching table. If the row uses another name, add it to PAGE_NAMES in scripts/check-plugins.mjs.",
   );
   process.exitCode = 1;
 };

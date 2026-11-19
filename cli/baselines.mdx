@@ -1,160 +1,109 @@
 ---
-title: "fallow baselines prune: remove stale baseline entries"
-sidebarTitle: "fallow baselines prune"
-description: "Remove stale entries from committed fallow baselines. One whole-project run prunes the dead-code, health, and duplication baselines and never adds an entry."
-keywords: ["fallow baselines prune", "baseline", "stale baseline", "fail-on-stale-baseline", "pre-commit", "CLI"]
+title: "fallow baselines"
+description: "Reference: fallow baselines prune removes the entries of a committed baseline that match no current finding."
+keywords: ["fallow baselines", "baselines prune", "stale baseline", "cli reference"]
 icon: "terminal"
 ---
 
-Use `fallow baselines prune` after you fix findings that a committed baseline holds. A fixed finding leaves its entry in the file. A run with `--fail-on-stale-baseline` in the mode of the file then fails until someone updates the file. Prune removes the entries that match no current finding, so the stale gate passes again.
+Keep the committed [baseline](/concepts/changed-code) files current.
+
+For the baseline workflow, read [Baselines](/guides/baselines).
+
+## Synopsis
+
+{/* generated:start cli-synopsis baselines */}
+
+```bash
+fallow baselines [OPTIONS] <COMMAND>
+```
+
+{/* generated:end */}
+
+## Subcommands
+
+{/* generated:start cli-subcommands baselines */}
+
+| Subcommand | Description |
+|:--|:--|
+| [`prune`](#prune) | Remove the baseline entries that match no current finding |
+
+{/* generated:end */}
+
+### prune {#prune}
+
+Remove each baseline entry that matches no current finding. Prune never adds an entry.
+
+{/* generated:start cli-options baselines prune */}
+
+| Option | Description |
+|:--|:--|
+| `--check` | Report the entries that a prune would remove, and write nothing |
+| `--dead-code-baseline <PATH>` | The dead-code baseline to prune. Overrides `audit.deadCodeBaseline` |
+| `--health-baseline <PATH>` | The health baseline to prune. Overrides `audit.healthBaseline` |
+| `--dupes-baseline <PATH>` | The duplication baseline to prune. Overrides `audit.dupesBaseline` |
+| `--coverage <PATH>` | The coverage input for CRAP scores, as for `fallow health --coverage`. Use the input that the health baseline was saved with |
+| `--coverage-root <PATH>` | Rebase the file paths of the coverage input onto this root |
+
+{/* generated:end */}
+
+Prune reads the files that `audit.deadCodeBaseline`, `audit.healthBaseline` and `audit.dupesBaseline` name in the [config file](/configuration/overview). A file option replaces the config path for one file. Prune analyzes the whole project, so it refuses `--changed-since`, `--workspace`, `--changed-workspaces`, `--diff-file`, `--diff-stdin`, and the global baseline options.
+
+Prune runs in one mode. To prune a baseline that you saved with `--production` or `--include-entry-exports`, pass the same option. Prune skips a file that it cannot match to the mode of the run, or a file with an older key form, and prints the command that saves the file again.
+
+## Output
 
 ```bash
 fallow baselines prune
 ```
 
 ```text
-Pruned 1 entry from the dead-code baseline baselines/dead-code.json (12 -> 11)
-  unused_files: unused-file:src/legacy/export.ts
-health baseline baselines/health.json: nothing to prune (40 entries)
-Pruned 1 entry from the dupes baseline baselines/dupes.json (9 -> 8)
-  normalized_clone_fingerprints: dup:4e50b434:2
+Pruned 1 entry from the dead-code baseline fallow-baselines/dead-code.json (6 -> 5)
+  unused_exports: unused-export:src/services/orders.ts:cancelOrder
+dupes baseline fallow-baselines/dupes.json: nothing to prune (1 entry)
 ```
 
-## What prune changes
+Each file gets one line with the number of entries before and after. An indented line gives each removed entry: its category and its key. With `--check`, the lines start with `Would prune`.
 
-- Prune keeps exactly the entries that `--baseline` matches. A pruned file hides the same findings as before.
-- Prune never adds an entry. A new finding stays outside the baseline, and the normal gates report it. To record new findings on purpose, use `fallow dead-code --save-baseline`, `fallow health --save-baseline` or `fallow dupes --save-baseline`.
-- Prune keeps the order of the file and writes a file only when it removes an entry. It writes through a temporary file and a rename, and it does not write through a symbolic link.
-- Health buckets keep the slots that cover current findings. A slot of a higher severity can cover a finding of a lower severity, as with `--baseline`. An identity bucket that follows a moved file keeps its saved key.
-- Prune does not change the runtime-coverage keys or the refactoring target keys of a health baseline.
-- When the run still reports a function whose identity bucket loses all its slots, the bucket stays as an empty object. This keeps the move matching of `--baseline` as it was.
+With `--format json`, the output has these top-level fields:
 
-## Which files
+| Field | Content |
+|:--|:--|
+| `kind` | `"baselines-prune"` |
+| `schema_version` | The version of this output format. |
+| `check` | `true` for a run with `--check`. |
+| `files` | One object for each file: `kind`, `path`, `status`, `entries_before`, `entries_after`, `removed`, `reason_code`, `reason`. |
+| `actions` | `stage-baselines` with the `git add` command for the written files, `prune-baselines` after `--check`, and `resave-baseline` for each skipped file. |
 
-Prune reads the paths in the config, the same paths that [`fallow audit`](/cli/audit) reads:
-
-```json
-{
-  "audit": {
-    "deadCodeBaseline": "baselines/dead-code.json",
-    "healthBaseline": "baselines/health.json",
-    "dupesBaseline": "baselines/dupes.json"
-  }
-}
-```
-
-The paths resolve against the project root. A flag overrides the config path for one file. Prune runs only the analyses that the files need.
-
-## Whole-project scope
-
-Prune analyzes the whole project. A narrowed run would remove entries for findings that it did not see. So prune exits 2 on `--changed-since`, `--workspace`, `--changed-workspaces`, `--diff-file`, `--diff-stdin` and the `FALLOW_DIFF_FILE` environment variable, and it ignores `workspaces.changedSince`. Production mode is not a narrowed run for prune. Pass `--production`, or set production mode in the config as for `fallow audit`.
-
-Prune also exits 2 on the global baseline flags `--baseline`, `--save-baseline`, `--fail-on-baseline-growth` and `--baseline-base`. Name the files with the prune flags or the config.
-
-CRAP scores in a health baseline depend on coverage. Prune reads the coverage input of the config and of `FALLOW_COVERAGE`. When you saved the health baseline with `--coverage`, pass the same input to prune.
-
-## Mode of the file
-
-A prune runs in one mode, and the file must be saved in the same mode. Two modes change which findings exist: `--production` and `--include-entry-exports`. A run in another mode does not see the findings of the file, so it would remove valid entries.
-
-- Pass `--production` to prune a baseline saved with `--production`.
-- Pass `--include-entry-exports` to prune a baseline saved with `--include-entry-exports`.
-- Pass no mode flag to prune a baseline saved without them.
-
-Prune refuses a file that it cannot match to the mode of the run. It leaves the file as it is, exits 2, and prints the command to use. The refusal has the `reason_code` `scope-mismatch`.
-
-A file may have no record of a mode that the run uses. This happens with a file saved before fallow recorded the mode, and with a whole-project file. Prune refuses it as well, so `--check` can exit 2 for a project that sets production mode in the config. Review the findings of the file, then save it again in that mode:
-
-```bash
-fallow dead-code --production --save-baseline baselines/dead-code.json
-```
-
-The dead-code, health and duplication baselines record production mode when you save them with `--production`.
-
-## Skipped files
-
-Prune does not change a file that it cannot match entry by entry. It reports the file as skipped, prints the command that saves it again, and exits 2. The other files are still pruned. A file that does not exist or cannot be read gets the status `error`, and the other files are still pruned. A file is skipped when:
-
-- another command saved it;
-- it uses an older key form, for example a dead-code baseline without `identity`;
-- it was saved by a type-aware run;
-- it has fields that this version does not know, for example from a newer fallow version;
-- it is a duplication baseline with the clone keys that older versions shared between unrelated groups. See [migrating collision handles](/analysis/duplication#migrating-collision-handles).
-
-The stale-baseline warning and the `--fail-on-stale-baseline` message print the prune command for the file, with an absolute path.
-
-## Pre-commit hook
-
-Install a pre-commit hook that prunes before the audit:
-
-```bash
-fallow hooks install --target git --prune-baselines
-```
-
-Prune analyzes the working tree, not the staged content. A partial commit (`git commit -p`) can then carry a pruned file that the commit does not support. So the hook runs the prune only when the working tree has no unstaged changes and no untracked files, and it stages the files that the prune wrote. Otherwise it prints a note and skips the prune. It also skips the prune for a commit with paths (`git commit <path>` or `--only`), because git builds a temporary index for such a commit. A failed prune never blocks the commit, because the audit is the gate. The prune analyzes the whole project, so it adds the time of a full run to each commit.
-
-For a hook manager such as Lefthook, or an existing hook, the install command prints the block to add.
-
-## Options
-
-| Flag | Description |
-|:-----|:------------|
-| `--check` | Report the entries that a prune would remove, and write nothing. Exits 1 when an entry can be pruned. |
-| `--dead-code-baseline <PATH>` | The dead-code baseline to prune. Overrides `audit.deadCodeBaseline`. |
-| `--health-baseline <PATH>` | The health baseline to prune. Overrides `audit.healthBaseline`. |
-| `--dupes-baseline <PATH>` | The duplication baseline to prune. Overrides `audit.dupesBaseline`. |
-| `--production` | Prune in production mode. Use it for baselines saved with `--production`. |
-| `--include-entry-exports` | Prune with unused exports in entry files reported. Use it for baselines saved with `--include-entry-exports`. |
-| `--coverage <PATH>` | The coverage input for CRAP scores, as for `fallow health --coverage`. |
-| `--coverage-root <PATH>` | Rebase the file paths of the coverage input onto this root. |
-| `-f, --format <FORMAT>` | `human` (default) or `json` |
-| `-r, --root <ROOT>` | Project root directory |
-| `-q, --quiet` | Print only the skipped and failed files, and no progress output |
+`status` is `pruned`, `would-prune`, `unchanged`, `refused` (skipped) or `error`. `reason_code` gives the cause of a skip: `parse-error`, `not-this-kind`, `legacy-keys`, `unknown-key-scheme`, `incompatible-identity`, `shared-clone-keys`, `unknown-fields` or `scope-mismatch`. The [JSON output reference](/reference/json-output) has each field.
 
 ## Exit codes
 
 | Code | Meaning |
-|:-----|:--------|
+|:--|:--|
 | `0` | The files are pruned, or have nothing to prune. |
 | `1` | With `--check`: at least one entry can be pruned. |
-| `2` | No baseline is configured, a flag narrows the run, a file cannot be read or written, or a file is skipped. Exit 2 wins over exit 1 when both apply. |
+| `2` | No baseline in the config, an option that narrows the run, a file that fallow cannot read or write, or a skipped file. Code 2 wins over code 1. |
 
-## JSON output
+See [Exit codes](/reference/exit-codes).
 
-`--format json` prints the `baselines-prune` envelope (schema version 1). Paths are relative to the project root.
+## Examples
 
-```json
-{
-  "kind": "baselines-prune",
-  "schema_version": 1,
-  "check": false,
-  "files": [
-    {
-      "kind": "dead-code",
-      "path": "baselines/dead-code.json",
-      "status": "pruned",
-      "entries_before": 12,
-      "entries_after": 11,
-      "removed": [
-        { "category": "unused_files", "key": "unused-file:src/legacy/export.ts", "count": 1 }
-      ],
-      "reason_code": null,
-      "reason": null
-    }
-  ],
-  "actions": [
-    {
-      "type": "stage-baselines",
-      "auto_fixable": false,
-      "description": "Stage the pruned baseline files and commit them with the change that fixed the findings",
-      "paths": ["baselines/dead-code.json"],
-      "command": "git add -- baselines/dead-code.json"
-    }
-  ]
-}
+```bash
+# Remove the entries of fixed findings
+fallow baselines prune
+
+# Show the entries that a prune removes, and write nothing
+fallow baselines prune --check
+
+# Prune a baseline that you saved in production mode
+fallow baselines prune --production
+
+# Prune one file that the config does not name
+fallow baselines prune --dead-code-baseline fallow-baselines/dead-code.json
 ```
 
-- `status` is `pruned`, `would-prune` (with `--check`), `unchanged`, `refused` (skipped) or `error` (the file cannot be read or written).
-- `reason` is a sentence for people. It is set for `refused` and `error`, and `null` for the other statuses.
-- `reason_code` names why a file is skipped: `parse-error`, `not-this-kind`, `legacy-keys`, `unknown-key-scheme`, `incompatible-identity`, `shared-clone-keys`, `unknown-fields` or `scope-mismatch`. It is `null` for `error` and for the other statuses.
-- `actions` holds `stage-baselines` for written files, `prune-baselines` after a `--check` run with entries to prune, and `resave-baseline` with the save command for each skipped file. For a `scope-mismatch` refusal, the action holds the command to run. It is `prune-baselines` with the mode flags of the file when the run can prune the file, and `resave-baseline` when the file has no record of a mode that the run uses.
+## Related
+
+- [Baselines](/guides/baselines): save a baseline, and gate only new findings.
+- [`fallow hooks`](/cli/hooks): `--prune-baselines` runs a prune in the Git hook.
+- [`fallow audit`](/cli/audit): the changed-code check that reads the same files.

@@ -1,0 +1,94 @@
+---
+title: "Plugins"
+description: "Concept: how fallow knows the files and exports that a framework or tool uses by convention, and how it turns on a plugin."
+keywords: ["plugins", "framework detection", "entry points", "used exports", "tooling dependencies", "list plugins"]
+icon: "puzzle-piece"
+---
+
+A framework or a tool often loads files that no import names. Fallow follows imports, so it needs one more source of facts for these files. Plugins give these facts. When you know what a plugin adds, you can see why fallow treats a file as used, and what to do when your framework has no plugin.
+
+## The problem
+
+A test runner loads each test file by its name pattern. No file of the project imports a test file. Without knowledge of the test runner, fallow cannot reach the test file from an [entry point](/concepts/entry-points).
+
+The example project uses Vitest. With `vitest` removed from `devDependencies`, the same project gives this result:
+
+```bash
+npx fallow dead-code --unused-files
+```
+
+```text
+  2 entry points detected (2 package.json)
+
+── Unused Code ─────────────────────────────────────
+
+● Unused files (3)
+  src/math.test.ts
+  src/utils/legacy-currency.ts
+  src/utils/test-helpers.ts
+  Files not reachable from any entry point
+```
+
+Fallow reports the test file and the helper that only the test imports as unused files. Both findings are wrong.
+
+## Plugins
+
+A **plugin** is the part of fallow that knows one framework or tool. Fallow turns it on when the project depends on that package. Fallow has built-in plugins for many frameworks, test runners, bundlers and other tools. [Built-in plugins](/frameworks/built-in) lists them.
+
+With `vitest` in `devDependencies`, the Vitest plugin is on. It makes `src/math.test.ts` an entry point, and both wrong findings go away.
+
+## How fallow turns on a plugin
+
+Fallow reads the `package.json` of the project. It turns on a plugin when one of its packages is in `dependencies`, `devDependencies`, `peerDependencies` or `optionalDependencies`. A plugin can name an exact package, for example `vitest`, or a scope, for example each package that starts with `@storybook/`.
+
+Some plugins have other triggers:
+
+- A file in the project. For example, a `tsconfig.json` turns on the TypeScript plugin, also without a `typescript` dependency.
+- A `package.json` script that runs the tool.
+- A field in `package.json` that the tool reads.
+
+In a monorepo, fallow turns on the plugins for each [workspace](/concepts/workspaces) from the `package.json` of that workspace. A plugin that one package turns on does not add entry points in another package.
+
+To see the plugins that are on, run:
+
+```bash
+npx fallow list --plugins
+```
+
+```text
+Active plugins:
+  - vitest
+  - typescript
+```
+
+## What a plugin adds
+
+A plugin gives fallow the facts that the conventions of its tool create:
+
+| A plugin adds | Example |
+|:--|:--|
+| Entry points | The Vitest plugin adds each test file. The Next.js plugin adds pages, layouts and route handlers. |
+| Used exports | In a Next.js page, the plugin counts `default`, `metadata` and `generateMetadata` as used. |
+| Config files | The plugin reads the config file of the tool, for example `vite.config.ts`, and finds more entry points and dependencies in it. |
+| Files that are always used | Files that the tool loads by their path. |
+| Tooling dependencies | Packages that a tool runs from the command line or from its config. Fallow does not report them as unused. |
+| Generated imports | Virtual modules and path aliases that the framework makes when it builds. Fallow does not report them as unlisted or unresolved. |
+| Class members | Methods that the framework calls, for example a lifecycle method. Fallow does not report them as unused. |
+
+A plugin reads a config file as source text. It does not run the config file.
+
+## What a plugin cannot do
+
+A plugin knows only the conventions that it was written for. Some cases stay outside it:
+
+- A framework that has no plugin. Fallow then reports the files that the framework loads as unused files.
+- A config value that the config file computes when it runs, for example a path from an environment variable.
+- A convention of your own project, for example a folder of jobs that a scheduler loads by name.
+
+For a framework or a convention of your own, write a plugin file. [Write a custom plugin](/guides/custom-plugins) shows how. For a few files, the [`entry`](/reference/config-files#entry) key of the config file is enough.
+
+## Next
+
+- [Changed code and baselines](/concepts/changed-code): how to stop new findings first in an existing project.
+- [Built-in plugins](/frameworks/built-in): each plugin and its package.
+- [Write a custom plugin](/guides/custom-plugins): teach fallow a framework that has no plugin.

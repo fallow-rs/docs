@@ -1,0 +1,157 @@
+---
+title: "Fallow for coding agents"
+sidebarTitle: "Coding agents"
+description: "Guide: set up fallow for Claude Code, Codex, Cursor and other coding agents, choose the parts that your agent needs, and verify each change."
+keywords: ["coding agent", "AI agent", "Claude Code", "Codex", "Cursor", "fallow agent install", "AGENTS.md", "skills", "MCP", "commit gate", "verify agent changes", "Codex app"]
+icon: "robot"
+---
+
+Set up fallow for the coding agent of your project, so that the agent checks each change that it makes before it commits.
+
+A coding agent gets three things from fallow:
+
+- **A check of its own change.** `fallow audit` gives a verdict for the changed files, and marks each finding that the change adds.
+- **Facts from the module graph.** For example, which files import an export, or why fallow reports a file as unused. The agent then does not guess from the text of one file.
+- **Fixes that it can preview.** `fallow fix --dry-run` lists each change before `fallow fix --yes` applies it.
+
+## Before you start
+
+- Add fallow to the development dependencies of the project: `npm install --save-dev fallow`. The agent then runs the same version as your team and your CI.
+- [Use fallow with a coding agent](/start/first-agent) shows the setup step by step, with real output. This page gives the choices.
+
+## Set up with one command
+
+`fallow agent install` sets up each agent that it finds in the project, in your home folder and in the current session. It supports Claude Code, Codex and Cursor. Run it with `--dry-run` first to see the plan:
+
+```bash
+npx fallow agent install --dry-run
+npx fallow agent install
+```
+
+The command writes four parts. Each part has a marker, so `npx fallow agent status` can report it and `npx fallow agent uninstall` can remove it.
+
+- To skip a part, add `--without guide`, `--without skill`, `--without mcp` or `--without hooks`.
+- To select the agents yourself, add `--harness claude`, `--harness codex` or `--harness cursor`.
+- To write the skills and the MCP server to your home folder for all projects, add `--user`.
+
+[`fallow agent`](/cli/agent) lists each option and the files of each agent.
+
+## Which part do I need
+
+| Part | What it gives the agent | Agents | Set up with |
+|:--|:--|:--|:--|
+| The CLI with JSON output | Each analysis, with typed JSON. Always needed. | Each agent with a shell | `npm install --save-dev fallow` |
+| The guide | `AGENTS.md` with a task map: the fallow command to run before each kind of change. | Each agent that reads `AGENTS.md`. Claude Code reads it through a `CLAUDE.md` import. | `fallow agent install` |
+| [Skills](/integrations/agent-skills) | Instructions for each task: the command, the options, and how to read the output. | Claude Code (`.claude/skills/`), Codex and Cursor (`.agents/skills/`), and other agents that read Agent Skills | `fallow agent install`, or a plugin |
+| [MCP server](/integrations/mcp) | Each analysis as a typed tool call. Use it for a client without a shell, or when you want structured tool calls. | Each MCP client | `fallow agent install`, or the config of the client |
+| [Commit gate](/integrations/claude-hooks) | A hook that runs `fallow audit` before `git commit` and `git push`, and blocks the command on a `fail` verdict. | Claude Code and Codex | `fallow agent install` |
+
+The skills tell the agent what to do. The gate makes sure that the check runs, also when the agent does not follow the skill.
+
+## Plugins
+
+The [fallow-skills](https://github.com/fallow-rs/fallow-skills) repository packages the skills as a plugin for some agents. Use a plugin when you want the skills for all your projects. `fallow agent install` writes the same skills into one project.
+
+| Agent | Install | The plugin adds |
+|:--|:--|:--|
+| Claude Code | `/plugin marketplace add fallow-rs/fallow-skills`, then `/plugin install fallow@fallow-skills` | The skills, a commit gate, and the Fallow app: a code health dashboard in the conversation |
+| Codex | `codex plugin marketplace add fallow-rs/fallow-skills`, then `codex plugin add fallow@fallow-skills` | The skills, and in the Codex desktop app the Fallow app: a dashboard, a Code Health tab for each thread, `@Fallow` mentions and a config editor |
+| Cursor | Copy the `fallow` folder of the repository to `~/.cursor/plugins/local/fallow` | The skills and the MCP server |
+| Other agents | `npx skills add fallow-rs/fallow-skills` | The skills |
+
+The Fallow app needs Node.js 20 or later. It runs the fallow CLI on your machine, so the code stays local. The gate of the Claude Code plugin does nothing when `fallow agent install` already wrote a gate. To turn the plugin gate off, set `FALLOW_PLUGIN_GATE=off` in the environment of Claude Code.
+
+## Verify a change {#verify}
+
+A check that runs on the change gives you evidence for the claim of the agent that a task is done. Each check finds a different problem:
+
+| Check | Command | What it tells you |
+|:--|:--|:--|
+| Tests and type check | The commands of your project | The code does what the tests expect. |
+| Changed-code check | `fallow audit` | The change adds no unused code, complexity, duplication or styling problem. |
+| Diff-risk rules | `fallow audit` | The change does not skip a test, remove an assertion, or add a suppression comment. |
+| Mutation testing | `fallow mutation` | The tests fail when the changed code is wrong. |
+| Review brief | `fallow audit --brief` | The places in the change that a reviewer looks at first. |
+
+`fallow audit` runs no project code, so the agent can run it on each change. `fallow mutation` runs your tests many times. Limit it with `--max-mutants` or `--time-budget`.
+
+The [diff-risk rules](/cli/audit#diff-risk-rules) compare each changed file with its base. They have the severity `warn` by default, so they report and do not fail the audit. To make the audit fail on them, set them to `error`:
+
+```jsonc
+// .fallowrc.json
+{
+  "rules": {
+    "weakened-tests": "error",
+    "added-suppression": "error"
+  }
+}
+```
+
+The agent can change the config file too. Fallow reports a change that makes a rule less strict as a `weakened-tests` finding. Add a code owner for the config file, and run `fallow audit` in CI, where the agent cannot change the command.
+
+### A verify skill for your project
+
+A skill tells the agent which checks to run and what to report. Put this file in `.claude/skills/verify/SKILL.md` for Claude Code, or in `.agents/skills/verify/SKILL.md` for Codex and Cursor. Replace the test commands with the commands of your project.
+
+````markdown
+---
+name: verify
+description: Use before you say that a change is done, before a commit, and before you open a pull request. Runs the tests, fallow audit and fallow mutation, and reports the evidence.
+---
+
+# Verify
+
+Run each step in order. When a step fails, fix the cause, then start again at step 1.
+
+1. Run the type check: `npm run typecheck`.
+2. Run the tests: `npm test`.
+3. Run `fallow audit --format json --quiet --explain`.
+   - When `verdict` is `fail`, fix each finding with `"introduced": true`.
+   - Do not skip a test, remove an assertion, or add a suppression to make a check pass.
+4. When the change adds logic, run `fallow mutation --max-mutants 50 --format json --quiet`.
+   - For each `survived` mutant, write a test that fails on that mutant.
+
+When one step fails three times, stop. Report the step, the error, and what you tried.
+
+## Report
+
+- The command of each step and its result.
+- The audit verdict and each diff-risk finding.
+- The mutation score, and each `survived` mutant without a new test.
+- Each step that you did not run, and the reason.
+````
+
+## Rules for an agent that runs fallow {#rules}
+
+Give these rules to an agent, or check that its skill follows them:
+
+- Add `--format json` and parse the JSON. Add `--quiet` to remove the progress output.
+- Use the issue filters, for example `--unused-exports`, to keep the output small.
+- Run `fallow fix --dry-run --format json --quiet` before a fix. Apply an approved fix with `fallow fix --yes`.
+- Use the `actions` array and the `auto_fixable` field of a finding. Do not invent a fix.
+- Read each path as relative to the project root.
+- Read the exit code: 0 means that no gate failed, 1 that a gate failed, and 2 that the input was invalid or the run failed.
+- Bare `fallow` with `--format json` exits with code 0 on findings. Add `--fail-on-issues` to fail on them.
+- Add `--explain` to get the meaning of each metric in the output.
+- Do not run `fallow watch`. It does not exit.
+- Read the options from `fallow --help` and `fallow <command> --help`.
+
+## Check the result
+
+Run `npx fallow agent status`. Each part that the install wrote shows `installed`:
+
+```text
+  .claude/hooks/fallow-gate.sh              installed   hooks (claude)    gate script from fallow 3.44.0
+```
+
+## If it fails
+
+- **The MCP step shows `skipped` with `mcp_entry_unavailable`.** Fallow found no `fallow-mcp` launcher. Install fallow in the project with npm, then run the install again.
+- **Cursor shows `skipped` for the hooks step.** Cursor has no compatible hook. Cursor still reads `AGENTS.md`.
+- **Codex does not run the gate.** Codex runs a project hook only after you trust it in `/hooks`.
+
+## Related
+
+- [Use fallow with a coding agent](/start/first-agent)
+- [`fallow agent`](/cli/agent)
+- [MCP server](/integrations/mcp)

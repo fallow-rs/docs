@@ -1,0 +1,175 @@
+---
+title: "Set up fallow in a monorepo"
+sidebarTitle: "Monorepo"
+description: "Guide: check that fallow finds each package of a monorepo, scope a run to one package or to the changed packages, and give a package its own rules."
+keywords: ["monorepo", "workspaces", "pnpm workspaces", "npm workspaces", "yarn workspaces", "--workspace", "--changed-workspaces", "publicPackages", "overrides"]
+icon: "folder-tree"
+---
+
+At the end of this guide, fallow analyzes each package of your monorepo, and CI checks only the packages that a change touches.
+
+Fallow analyzes the whole repository in one run. An import from one [workspace](/concepts/workspaces) to another is an ordinary import. You scope the report, not the analysis.
+
+## Before you start
+
+- Run each command from the root of the repository, where the workspace config of your package manager is: `pnpm-workspace.yaml`, or `workspaces` in `package.json`.
+- Install the dependencies. Your package manager then links the workspace packages in `node_modules`.
+
+The examples use this repository:
+
+```text
+package.json                 "workspaces": ["packages/*"]
+packages/shared              @shop/shared, a library
+packages/app                 @shop/app, imports @shop/shared
+packages/legacy              @shop/legacy, old code
+```
+
+## Steps
+
+### 1. Check that fallow finds each package
+
+```bash
+npx fallow list --workspaces
+```
+
+```text
+Discovered 3 workspaces
+  @shop/app -> packages/app
+  @shop/legacy -> packages/legacy
+  @shop/shared -> packages/shared (internal dep)
+```
+
+Each line gives the package name and its directory. `internal dep` marks a package that another workspace lists as a dependency.
+
+When a package is missing, your package manager does not declare it. Add its directory to [`workspaces.patterns`](/reference/config-workspaces#workspaces-patterns) in the fallow config file. `npx fallow workspaces` also prints the problems that fallow found in the workspace setup.
+
+### 2. Run fallow on the whole repository
+
+```bash
+npx fallow dead-code
+```
+
+```text
+  3 entry points detected (3 package.json)
+
+── Unused Code ─────────────────────────────────────
+
+● Unused exports (2)
+  packages/app/src/cart.ts
+    :3 average
+  packages/legacy/src/tax.ts
+    :3 oldRate
+  Exported symbols with no known consumers
+  https://fallow.tools/docs/explanations/dead-code/#unused-exports
+
+── Dependencies ─────────────────────────────────────
+
+● Unused dependencies (1)
+  left-pad (packages/app/package.json)
+  Listed in dependencies but never imported
+  https://fallow.tools/docs/explanations/dead-code/#unused-dependencies
+
+✗ 2 exports · 1 unused dependency (0.07s)
+```
+
+The `main` field of each package gives one [entry point](/concepts/entry-points). A dependency finding names the `package.json` that lists the package.
+
+### 3. Scope a run to one package
+
+```bash
+npx fallow dead-code --workspace @shop/app
+```
+
+```text
+● Unused exports (1)
+  packages/app/src/cart.ts
+    :3 average
+```
+
+Fallow still analyzes the whole repository, so a use in another package counts. It reports only the findings of `@shop/app`. `--workspace` also takes a glob, a list and a `!` exclusion, for example `--workspace 'packages/*,!@shop/legacy'`.
+
+### 4. Scope a run to the changed packages
+
+In CI, check only the packages that a pull request changes:
+
+```bash
+npx fallow dead-code --changed-workspaces main
+```
+
+```text
+● Unused exports (1)
+  packages/legacy/src/tax.ts
+    :3 oldRate
+```
+
+Here the change touched only `packages/legacy`. You cannot combine `--changed-workspaces` with `--workspace`. For a check of the changed files only, use the [changed-code check](/analysis/changed-code).
+
+### 5. Give one package its own rules
+
+Fallow reads one config file, at the root. A config file inside a package has no effect on a run from the root. To change a rule for one package, add an [`overrides`](/reference/config-rules#overrides) entry:
+
+```jsonc
+// .fallowrc.jsonc
+{
+  "overrides": [
+    {
+      "files": ["packages/legacy/**"],
+      "rules": { "unused-exports": "warn" }
+    }
+  ]
+}
+```
+
+```bash
+npx fallow dead-code --workspace @shop/legacy
+```
+
+```text
+● Unused exports (1)
+  packages/legacy/src/tax.ts
+    :3 oldRate
+  Exported symbols with no known consumers
+  https://fallow.tools/docs/explanations/dead-code/#unused-exports
+
+⚠ 1 export (0.03s)
+```
+
+The finding is a warning now, and the exit code is 0. Some rules are about the whole project, for example `unused-dependencies`, and `overrides` does not change them. For the dependencies of one package, use `ignoreDependencies` under [`workspaces.settings`](/reference/config-workspaces#workspaces-settings).
+
+### 6. Mark the packages that you publish
+
+By default, fallow does not check the exports of an entry point. To find unused exports in your package entries too, turn on [`includeEntryExports`](/reference/config-files#includeentryexports). Then mark each package that code outside the repository uses:
+
+```jsonc
+// .fallowrc.jsonc
+{
+  "includeEntryExports": true,
+  "publicPackages": ["@shop/shared"]
+}
+```
+
+Fallow then checks the entry exports of `@shop/app` and `@shop/legacy`, and keeps the public API of `@shop/shared`. Without `publicPackages`, it reports `formatWeight` of `@shop/shared`, which no package in the repository imports.
+
+## Check the result
+
+```bash
+npx fallow list --workspaces
+npx fallow dead-code --changed-workspaces main
+```
+
+The first command lists each package. The second command reports only the packages that your branch changed.
+
+## If it fails
+
+| Problem | Cause | Fix |
+|:--|:--|:--|
+| A package is not in `list --workspaces`. | The workspace config of the package manager does not declare it. | Add the directory to `workspaces.patterns`. |
+| An import of a workspace package is unresolved. | The package is not linked in `node_modules`, or its `exports` point to a build output that does not exist. | Install the dependencies. Check the `exports` field of the package. |
+| A rule in `packages/x/.fallowrc.json` has no effect. | Fallow reads the config file of the root. | Move the rule to an `overrides` entry in the root config file. |
+| `--changed-workspaces failed for ref` and exit code 2. | Git cannot find the ref, for example in a shallow clone. | Fetch the history in CI, for example with `fetch-depth: 0` on `actions/checkout`. |
+
+## Related
+
+- [Workspaces](/concepts/workspaces): how fallow finds and links packages.
+- [Workspace config](/configuration/workspaces): each key for workspaces.
+- [Changed code](/concepts/changed-code): check only what a change touches.

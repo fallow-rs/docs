@@ -1,0 +1,153 @@
+---
+title: "Styling"
+description: "Analysis: find unused CSS Module classes, broken class references and style drift in CSS, SCSS, Tailwind and CSS-in-JS with fallow."
+keywords: ["CSS", "SCSS", "Tailwind", "CSS Modules", "CSS-in-JS", "unused CSS classes", "design tokens", "fallow health --css", "styling health"]
+icon: "paintbrush"
+---
+
+Stylesheets collect old classes, copied blocks and one-off values, and nothing tells you when a class is no longer used. Fallow reads your stylesheets in two analyses. `fallow dead-code` follows the imports of stylesheets and finds unused CSS Module classes. `fallow health --css` checks the quality of the styles.
+
+```bash
+npx fallow health --css
+```
+
+## What fallow finds
+
+### Unused CSS Module classes
+
+Fallow reads each class of a CSS Module as an export. A class that no component reads is an [unused export](/rules/unused-export):
+
+```css
+/* src/Button.module.css */
+.root {
+  display: flex;
+}
+
+.disabled {
+  opacity: 0.5;
+}
+```
+
+```tsx
+// src/index.tsx
+import "./global.css";
+import styles from "./Button.module.css";
+
+export const Button = () => (
+  <button className={styles.root}>
+    <span className="card-titel">Pay</span>
+  </button>
+);
+```
+
+```text
+● Unused exports (1)
+  src/Button.module.css
+    :5 disabled
+  Exported symbols with no known consumers
+  https://fallow.tools/docs/explanations/dead-code/#unused-exports
+```
+
+### Style quality
+
+`fallow health --css` adds a `CSS health` section to the health report:
+
+```text
+CSS health
+  Styling health: ~84 B (CSS quality, scored separately from the code health score)
+  Low confidence: graded from only 10 declarations across 2 stylesheets
+  Deductions: dead surface -8.0 · structural -5.0 · broken refs -3.0
+  2 stylesheets · 6 rules · 10.0% !important · 0 empty · max nesting 0
+  value sprawl: 2 distinct colors · 0 font sizes · 0 z-index values
+  undefined @keyframes: 1 referenced but defined nowhere (candidates; likely typo or defined in CSS-in-JS): spin (src/global.css)
+  1 global CSS class referenced by no in-project markup (candidates; verify no email / server template / CMS / Markdown applies them):
+  src/Button.module.css:5: .disabled
+  src/global.css:17  specificity (0,4,5) · complexity 15 · 1 !important · nesting 0
+```
+
+| Line | Meaning |
+|:--|:--|
+| `Styling health: ~84 B` | A score from 0 to 100 and a grade for the styles. Fallow scores it apart from the [health score](/analysis/health), and it never changes an exit code. |
+| `Low confidence` | The project has too few styles for a reliable score. The `~` marks the same. |
+| `Deductions` | The areas that lower the score: dead styles, broken references, copied blocks, values outside the design tokens, and structure. |
+| `undefined @keyframes` | An animation names a `@keyframes` block that no file defines. |
+| `referenced by no in-project markup` | A class that no markup in the project uses. |
+| `specificity (0,4,5)` | A selector that is hard to override. |
+
+### Styling findings
+
+Fallow turns these signals into findings of five issue types:
+
+| Issue type | Reports |
+|:--|:--|
+| [`css-dead-surface`](/rules/css-dead-surface) | Styles that nothing uses: classes, `@theme` tokens, `@keyframes`, font faces and CSS-in-JS style bindings. |
+| [`css-broken-reference`](/rules/css-broken-reference) | A class or an animation name with no definition, for example a typo one letter away from a real class. |
+| [`css-duplicate-block`](/rules/css-duplicate-block) | The same block of declarations in two rules or more. |
+| [`css-selector-complexity`](/rules/css-selector-complexity) | A selector that is too specific, too deep or uses `!important`. |
+| [`css-token-drift`](/rules/css-token-drift) | A fixed value that goes around the design tokens, for example a Tailwind value such as `w-[13px]`. |
+
+All five rules have the severity `warn` by default.
+
+## How fallow decides
+
+Fallow reads `.css`, `.scss`, `.sass` and `.less` files, and the `<style>` blocks of Vue and Svelte files. It also reads CSS-in-JS code such as styled-components, Emotion, StyleX, vanilla-extract and PandaCSS.
+
+For the module graph, a stylesheet is a file like any other:
+
+- `@import`, `@use` and `@forward` are imports. Fallow resolves SCSS partials, such as `_button.scss` for `@use 'button'`. A used stylesheet is never an unused file.
+- In a `.module.css`, `.module.scss`, `.module.sass` or `.module.less` file, each class is an export. `styles.root` uses the class `root`. When code uses the whole `styles` object, each class counts as used.
+- `@tailwind`, `@apply` and `@plugin` use the `tailwindcss` package and each plugin package, so fallow does not report them as unused dependencies.
+
+For the quality checks, fallow compares the classes in the stylesheets with the classes in the markup. Markup is JSX, Vue, Svelte, Astro and HTML. It also reads server templates such as `.liquid`, `.njk`, `.hbs` and `.twig`. Add other template extensions with [`markupExtensions`](/reference/config-files#markupextensions).
+
+Each styling finding is a candidate. A class can be in use in a way that fallow cannot see. Each finding has a `confidence` and a fix hint in the JSON output.
+
+## Act on a finding
+
+On a pull request, `fallow audit` checks the styles of the changed files and sorts the findings by the next step:
+
+```text
+── Styling ────────────────────────────────────────
+  Fix confidently
+    src/global.css:17  css-selector-complexity  1 !important declaration across 1 declaration  (advisory: rules.css-selector-complexity=warn, introduced design-system drift since main)
+  Verify first
+    src/Button.module.css:5  css-dead-surface  disabled  (advisory: rules.css-dead-surface=warn, introduced design-system drift since main)
+    src/global.css:1  css-broken-reference  spin  (advisory: rules.css-broken-reference=warn, introduced design-system drift since main)
+```
+
+| Group | Action |
+|:--|:--|
+| Fix confidently | The code alone shows the problem. Simplify the selector, or merge the copied block. |
+| Verify first | Search for other users before you delete. An email template, a CMS or a class name that the code builds when it runs can use the class. |
+
+For an unused CSS Module class, delete the class. For a broken reference, correct the name in the markup or add the definition. For token drift, use a token of your design system in place of the fixed value.
+
+To accept one finding, add the suppression comment that the rule page of its issue type gives. For Tailwind values that are correct on purpose, list them in [`health.tailwindIgnorePatterns`](/reference/config-health#health-tailwindignorepatterns).
+
+## Set a limit
+
+The styling findings do not fail a run by default. To fail on one issue type, set its rule to `error`:
+
+```jsonc
+// .fallowrc.jsonc
+{
+  "rules": {
+    "css-broken-reference": "error"
+  }
+}
+```
+
+`fallow audit` checks the styles by default. A styling finding at `error` that the change introduces then makes the verdict fail. Add `--no-css` to skip the styling checks. Bare `fallow` does not run them.
+
+## Limits
+
+- Fallow cannot see a class name that the code builds when it runs, for example `` `btn-${size}` ``.
+- A class that only HTML outside the project uses, for example in an email or a CMS, looks unused.
+- Fallow reads Sass and Less structure only where it can do so without a compile. It does not expand mixins or loops.
+- In `fallow health --css`, unused global classes, unused tokens and broken references are candidates in the `CSS health` section. `fallow audit` reports them as findings.
+
+## Reference
+
+- [`fallow health`](/cli/health): the `--css` option and the JSON output.
+- [`fallow audit`](/cli/audit): `--no-css` and `--no-css-deep`.
+- [Health config](/reference/config-health#health): each key and its default.

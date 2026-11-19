@@ -1,0 +1,128 @@
+---
+title: "Changed code and baselines"
+description: "Concept: three ways to stop new findings in a project that has old ones: --changed-since, the changed-code check of fallow audit, and a baseline."
+keywords: ["changed code", "changed-since", "audit", "verdict", "baseline", "save-baseline", "new findings", "pull request"]
+icon: "code-compare"
+---
+
+An existing project often has many findings. A team can rarely fix them all before it adds fallow to CI. Fallow has three tools that separate new findings from old ones, so CI can block new problems from the first day.
+
+## The problem
+
+The example project has six [findings](/concepts/findings) at `error` in its dead code report. Each run exits with code 1. A pull request adds `src/services/cart-report.ts`, with one new unused export and a copy of a function that exists in two other files.
+
+A CI job that runs `fallow` fails for this pull request. It also fails for each other pull request, because of the old findings. The author cannot see which findings the change added.
+
+## Scope a report to changed files
+
+`--changed-since <ref>` limits the report to the files that changed since a git ref. The changed files are the files of the commits since the merge base with the ref, plus the changes in the working tree and new files.
+
+Fallow still analyzes the full project, so a used export stays used. Only the report changes:
+
+| Analysis | What `--changed-since` keeps |
+|:--|:--|
+| Dead code | The findings in changed files. Unused dependencies stay in the report, because a dependency is unused for the whole project. |
+| Duplication | Each clone group with at least one instance in a changed file. |
+| Health | The findings and file scores of changed files. |
+
+```bash
+npx fallow dead-code --changed-since main
+```
+
+```text
+● Unused exports (1)
+  src/services/cart-report.ts
+    :25 cartTotalCents
+  Exported symbols with no known consumers
+
+● Unused dependencies (1)
+  left-pad
+  Listed in dependencies but never imported
+```
+
+`--changed-since` does not compare with the old state of the code. It reports each finding in a changed file, also a finding that was there before the change.
+
+## The changed-code check
+
+A **changed-code check** is a run of `fallow audit`. It runs the dead code, duplication and health analyses on the files that a change touches, and gives one verdict. The **verdict** is the result of the check:
+
+| Verdict | Meaning | Exit code |
+|:--|:--|:--|
+| `pass` | The change adds no finding. | 0 |
+| `warn` | The change adds only findings at `warn`. | 0 |
+| `fail` | The change adds a finding at `error`. | 1 |
+
+By default, only the findings that the change introduced decide the verdict. To find them, fallow also analyzes the base of the change and compares the two results. A finding is introduced when the base does not have it.
+
+An introduced finding can be outside the changed files. When a change removes the last import of an export, that export becomes unused in a file that the change did not touch. The check reports it.
+
+On the example change, the new unused export is at `error`, so the verdict is `fail`:
+
+```bash
+npx fallow audit --base main
+```
+
+```text
+Audit scope: 2 changed files vs main (87067c4..HEAD)
+
+● Unused exports (1)
+  src/services/cart-report.ts
+    :25 cartTotalCents
+
+● Duplicates (1 clone groups)
+
+     17 lines  3 instances  spread 2  dup:f42424e8
+    src/reports/export.ts:3-19
+    src/services/cart-report.ts:7-23
+    src/utils/summary.ts:7-23
+
+✗ dead code: 1 issue · duplication: 1 clone group · 2 changed files (0.33s)
+```
+
+The new copy joins a [clone group](/analysis/duplication) that existed before. That finding is at `warn`, so without the unused export the verdict is `warn`. The old findings in unchanged files do not affect the verdict.
+
+The `--gate all` option makes each finding in the changed files decide the verdict, introduced or not. [`fallow audit`](/cli/audit) has the options.
+
+## Baselines
+
+A **baseline** is a saved file of the current findings. With it, fallow reports only the findings that the file does not hold. A baseline works for the full project, also without git.
+
+```bash
+npx fallow dead-code --save-baseline fallow-baseline.json
+npx fallow dead-code --baseline fallow-baseline.json
+```
+
+The dead code baseline identifies a finding by its file and its name. It does not use the line. Thus, a finding stays known when lines move inside the file. A finding becomes new when its file moves or when its name changes. In the example, a move of `legacy-currency.ts` to `src/old/` makes it a new unused file:
+
+```text
+Comparing against baseline: fallow-baseline.json
+  3 entry points detected (2 package.json, 1 plugin)
+
+── Unused Code ─────────────────────────────────────
+
+● Unused files (1)
+  src/old/legacy-currency.ts
+```
+
+Dead code, duplication and health each have their own baseline file. An entry for a finding that you fixed stays in the file. Save the baseline again after a cleanup, or remove the old entries with `fallow baselines prune`. Do not save it again for each merge, because a new finding then becomes a known finding.
+
+## Which one do I use
+
+| Situation | Use |
+|:--|:--|
+| Block a pull request only on the problems that it adds | `fallow audit` |
+| Show the developer the findings in the files that they changed | `--changed-since` |
+| Fail a full run of the project only on new findings, for example on a schedule or without git history | A baseline |
+| Check all findings of the changed files with `fallow audit --gate all`, but not the known ones | A baseline, given to `fallow audit` with `--dead-code-baseline` |
+
+## What these tools cannot do
+
+None of the three tools removes old findings. They stay in the code until you fix them.
+
+`--changed-since` and `fallow audit` need git. The base ref must exist in the clone, also in a shallow CI clone.
+
+## Next
+
+- [Evidence levels](/concepts/evidence): what syntax, the type checker and runtime data can each tell you.
+- [Check changed code](/analysis/changed-code): run the changed-code check in a project and in CI.
+- [Set a baseline](/guides/baselines): save, use and update a baseline step by step.

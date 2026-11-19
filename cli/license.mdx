@@ -1,172 +1,162 @@
 ---
-title: "fallow license: activate a trial or license"
-sidebarTitle: "fallow license"
-description: "Activate a fallow trial or license to turn on continuous runtime coverage. fallow license also shows status, refreshes a license, or removes the local token."
-keywords: ["fallow license", "trial", "license activate", "license refresh", "runtime coverage", "JWT", "CLI"]
+title: "fallow license"
+description: "Reference: fallow license activates, shows, refreshes and removes the license for continuous runtime coverage."
+keywords: ["fallow license", "trial", "license status", "runtime coverage", "cli reference"]
 icon: "key"
 ---
 
-Use `fallow license` to manage the local license for runtime coverage, which is part of Fallow Cloud, the paid product.
+Activate, show, refresh and remove the local license for continuous [runtime coverage](/analysis/runtime-coverage). Static analysis and one local capture of runtime coverage need no license.
 
-You need a license only for continuous or multi-capture runtime monitoring. A single local capture is free and needs no license. All static analysis is free and open source (MIT). For pricing and tiers, see [fallow.tools/pricing](https://fallow.tools/pricing).
+For what runtime coverage adds, read [Runtime coverage](/analysis/runtime-coverage).
+
+## Synopsis
+
+{/* generated:start cli-synopsis license */}
 
 ```bash
-fallow license status
+fallow license [OPTIONS] <COMMAND>
 ```
 
-Fallow verifies the license offline, against an Ed25519 public key in the binary. Only the trial and refresh flows send network requests to `api.fallow.cloud`.
+{/* generated:end */}
 
 ## Subcommands
 
-### `activate`
+{/* generated:start cli-subcommands license */}
 
-Activate a local JWT or start a 30-day email-gated trial.
+| Subcommand | Description |
+|:--|:--|
+| [`activate`](#activate) | Activate a license JWT |
+| [`status`](#status) | Show the active license tier, seats, features, and days remaining |
+| [`refresh`](#refresh) | Fetch a fresh JWT from `api.fallow.cloud` (network-only) |
+| [`deactivate`](#deactivate) | Remove the local license file |
 
-```bash
-fallow license activate --trial --email you@company.com
-fallow license activate eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9...
-fallow license activate --from-file ./license.jwt
-cat ./license.jwt | fallow license activate --stdin
-```
+{/* generated:end */}
 
-Fallow reads the JWT from the first source that is present:
+### activate {#activate}
 
-1. positional JWT argument
-2. `--from-file <path>`
-3. `--stdin`
+Store a license token, or start a 30-day trial with `--trial --email`.
 
-Fallow normalizes whitespace before verification, so a copied multiline token still works.
+{/* generated:start cli-options license activate */}
 
-#### Flags
+| Argument | Description |
+|:--|:--|
+| `[JWT]` | JWT as a positional argument |
 
-| Flag | Description |
-|:-----|:------------|
-| `--trial` | Start a 30-day email-gated trial, and do not read a local JWT. Requires `--email`. Rate-limited to **5 requests per hour per IP**. In CI or behind a shared NAT, start the trial on a developer machine and set `FALLOW_LICENSE` on the runner. |
-| `--email <ADDR>` | Email address for the trial flow. On success, fallow also prints the `trialEndsAt` ISO timestamp from the server, so you do not need to decode the JWT. |
-| `--from-file <PATH>` | Read a JWT from a file. |
-| `--stdin` | Read a JWT from standard input. |
+| Option | Description |
+|:--|:--|
+| `--from-file <PATH>` | Path to a file containing the JWT |
+| `--stdin` | Read JWT from stdin |
+| `--trial` | Start a 30-day email-gated trial in one step. The trial endpoint is rate-limited to 5 requests per hour per IP. |
+| `--email <ADDR>` | Email address for the trial flow |
 
-### `status`
+{/* generated:end */}
 
-Print the current license status, tier, seats, enabled features, and expiry state.
+Fallow reads the token from the first source that is present: the `JWT` argument, `--from-file`, then `--stdin`. Fallow removes whitespace before it checks the token. The trial sends one request to `api.fallow.cloud`, and the server allows 5 trials for each IP address in one hour. In CI, start the trial on your machine and set `FALLOW_LICENSE` on the runner.
+
+### status {#status}
+
+Show the tier, the seats, the features and the days until the license expires.
+
+{/* generated:start cli-options license status */}
+
+This command has no options of its own.
+
+{/* generated:end */}
+
+### refresh {#refresh}
+
+Get a new token from `api.fallow.cloud` for the active license.
+
+{/* generated:start cli-options license refresh */}
+
+| Option | Description |
+|:--|:--|
+| `--api-key <KEY>` | Fallow Cloud API key (bearer token) used when the stored license JWT cannot be refreshed. Precedence: this flag > $FALLOW_API_KEY. |
+
+{/* generated:end */}
+
+Fallow sends the stored token first. When no token is stored, or the server finds it too old, fallow tries again with a full-access API key from `--api-key` or `FALLOW_API_KEY`. On a shared runner, use `FALLOW_API_KEY`, because other processes can see a command line.
+
+### deactivate {#deactivate}
+
+Remove the local license file.
+
+{/* generated:start cli-options license deactivate */}
+
+This command has no options of its own.
+
+{/* generated:end */}
+
+## Options
+
+Fallow checks a token offline with a public key in the binary. Only `activate --trial` and `refresh` use the network. Fallow takes the license from the first source that is present:
+
+1. `FALLOW_LICENSE`
+2. `FALLOW_LICENSE_PATH`
+3. `~/.fallow/license.jwt`, written with mode 0600 on Unix
+
+Fallow refuses a token that was issued more than 24 hours in the future of the local clock. `FALLOW_LICENSE_SKEW_TOLERANCE_SECONDS` changes that window.
+
+## Output
 
 ```bash
 fallow license status
 ```
 
-Example output:
-
 ```text
-license: VALID, tier=trial seats=1 features=runtime_coverage days_until_expiry=29
-  → runtime_coverage: ENABLED
+license: NOT FOUND. Start a 30-day trial: fallow license activate --trial --email you@company.com
+  → runtime_coverage: disabled (upgrade or refresh)
 ```
 
-If the token is expired but still in the grace window, fallow says so and tells you to refresh it. If no token is present, the command suggests a trial.
+The first line gives the state of the license, and for a valid license its tier, seats, features and days until expiry. Each next line gives one feature and its state. When the token can be refreshed, `status` adds a hint.
 
-`api.fallow.cloud` can set a `refresh_after` claim in the JWT, at `iat + 15 days`. When that time has passed, `status` adds a one-line refresh hint. The hint is not an error. It comes while the license is still valid, so you can refresh early.
+With `--format json`, `status` prints `kind: "license-status"` with these fields:
 
-### `refresh`
+| Field | Content |
+|:--|:--|
+| `schema_version` | The version of this output format. |
+| `state` | The state of the license, for example `missing`. |
+| `tier`, `seats`, `features` | The content of the license. |
+| `days_until_expiry`, `days_since_expiry` | The time to or since the expiry date. |
+| `refresh_suggested` | `true` when fallow can refresh the token. |
+| `runtime_coverage_enabled` | `true` when the license allows continuous runtime coverage. |
+| `license_path` | The path of the license file. |
+| `message` | One sentence about the state. |
 
-Fetch a fresh JWT for the currently active license.
+After the expiry date, runtime coverage runs normally for 7 days. From day 8 to day 30, the output of runtime coverage has the `license-expired-grace` mark. From day 31, fallow stops runtime coverage with exit code 3.
+
+## Exit codes {#exit-behavior}
+
+| Code | Meaning |
+|:--|:--|
+| `0` | The command completed. `status` with a valid license, or a license less than 31 days after expiry. |
+| `2` | Invalid input, for example `--trial` without `--email`. |
+| `3` | `status` without a license, or more than 30 days after expiry. `activate` with a token that is not valid. |
+| `7` | The trial or the refresh failed: no network, a rate limit, or a refusal of the server. |
+
+Commands with `--runtime-coverage` also check the license. Without a license, one local capture runs. With a license that is not valid, expired for more than 30 days, or without the `runtime_coverage` feature, the run stops with code 3. See [Exit codes](/reference/exit-codes).
+
+## Examples
 
 ```bash
+# Start a 30-day trial
+fallow license activate --trial --email you@example.com
+
+# Store a license token from a file
+fallow license activate --from-file ./license.jwt
+
+# Show the state of the license
+fallow license status
+
+# Get a new token before the license expires
 fallow license refresh
-```
 
-Use `refresh` to renew a token before it reaches the hard-fail window.
-
-Fallow first sends the stored license JWT. When no JWT is stored, or the server reports it as too stale to refresh, fallow tries again with a full-access API key. Generate the key at [fallow.cloud/settings](https://fallow.cloud/settings#api-keys).
-
-| Flag | Description |
-|:-----|:------------|
-| `--api-key <KEY>` | Fallow Cloud API key for the retry. Overrides `FALLOW_API_KEY`. On a shared CI runner, set `FALLOW_API_KEY` instead: other processes can see a key on the command line, and it can go into the shell history. |
-
-### `deactivate`
-
-Remove the local license file.
-
-```bash
+# Remove the license and go back to one local capture
 fallow license deactivate
 ```
 
-## Storage and precedence
+## Related
 
-By default, fallow stores the local token at `~/.fallow/license.jwt`. On Unix, fallow writes the file with mode `0600` (only the owner can read and write). Other users on the same host thus cannot read the bearer token. On Windows, the ACL of the parent directory controls access.
-
-Fallow looks for the license in this order:
-
-1. `FALLOW_LICENSE`
-2. `FALLOW_LICENSE_PATH`
-3. `~/.fallow/license.jwt`
-
-On a shared CI runner where you do not want to write to a home directory, use `FALLOW_LICENSE`.
-
-## Exit behavior
-
-| Situation | Exit code |
-|:----------|:----------|
-| `status` with a valid license, or a license in the grace period | `0` |
-| `status` with no license, or a license more than 30 days past expiry | `3` |
-| `activate` with a malformed, truncated, or not valid JWT | `3` |
-| `activate --trial` without `--email` | `2` |
-| `activate --trial` or `refresh` fails: network error, rate limit, or rejection by the server | `7` |
-
-### Grace period
-
-When a license expires, fallow gives you a grace period before it blocks runtime coverage:
-
-| Days after expiry | Behavior |
-|:------------------|:---------|
-| 1 to 7 | Runtime coverage runs as normal. `status` tells you to refresh. |
-| 8 to 30 | Runtime coverage runs. Its output gets the `license-expired-grace` watermark and verdict. |
-| 31 or more | Fallow blocks runtime coverage with exit code `3`. |
-
-### Runtime coverage runs
-
-Commands that take `--runtime-coverage` (`health`, `audit`, `security`, and `coverage analyze`) check the license before they start the sidecar:
-
-- With no license, the run continues. A single local capture works. The sidecar rejects continuous or multi-capture input.
-- With a license present, fallow checks it also for a single capture. A token that is not valid, a license more than 30 days past expiry, or a license without the `runtime_coverage` feature stops the run with exit code `3`.
-
-To go back to the free single-capture mode, run `fallow license deactivate` and unset `FALLOW_LICENSE` and `FALLOW_LICENSE_PATH`.
-
-### Actionable error messages
-
-When the backend returns a structured error envelope, fallow shows a specific hint for each known `code` value. It does not print the raw HTTP body:
-
-| Operation + code | Message |
-|:-----------------|:--------|
-| `refresh` + `token_stale` | ``your stored license is too stale to refresh: set FALLOW_API_KEY to a full-access key and run `fallow license refresh` again (generate one at https://fallow.cloud/settings#api-keys)`` |
-| `refresh` + `invalid_token` | `your stored license token is missing required claims. Reactivate with: fallow license activate --trial --email <addr>` |
-| `refresh` or `trial` + `unauthorized` | `authentication failed. Reactivate with: fallow license activate --trial --email <addr>` |
-| `trial` + `rate_limit_exceeded` | `trial creation is rate-limited to 5 per hour per IP. Wait an hour or retry from a different network (in CI, start the trial locally and set FALLOW_LICENSE on the runner).` |
-
-For an unknown code, fallow prints the `message` field from the backend. If that field is missing, fallow prints the raw body.
-
-## Clock skew
-
-License verification rejects a JWT when its `iat` (issued-at) claim is more than 24 hours in the future, relative to the local system clock. The same check finds skew in both directions:
-
-- a JWT signed with a clock that is ahead
-- a local machine with a clock that is behind
-
-On rejection, fallow prints a `license appears to be issued <duration> in the future` error and exits non-zero. Licensed features thus fail closed. Fallow does not accept a license that the local clock cannot validate.
-
-Common causes that are not user errors:
-
-- CI containers booted without NTP.
-- Machines with a dead BIOS battery.
-- A laptop clock that drifts after a long sleep.
-
-For an environment with predictable drift, first make sure that the system clock is correct. Then set `FALLOW_LICENSE_SKEW_TOLERANCE_SECONDS=<seconds>` to change the default 24h window. Fallow parses this value leniently. An unset, empty, unparsable, or negative value falls back to the default, so a typo in a runner env block cannot cause a license verification failure by itself.
-
-## See also
-
-<CardGroup cols={2}>
-  <Card title="Runtime coverage" icon="chart-network" href="/analysis/runtime-coverage">
-    See what runtime coverage adds to health analysis.
-  </Card>
-  <Card title="Coverage setup" icon="wand-magic-sparkles" href="/cli/coverage">
-    Run the guided first-run setup. It sets up the sidecar and writes a collection recipe.
-  </Card>
-</CardGroup>
+- [Runtime coverage](/analysis/runtime-coverage): what continuous runtime coverage reports.
+- [`fallow coverage`](/cli/coverage): set up and analyze runtime coverage.
+- [Environment variables](/configuration/environment): `FALLOW_LICENSE` and the other settings.

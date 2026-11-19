@@ -1,221 +1,103 @@
 ---
-title: "fallow doctor: check your project setup"
-sidebarTitle: "fallow doctor"
-description: "Check if fallow sees your project correctly before you trust its results. fallow doctor runs read-only checks on config, workspaces, plugins, and caches."
-keywords: ["fallow doctor", "readiness", "diagnostics", "CLI", "onboarding", "troubleshooting", "cache"]
+title: "fallow doctor"
+description: "Reference: fallow doctor checks if fallow can read the project correctly, without an analysis. Checks, output fields and exit codes."
+keywords: ["fallow doctor", "project readiness", "preflight", "cache check", "cli reference"]
 icon: "terminal"
 ---
 
-A misconfigured project can give output that looks clean but is wrong. `fallow doctor` checks your setup without running an analysis, so you know if you can trust the results of other commands. It checks:
+Check if fallow can read the project correctly: the root, the config file, the workspaces, the plugins, the dependencies and the caches. The command runs no analysis and writes nothing.
 
-- that the project root is readable
-- which config resolved
-- that workspace discovery found the packages you expect
-- that the external plugins load
-- that the optional type-aware companion is present
-- that the dependencies are installed
-- that the persisted caches are compatible with the project
-- that the installed Vitest is a version that `fallow mutation` supports
+For the causes of an unexpected result, read [False positives](/guides/false-positives).
 
-Each check is a local read. You can safely run `doctor` as the first command on a repository that you have never analyzed. It is also fast enough for a CI preflight step.
+## Synopsis
+
+{/* generated:start cli-synopsis doctor */}
 
 ```bash
-fallow doctor
-fallow doctor --format json
+fallow doctor [OPTIONS]
 ```
 
-<Info>
-  `doctor` only tells you if fallow can see your project correctly. It does not analyze your code. When it reports ready, run [`fallow dead-code`](/cli/dead-code) and [`fallow health`](/cli/health) to analyze the code.
-</Info>
-
-## Checks
-
-| Check | Category | Required | What it answers |
-|:------|:---------|:---------|:----------------|
-| `root` | `project` | Yes | Is the project root an accessible directory? |
-| `config` | `configuration` | Yes | Which config resolved, or did zero-config defaults apply? |
-| `workspaces` | `workspace` | No | Did workspace discovery complete, and how many packages did it find? |
-| `plugins` | `plugin` | Yes | Do the configured external plugins load? |
-| `type-aware` | `companion` | No | Is the optional type-aware companion enabled and available? |
-| `dependencies` | `project` | No | Is a `node_modules` directory present, or does the project run without one? |
-| `cache` | `cache` | No | Can the extraction cache be loaded with the current configuration? |
-| `graph-cache` | `cache` | No | Can the module-graph cache be loaded for this project root? |
-| `mutation-runner` | `companion` | No | Is the installed Vitest in the supported range of [`fallow mutation`](/cli/mutation)? |
-
-When a check that is not required cannot run, it reports `skipped`. A skipped check never fails the command. The `type-aware` check is skipped when type-aware analysis is off, which is the default.
-
-The last four checks can only warn. They cannot fail, so they never change the exit code.
-
-- `dependencies` warns when the project has no `node_modules` directory and needs one. Until you install the dependencies, fallow gives less accurate results for package `exports`, plugin activation, and dependency classification.
-- `cache` and `graph-cache` warn when a persisted blob exists but a run would discard it. The warning gives the reason and the size on disk. A project with no cache yet passes, because a first run has no cache.
-- `mutation-runner` warns when the installed Vitest is outside the supported range of `fallow mutation`, or when Vitest is not installed. The message gives the supported range and the install step, and the remediation is the install command. The check reads the `package.json` of the installed Vitest and runs no code. It passes for a supported version. It is skipped for the `node-test` and `bun-test` runners. It is also skipped when `mutation.runner` does not select Vitest, the root `package.json` declares no Vitest, and the root `node_modules` holds no Vitest. A workspace package can declare a Vitest that the package manager installs at the root, so the check counts the root install.
-
-A project with one of these warnings reports the aggregate `warn` and still exits `0`.
-
-There are two cache checks because a run reuses the two blobs independently. The extraction cache can be reusable while fallow rebuilds the module graph on every run. `graph-cache` checks that the blob loads and belongs to this project root. A pass does not prove that a run will reuse the blob. The reuse decision also compares resolver options, entry points, and per-file content hashes. To compute those, fallow must run discovery and extraction, and `doctor` does not do that.
-
-When `FALLOW_CACHE_DIR` is nonempty, it sets the cache location and takes priority over the configured cache directory. Fallow resolves relative paths against the project root, the same as during analysis.
-
-- An absent cache is normal on a first run.
-- An unreadable cache gets a separate report with a hint about the path and permissions.
-- A decoding failure can mean an older cache format or damaged data. It does not prove corruption. When you rebuild the cache, it uses the current format.
+{/* generated:end */}
 
 ## Options
 
-| Flag | Default | Description |
-|:-----|:--------|:------------|
-| `--root <ROOT>` | current directory | Project root directory. |
-| `--config <CONFIG>` | discovered | Path to the Fallow config file. |
-| `--format <FORMAT>` | `human` | Output format: `human` or `json`. Alias: `--output`. |
-| `--pretty` | off | Indent JSON output. |
-| `--quiet` | off | Suppress progress output. |
+This command has no options of its own. It refuses analysis and gate options, for example `--production` and `--fail-on-issues`, and `--output-file`.
 
-`doctor` reads and never writes, so it rejects `--output-file`. The report goes to stdout, and the files that `doctor` checks do not change. `doctor` runs no analysis, so it also rejects analysis and gate flags such as `--production` and `--fail-on-issues`. It does not ignore them silently.
+## Output
 
-## Exit codes
-
-| Code | Meaning |
-|:-----|:--------|
-| `0` | Every required check passed. Warnings still exit `0`. |
-| `2` | A required check failed, so the project is not ready to analyze. Also an invalid flag or format, such as `--production`, `--output-file`, or `--format sarif`. |
-
-`doctor` never exits `1`. That code means error-severity findings. `doctor` checks your setup and not your code, so it has no findings.
-
-## Human output
+```bash
+fallow doctor
+```
 
 ```text
 Fallow doctor (.)
 [OK] root: Project root is an accessible directory.
-[OK] config: Configuration resolved from .fallowrc.json.
-[OK] workspaces: Workspace discovery completed (30 workspace packages).
+[OK] config: Zero-config defaults resolved successfully.
+[OK] workspaces: Workspace discovery completed (0 workspace packages).
 [OK] plugins: No external plugins are configured; built-in detection remains available.
 [-] type-aware: Type-aware analysis is not enabled.
 [OK] dependencies: Dependencies are installed, or the project runs without a node_modules directory.
-[W] cache: Extraction cache (0.9 MB) would not be reused: cache format version changed. The next run parses every file.
-    Action (from project root): fallow dead-code --quiet
-[OK] graph-cache: Module-graph cache (0.5 MB) loads; a run reuses it when the analysed files and options are unchanged.
-[OK] mutation-runner: vitest 4.1.12 is in the supported mutation runner range >=4.1.0 <6.0.0.
+[OK] cache: Extraction cache is reusable (9.9 KB).
+[OK] graph-cache: Module-graph cache (6.2 KB) loads; a run reuses it when the analysed files and options are unchanged.
+[W] mutation-runner: vitest 2.1.9 is not supported; the supported range is >=4.1.0 <6.0.0. A mutation run stops before the first mutant. Fix: install vitest 4.1.0 or a later version below 6.0.0; a vitest 4.x release from 4.1.0 is in the range.
+    Action (from project root): npm install --save-dev vitest@^4.1.0
 Status: ready with warnings
 ```
 
-The last line gives the status: `ready`, `ready with warnings`, or `not ready`. When a check has a remediation, it prints the remediation on an indented `Action` line under the message.
+Each line gives the result of one check: `[OK]` passed, `[W]` warns, `[X]` failed, and `[-]` was skipped. An `Action` line gives the command that fixes a problem. The last line is `ready`, `ready with warnings` or `not ready`.
 
-## JSON output
+| Check | Required | Question |
+|:--|:--|:--|
+| `root` | Yes | Can fallow read the project root? |
+| `config` | Yes | Which config file applies, or do the defaults apply? |
+| `workspaces` | No | Did fallow find the workspaces? |
+| `plugins` | Yes | Do the external plugins load? |
+| `type-aware` | No | Is [type-aware analysis](/analysis/type-aware) on and available? |
+| `dependencies` | No | Is `node_modules` present, when the project needs it? |
+| `cache` | No | Can the next run use the cache of the parsed files? |
+| `graph-cache` | No | Can the next run use the cache of the module graph? |
+| `mutation-runner` | No | Is the installed Vitest in the range that [`fallow mutation`](/cli/mutation) supports? |
 
-```json
-{
-  "kind": "doctor",
-  "schema_version": 2,
-  "version": "3.44.0",
-  "root": ".",
-  "status": "warn",
-  "summary": {
-    "pass": 7,
-    "warn": 1,
-    "fail": 0,
-    "skipped": 1
-  },
-  "checks": [
-    {
-      "id": "root",
-      "category": "project",
-      "status": "pass",
-      "required": true,
-      "message": "Project root is an accessible directory."
-    },
-    {
-      "id": "config",
-      "category": "configuration",
-      "status": "pass",
-      "required": true,
-      "message": "Configuration resolved from .fallowrc.json."
-    },
-    {
-      "id": "workspaces",
-      "category": "workspace",
-      "status": "pass",
-      "required": false,
-      "message": "Workspace discovery completed (30 workspace packages)."
-    },
-    {
-      "id": "plugins",
-      "category": "plugin",
-      "status": "pass",
-      "required": true,
-      "message": "No external plugins are configured; built-in detection remains available."
-    },
-    {
-      "id": "type-aware",
-      "category": "companion",
-      "status": "skipped",
-      "required": false,
-      "message": "Type-aware analysis is not enabled."
-    },
-    {
-      "id": "dependencies",
-      "category": "project",
-      "status": "pass",
-      "required": false,
-      "message": "Dependencies are installed, or the project runs without a node_modules directory."
-    },
-    {
-      "id": "cache",
-      "category": "cache",
-      "status": "warn",
-      "required": false,
-      "message": "Extraction cache (0.9 MB) would not be reused: cache format version changed. The next run parses every file.",
-      "remediation": {
-        "command": "fallow dead-code --quiet",
-        "cwd": ".",
-        "mutating": false
-      }
-    },
-    {
-      "id": "graph-cache",
-      "category": "cache",
-      "status": "pass",
-      "required": false,
-      "message": "Module-graph cache (0.5 MB) loads; a run reuses it when the analysed files and options are unchanged."
-    },
-    {
-      "id": "mutation-runner",
-      "category": "companion",
-      "status": "pass",
-      "required": false,
-      "message": "vitest 4.1.12 is in the supported mutation runner range >=4.1.0 <6.0.0."
-    }
-  ]
-}
+A check that is not required can only warn or be skipped. A `graph-cache` pass does not prove that the next run uses the cache, because that also depends on the content of each file. `FALLOW_CACHE_DIR` sets the cache directory that the cache checks read.
+
+With `--format json`, the output has these top-level fields:
+
+| Field | Content |
+|:--|:--|
+| `kind` | `"doctor"` |
+| `schema_version` | The version of this output format. |
+| `version` | The fallow version. |
+| `root` | The project root. |
+| `status` | `pass`, `warn` or `fail`. |
+| `summary` | The number of checks for each status: `pass`, `warn`, `fail`, `skipped`. |
+| `checks` | One object for each check: `id`, `category`, `status`, `required`, `message`, and `remediation` when a fix exists. |
+
+A `remediation` has `command`, `cwd` (always the project root) and `mutating` (`true` when the command writes files). An install command uses the package manager of the project. The [JSON output reference](/reference/json-output) has each field.
+
+## Exit codes
+
+| Code | Meaning |
+|:--|:--|
+| `0` | Each required check passed. Warnings do not change the code. |
+| `2` | A required check failed, or the input is invalid, for example `--production` or `--format sarif`. |
+
+The command never exits with code 1, because it reports no findings. See [Exit codes](/reference/exit-codes).
+
+## Examples
+
+```bash
+# Check the project
+fallow doctor
+
+# Check the project in a CI step, and read the status
+fallow doctor --format json --quiet | jq -r '.status'
+
+# Check a project with another config file
+fallow doctor --config configs/fallow.json
 ```
 
-The top-level `status` is `pass`, `warn`, or `fail`. The `status` of a single check can also be `skipped`.
+## Related
 
-A check can have a `remediation` object with `command`, `cwd`, and `mutating`:
-
-- `cwd` is always the project root.
-- `mutating` tells you if the command writes anything. An agent can run the read-only commands without asking.
-
-An install remediation uses the package manager of the project: `pnpm install`, `yarn install` or `bun install` instead of `npm install`. The type-aware companion install follows the same rule. The `packageManager` field of `package.json` wins, then the lockfile. A workspace package uses the signal of its monorepo root. Without either signal, the command uses npm.
-
-If you pass `--config` with a project-relative path that is safe to render, the remediation command repeats it. For an external config path, or a path that is not safe to render, fallow omits the command. The message then tells the caller to use the same `--config` value again.
-
-## For agents
-
-Run `fallow doctor --format json --quiet` before the first analysis on an unfamiliar repository. A clean project and a misconfigured project can both give empty results, and `doctor` is the fastest way to tell them apart. Branch on the top-level `status`. Then read `checks[].message` to tell the user what to fix.
-
-## See also
-
-<CardGroup cols={2}>
-  <Card title="Configuration" icon="gear" href="/configuration/overview">
-    Config file discovery and the available options.
-  </Card>
-  <Card title="Workspaces" icon="folder-tree" href="/configuration/workspaces">
-    How fallow discovers the packages in a monorepo.
-  </Card>
-  <Card title="Type-aware analysis" icon="code" href="/analysis/type-aware">
-    Set up the optional type-aware companion.
-  </Card>
-  <Card title="Environment variables" icon="terminal" href="/configuration/environment">
-    Variables such as `FALLOW_CACHE_DIR` that change fallow behavior.
-  </Card>
-</CardGroup>
+- [Configuration overview](/configuration/overview): how fallow finds the config file.
+- [Workspaces config](/configuration/workspaces): how fallow finds the packages of a monorepo.
+- [Environment variables](/configuration/environment): `FALLOW_CACHE_DIR` and the other settings.

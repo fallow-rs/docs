@@ -1,121 +1,94 @@
 ---
-title: "dependency-cruiser alternative: compare with fallow"
-sidebarTitle: "Comparing with dependency-cruiser"
-description: "Compare dependency-cruiser rules with fallow boundaries, cycles, and dependency checks for TypeScript and JavaScript. See which rules map and which have no fallow equivalent."
-keywords: ["dependency-cruiser", "depcruise", "dependency-cruiser alternative", "architecture rules", "boundaries", "circular dependencies", "forbidden dependencies", "compare dependency-cruiser"]
+title: "Migrate from dependency-cruiser"
+sidebarTitle: "From dependency-cruiser"
+description: "Guide: map the dependency-cruiser rules of a project to fallow cycles, boundaries and dependency checks, and write the boundary zones by hand."
+keywords: ["dependency-cruiser", "depcruise", "architecture rules", "boundaries", "circular dependencies", "forbidden dependencies", "migrate from dependency-cruiser"]
 icon: "scale-balanced"
 ---
 
-[dependency-cruiser](https://github.com/sverweij/dependency-cruiser) validates the dependencies of a project against your own rules, and it draws dependency graphs. Fallow checks import cycles, architecture boundaries, and the dependencies in `package.json`. It also reports unused code, duplication, and complexity in the same run. This page maps the dependency-cruiser rules to fallow, and lists what each tool does better.
+Fallow reports import cycles, imports across [architecture](/analysis/architecture) boundaries, and problems in `package.json` dependencies. This guide maps your dependency-cruiser rules to these checks. `fallow migrate` does not read a dependency-cruiser config, so you write the fallow config by hand.
 
-<Note>
-  `fallow migrate` does not read `.dependency-cruiser.js` or other dependency-cruiser configs. A dependency-cruiser rule is a set of regular expressions and conditions. Fallow boundaries use named zones with an allow list. The two models do not convert one to one, so write the fallow zones by hand. See [Boundaries](/analysis/boundaries).
-</Note>
+## Before you start
 
-## Rule mapping
+- A list of the rules in your dependency-cruiser config that you want to keep.
+- A fallow [config file](/configuration/overview), or a plan to create one.
 
-These are the rules that `npx dependency-cruiser --init` writes, and the fallow rule that reports the same kind of problem:
+## What maps to what
 
-| dependency-cruiser rule | Fallow |
-|:------------------------|:-------|
-| `no-circular` | [`circular-dependencies`](/configuration/rules) |
-| `no-orphans` | `unused-files` (fallow reports a file that no entry point reaches, see [Orphans and unused files](#orphans-and-unused-files)) |
-| `not-to-unresolvable` | `unresolved-imports` |
-| `no-non-package-json` | `unlisted-dependencies` |
-| `not-to-dev-dep` | `dev-dependencies-in-production` |
-| `not-to-spec` | -- (no built-in rule. A boundary zone for test files can forbid the imports) |
-| `no-deprecated-core`, `not-to-deprecated` | -- (no check for deprecated Node.js core modules or deprecated npm packages) |
-| `no-duplicate-dep-types` | -- (no equivalent) |
-| `optional-deps-used`, `peer-deps-used` | -- (no equivalent) |
-| Custom `forbidden` rules with `from` and `to` paths | [`boundaries`](/analysis/boundaries#custom-zones-and-rules) zones and `allow` lists, reported as `boundary-violation` |
+| dependency-cruiser rule | fallow issue type |
+|:--|:--|
+| `no-circular` | [`circular-dependency`](/rules/circular-dependency) |
+| `no-orphans` | [`unused-file`](/rules/unused-file). See [What differs](#what-differs). |
+| `not-to-unresolvable` | [`unresolved-import`](/rules/unresolved-import) |
+| `no-non-package-json` | [`unlisted-dependency`](/rules/unlisted-dependency) |
+| `not-to-dev-dep` | [`dev-dependency-in-production`](/rules/dev-dependency-in-production) |
+| A `forbidden` rule with `from` and `to` paths | [`boundary-violation`](/rules/boundary-violation), with zones in the `boundaries` config |
+| `not-to-spec`, `no-deprecated-core`, `not-to-deprecated`, `no-duplicate-dep-types`, `optional-deps-used`, `peer-deps-used` | No built-in issue type. |
 
-Fallow also reports problems that dependency-cruiser does not: unused dependencies, unused exports and types, type-only and test-only production dependencies, and package cycles between workspace packages.
+## Steps
 
-## Write the boundaries
+1. Run the checks that need no config:
 
-A dependency-cruiser `forbidden` rule says which dependencies are not allowed. A fallow boundary rule says which zones a zone can import from. All other imports between zones are violations. For example, this dependency-cruiser rule forbids an import from `src/ui` into `src/db`:
+   ```bash
+   npx fallow architecture --cycles
+   npx fallow dead-code --unresolved-imports --unlisted-deps
+   ```
 
-```json .dependency-cruiser.json
-{
-  "forbidden": [
-    {
-      "name": "ui-not-to-db",
-      "severity": "error",
-      "from": { "path": "^src/ui" },
-      "to": { "path": "^src/db" }
-    }
-  ]
-}
+2. Write a zone for each directory of a `forbidden` rule. A dependency-cruiser `forbidden` rule says which imports are not allowed. A fallow boundary rule says which zones a zone can import from. Each other import between zones is a violation. This dependency-cruiser rule forbids imports from `src/ui` into `src/db`:
+
+   ```json
+   {
+     "forbidden": [
+       { "name": "ui-not-to-db", "severity": "error", "from": { "path": "^src/ui" }, "to": { "path": "^src/db" } }
+     ]
+   }
+   ```
+
+   In fallow, the `ui` zone can import only from the `shared` zone:
+
+   ```jsonc
+   // .fallowrc.json
+   {
+     "boundaries": {
+       "zones": [
+         { "name": "ui", "patterns": ["src/ui/**"] },
+         { "name": "db", "patterns": ["src/db/**"] },
+         { "name": "shared", "patterns": ["src/shared/**"] }
+       ],
+       "rules": [
+         { "from": "ui", "allow": ["shared"] }
+       ]
+     }
+   }
+   ```
+
+3. Run the boundary check:
+
+   ```bash
+   npx fallow architecture --boundaries
+   ```
+
+## Check the result
+
+An import from `src/ui` into `src/db` gives this finding:
+
+```text
+● Boundary violations (1)
+  src/ui/view.ts:1 → src/db/query.ts (ui → db)
 ```
 
-In fallow, give each directory a zone, and list the zones that `ui` can import from:
+## What differs
 
-```jsonc .fallowrc.json
-{
-  "boundaries": {
-    "zones": [
-      { "name": "ui", "patterns": ["src/ui/**"] },
-      { "name": "db", "patterns": ["src/db/**"] },
-      { "name": "shared", "patterns": ["src/shared/**"] }
-    ],
-    "rules": [
-      { "from": "ui", "allow": ["shared"] }
-    ]
-  }
-}
-```
+- Fallow zone patterns are globs, not regular expressions. A file that matches no zone has no restriction. [Boundaries](/configuration/boundaries) shows presets for common layouts and zones for each feature directory.
+- A boundary rule matches on the zone of the importing file and the zone of the imported file. The only condition on the kind of import is `allowTypeOnly`, which allows type-only imports from more zones.
+- dependency-cruiser reports an orphan when a module has no dependencies in either direction. Fallow reports an unused file when no [entry point](/concepts/entry-points) reaches it. So fallow reports a group of files that only import each other, and does not report an entry point that nothing imports.
 
-Fallow patterns are globs, not regular expressions. A file that matches no zone has no restriction. For common layouts, start from a [preset](/analysis/boundaries#presets). To give each feature directory its own zone, like a dependency-cruiser rule with `$1` group matching, see [Auto-discovered feature zones](/analysis/boundaries#auto-discovered-feature-zones).
+## Run both tools for a while
 
-## Orphans and unused files
+Each tool reads its own config, so you can run both in CI. Fallow does not report `.dependency-cruiser.js`, `.cjs`, `.mjs` or `.json` as an unused file when `dependency-cruiser` is a dependency. When the fallow checks cover your rules, remove dependency-cruiser. To start on a project with existing violations, save a [baseline](/guides/baselines).
 
-dependency-cruiser reports an orphan when a module has no incoming dependencies and no outgoing dependencies. Fallow reports an unused file when no entry point reaches it. Fallow finds entry points from `package.json`, from scripts, and from the built-in framework plugins. So the two checks find different files:
+## Related
 
-- A file that nothing imports, but that imports other files, is not an orphan. Fallow reports it when it is not an entry point.
-- A file that nothing imports and that imports nothing is an orphan. Fallow does not report it when it is an entry point.
-- A group of files that only import each other has no orphans. Fallow reports the group when no entry point reaches it.
-
-## What dependency-cruiser does better
-
-- **Rule conditions.** A rule can match on dependency types (for example `npm-dev` or `type-only`), on dynamic imports, on licenses, on reachability, on the number of dependents, and on module stability. Fallow boundaries match on the zone of the source file and the zone of the target file. The one dependency-type condition is `allowTypeOnly`, which allows [type-only imports](/configuration/boundaries#type-only-imports-across-boundaries) from a zone that is not in `allow`.
-- **Regular expressions with group matching.** A rule can capture part of the `from` path and reuse it in the `to` path with `$1`. Fallow has auto-discovered feature zones for the common case, but no general group matching.
-- **Required dependencies.** A `required` rule says that a module must depend on another module. Fallow has no such rule.
-- **Cycle filters.** A `circular` rule can use `via` and `viaOnly` to match only some cycles. Fallow reports every import cycle, and you can ignore lazy imports or suppress one cycle with a comment.
-- **Reporters.** dependency-cruiser writes text, `err`, JSON, CSV, HTML, DOT, and Mermaid. Fallow draws the graph with [`fallow viz`](/cli/viz) as HTML, DOT, or Mermaid, and writes findings as JSON, SARIF, CodeClimate, and other formats. Fallow has no CSV output.
-- **More languages.** dependency-cruiser also reads CoffeeScript and LiveScript.
-
-## What fallow adds
-
-- **No rules to write for the basics.** Fallow reports cycles, unresolved imports, and unlisted dependencies with no config.
-- **Unused code.** Fallow reports unused files, exports, types, dependencies, enum members, and class members, and `fallow fix` can remove some of them. See [Auto-fix](/analysis/auto-fix).
-- **Framework entry points.** Built-in plugins find the entry points of frameworks such as Next.js and Vite, so fallow knows which files are used.
-- **Forbidden calls and rule packs.** Fallow can also forbid calls and imports with [rule packs](/cli/rule-pack).
-- **More analyses in one run.** Fallow also reports duplication and complexity hotspots.
-
-## Move a dependency-cruiser check to fallow
-
-A typical CI step runs dependency-cruiser on the source directory and fails on an `error` rule. To check the same kinds of problems with fallow, run:
-
-```bash
-fallow architecture       # Import cycles and boundary violations
-fallow dead-code          # Unused files, unresolved imports, and dependency findings
-```
-
-To adopt the checks on a codebase that already has findings, save a baseline first. See [Baselines](/cli/baselines). Fallow does not report the dependency-cruiser config file as unused. When `dependency-cruiser` is a dependency, the built-in dependency-cruiser plugin marks `.dependency-cruiser.js`, `.cjs`, `.mjs`, and `.json` as used.
-
-## See also
-
-<CardGroup cols={2}>
-  <Card title="Boundaries" icon="shield-halved" href="/analysis/boundaries">
-    Define architecture zones and the imports between them.
-  </Card>
-  <Card title="fallow architecture" icon="terminal" href="/cli/architecture">
-    Find import cycles and boundary violations.
-  </Card>
-  <Card title="Rules & severity" icon="sliders" href="/configuration/rules">
-    Set the severity of each rule.
-  </Card>
-  <Card title="Comparing with madge" icon="scale-balanced" href="/migration/from-madge">
-    Compare fallow cycles and graphs with madge.
-  </Card>
-</CardGroup>
+- [Architecture](/analysis/architecture): cycles and boundaries.
+- [Boundaries](/configuration/boundaries): zones, rules and presets.
+- [`fallow architecture`](/cli/architecture): each option and the output.

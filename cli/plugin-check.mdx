@@ -1,127 +1,92 @@
 ---
-title: "fallow plugin-check: debug a custom plugin"
-sidebarTitle: "fallow plugin-check"
-description: "See why a custom fallow plugin does not activate or seeds no entries. plugin-check is a read-only dry run that shows the matches of each manifestEntries rule."
-keywords: ["fallow plugin-check", "custom plugins", "external plugins", "manifest entries", "plugin authoring", "CLI", "agent"]
+title: "fallow plugin-check"
+description: "Reference: fallow plugin-check shows if each external plugin is active, and what each manifestEntries rule matched and seeded."
+keywords: ["fallow plugin-check", "external plugin", "manifestEntries", "plugin debugging", "cli reference"]
 icon: "terminal"
 ---
 
-Use `fallow plugin-check` to debug an external plugin while you write it. The command does a dry run of your external plugins and does not run a full analysis. For each plugin, it tells you if the plugin activated, and what each `manifestEntries` rule matched and seeded. The command is read-only, so you can run it again after each change to a `fallow-plugin-*` file.
+Show if each external [plugin](/concepts/plugins) is active, and what each `manifestEntries` rule matched and added as entry points. The command runs no full analysis and writes nothing.
 
-<Info>
-  `plugin-check` is advisory, and never a gate. It always exits 0, and it rejects the output-gating flags (`--ci`, `--fail-on-issues`, `--sarif-file`, `--output-file`) with exit code 2. Use it to debug why a plugin does not activate or seeds nothing. Do not use it to fail CI.
-</Info>
+For how to write a plugin, read [Custom plugins](/guides/custom-plugins).
+
+## Synopsis
+
+{/* generated:start cli-synopsis plugin-check */}
 
 ```bash
-fallow plugin-check
-fallow plugin-check --format json
-fallow plugin-check --format json --root packages/app
+fallow plugin-check [OPTIONS]
 ```
 
-[`fallow list --plugins`](/cli/list) tells you if a plugin is active. For an active plugin, `plugin-check` also shows what each `manifestEntries` rule matched and seeded. For the plugin file format, the field reference, and `manifestEntries` interpolation, see [Custom plugins](/frameworks/custom-plugins).
-
-## What it reports
-
-Fallow finds external plugins in the `plugins` config field, the `.fallow/plugins/` directory, and `fallow-plugin-*` files in the project root. For each of these plugins, it reports:
-
-- `active`. For an inactive plugin, an `activation_requirement` string names the unmet condition. A plugin with a failing `detection` thus shows why it did not activate.
-- For an active plugin with `manifestEntries`, a report for each rule:
-  - the manifests that the glob matched (`manifests_matched`)
-  - the result of the `when` gate for each matched manifest (`when_passed`)
-  - the seeded entries, each a resolved path with a `path_exists` flag
-  - any `warnings`
-
-The output is deterministic and sorted. `--format json` gives the same bytes on each machine, so you can diff it in CI or use it as a test snapshot.
-
-<Note>
-  `path_exists` reports if a file on disk matches the seeded glob. `false` means that the entry is broken for certain. `true` is necessary but not sufficient. It does not prove that the entry became reachable, because file discovery still removes gitignored files and files with the wrong extension.
-</Note>
-
-## Warnings
-
-Each `manifestEntries` rule reports typed `warnings[]`. When a rule seeds nothing, read these warnings first. Agents branch on the kebab-case `kind`. Each warning has only the fields for its kind: `glob`, `field_path`, `manifest`, or `entry`. The two limit warnings also have a `limit` number.
-
-| `kind` | Emitted when |
-|:-------|:-------------|
-| `manifests-matched-none` | The `manifests` glob matched no files. |
-| `when-excluded-all` | The rule's `when` gate excluded every matched manifest. |
-| `field-path-unresolved` | A `${dotted.field}` path did not resolve in any of the gated manifests (probably a typo). |
-| `entries-empty` | The rule's `entries` list is empty, so it seeds nothing. |
-| `manifest-parse-failed` | Fallow could not read or parse a matched manifest (one warning for each failing manifest). |
-| `field-values-limit-exceeded` | A field path in a manifest gave more values than the limit (1,024). Make the manifest array smaller or split the rule. |
-| `entry-expansion-limit-exceeded` | An entry template gave more concrete paths for one manifest than the limit (4,096). Use less interpolation in the template. |
-| `entry-outside-root` | A seeded entry resolved outside the project root, and fallow skipped it. |
-| `seeded-paths-missing` | The rule seeded entries, but none of the seeded paths exist on disk. |
+{/* generated:end */}
 
 ## Options
 
-| Flag | Description |
-|:-----|:------------|
-| `--root <ROOT>` | Project root directory |
-| `--config <CONFIG>` | Path to a config file. The file can declare extra plugin paths in `plugins` |
-| `--format <FORMAT>` | Output format (`human` default, `json` for agents) |
-| `--quiet` | Suppress progress output |
+This command has no options of its own. Fallow reads the plugins of the `plugins` config key, of `.fallow/plugins/`, and the `fallow-plugin-*` files in the project root. The command refuses `--ci`, `--fail-on-issues`, `--sarif-file` and `--output-file`.
 
-Global flags such as `--no-cache` and `--threads` still apply. See [global flags](/cli/global-flags).
+## Output
 
-## JSON output
-
-This example shows both shapes in one run:
-
-- an inactive plugin, with its `activation_requirement`
-- an active plugin with a rule that seeded an entry that does not exist on disk yet (`path_exists: false`). The rule reports a `seeded-paths-missing` warning.
-
-```json
-{
-  "kind": "plugin-check",
-  "schema_version": "1",
-  "note": "path_exists reports whether a file matches the seeded glob on disk. false means the entry is definitely broken; true is necessary but NOT sufficient (it does not prove the entry became reachable, since discovery still filters gitignored and wrong-extension files).",
-  "plugins": [
-    {
-      "name": "acme-framework",
-      "active": false,
-      "activation_requirement": "no enabler present; requires one of these dependencies: @acme/core"
-    },
-    {
-      "name": "internal-manifests",
-      "active": true,
-      "manifest_rules": [
-        {
-          "manifests": "**/service.jsonc",
-          "manifests_matched": ["svc/service.jsonc"],
-          "matched": [
-            {
-              "path": "svc/service.jsonc",
-              "when_passed": true,
-              "seeded": [
-                { "path": "svc/src/main.{ts,tsx}", "path_exists": false }
-              ]
-            }
-          ],
-          "warnings": [
-            { "kind": "seeded-paths-missing", "glob": "**/service.jsonc" }
-          ]
-        }
-      ]
-    }
-  ]
-}
+```bash
+fallow plugin-check
 ```
 
-A healthy active plugin reports `when_passed: true`, `path_exists: true` for each seeded entry, and an empty `warnings` array.
+```text
+plugin 'acme': INACTIVE (no enabler present; requires one of these dependencies: @acme/core)
+plugin 'jobs': rule 'svc/**/service.json' matched 1 manifest(s), seeded 2 entry pattern(s), 0 warning(s)
 
-`plugin-check` is a CLI-only tool for plugin authors. The [MCP server](/integrations/mcp) does not expose it.
+0 warnings.
+```
 
-## See also
+An inactive plugin shows the condition that is not met. An active plugin shows one line for each `manifestEntries` rule: the number of manifests that the rule matched, the number of entry patterns that it added, and the number of warnings.
 
-<CardGroup cols={3}>
-  <Card title="Custom plugins" icon="puzzle-piece" href="/frameworks/custom-plugins">
-    The plugin file format, the `manifestEntries` rule shape, and `${dotted.field}` interpolation.
-  </Card>
-  <Card title="fallow list" icon="list" href="/cli/list">
-    `fallow list --plugins` shows which plugins are active.
-  </Card>
-  <Card title="Schemas" icon="file-code" href="/cli/schema">
-    `fallow plugin-schema` prints the plugin-file schema for IDE autocomplete.
-  </Card>
-</CardGroup>
+With `--format json`, the output has these top-level fields:
+
+| Field | Content |
+|:--|:--|
+| `kind` | `"plugin-check"` |
+| `schema_version` | The version of this output format. |
+| `note` | How to read `path_exists`. |
+| `plugins` | One object for each plugin: `name`, `active`, and `activation_requirement` for an inactive plugin, or `manifest_rules` for an active plugin. |
+
+Each item of `manifest_rules` has `manifests` (the glob), `manifests_matched`, `matched` and `warnings`. Each item of `matched` has the manifest `path`, `when_passed`, and `seeded` with a `path` and `path_exists` for each entry. `path_exists: false` means that the entry is broken. `path_exists: true` does not prove that fallow reaches the entry, because discovery still skips gitignored files. The output is sorted, so the same project gives the same bytes. The [JSON output reference](/reference/json-output) has each field.
+
+Each warning has a `kind`:
+
+| `kind` | Cause |
+|:--|:--|
+| `manifests-matched-none` | The `manifests` glob matched no file. |
+| `when-excluded-all` | The `when` condition excluded each matched manifest. |
+| `field-path-unresolved` | A `${field}` path resolved in no manifest. |
+| `entries-empty` | The rule has no `entries`. |
+| `manifest-parse-failed` | Fallow cannot read or parse a matched manifest. |
+| `field-values-limit-exceeded` | A field path gave more than 1,024 values in one manifest. |
+| `entry-expansion-limit-exceeded` | An entry gave more than 4,096 paths for one manifest. |
+| `entry-outside-root` | An entry resolved outside the project root. Fallow skipped it. |
+| `seeded-paths-missing` | No added entry exists on disk. |
+
+## Exit codes
+
+| Code | Meaning |
+|:--|:--|
+| `0` | The check completed, also with warnings or inactive plugins. |
+| `2` | Invalid input, for example `--fail-on-issues`. |
+
+See [Exit codes](/reference/exit-codes).
+
+## Examples
+
+```bash
+# Check the plugins of the project
+fallow plugin-check
+
+# Save the result as a snapshot to compare in CI
+fallow plugin-check --format json --quiet > plugin-check.json
+
+# Check the plugins of one workspace package
+fallow plugin-check --root packages/app
+```
+
+## Related
+
+- [Custom plugins](/guides/custom-plugins): the plugin file format and `manifestEntries`.
+- [`fallow plugin-schema`](/cli/plugin-schema): the JSON Schema of a plugin file.
+- [`fallow list`](/cli/list): the active plugins with `--plugins`.

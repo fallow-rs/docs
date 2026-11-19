@@ -1,0 +1,145 @@
+---
+title: "Mutation testing"
+description: "Analysis: find the changes to your code that no test detects with fallow mutation, and decide which test to add."
+keywords: ["fallow mutation", "mutation testing", "mutation score", "surviving mutants", "test quality", "Vitest", "node:test", "bun test"]
+icon: "flask"
+---
+
+Line coverage tells you which code your tests run. It does not tell you if a test fails when that code is wrong. `fallow mutation` makes small changes to your code, runs your tests against each change, and reports the changes that no test detects.
+
+```bash
+npx fallow mutation
+```
+
+Mutation testing is opt-in. It runs your tests, so it is slower than the other analyses. Bare `fallow`, `fallow audit` and `fallow health` never run it.
+
+## What fallow finds
+
+A small project has two pricing functions and a `node:test` file with two tests:
+
+```bash
+npx fallow mutation --all
+```
+
+```text
+Mutation testing (ran the project tests)
+Scope: all source files
+Score 85.7%  killed 12  survived 2  timeout 0  complete
+Coverage 100.0%  no coverage 0
+
+● Survived (2)
+  src/pricing.js
+    #3 2:15  applyDiscount  relational-operator  if (percent <= 0) return total; -> if (percent < 0) return total;
+      id a9de53766d655afd
+      covered by 1 test: src/pricing.test.js::discount
+    #14 6:47  shippingCost  relational-operator  ...t shippingCost = (total) => (total >= 5000 ? 0 : 495); -> ...t shippingCost = (total) => (total > 5000 ? 0 : 495);
+      id 502f8dc444e3ebcf
+      covered by 1 test: src/pricing.test.js::shipping
+
+Next
+  Inspect a survivor (runs no code): fallow mutation inspect a9de53766d655afd
+```
+
+A **mutant** is one small change to the code, for example `<=` to `<`. When a test fails, the test detected the change, and the mutant is killed. When each test passes, the mutant survived.
+
+| Part | Meaning |
+|:--|:--|
+| `Score 85.7%` | The **mutation score**: the share of the tested mutants that a test detects. |
+| `killed 12  survived 2` | The status counts. A timeout also counts as detected. |
+| `complete` | All planned mutants ran. A `partial` run lists its reason, for example a time budget. |
+| `Coverage 100.0%` | The share of the mutants that a test reaches. |
+| `#3 2:15 applyDiscount relational-operator` | One survivor: its rank, line and column, function, and kind of change. |
+| `->` | The original line and the changed line. |
+| `covered by 1 test` | The tests that ran the changed code and still passed. |
+
+Both survivors show a boundary that no test checks. No test calls `applyDiscount` with `0` percent, and no test calls `shippingCost` with exactly `5000`.
+
+## How fallow decides
+
+By default, fallow mutates only the code that your branch changes against the base branch, as [`fallow audit`](/analysis/changed-code) does. Add `--all` for each source file, or pass paths.
+
+Fallow then runs these steps:
+
+1. It selects the mutants and ranks them. `fallow mutation --plan` shows this list and runs no code.
+2. It runs your tests once without a mutant. This run finds the tests that reach each mutant.
+3. For each mutant, it runs only the tests that reach it. A survivor and a timeout run a second time, so that a slow host does not decide the result.
+
+Fallow detects the test runner of your project: Vitest, `node:test` or `bun test`. Each runner has a supported version range. `fallow mutation --plan` and [`fallow doctor`](/cli/doctor) report a version outside it.
+
+The score counts only the mutants that ran: killed and timeout, divided by killed, timeout and survived. A mutant that no test reaches gets the status `no_coverage`. It does not lower the score. The coverage value reports it.
+
+### Safety
+
+A run executes your project tests, so fallow applies these rules:
+
+- Fallow does not write to your project files. The changed copies of your files are in a run directory in the fallow cache.
+- A run refuses a git worktree with uncommitted changes, unless you pass `--allow-dirty`. After the run, fallow reports each file that your tests changed.
+- Fallow skips the mutants in a function that writes to files, starts a process, or writes to a network or a database. Such a mutant can remove a guard of a real side effect. `--allow-side-effects` keeps them. No config key can do this.
+- Fallow stops each test process when the run ends, also on Ctrl+C.
+
+Do not write the report with `> report.json`. The shell creates the file first, and the worktree check then refuses the run. Use `-o .fallow/mutation.json`.
+
+## Act on a finding
+
+Look at one survivor. This command runs no code:
+
+```bash
+npx fallow mutation inspect a9de53766d655afd
+```
+
+```text
+Mutant a9de53766d655afd  fresh
+src/pricing.js:2:15  applyDiscount  relational-operator  (report: survived)
+-    2 |   if (percent <= 0) return total;
++    2 |   if (percent < 0) return total;
+
+● Covering tests (1)
+  src/pricing.test.js::discount
+```
+
+Then decide:
+
+| Situation | Action |
+|:--|:--|
+| The changed code gives a wrong result, and no test checks it. | Add an assertion for the input that tells the two versions apart. Here: `applyDiscount(1000, 0)`. |
+| The changed code gives the same result for each input. | The mutant is **equivalent**. Record it in a verdict file, and pass the file with `--verdicts`. |
+| No test reaches the code (`no_coverage`). | Write a first test for the function. |
+
+After you add tests, run `fallow mutation --recheck`. It runs only the open survivors of the last report against your new tests. The [`fallow-mutation` agent skill](/integrations/agent-skills) lets a coding agent do these steps.
+
+## Set a limit
+
+By default, survivors do not fail a run: it exits with code 0. Set a minimum score to fail it:
+
+```bash
+npx fallow mutation --min-score 80
+```
+
+The run exits with code 1 when the score is lower than 80 percent. Set the same value as `mutation.minScore` in your config file. A run with no tested mutant has no score and exits with code 0.
+
+## Cost and scope
+
+A run executes your tests many times. These options keep a run short:
+
+- The default scope is the changed code. Run `fallow mutation --plan` to see the number of mutants before a run.
+- `--max-mutants <N>` runs at most N mutants, in rank order. `--time-budget 10m` stops new mutants after 10 minutes.
+- `--concurrency <N>` sets the number of test processes. The default is half of the logical cores.
+- A result cache keeps the result of each mutant. A second run on the same code and tests reuses it.
+
+The GitHub Action and the GitLab template run mutation testing only when you turn it on. See [CI integrations](/integrations/ci).
+
+To show the mutation score next to the CRAP score of each complex function, pass a saved report to [`fallow health --mutation-report`](/analysis/health).
+
+## Limits
+
+- The score describes only the mutants that ran. A score of 100 percent on 20 mutants says nothing about the rest of the code.
+- A survivor is not always a missing test. Some mutants are equivalent: no input tells them apart from the original code.
+- By default, fallow does not type-check a mutant. A mutant that adds a type error can survive. Add `--typecheck` with the [type-aware analysis](/analysis/type-aware) to remove these mutants from the score.
+- Shared state between test processes, such as one database, can give wrong results. Run with `--concurrency 1` to check.
+- `--workspace` is not supported. Pass the directory of the package as a path.
+
+## Reference
+
+- [`fallow mutation`](/cli/mutation): each option, the statuses, the JSON output and the exit codes.
+- [`mutation` config](/reference/config-health#mutation): each key and its default.
+- [CRAP scores with Vitest](/guides/crap-with-vitest): measured coverage for the health report.

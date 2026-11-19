@@ -1,0 +1,189 @@
+---
+title: "Adopt fallow in an existing repository"
+sidebarTitle: "Adopt in an existing repo"
+description: "Guide: adopt fallow in a repository with many findings. Set a policy, fix the entry points, clean the backlog in order, and stop new findings."
+keywords: ["adoption", "existing codebase", "brownfield", "backlog", "policy", "cleanup", "rollout", "fallow audit"]
+icon: "rocket"
+---
+
+At the end of this guide, your repository has a fallow policy in its config file, a clean or modeled backlog, and a check that stops new findings on each pull request.
+
+A repository with a backlog needs two things in this order. First you clean the whole repository once. Then a [changed-code check](/concepts/changed-code) keeps each change clean. You can turn on the check before the backlog is gone.
+
+## Before you start
+
+- Read [Entry points and reachability](/concepts/entry-points) and [Findings](/concepts/findings).
+- Install the dependencies of the project.
+- Coming from knip? Run `fallow migrate` first. See [Migrate from knip](/migration/from-knip).
+- In a monorepo, do the steps for one package at a time. See [Set up a monorepo](/guides/monorepo).
+
+## Steps
+
+### 1. Run fallow once
+
+```bash
+npx fallow
+```
+
+Read the last line. It names each analysis with findings and the file to start with:
+
+```text
+Failed: dead-code (6 issues), dupes (1 clone group), health (1 above threshold): start with src/services/customers.ts
+```
+
+Do not fix findings yet. A finding that you fix before step 3 can be a false positive.
+
+### 2. Decide the policy
+
+Do not start to suppress findings one by one. That gives a list of exceptions that only grows, and no policy. Decide as a team first:
+
+- which issue types fail CI (`error`) and which only report (`warn`),
+- which files are generated or out of scope,
+- which packages ship an API to users outside the repository,
+- which complexity limits you enforce.
+
+Write the answers in the config file:
+
+```jsonc
+// .fallowrc.jsonc
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "ignorePatterns": ["src/generated/**"],
+  "rules": {
+    "unresolved-imports": "error",
+    "unlisted-dependencies": "error",
+    "unused-files": "error",
+    "unused-dependencies": "error",
+    "unused-exports": "warn"
+  }
+}
+```
+
+A [rule](/concepts/findings) with `warn` reports its findings, and they do not fail the run:
+
+```text
+⚠ 3 exports (0.13s)
+```
+
+Use `warn` for the large categories while you clean them, and change them to `error` when they are clean. A rule that you do not list keeps its default. The complexity limits keep theirs too: a [cyclomatic complexity](/analysis/health) of 20 and a cognitive complexity of 15. Change a limit only when the team agrees on a new standard. [Rules](/configuration/rules) lists each issue type and its default.
+
+If you do not own the policy, do steps 1 and 3 on a branch, and bring the findings to the discussion.
+
+### 3. Get the entry points right
+
+Each dead code finding depends on the [entry points](/concepts/entry-points). Check them before you read the findings:
+
+```bash
+npx fallow list --entry-points
+npx fallow list --plugins
+```
+
+```text
+Found 3 entry points
+scripts/seed.js (package.json script `seed`)
+src/index.ts (package.json main)
+src/math.test.ts (vitest)
+```
+
+Compare the list with the way your project starts: the app, the scripts, the workers, the tests. For each missing entry point, follow [Fix a false positive](/guides/false-positives). Run step 1 again. The number of findings often drops a lot.
+
+### 4. Clean the backlog in a fixed order
+
+Each step removes findings that the next step would show. Commit after each step.
+
+1. **Unused files.** Delete them. A file that no entry point reaches cannot run. When you are not sure, [trace the file](/guides/trace-a-finding).
+
+   ```bash
+   npx fallow dead-code --unused-files
+   ```
+
+2. **Dependencies.** Fix the unlisted dependencies and the unresolved imports first: they are bugs that have not failed yet. Then remove the unused dependencies.
+
+   ```bash
+   npx fallow dead-code --unlisted-deps --unresolved-imports
+   npx fallow dead-code --unused-deps
+   ```
+
+3. **Unused exports.** This category is usually the largest. [Auto-fix](/guides/auto-fix) removes the `export` keyword for you. For an export that users of a package need, use step 5.
+
+   ```bash
+   npx fallow dead-code --unused-exports --unused-types
+   ```
+
+4. **Duplication.** Merge the copies that must change together. See [Duplication](/analysis/duplication).
+
+   ```bash
+   npx fallow dupes
+   ```
+
+5. **Complexity.** Start with the refactoring targets of the report, not with each file above the average. See [Health](/analysis/health).
+
+   ```bash
+   npx fallow health
+   ```
+
+### 5. Match each kept finding to the right mechanism
+
+For each finding that you keep, find the reason, and use the mechanism for that reason. When you cannot give the reason in one sentence, you probably use the wrong mechanism.
+
+| Reason | Mechanism | Good example | Bad example |
+|:--|:--|:--|:--|
+| A framework or tool runs the file. | A [plugin](/guides/custom-plugins), [`entry`](/reference/config-files#entry) or [`dynamicallyLoaded`](/reference/config-files#dynamicallyloaded) | One `entry` pattern for the worker scripts | A suppression comment in each worker file |
+| Users outside the repository import the export. | The entry points of the package, [`publicPackages`](/reference/config-files#publicpackages), or a `/** @public */` tag | `publicPackages` for the one package that you publish | `ignoreExports` with `"*"` on each file of the package |
+| A tool generates the file. | [`ignorePatterns`](/reference/config-files#ignorepatterns) | `src/generated/**` | An `ignorePatterns` entry that excludes half of `src/` |
+| The runtime supplies the package. | [`ignoreDependencies`](/reference/config-dead-code#ignoredependencies) | One package name | A glob that matches each package of a scope |
+| You keep an export for a consumer that does not exist yet. | `/** @expected-unused */` | One shim export | The same tag on each unused export |
+| One place is correct, and no config fits. | A [suppression comment](/guides/suppress) with a reason | One `fallow-ignore-next-line` with ` -- reason` | The same comment in twenty files: that is a config fact |
+| The team has another standard for a whole category. | [`rules`](/configuration/rules), [`overrides`](/reference/config-rules#overrides), health limits | `unused-exports: warn` for a legacy directory | A higher complexity limit to hide three functions |
+
+Fallow reports a suppression comment and an `@expected-unused` tag that no longer match a finding as [stale](/rules/stale-suppression). Remove them when fallow reports them. [Suppression](/configuration/suppression) has the syntax of each comment.
+
+### 6. Stop new findings while the backlog remains
+
+Turn on the changed-code check in CI. It analyzes the files that a pull request changes, and only the findings that the change adds fail it:
+
+```bash
+npx fallow audit
+```
+
+[Set up CI](/start/first-ci) shows the job. To check the whole project on each run, and not only the changed files, save a [baseline](/guides/baselines) and compare with it.
+
+### 7. Define done
+
+Work in two stages. Most teams turn on step 6 at the end of stage 1.
+
+**Stage 1: the check can run.**
+
+- The config file holds the policy. Suppression comments are few, and each one has a reason.
+- No unresolved imports and no unlisted dependencies are left.
+- The unused files and the unused dependencies are gone.
+- `fallow audit` runs in CI, and it passes for new changes.
+
+**Stage 2: the backlog is gone.**
+
+- No function is above the complexity limits, or the team changed a limit on purpose and wrote down why.
+- The duplication is below your limit.
+- No stale suppression is left, and each rule is `error`.
+
+## Check the result
+
+```bash
+npx fallow
+```
+
+The run exits with code 0, or it fails only on the findings that stage 2 still lists.
+
+## If it fails
+
+| Problem | Cause | Fix |
+|:--|:--|:--|
+| Hundreds of unused files. | Fallow found the wrong entry points. | Go back to step 3. |
+| The same exception appears in many files. | The reason is a fact about the project. | Move it to the config file. |
+| The warnings never become errors. | Nobody owns the change. | Set a date for the change from `warn` to `error`. |
+| The baseline only grows. | CI saves a new baseline after each merge. | Save it on a schedule, and review the diff. See [Baselines](/guides/baselines). |
+
+## Related
+
+- [Set up CI](/start/first-ci): run the changed-code check on each pull request.
+- [Baselines](/guides/baselines): check the whole project without the old findings.
+- [Fix a false positive](/guides/false-positives): the fix for each cause.

@@ -1,0 +1,190 @@
+---
+title: "Architecture"
+description: "Analysis: find import cycles and imports that break your layer rules with fallow architecture, and break or accept each one."
+keywords: ["architecture boundaries", "circular dependencies", "import cycles", "re-export cycles", "package cycles", "layered architecture", "zones", "fallow architecture"]
+icon: "layer-group"
+---
+
+Two problems make a codebase hard to change as it grows. Modules import each other in a loop, so no module can change alone. Code in one layer imports code that it must not use, for example a utility that imports a service. `fallow architecture` finds both.
+
+```bash
+npx fallow architecture
+```
+
+Cycles, boundary violations and policy violations are architecture findings. `fallow architecture` reports them. `fallow dead-code` also reports them in its `Structure` section, and its options `--circular-deps`, `--re-export-cycles`, `--package-cycles`, `--boundary-violations` and `--policy-violations` are deprecated aliases of `fallow architecture --cycles`, `--boundaries` and `--policy`.
+
+## What fallow finds
+
+This project has one cycle and one boundary rule that an import breaks:
+
+```text
+── Architecture ─────────────────────────────────────
+
+● Circular dependencies (1)
+  src/services/catalog.ts
+    → orders.ts → catalog.ts
+
+  Import cycles that can cause initialization failures and prevent tree-shaking
+  https://fallow.tools/docs/explanations/dead-code/#circular-dependencies
+
+● Boundary violations (1)
+  src/lib/format.ts:1 → src/services/catalog.ts (lib → services)
+  Imports that cross defined architecture zone boundaries
+  https://fallow.tools/docs/explanations/dead-code/#boundary-violations
+
+✗ 1 circular dependency · 1 boundary violation (0.07s)
+```
+
+| Part | Meaning |
+|:--|:--|
+| `src/services/catalog.ts` and `→ orders.ts → catalog.ts` | The files of the cycle, in import order. The last file imports the first file again. |
+| `src/lib/format.ts:1` | The file and the line of the import that breaks a rule. |
+| `→ src/services/catalog.ts` | The file that the import loads. |
+| `(lib → services)` | The zone of the importing file and the zone of the target. A zone is a group of files that your config names. No rule lets `lib` import `services`. |
+
+Fallow reports four kinds of architecture findings:
+
+| Finding | What it is | Rule |
+|:--|:--|:--|
+| Circular dependency | Files that import each other in a loop, directly or through other files. | [`circular-dependency`](/rules/circular-dependency) |
+| Re-export cycle | [Barrel files](/concepts/entry-points) that export from each other in a loop. No file in the loop declares the names. | [`re-export-cycle`](/rules/re-export-cycle) |
+| Package cycle | [Workspace](/concepts/workspaces) packages that import each other in a loop. | [`package-cycle`](/rules/package-cycle) |
+| Boundary violation | An import from one zone to a zone that your rules do not allow. | [`boundary-violation`](/rules/boundary-violation) |
+
+A re-export cycle and a package cycle look like this:
+
+```text
+● Re-Export Cycles (1)
+  src/api/index.ts
+    Cycle (2 files):
+      - src/api/index.ts
+      - src/api/internal/index.ts
+    To fix: remove one `export * from` statement on any member file.
+
+● Package cycles (1)
+  @shop/core → @shop/utils → @shop/core
+    packages/core/src/index.ts:1 → packages/utils/src/index.ts
+    packages/utils/src/index.ts:1 → packages/core/src/index.ts
+```
+
+## How fallow decides
+
+Fallow uses the same graph of imports as for [dead code](/analysis/dead-code). It does not build a second graph.
+
+### Cycles
+
+A cycle is a path of imports that returns to its start file. Fallow reports cycles of any length.
+
+- An `import type` loads no code when the program runs. A cycle in which each import is type-only is not a finding.
+- A dynamic `import()` counts as an edge. To skip the imports that load later, set [`circularDependencies.ignoreLazyImports`](/reference/config-architecture#circulardependencies-ignorelazyimports).
+- A package cycle uses the imports in the code, not the dependencies in `package.json`. Imports from test files and config files do not count. A type-only import counts, because a declaration build can still need the other package first.
+
+A cycle is a risk, because JavaScript runs the modules of a cycle in an order that depends on the first import. A module can then read an export of another module before that module has set it, and get `undefined`. A re-export cycle is almost always a mistake: an import through the loop finds no declaration.
+
+### Boundaries
+
+A boundary rule needs a config. A **zone** is a named group of files, set by glob patterns. A rule lists the zones that one zone may import:
+
+```jsonc
+// .fallowrc.json
+{
+  "boundaries": {
+    "zones": [
+      { "name": "reports", "patterns": ["src/reports/**"] },
+      { "name": "services", "patterns": ["src/services/**"] },
+      { "name": "lib", "patterns": ["src/lib/**", "src/utils/**"] }
+    ],
+    "rules": [
+      { "from": "reports", "allow": ["services", "lib"] },
+      { "from": "services", "allow": ["lib"] },
+      { "from": "lib", "allow": [] }
+    ]
+  }
+}
+```
+
+A file belongs to the first zone that matches it. Files in one zone can always import each other. An empty `allow` list means that the zone may import no other zone. Fallow checks each file that it analyzes, also an unused file. [Boundaries](/configuration/boundaries) explains the presets, the zones that fallow finds by itself, and each other option.
+
+To see the zones and the rules that fallow uses, run:
+
+```bash
+npx fallow list --boundaries
+```
+
+```text
+Boundaries: 3 zones, 3 rules
+
+Zones:
+  reports              3 files  src/reports/**
+  services             3 files  src/services/**
+  lib                  6 files  src/lib/**, src/utils/**
+
+Rules:
+  reports              → services, lib
+  services             → lib
+  lib                  (isolated, no imports allowed)
+```
+
+Before you change a file, `fallow guard <file>` shows the zones that the file may import.
+
+### Policy rules
+
+A rule pack is a JSON file of project rules, for example "do not call `Date` in the domain code" or "do not import `moment`". Fallow reports each call or import that breaks a rule as a [policy violation](/rules/policy-violation). Load a pack with the [`rulePacks`](/reference/config-plugins#rulepacks) key, and run `fallow architecture --policy` to see only these findings. [`fallow rule-pack`](/cli/rule-pack) creates and checks packs.
+
+## Act on a finding
+
+### Break a cycle
+
+Look at the files of the cycle and find the import that you can remove most easily. Then use one of these fixes:
+
+| Situation | Fix |
+|:--|:--|
+| Two files share a function or a constant. | Move it to a third file that both files import. |
+| A low-level file calls back into a high-level file. | Pass the function as a parameter, so that the low-level file does not import it. |
+| One side needs only a type. | Change the import to `import type`. |
+| A re-export cycle. | Remove one `export * from` line in one file of the loop. |
+| A package cycle. | Move the shared code to a package that both packages can import. |
+
+One removed import breaks the cycle. Run `fallow architecture --cycles` again: a large group of files can hold more cycles than the report lists.
+
+To accept one cycle, list its files in [`circularDependencies.allow`](/reference/config-architecture#circulardependencies-allow). Fallow then reports a new cycle through the same files again.
+
+### Fix or accept a boundary violation
+
+Change the import, so that it follows the rules. In the example, `formatSku` in `src/lib/format.ts` needs a price from `services`. Move `formatSku` to `services`, or pass the price as a parameter.
+
+When the import is correct and the rule is too strict, add the zone to the `allow` list of the rule. To accept one import, add a comment on the line above it:
+
+```ts
+// fallow-ignore-next-line boundary-violation
+import { lookupPrice } from "../services/catalog";
+```
+
+## Set a limit
+
+Circular dependencies and boundary violations have the severity `error` by default, so `fallow architecture` exits with code 1. Re-export cycles, package cycles and policy violations have the severity `warn`. Add `--fail-on-issues` to fail on them too.
+
+When you add boundaries to an existing codebase, start with the rule at `warn`, and set it to `error` when no violation is left:
+
+```jsonc
+// .fallowrc.json
+{
+  "rules": {
+    "boundary-violation": "warn"
+  }
+}
+```
+
+On a pull request, use [`fallow audit`](/analysis/changed-code). It judges only the findings that the change introduces.
+
+## Limits
+
+- Fallow follows the imports in the source text. An import that the code builds when it runs is not part of the graph.
+- A boundary rule checks imports. It does not check a call through a value that another zone passes in.
+- A cycle with many files can hold many paths. Fallow lists a limited number of cycles for each group of files that import each other.
+
+## Reference
+
+- [`fallow architecture`](/cli/architecture): each option, the JSON output and the exit codes.
+- [Boundaries](/configuration/boundaries): presets, zones and rules.
+- [Architecture config](/reference/config-architecture): each key and its default.

@@ -1,156 +1,177 @@
 ---
-title: "fallow agent: set up Claude Code, Codex and Cursor"
-sidebarTitle: "fallow agent"
-description: "Set up fallow for Claude Code, Codex, and Cursor with one command. It installs AGENTS.md, the skill, the MCP server, and a commit and push gate."
-keywords: ["fallow agent", "agent install", "Claude Code", "Codex", "Cursor", "MCP", "AGENTS.md", "skill", "onboarding", "CLI", "AI coding agent setup"]
+title: "fallow agent"
+description: "Reference: fallow agent installs, shows and removes the fallow setup for Claude Code, Codex and Cursor."
+keywords: ["fallow agent", "agent install", "AGENTS.md", "skills", "MCP", "commit gate", "cli reference"]
 icon: "terminal"
 ---
 
-Set up fallow for each coding-agent harness in a project with one command. `fallow agent install` detects Claude Code, Codex, and Cursor. Then it writes the files that each harness reads:
+Install the fallow setup for each coding agent in the project in one step: the `AGENTS.md` task map, the skills, the MCP server entry and the commit gate.
 
-- an `AGENTS.md` task map
-- the `fallow` and `fallow-setup` skills
-- the MCP server registration
-- the commit and push gate
+For the setup of an agent, read [Coding agents](/integrations/agents).
 
-`fallow agent status` shows what is installed. `fallow agent uninstall` removes exactly what fallow wrote.
+## Synopsis
+
+{/* generated:start cli-synopsis agent */}
 
 ```bash
-fallow agent install --dry-run   # show the plan first
-fallow agent install             # wire every detected harness
-fallow agent status --format json
+fallow agent [OPTIONS] <COMMAND>
 ```
 
-Review `next_actions` after installation. Approve the project and its hooks in your harness when prompted.
+{/* generated:end */}
 
-<Info>
-  `fallow init --agents`, `fallow hooks install --target agent`, and the hand-written MCP snippet still work. `agent install` combines them. It does not replace them.
-</Info>
+## Subcommands
 
-## Detection
+{/* generated:start cli-subcommands agent */}
 
-Without `--harness`, fallow selects a harness when one or more of its signals is present. When no signal exists, fallow writes nothing for that harness. For example, a Cursor-only repository never gets a `.claude/` directory.
+| Subcommand | Description |
+|:--|:--|
+| [`install`](#install) | Wire fallow into the coding-agent harnesses used by this project in one pass: the `AGENTS.md` task map (plus a `CLAUDE.md` import for Claude Code), the fallow skills, the MCP server registration, and the commit/push gate. |
+| [`status`](#status) | Show which agent surfaces are installed, stale, absent, or foreign |
+| [`uninstall`](#uninstall) | Remove every fallow-managed agent surface. |
 
-| Harness | Project | Home | Session |
-|:--------|:--------|:-----|:--------|
+{/* generated:end */}
+
+### install {#install}
+
+Write the files that each detected agent reads.
+
+{/* generated:start cli-options agent install */}
+
+| Option | Description |
+|:--|:--|
+| `--harness <HARNESS>` | Harness to wire; repeatable. Defaults to `auto`. Values: `auto`, `claude`, `codex`, `cursor`. |
+| `--user` | Write user-scoped files (skill and MCP config under $HOME) instead of project files. The `AGENTS.md` guide is project-only and is skipped under this flag |
+| `--without <WITHOUT>` | Skip a step; repeatable. Values: `guide`, `skill`, `mcp`, `hooks`. |
+| `--dry-run` | Print the plan without touching the filesystem |
+| `--force` | Replace skills, hook scripts, or config files fallow did not write |
+| `--approve` | Pre-approve the project-scoped MCP server for yourself by listing it in `.claude/settings.local.json` (Claude Code asks otherwise) |
+| `--gitignore-claude` | Append `.claude/` to the project's `.gitignore` |
+
+{/* generated:end */}
+
+`--harness` takes `auto`, `claude`, `codex` or `cursor`. `--without` takes `guide`, `skill`, `mcp` or `hooks`. With `auto`, fallow selects each agent that has a signal:
+
+| Agent | Project signal | Home signal | Session variable |
+|:--|:--|:--|:--|
 | Claude Code | `.claude/`, `CLAUDE.md`, `.mcp.json` | `~/.claude/` | `CLAUDECODE` |
 | Codex | `.codex/` | `~/.codex/` | `CODEX_THREAD_ID` |
 | Cursor | `.cursor/` | `~/.cursor/` | `CURSOR_AGENT` |
 
-When fallow detects no harness, it writes only the harness-neutral files (`AGENTS.md` and `.agents/skills/fallow`). The output then names the `--harness` values that you can pass. `AGENTS.md` is not a detection signal, because every harness and fallow write it.
-
-## What each step writes
+Without a signal, fallow writes only `AGENTS.md` and `.agents/skills/`. Each step writes these files:
 
 | Step | Claude Code | Codex | Cursor |
-|:-----|:------------|:------|:-------|
-| `guide` | `AGENTS.md` task map. `CLAUDE.md` gets an `@AGENTS.md` import (fallow creates the file when it is absent, and otherwise appends a marked block) | `AGENTS.md` task map | `AGENTS.md` task map (Cursor reads it) |
-| `skill` | `.claude/skills/fallow/` and `.claude/skills/fallow-setup/` | `.agents/skills/fallow/` and `.agents/skills/fallow-setup/` | `.agents/skills/fallow/` and `.agents/skills/fallow-setup/` |
+|:--|:--|:--|:--|
+| `guide` | `AGENTS.md`, and an `@AGENTS.md` import in `CLAUDE.md` | `AGENTS.md` | `AGENTS.md` |
+| `skill` | `.claude/skills/fallow/`, `.claude/skills/fallow-setup/` | `.agents/skills/fallow/`, `.agents/skills/fallow-setup/` | `.agents/skills/fallow/`, `.agents/skills/fallow-setup/` |
 | `mcp` | `mcpServers.fallow` in `.mcp.json` | `[mcp_servers.fallow]` in `.codex/config.toml` | `mcpServers.fallow` in `.cursor/mcp.json` |
-| `hooks` | PreToolUse gate in `.claude/settings.json` plus `.claude/hooks/fallow-gate.sh` | PreToolUse gate in `.codex/hooks.json` plus `.codex/hooks/fallow-gate.sh`, and a marked routing block in `AGENTS.md` | skipped (`unsupported_harness`) |
+| `hooks` | `.claude/settings.json` and `.claude/hooks/fallow-gate.sh` | `.codex/hooks.json`, `.codex/hooks/fallow-gate.sh`, and a block in `AGENTS.md` | none |
 
-**Skills.** The step writes two skills: `fallow` for analysis, and `fallow-setup` to set up code-quality tooling in a project. It reports one `skill` row for each skill in each skill directory. When the project has `node_modules/fallow/skills/<name>`, the installed skill is a small pointer to that copy. The skill thus always matches the fallow version that the project pins. Without that directory, fallow writes the skill from the binary, which matches the binary version. Fallow selects the source of each skill separately. An older npm package without `fallow-setup` thus gets the copy from the binary for that skill. If a skill named `fallow` or `fallow-setup` exists and fallow did not write it, that step is refused (`skill_name_taken`), unless you pass `--force`. Fallow still writes the other skill.
+Fallow marks each file and block that it writes. A second run writes the same bytes. Fallow does not change a file that it did not write, except with `--force`. The `mcp` step writes an entry only when the server command can start. The root is the Git root of the current directory, except with `--root`.
 
-**MCP.** Before it writes anything, fallow checks that the server command can start. It tries these commands:
+### status {#status}
 
-- `npx --no fallow-mcp` for an npm-installed project
-- `fallow-mcp` from `PATH`
-- the running binary, when it is the npm multicall build
+Show the state of each agent file: `installed`, `absent`, `stale` (needs a refresh) or `foreign` (fallow did not write it).
 
-When none of them exists, fallow skips the step with `mcp_entry_unavailable`. It does not write a registration that cannot start. A project-level `.codex/config.toml` applies only after Codex trusts the project. The output thus starts with the `codex mcp add fallow -- ...` command, which works immediately.
+{/* generated:start cli-options agent status */}
 
-**Gate.** For Claude Code and Codex, the step installs a PreToolUse hook that runs `fallow audit` before `git commit` and `git push`, and blocks the command on a `fail` verdict. Both harnesses run the same gate script. The Codex handler in `.codex/hooks.json` uses the matcher `^Bash$`. Codex runs a project hook only after you trust it in `/hooks`. The `AGENTS.md` block tells agents to use fallow and names the hook as the enforcement layer. [Claude Code hooks](/integrations/claude-hooks) has the details.
+This command has no options of its own.
 
-**Approval.** Claude Code asks before it starts a project-scoped MCP server. `--approve` records that approval for you: it lists `fallow` in `.claude/settings.local.json`. The flag is opt-in. Fallow refuses it when git tracks that file.
+{/* generated:end */}
 
-## Markers, idempotency, and uninstall
+### uninstall {#uninstall}
 
-Each file or block that fallow writes has a `<!-- fallow:agent-install v1 ... -->` marker. A second run gives the same bytes and reports every step as `unchanged`.
+Remove each file and block that fallow wrote. Fallow deletes a whole file only while it matches what fallow wrote.
 
-- Fallow never overwrites a file that it did not write, unless you pass `--force`.
-- A `fallow` MCP entry belongs to fallow only when its command is one that fallow writes. Fallow refuses a hand-written entry (`mcp_entry_foreign`) and keeps it.
-- `--force` on a config file that fallow cannot parse first saves the old bytes as `<file>.fallow-bak`.
-- `uninstall` removes managed blocks and entries, and deletes a config file that it emptied. It deletes `AGENTS.md` or `CLAUDE.md` only while the file still matches what fallow wrote.
+{/* generated:start cli-options agent uninstall */}
 
-## Options
+| Option | Description |
+|:--|:--|
+| `--harness <HARNESS>` | Harness to unwire; repeatable. Defaults to `auto`. Values: `auto`, `claude`, `codex`, `cursor`. |
+| `--user` | Remove user-scoped files under $HOME instead of project files |
+| `--dry-run` | Print what would be removed without touching the filesystem |
+| `--force` | Also remove skills and hook scripts fallow did not write |
 
-| Flag | Applies to | Description |
-|:-----|:-----------|:------------|
-| `--harness <auto\|claude\|codex\|cursor>` | `install`, `uninstall` | Repeatable; default `auto` |
-| `--without <guide\|skill\|mcp\|hooks>` | `install` | Skip a step; repeatable |
-| `--dry-run` | `install`, `uninstall` | Print the plan, and change no files |
-| `--force` | `install`, `uninstall` | Replace or remove skills, hook scripts, or config files fallow did not write |
-| `--approve` | `install` | Pre-approve the project MCP server for yourself in `.claude/settings.local.json` |
-| `--user` | `install`, `uninstall` | Write the skills, the MCP config, and the gate under `$HOME`, not in the project. The Codex gate goes to `~/.codex/hooks.json`. Fallow skips the guide step and the `AGENTS.md` routing block. For Claude Code, fallow prints the `claude mcp add --scope user` command and does not edit `~/.claude.json` |
-| `--gitignore-claude` | `install` | Append `.claude/` to `.gitignore` |
-
-The root is the git toplevel of the current directory, unless you pass `--root`. A run from a monorepo package thus still writes where the harnesses read. The first line of output shows the chosen root.
+{/* generated:end */}
 
 ## Output
 
-Human output groups paths under "Shared with your team (commit these)" and "Local to you".
-
-With `--format json`, the envelope has `kind` (`agent-install`, `agent-uninstall`, `agent-status`), `schema_version`, and `fallow_version`. Each step has:
-
-- `harness`, `step`, `scope`, and `path`
-- `status`: `written`, `removed`, `unchanged`, `skipped`, `refused`, or `failed`
-- a `reason`, when the step was skipped or refused
-
-Fallow does not write, back up or delete a project path when the path, or a directory on the way to it, is a symlink that resolves outside the project root, or a dangling link. The step then has the status `skipped` and the reason `symlinked_path`. A link that stays inside the project, such as `CLAUDE.md -> AGENTS.md`, still works. `--user` targets still follow symlinks.
-
-After the steps comes `next_actions`. An action is flagged `mutating` when it would write harness config. The `next_steps` of the analysis commands are read-only.
-
-A `--dry-run` of `agent install` that plans at least one write puts an `agent-install-apply` action first in `next_actions[]`. The human output shows it first in the `Next:` list. Its `command` applies the plan: it drops `--dry-run` and repeats the flags that change the plan (`--harness`, `--user`, `--without`, `--force`, `--approve`, `--gitignore-claude`, and `--root`). A harness that detection found is repeated as `--harness`, because detection reads the session environment and `$HOME`. A run of the command in another shell then writes the same plan.
-
-```json title="$ fallow agent install --dry-run --format json"
-{
-  "next_actions": [
-    {
-      "id": "agent-install-apply",
-      "command": "fallow agent install --harness claude",
-      "reason": "This was a dry run. The command writes the steps marked \"would write\".",
-      "mutating": true
-    }
-  ]
-}
+```bash
+fallow agent install --dry-run
 ```
 
-The exit code is 2 when a step is `refused` or `failed`. All other steps still run.
+```text
+fallow agent install (dry run)
+  harnesses: claude (detected)
 
-`agent status` reports a different shape: `surfaces[]`, each with `harness`, `step`, `path`, and a `state` of `absent`, `installed`, `stale`, or `foreign`. `stale` means that the surface needs a refresh, or that its runtime is missing or unverified. `foreign` means that the file or entry exists, but fallow did not write it. `fallow agent install --force` replaces a `foreign` surface. Without `--force`, fallow leaves it alone.
+Shared with your team (commit these):
+  AGENTS.md                                 would write    guide             scaffold with the fallow task map
+  CLAUDE.md                                 would write    guide (claude)    create with an @AGENTS.md import
+  .claude/skills/fallow                     would write    skill (claude)    embedded copy, 9 files
+  .claude/skills/fallow-setup               would write    skill (claude)    embedded copy, 5 files
+  .claude/settings.json                     would write    hooks (claude)    PreToolUse gate handler
+  .claude/hooks/fallow-gate.sh              would write    hooks (claude)    gate script
 
-### Gate readiness
+Next:
+  fallow agent install --harness claude
+    This was a dry run. The command writes the steps marked "would write".
+```
 
-For Codex, the `hooks` step covers the gate script and the `AGENTS.md` routing block. Check `detail` and `next_actions[]` for a `stale` gate:
+Each row gives a path, its status, the step and the agent, and a note. Fallow puts the files to commit under "Shared with your team" and the files for you only under "Local to you". The `Next:` list starts with the command that applies the plan.
 
-| Action ID | Meaning and next step |
-|:----------|:----------------------|
-| `gate-json-reader` | No native fallow JSON reader or jq was found. Upgrade fallow on PATH or install it in the project. jq supports older installations. |
-| `gate-reader-unverified` | A launcher exists, but its runtime is unverified. Review and approve the project code, then run the returned command with the gate's fallow installation. |
-| `gate-script-refresh` | The script differs from the managed template, for example a gate from an older fallow version. Review its edits and the returned dry-run before replacing it. Run `fallow agent install` to write the current gate. |
-| `gate-requires-jq` | An older gate requires jq. Refresh the gate with current fallow, or install jq. |
-| `gate-path-version` | The project has no executable `node_modules/.bin/fallow`, so the gate runs the `fallow` on PATH, and that is another fallow version. Check `fallow --version` in the hook environment and update that installation. |
+With `--format json`, `install` and `uninstall` print `kind: "agent-install"` or `"agent-uninstall"` with these top-level fields:
 
-Status inventories project launchers and package managers without executing them. It does not verify project trust or hook activation. Branch on `state` and the action ID. A missing reader makes the gate print a notice and exit 0 without auditing.
+| Field | Content |
+|:--|:--|
+| `schema_version`, `fallow_version` | The version of this output format, and of fallow. |
+| `root`, `mode`, `dry_run` | The root, `install` or `uninstall`, and `true` for a dry run. |
+| `harnesses`, `detected`, `evidence` | The selected agents, `true` when detection selected them, and the signals of each agent. |
+| `steps` | One object for each file: `harness`, `step`, `scope`, `path`, `status`, and `reason` for a skipped or refused step. |
+| `next_actions` | Commands to run next. `mutating: true` marks a command that writes agent config. After a dry run, `agent-install-apply` comes first. |
+
+`status` is `written`, `removed`, `unchanged`, `skipped`, `refused` or `failed`. `fallow agent status --format json` prints `kind: "agent-status"` with `surfaces` (`step`, `path`, `state`, `detail`) and `next_actions`. The [JSON output reference](/reference/json-output) has each field.
+
+### Gate readiness {#gate-readiness}
+
+A `stale` gate has one of these entries in `next_actions`:
+
+| Action id | Meaning |
+|:--|:--|
+| `gate-json-reader` | Fallow found no fallow build or `jq` that the gate can use to read JSON. The gate then exits 0 and audits nothing. |
+| `gate-reader-unverified` | A launcher exists, but fallow did not run it to check it. |
+| `gate-script-refresh` | The gate script differs from the current version. Run `fallow agent install` to write it again. |
+| `gate-requires-jq` | An older gate needs `jq`. |
+| `gate-path-version` | The gate runs the `fallow` on `PATH`, and that is another fallow version. |
+
+## Exit codes
+
+| Code | Meaning |
+|:--|:--|
+| `0` | Each step completed or had nothing to do. |
+| `2` | Invalid input, or a step is `refused` or `failed`. The other steps still run. |
+
+See [Exit codes](/reference/exit-codes).
+
+## Examples
 
 ```bash
-fallow agent install --format json --quiet
+# Show the plan, and write nothing
+fallow agent install --dry-run
+
+# Install the setup for each detected agent
+fallow agent install
+
+# Install the setup for Codex only, without the MCP entry
+fallow agent install --harness codex --without mcp
+
+# Show the state of each agent file as JSON
 fallow agent status --format json
+
+# Show what an uninstall removes
 fallow agent uninstall --dry-run
 ```
 
-## See also
+## Related
 
-<CardGroup cols={2}>
-  <Card title="Agent integration" icon="robot" href="/integrations/mcp">
-    Connect coding agents to fallow through the CLI and the MCP server.
-  </Card>
-  <Card title="Agent skills" icon="wand-magic-sparkles" href="/integrations/agent-skills">
-    Install the fallow skill in your coding agent.
-  </Card>
-  <Card title="Claude Code hooks" icon="shield-check" href="/integrations/claude-hooks">
-    Gate agent commits and pushes with fallow.
-  </Card>
-  <Card title="fallow init" icon="terminal" href="/cli/init">
-    Create a config file or a starter AGENTS.md guide.
-  </Card>
-</CardGroup>
+- [Coding agents](/integrations/agents): use fallow from a coding agent.
+- [Claude Code hooks](/integrations/claude-hooks): how the commit gate works.
+- [`fallow hooks`](/cli/hooks): install only the Git hook or the agent gate.

@@ -1,1018 +1,135 @@
 ---
-title: "Code complexity and hotspot metrics explained"
-sidebarTitle: "Health explained"
-description: "Code complexity metrics explained: what each value in fallow health output means, how fallow computes it, and how to find hotspots and refactoring targets."
-keywords: ["health", "maintainability index", "cyclomatic complexity", "cognitive complexity", "hotspots", "refactoring targets", "fan-in", "fan-out", "complexity density", "untested complexity risk", "CRAP", "coverage gaps", "code quality", "technical debt", "code complexity metrics"]
+title: "Health issue types"
+sidebarTitle: "Health issue types"
+description: "Reference: what each finding and metric of fallow health means, and what to do about it."
+keywords: ["health", "cyclomatic complexity", "cognitive complexity", "CRAP", "maintainability index", "hotspots", "refactoring targets", "coverage gaps", "styling findings"]
 icon: "chart-line"
 ---
 
-Dead code findings tell you what to delete. Health metrics tell you what to fix first: which functions are too complex, which files change too often, and where untested complexity creates the most risk.
+This page lists the findings and the metrics of `fallow health`. Each section tells in a few sentences what a value means and what to do. A section for an issue type links to its rule page, with an example, the fix and the facts.
 
-This page explains what `fallow health` reports, when to act on the numbers, and which research each metric comes from.
-
+To learn how fallow measures complexity and risk, read [Health](/analysis/health).
 
 ## Complexity metrics {#complexity-metrics}
 
-These metrics appear in [`fallow health`](/cli/health) output, per function (findings) and per file (file scores).
+Fallow measures each function, and the template of a component, with two numbers: the [cyclomatic complexity](#cyclomatic-complexity) and the [cognitive complexity](#cognitive-complexity). A function above a limit is a finding. A function above both limits gets the [High complexity](/rules/high-complexity) issue type. Split such a function into smaller functions, and test it first.
 
 ### Cyclomatic complexity {#cyclomatic-complexity}
 
-The number of linearly independent paths through the control flow graph of a function. For structured programs (like JS/TS), this is 1 + the number of decision points (`if`/`else`, `switch` cases, loops, ternary `?:`, logical `&&`/`||`, `catch`).
+The cyclomatic complexity is the number of paths through a function: 1, plus 1 for each `if`, loop, `case`, `catch`, `?:`, `&&` and `||`. Each path needs its own test. Fallow reports a function above 20 by default. Split the function, or remove branches.
 
-| Range | Interpretation | Action |
-|:------|:---------------|:-------|
-| 1–10 | Simple, easy to test exhaustively | No action needed |
-| 11–20 | Moderate, most functions should stay here | Review if growing |
-| 21–50 | High, hard to test all paths | Split into smaller functions |
-| 51+ | Very high, testing all paths is impractical | Refactor urgently |
-
-**Default threshold:** 20
-
-Project-wide cyclomatic averages, percentiles, and critical shares include authored functions, module-scope branching, and template units. `vital_signs.cyclomatic_population` reports `count`, `sum`, and `max` for each group. To get the mean, add the sums and divide by the total count, then round to one decimal place. An empty group has a `null` maximum. Older saved reports do not have the population field.
-
-Module-scope units count in these aggregates, but they produce no function findings. `summary.functions_analyzed` counts the functions and template units that fallow checks for findings, without module scopes. For example, one function with complexity 1 and a module scope with complexity 31 give an average of 16, even when the function has no finding. The population fields show that difference.
-
-Compact output adds population rows after the unchanged `vital-signs` line, in this order: functions, modules, templates. For the example above:
-
-```text
-cyclomatic-population:functions:count=1,sum=1,max=1
-cyclomatic-population:modules:count=1,sum=31,max=31
-cyclomatic-population:templates:count=0,sum=0,max=null
-```
-
-Older reports, and results without population data, do not have these three rows.
-
-<Accordion title="Research">
-Introduced by Thomas McCabe in ["A Complexity Measure" (1976)](https://doi.org/10.1109/TSE.1976.233837). The practical upper bound of 20 comes from [NIST SP 500-235](https://www.nist.gov/publications/structured-testing-testing-methodology-using-cyclomatic-complexity-metric) (Watson & McCabe, 1996).
-</Accordion>
+Full reference: [High cyclomatic complexity](/rules/high-cyclomatic-complexity)
 
 ### Cognitive complexity {#cognitive-complexity}
 
-How hard a function is to understand when you read it from top to bottom. Cyclomatic complexity counts paths for *testing*. Cognitive complexity measures how hard the code is to *understand*. It adds points for nesting depth, `break`/`continue` to labels, recursion, and sequences of logical operators.
+The cognitive complexity estimates how hard a function is to read. Nested code counts more than flat code. Fallow reports a function above 15 by default. Flatten the nesting with early returns, or move nested blocks to helper functions.
 
-| Range | Interpretation | Action |
-|:------|:---------------|:-------|
-| 0–7 | Easy to understand at a glance | No action needed |
-| 8–15 | Moderate, may benefit from extraction | Extract helpers if growing |
-| 16+ | Hard to follow, likely mixing concerns | Refactor: extract, simplify, or decompose |
+Full reference: [High cognitive complexity](/rules/high-cognitive-complexity)
 
-**Default threshold:** 15 (the same as the SonarSource default rule). The 0–7 "easy" range is a fallow guideline, based on common industry practice.
+### Function names {#function-names}
 
-<Accordion title="Research">
-Developed by G. Ann Campbell at SonarSource. Full specification: [SonarSource white paper](https://www.sonarsource.com/resources/cognitive-complexity/).
-</Accordion>
+A finding names the function by its declaration or by its variable, for example `load` for `const load = () => {}`. A callback gets a name from the call around it when that call has a string as first argument, for example `it("renders the empty state")`. Other callbacks are `<anonymous>` or `<arrow>`: use the path and the line of the finding to find them.
 
-### Complexity density
+### Unit size {#unit-size}
 
-Total cyclomatic complexity divided by lines of code. Because density divides by file size, you can compare files of different sizes: a 500-line file with complexity 50 (density 0.1) vs. a 10-line file with complexity 10 (density 1.0).
-
-| Value | Interpretation | Action |
-|:------|:---------------|:-------|
-| < 0.3 | Low, data files, configs, simple modules | No action needed |
-| 0.3–1.0 | Moderate, normal application code | Review the densest functions |
-| > 1.0 | Very dense, nearly every line is a decision point | Refactor: extract logic, simplify conditions |
-
-### Cyclomatic vs cognitive: a code example
-
-These two functions show why you need both metrics:
-
-<CodeGroup>
-
-```typescript High cyclomatic, low cognitive
-// Cyclomatic: 6 (1 + one per non-default case)
-// Cognitive: 1 (flat switch is easy to read)
-function getStatusLabel(status: string): string {
-  switch (status) {
-    case "pending": return "Pending";
-    case "active": return "Active";
-    case "paused": return "Paused";
-    case "cancelled": return "Cancelled";
-    case "completed": return "Done";
-    default: return "Unknown";
-  }
-}
-```
-
-```typescript Low cyclomatic, high cognitive
-// Cyclomatic: 4 (1 + one per if)
-// Cognitive: 7 (nesting adds +2, +3 increments)
-function processOrder(order: Order): string {
-  if (order.items.length > 0) {            // +1
-    if (order.customer.verified) {          // +2 (nesting)
-      if (order.total > order.limit) {      // +3 (nesting)
-        return "requires_approval";
-      }
-    } else {                                // +1
-      return "unverified";
-    }
-  }
-  return "empty";
-}
-```
-
-</CodeGroup>
-
-The `switch` has higher cyclomatic complexity (more paths to test), but it is easy to read. The nested `if` chain has lower cyclomatic complexity, but it is harder to follow. Cognitive complexity shows that difference.
-
-### Function names
-
-Each function is a separate complexity unit. A complexity finding names the function in this order:
-
-1. The declared name: `function load() {}`, a method, a class property, or an object key.
-2. The binding: `const load = () => {}`. An anonymous `export default` gets `default`.
-3. A name from the call that holds the function:
-
-| Code | Finding `name` |
-|:-----|:---------------|
-| `Effect.fn("Users.create")(function* () {...})` | `Users.create` |
-| `Command.make("setup", {...}, (args) => ...)` | `Command.make("setup")` |
-| `api.group().handle("github", (req) => ...)` | `handle("github")` |
-| `it("renders the empty state", () => ...)` | `it("renders the empty state")` |
-| `const load = (id) => Effect.gen(function* () {...})` | `load` for the arrow and for the generator |
-| `function load() { return Effect.gen(function* () {...}) }` | `load` for the function and for the generator |
-
-A call name needs a string literal as the first argument. Fallow keeps the first 40 characters of a long literal. A generator takes the name of the function that returns it, also through `.pipe(...)`, because the generator is the real body of that function.
-
-A function that gets no name is `<anonymous>` (a function expression) or `<arrow>` (an arrow function). Examples are an `items.map((item) => ...)` callback and a `Match.when({...}, (value) => ...)` handler. Use the `path` and `line` fields to find such a function.
-
-A name from the call does not change the score or the coverage match. Coverage tools record these functions without a name, so fallow matches their coverage by position.
-
-### Effect code
-
-Fallow counts the same decision points in [Effect](https://effect.website) code as in other code: `if`, loops, `case`, `catch`, `?:`, `&&`, `||`, `??`, and `?.`. Effect combinators are function calls, so they add no points:
-
-- `pipe(...)`, `Effect.catchTag(...)`, `Effect.if(...)`, `Match.when(...)`, and `Match.orElse(...)`.
-- `yield*` inside `Effect.gen`.
-
-Each callback is its own unit, and its nesting starts at zero. A callback inside an `if` does not add nesting to the callback or to the function around it.
-
-### Synthetic `<template>` and `<component>` findings
-
-An Angular component has two parts: a TypeScript class (methods, getters, lifecycle hooks) and a template (HTML control flow, bindings, interpolations). Fallow flags both. A finding for each part alone would show less than the total complexity that a developer or agent must maintain. Two synthetic findings show the total:
-
-| Finding `name`  | Path                                                                     | What `cyclomatic` and `cognitive` count                                                                                                                                                       |
-|:----------------|:-------------------------------------------------------------------------|:----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `<template>`    | The `.html` file or the `.ts` file containing the inline literal         | Cyclomatic: template control-flow blocks (`@if`, `@else if`, `@for`, `@case`, `@defer (when ...)`, legacy `*ngIf`/`*ngFor`) plus ternary and logical operators inside bound attributes and `{{ }}` interpolations. Cognitive: the same plus nesting penalties on stacked `@if`/`@for`/`@switch` blocks |
-| `<component>`   | The `.ts` file declaring the `@Component`                                | The score of the worst class method plus the score of the template, for each metric. Ranking and `--targets` use the rollup totals. The breakdown per part is under `component_rollup` (`class_cyclomatic`, `class_cognitive`, `template_cyclomatic`, `template_cognitive`) |
-
-Both findings use the same rule ids as function findings: `fallow/high-cyclomatic-complexity`, `fallow/high-cognitive-complexity`, and `fallow/high-complexity`. They use the same thresholds (`max_cyclomatic`, `max_cognitive`) and the same severity bands. Fallow reports each template above the configured threshold on its own. If a `<template>` and at least one class method in the same component file are both above the thresholds, fallow also adds a `<component>` rollup.
-
-You act on these findings differently from function findings:
-
-- **`<template>` findings**: split the template into child components, move derived data into the class as computed signals (`computed(...)`), or replace nested control flow with a flatter structure.
-- **`<component>` rollup findings**: the class and the template together are above the budget. Fix the larger part first. The `component_rollup.class_*` and `component_rollup.template_*` fields show which part adds more.
-
-A `<template>` finding gets its CRAP score from the component class that owns it. Because of the `templateUrl` edge, a template is reachable if and only if its class is reachable. Tests that run the class also run the template. The `inherited_from` field in the payload of a `<template>` finding names the `.component.ts` file whose coverage gave the score. So the `increase-coverage` action points at the class, which you can test, and not at the `.html` file, which you cannot test directly.
-
+The unit size is the length of a function in lines of code. When many functions are longer than 60 lines, the report lists them under "Large functions". Split each long function. To change the limit of 60 lines, set [`health.maxUnitSize`](/reference/config-health#health-maxunitsize).
 
 ### File length {#file-length}
 
-`health.maxFileLines` (or `fallow health --max-file-lines <N>`) sets a maximum file length. The default is `0`, so the check is off. Set a limit, for example `500`, to enable it.
+The file has more lines than the limit that you set in [`health.maxFileLines`](/reference/config-health#health-maxfilelines). Each line counts, also blank lines and comments. The check is off until you set a limit. Move groups of exports to their own files.
 
-Fallow counts physical lines, as an editor shows them. Blank lines and comment lines count. A final newline does not add a line. Fallow does not count only code lines, because blank and comment lines also make a file longer to read and to review.
+Full reference: [Long file](/rules/long-file)
 
-A file with more lines than the limit is a complexity finding:
+## File health scores {#file-health-scores}
 
-| Field | Value |
-|:------|:------|
-| `name` | `<file>` |
-| `line` | `1` |
-| `exceeded` | `file_lines` |
-| `line_count` | The line count of the file |
-| `max_file_lines` | The limit for the file |
+`fallow health --file-scores` gives each file a score and its measurements: lines, fan-in (the files that import it), fan-out (the files that it imports), the share of unused exports and the complexity density. Fallow sorts the files with the most concern first. Start with the files at the top. Fallow leaves out files without functions, such as barrel files.
 
-`cyclomatic` and `cognitive` are `0` on this finding. SARIF and CodeClimate use the rule id `fallow/long-file`. The JSON `actions` are `split-file` and `suppress-file`. The `complexity-file-lines` rule decides if the finding fails the run. It defaults to `error`.
+### Maintainability index {#maintainability-index-mi}
 
-To set a different limit for some files, add a `health.thresholdOverrides[]` entry with `files` and `maxFileLines`. Leave `functions` empty, because the limit applies to whole files. `maxFileLines: 0` turns the check off for the matching files. To hide one file, put `// fallow-ignore-file complexity` at the top of the file. This comment also hides the function complexity findings of the file.
+The [maintainability index](/analysis/health) (MI) is a number from 0 to 100 for one file. It goes down with more complexity for each line, more unused exports and more imports. Higher is better. The health score counts a file below 70 as low. The formula is different from the index of other tools, so do not compare the numbers.
 
-```jsonc
-{
-  "health": {
-    "maxFileLines": 500,
-    "thresholdOverrides": [
-      { "files": ["src/generated/**"], "maxFileLines": 0, "reason": "generated code" }
-    ]
-  }
-}
-```
+## Untested complexity risk {#untested-complexity-risk}
 
-In [`fallow audit`](/cli/audit), the file finding follows the same rules as a function finding. A file that is new, or that crosses the limit in the change, is `introduced`. A long file that grew by 5 lines or more is `worsened`. A long file that did not grow by 5 lines stays `inherited`, so you can enable the limit on an existing project and stop further growth without a new failure.
+Complex code without tests is the most likely place for a bug. Fallow combines the complexity of each function with its test coverage. Without coverage data, fallow estimates the coverage from the imports of the test files. Give fallow real coverage data with `--coverage` for exact scores.
 
-## File health scores
+### CRAP score {#crap-score}
 
-Per-file scores from [`fallow health --file-scores`](/cli/health). Fallow excludes files with zero functions (barrel files, re-export files).
+CRAP combines the cyclomatic complexity of a function with its test coverage. A complex function without tests gets a high score. Fallow reports a score of 30 or more by default. Add tests for the function first, then make it simpler.
 
-### Maintainability Index (MI) {#maintainability-index-mi}
-
-Fallow uses a **simplified Maintainability Index**, adapted for JavaScript/TypeScript module graphs.
-
-```
-dampening = min(lines / 50, 1)
-fan_out_penalty = min(ln(fan_out + 1) × 4, 15)
-MI = 100 - (complexity_density × 30 × dampening) - (dead_code_ratio × 20) - fan_out_penalty
-```
-
-Fallow clamps the result to \[0, 100\]. Higher is better. The dampening factor lowers the density weight for files under 50 lines. A short file with a few branches has a high density, but it is still easy to read.
-
-| Range | Interpretation | Action |
-|:------|:---------------|:-------|
-| 70–100 | Good maintainability | Monitor |
-| 40–70 | Moderate | Review periodically, fix if the score goes down |
-| 0–40 | Poor | Prioritize for refactoring |
-
-```text fallow health --file-scores --top 5
-● File health scores (3 files) · sorted by triage concern
-
-   57.5    src/helpers/errorUtil.ts                         structure
-             48 LOC    1 fan-in    0 fan-out  100% dead  0.75 density  18.0 risk
-
-   76.2    src/helpers/util.ts                              risk
-            320 LOC   35 fan-in    0 fan-out   86% dead  0.22 density  42.0 risk
-
-   90.5    src/types.ts                                     structure
-            154 LOC   42 fan-in    3 fan-out    0% dead  0.20 density   4.0 risk
-
-  Sorted by triage concern: the larger of low-MI concern and CRAP risk. The risk
-  / structure tag marks which one placed each file. MI reflects complexity,
-  coupling, and dead code; risk reflects untested complexity (CRAP) and can
-  diverge from MI. Risk: low <15, moderate 15-30, high >=30. CRAP scores are a
-  static estimate from export references (85% direct, 40% indirect, 0%
-  untested). Pass `--coverage <coverage-final.json>` for measured scores.
-  https://fallow.tools/docs/explanations/health/#file-health-scores
-```
-
-<Accordion title="How fallow's MI relates to the classic Maintainability Index">
-
-The original MI from [Oman and Hagemeister (1992)](https://doi.org/10.1109/ICSM.1992.242525) combines Halstead Volume, cyclomatic complexity, lines of code, and comment percentage. [Microsoft adapted it](https://learn.microsoft.com/en-us/visualstudio/code-quality/code-metrics-maintainability-index-range-and-meaning) to a 0–100 scale for Visual Studio.
-
-The fallow version makes three changes for the JS/TS ecosystem:
-
-1. **Replaces Halstead Volume with complexity density.** Halstead metrics need full type resolution, and fallow does only syntactic analysis. Complexity density measures the same thing: how complex the code is per unit of code.
-2. **Adds dead code ratio.** Unused exports are a maintenance cost specific to JS/TS, and the classic MI does not include them.
-3. **Adds fan-out coupling penalty.** A high import count is a strong sign that a module is hard to maintain. The penalty uses logarithmic scaling (`ln(fan_out + 1) × 4`, capped at 15 points), because each extra import adds less risk than the one before.
-
-Because the formula is different, you **cannot directly compare** fallow MI scores with Visual Studio or SonarQube MI scores.
-
-</Accordion>
-
-### Fan-in, fan-out, and dead code ratio
-
-**Fan-in**: the number of files that import this file. With high fan-in, a change affects many files.
-
-**Fan-out**: the number of files that this file imports. High fan-out means high coupling, and changes in other files are more likely to affect this file.
-
-**Dead code ratio**: the fraction of value exports with zero references (0-1). Fallow excludes type-only exports (interfaces, type aliases).
-
-| Metric | Signal | Action |
-|:-------|:-------|:-------|
-| Fan-in > 20 | Many dependents, critical file | Extra review before changes |
-| Fan-out > 15 | Many imports, high coupling | Consider splitting into smaller modules |
-| Dead code = 0 | All exports used | No action needed |
-| Dead code > 0.3 | Much unused code | Run `fallow fix` to remove it automatically |
-
-<Accordion title="Research: fan-in/fan-out">
-Fan-in and fan-out coupling metrics come from [Henry and Kafura (1981)](https://doi.org/10.1109/TSE.1981.231113). The [Chidamber & Kemerer OO metrics suite (1994)](https://doi.org/10.1109/32.295895) refined them later. Its Coupling Between Objects (CBO) metric applies the same idea to dependencies between classes.
-</Accordion>
-
-### Coupling concentration
-
-Two vital signs metrics show coupling for the whole project:
-
-| Metric | Description |
-|:-------|:------------|
-| `p95_fan_in` | 95th percentile fan-in across all files |
-| `coupling_high_pct` | Percentage of files with fan-in above the effective threshold |
-
-The effective threshold is `max(p95_fan_in, 10)`. The floor of 10 prevents false positives in small projects, where moderate fan-in is normal.
-
-### Risk profiles
-
-Risk profiles show the percentage of functions in each risk bin. Fallow reports two profiles as vital signs:
-
-**Unit size** (function length in lines of code):
-
-| Bin | LOC range |
-|:----|:----------|
-| Low risk | 1–15 |
-| Medium risk | 16–30 |
-| High risk | 31–60 |
-| Very high risk | > 60 |
-
-**Unit interfacing** (function parameter count):
-
-| Bin | Parameters |
-|:----|:-----------|
-| Low risk | 0–2 |
-| Medium risk | 3–4 |
-| High risk | 5–6 |
-| Very high risk | 7+ |
-
-Both profiles appear as `unit_size_profile` and `unit_interfacing_profile` in the vital signs JSON. Each has the percentage values `low_risk`, `medium_risk`, `high_risk`, and `very_high_risk`.
-
-When the unit size profile shows >= 3% of functions in the very-high-risk bin (> 60 LOC), the human output adds a **Large functions** list. The list shows each large function with file path, function name, line number, and LOC count. In JSON output, these functions are in a `large_functions` array on the health report.
-
-You can change the 60-LOC threshold with `health.maxUnitSize` (for all files) or with a per-file `health.thresholdOverrides[].maxUnitSize` entry. When you raise it for a glob (e.g. `**/*.test.*`), fallow removes those functions from the **Large functions** list. The complexity, cognitive, and CRAP checks still run on the same files. This is the recommended way to keep test suites (long `describe()` / `it()` blocks) from filling the list. Like the other overrides, `maxUnitSize` filters only the reported list. The descriptive `unit_size_profile` and the unit-size score still use the raw sizes. To remove a file from the score completely, use `health.ignore`.
-
-<Accordion title="Research: SIG quality model">
-Risk profiles follow the [SIG/TÜViT quality model](https://www.softwareimprovementgroup.com/wp-content/uploads/SIG-TUViT-Evaluation-Criteria-Trusted-Product-Maintainability-Guidance-for-producers.pdf). This model compares codebases by how their code spreads across risk categories, and not by averages. A codebase where 95% of functions are low-risk is healthier than one with the same average complexity and many very-high-risk functions.
-</Accordion>
-
-
-## Untested complexity risk
-
-Complex code without test coverage is the most likely source of production bugs. Fallow gives each function a risk score based on the CRAP metric (Change Risk Anti-Patterns). Alberto Savoia and Bob Evans developed CRAP at Agitar Labs in 2007.
-
-The score appears in [`fallow health --file-scores`](/cli/health) output and JSON.
-
-### How the score is computed {#crap-score}
-
-Fallow uses the canonical CRAP formula:
-
-```
-score = CC^2 × (1 - cov/100)^3 + CC
-```
-
-`cov` is the coverage of the function (0–100). Fallow gets that value in one of three ways:
-
-| Model (`coverage_model`) | When | How `cov` is determined |
-|:-------------------------|:-----|:------------------------|
-| `static_estimated` | Default | An estimate per function from the graph: directly test-referenced = 85%, transitively test-reachable = 40%, not test-reachable = 0%. Only a value reference counts as a direct test reference. An `import type` does not. |
-| `istanbul` | `--coverage <coverage-final.json>` (auto-detected from `coverage/` and `.nyc_output/`, or set with `FALLOW_COVERAGE`), or `--coverage <NODE_V8_COVERAGE dir>` | Real statement coverage per function from Jest, Vitest, c8, nyc, or raw V8 coverage from `node --test`. |
-| `static_binary` | Legacy, only for snapshot and JSON compatibility | Binary per file: test-reachable file = 100% (score = CC), untested file = 0% (score = CC^2 + CC). Replaced by `static_estimated`. |
-
-To set up Vitest coverage for measured scores, see [CRAP scores with Vitest](/analysis/crap-scores-vitest).
-
-For untested code, the quadratic term makes the score grow fast with complexity. With the default `static_estimated` model, a function that no test reaches, with cyclomatic complexity 5, scores 5^2 × 1 + 5 = 30. That is exactly the default threshold.
-
-For evidence from real traffic (hot and cold paths, runtime-weighted dead-code results), see [Runtime coverage](/analysis/runtime-coverage). Runtime coverage is part of Fallow Cloud, the paid product, and a single local capture is free. It accepts V8 or Istanbul runtime data through `--runtime-coverage`, and adds that data on top of the active static `coverage_model`.
-
-**Default threshold:** 30 (fallow flags functions with a score at or above this value)
-
-### Interpreting the numbers
-
-| Score | Finding `severity` | Action |
-|:------|:-------------------|:-------|
-| < 30 | No finding (below the default threshold) | No action needed |
-| 30-49 | `moderate` | Add test coverage or reduce complexity |
-| 50-99 | `high` | Prioritize: add tests, then simplify |
-| 100 or more | `critical` | Refactor urgently. This code is complex, and no test reaches it |
-
-A finding gets the highest severity of its cyclomatic, cognitive, and CRAP values.
-
-The severity band does not decide if the finding fails the run. The `complexity-cyclomatic`, `complexity-cognitive`, and `complexity-crap` rules decide that. See [Complexity rules](/configuration/rules#complexity-rules).
-
-To keep human output readable, fallow shows scores above 999 as `>999`. JSON output always has the exact value.
-
-The `risk` column in `--file-scores` output uses different bands. It shows the highest CRAP score in the file: low below half of `maxCrap`, moderate up to `maxCrap`, and high at or above `maxCrap`. With the default `maxCrap` of 30, the bands are `low <15`, `moderate 15-30`, and `high >=30`.
-
-### File-level aggregation
-
-Each file has two aggregated values:
-
-| Field | Meaning |
-|:------|:--------|
-| `crap_max` | Highest per-function score in the file |
-| `crap_above_threshold` | Number of functions with a score >= 30 |
-
-The health summary shows the active model as `coverage_model` (`static_estimated`, `istanbul`, or the legacy `static_binary`). With measured coverage, `coverage_input_format` names the input: `istanbul` or `v8`.
-
-To use the Node test runner without a conversion step:
-
-```bash
-NODE_V8_COVERAGE=./v8-coverage node --test
-fallow health --coverage ./v8-coverage
-```
-
-### Refactoring targets {#untested-risk-targets}
-
-Fallow reports the `add_test_coverage` refactoring target (label `untested risk`) when both conditions are true:
-
-- `crap_above_threshold` >= 2 (more than one risky function, not one outlier)
-- `complexity_density` > 0.3 (the file is complex, not only large)
-
-These are the files where new tests remove the most risk for the effort.
-
-### Suppression
-
-To exclude a file from untested complexity risk reporting:
-
-```typescript
-// fallow-ignore-file coverage-gaps
-```
-
-This comment suppresses all coverage findings for the file, also the CRAP-based scores.
-
-To suppress complexity findings (cyclomatic and cognitive thresholds) for one function:
-
-```typescript
-// fallow-ignore-next-line complexity
-function* parseCsv(text) { /* ... */ }
-```
-
-For all issue types that you can suppress, see [Inline suppression](/configuration/suppression).
-
-<Accordion title="Static estimation vs. real coverage">
-
-A fully tested function (cov = 100) always scores exactly CC, at any complexity. A fully untested function (cov = 0) scores CC^2 + CC.
-
-The default `static_estimated` model only estimates test coverage:
-
-- **False negatives**: When tests import a file but never run some of its functions, those functions score lower (look healthier) than they should.
-- **False positives**: When only non-test code references a file, but tests do cover it through indirect paths, the file can score worse than it should.
-
-</Accordion>
-
-<Accordion title="Research">
-Alberto Savoia and Bob Evans introduced the CRAP metric at Agitar Labs. Original presentation: ["CRAP4J" (2007)](http://www.artima.com/weblogs/viewpost.jsp?thread=215899). Complex code is not dangerous when tests cover it well, and simple code is low-risk even without tests. The risk is highest where code is complex and tests are missing.
-</Accordion>
-
+Full reference: [High CRAP score](/rules/high-crap-score)
 
 ## Coverage gaps {#coverage-gaps}
 
-A coverage gap is runtime code that no test reaches through the import graph. `fallow health --coverage-gaps` reports two finding types:
-
-| Rule ID | Finding |
-|:--------|:--------|
-| `fallow/untested-file` | A file that runtime entry points reach, but no test entry point reaches, directly or transitively. |
-| `fallow/untested-export` | A value export that runtime entry points reach, but no test-reachable module references as a value. |
-
-Only a value reference gives an export test reach. A test that imports a value export with `import type` does not run it, so the export stays an `untested-export`. At file level, an `import type` still makes the module test-reachable.
-
-This is a static test dependency gap. It is not line coverage: a test can import a file and still skip most of its code. For measured coverage, use `--coverage` (see [Untested complexity risk](#untested-complexity-risk)).
-
-Use `--coverage-gaps` to show the gaps. The `coverage-gaps` rule sets their severity and is `off` by default. For the JSON shape and the mock rules, see [With coverage gaps](/cli/health#with-coverage-gaps).
+A coverage gap is production code that no test imports, directly or through other files. `fallow health --coverage-gaps` reports a file as [Untested file](/rules/untested-file) and an export as [Untested export](/rules/untested-export). A gap is not line coverage: a test can import a file and still skip most of its code. Add a test that imports the code, or check that fallow finds your test files.
 
 ## Runtime coverage {#runtime-coverage}
 
-Runtime coverage adds production evidence to the health report. With `--runtime-coverage`, fallow merges V8 or Istanbul runtime data with the static analysis. Each runtime finding has a per-function verdict:
+[Runtime coverage](/analysis/runtime-coverage) adds data about the functions that ran in production. Each function gets a verdict, for example "safe to delete" for a function that is unused and never ran. A function that never ran can still run at another time of year, or only on an error path. Check those cases before you delete code.
 
-| Rule ID | Verdict | Meaning |
-|:--------|:--------|:--------|
-| `fallow/runtime-safe-to-delete` | `safe_to_delete` | Statically unused, and V8 tracked the function with zero invocations. This is the strongest delete signal from fallow. |
-| `fallow/runtime-review-required` | `review_required` | Statically used, but production never invoked it. The function can be seasonal, used only on an error path, or really unused. |
-| `fallow/runtime-low-traffic` | `low_traffic` | Invoked below the `--low-traffic-threshold` ratio of the total trace count. |
-| `fallow/runtime-coverage-unavailable` | `coverage_unavailable` | Fallow cannot match the function to tracked runtime data. This is not a dead-code signal. |
-| `fallow/runtime-coverage` | other | A runtime finding that no specific rule covers, for example the `unknown` verdict. |
-
-For the JSON fields, see [With runtime coverage](/cli/health#runtime-coverage). For the concepts and the capture workflow, see [Runtime coverage](/analysis/runtime-coverage).
+Full reference: [Runtime coverage](/rules/runtime-coverage), [Safe to delete](/rules/runtime-safe-to-delete), [Review required](/rules/runtime-review-required)
 
 ### Coverage intelligence {#coverage-intelligence}
 
-Coverage intelligence is an additive decision layer on top of runtime coverage. Fallow emits it when it can combine runtime evidence with static usage, test coverage, CRAP and complexity, ownership, or change scope. The JSON output has it as `runtime_coverage.coverage_intelligence`. Each finding has a stable `fallow:coverage-intel:<hash>` ID.
+Coverage intelligence combines runtime coverage with the static analysis, the tests, the CRAP score, the owners and the changed files. It gives one recommendation for a function: [delete](/rules/coverage-intelligence-delete), [review with an owner](/rules/coverage-intelligence-review), [refactor with care](/rules/coverage-intelligence-refactor), or [add tests before a risky change](/rules/coverage-intelligence-risky-change). Follow the rule page of the recommendation.
 
-| Rule ID | Meaning |
-|:--------|:--------|
-| `fallow/coverage-intelligence-risky-change` | A changed hot path has low test coverage and a high CRAP score. Add focused tests or split the change before you merge. |
-| `fallow/coverage-intelligence-delete` | Static usage, cold runtime evidence, and no test reachability all point to code that you can delete. |
-| `fallow/coverage-intelligence-review` | The code is statically reachable, cold at runtime, not covered by tests, and has an ownership risk. Ask an owner before you change or delete it. |
-| `fallow/coverage-intelligence-refactor` | Hot production code that tests cover, but with a high CRAP score. Refactor it carefully and keep its behavior. |
+## Hotspot metrics {#hotspot-metrics}
 
-When fallow finds no combined finding, the output does not have the `coverage_intelligence` object.
-
-
-## Hotspot metrics
-
-Hotspots are files that are both **complex** and **frequently changing**. Bugs concentrate in these files, so a refactor there gives the highest return. Use [`fallow health --hotspots`](/cli/health) to see them.
-
-<Info>
-Complex code that never changes is stable. You can manage simple code that changes often. Defects concentrate in complex code that changes often.
-</Info>
-
-### Hotspot score
-
-```
-normalized_churn = weighted_commits / max_weighted_commits   (0..1)
-normalized_complexity = complexity_density / max_density      (0..1)
-score = normalized_churn × normalized_complexity × 100       (0..100)
-```
-
-Because the formula multiplies the two values, a file needs **both** high churn AND high complexity for a high score. One of the two alone gives a low score.
-
-| Score | Interpretation | Action |
-|:------|:---------------|:-------|
-| 70–100 | Critical hotspot | Prioritize refactoring in next sprint |
-| 40–70 | Moderate hotspot | Schedule review, reduce complexity |
-| 0–40 | Low risk | Monitor |
-
-```text fallow health --hotspots --top 3
-● Hotspots (3 files, since 6 months)
-
-   72.1 ▲  src/types.ts
-           47 commits   2739 churn  0.20 density  42 fan-in  ▲ accelerating
-
-   38.4 ─  src/helpers/util.ts
-           23 commits    610 churn  0.22 density  35 fan-in  ─ stable
-
-   12.7 ▼  src/locales/en.ts
-            8 commits    177 churn  0.35 density   2 fan-in  ▼ cooling
-
-  Files with high churn and high complexity
-  https://fallow.tools/docs/explanations/health/#hotspot-metrics
-```
-
-### Two hotspot counts
-
-Fallow reports two different hotspot counts. Do not compare them directly.
-
-- `vital_signs.hotspot_count` counts the files with a hotspot score of 50 or more. It feeds the health score and the trend.
-- `groups[].hotspot_count` (with `--group-by`) counts the ranked hotspot entries of the group, before `--top`. It is the length of the ranked list, so it is larger than the first count on most projects.
-
-### Weighted commits
-
-The commit count, weighted by recency with exponential decay and a 90-day half-life:
-
-- A commit **yesterday** counts as ~1.0
-- A commit **90 days ago** counts as ~0.5
-- A commit **180 days ago** counts as ~0.25
-
-<Accordion title="Research">
-[Graves et al. (2000)](https://doi.org/10.1109/32.859533) introduced recency-weighted change metrics. [Nagappan and Ball (2005)](https://doi.org/10.1145/1062455.1062514) at Microsoft showed the empirical link between churn and defect density.
-</Accordion>
-
-### Churn trend
-
-Compares the commit frequency in the first half and the second half of the analysis window:
-
-| Trend | Meaning | Action |
-|:------|:--------|:-------|
-| `accelerating` | Recent > 1.5× older half | High priority if complexity is also high |
-| `stable` | Balanced frequency | Normal, monitor score |
-| `cooling` | Recent < 0.67× older half | Lower priority, the file is becoming stable |
-
-<Accordion title="Research: churn × complexity methodology">
-Michael Feathers started this method, and Adam Tornhill made it systematic in [*Your Code as a Crime Scene*](https://pragprog.com/titles/atcrime/your-code-as-a-crime-scene/) (2015) and [*Software Design X-Rays*](https://pragprog.com/titles/atevol/software-design-x-rays/) (2018).
-</Accordion>
-
+A hotspot is a file that is complex and changes often. `fallow health --hotspots` reads the git history to find them. Recent commits count more than old commits. The score is relative to your project: the worst file of a clean project can still have a high score. Refactor the top hotspots first, because a fix there helps most.
 
 ## Change coupling {#change-coupling}
 
-Change coupling finds two files that change together in most commits, while no import or re-export chain connects them. Fallow calls such a pair a hidden pair. An agent or a reviewer that follows the import graph does not find the second file. The `change_coupling` section of `fallow health` lists the hidden pairs. Use [`fallow health --hotspots`](/cli/health) to see them.
-
-The section is advisory. It has no weight in the health score, and it never gates.
-
-### Coupling degree
-
-```
-degree = shared_revisions / mean(revisions_a, revisions_b)   (0..1)
-```
-
-`revisions_a` and `revisions_b` are the commits that changed each file in the history window. `shared_revisions` are the commits that changed both files. Fallow rounds the degree to two decimals.
-
-A pair is hidden when all of these conditions are true. The defaults are the [Code Maat](https://github.com/adamtornhill/code-maat) defaults:
-
-| Condition | Config key | Default |
-|:----------|:-----------|:--------|
-| Each file has at least this number of commits | `health.changeCoupling.minRevisions` | `5` |
-| The two files share at least this number of commits | `health.changeCoupling.minSharedRevisions` | `5` |
-| The coupling degree is at least this value | `health.changeCoupling.minDegree` | `0.3` |
-| No import or re-export chain connects the two files | | |
-
-A commit that changes more analyzed files than `health.changeCoupling.maxFilesPerCommit` (default `30`, from `2` to `1000`) is skipped. Bulk commits, such as renames and format passes, would make false pairs. The upper limit keeps the pair count of one commit small.
-
-Fallow checks the ranges when it loads the config. `maxFilesPerCommit` must be from `2` to `1000`, and `minDegree` must be from `0` to `1`. A value out of range stops the run with exit code 2:
-
-```
-invalid config:
-  - health.changeCoupling.maxFilesPerCommit must be from 2 to 1000, found 1
-  - health.changeCoupling.minDegree must be from 0 to 1, found 1.5
-```
-
-An older fallow version rejects the `changeCoupling` key as unknown. When you commit the key, also set [`minimumVersion`](/configuration/overview#minimumversion).
-
-A pair with a degree of `0.5` or more is `strong`. A strong pair adds the `hidden_coupling` factor to the [refactoring targets](#refactoring-targets) of both files.
-
-### History window
-
-Without `--since`, change coupling reads 12 months of git history. Hotspots keep their 6 month default. With `--since`, both read the same window. The `since` field shows the window that the section read.
-
-A shallow clone, or a window with fewer analyzed commits than `minRevisions`, gives an empty `pairs` list. The `workspace_diagnostics[]` array then has the kind `change-coupling-skipped`, with `cause` `shallow-clone` or `too-few-commits`. This kind does not degrade the other sections, so `degrades_analysis` is absent. Fallow records the kind only when the run asks for the change coupling section, with the hotspot section. A run that reads the history only for the refactoring targets does not record it. See [Debugging](/analysis/debugging#a-health-section-reports-nothing).
-
-### JSON fields
-
-```json
-{
-  "change_coupling": {
-    "since": "12 months",
-    "commits_analyzed": 412,
-    "commits_skipped": 6,
-    "total_pairs": 1,
-    "thresholds": {
-      "max_files_per_commit": 30,
-      "min_revisions": 5,
-      "min_shared_revisions": 5,
-      "min_degree": 0.3,
-      "strong_degree": 0.5
-    },
-    "pairs": [
-      {
-        "path_a": "src/billing/invoice.ts",
-        "path_b": "src/email/templates/invoice.html.ts",
-        "revisions_a": 14,
-        "revisions_b": 10,
-        "shared_revisions": 9,
-        "degree": 0.75,
-        "strong": true
-      }
-    ]
-  }
-}
-```
-
-| Field | Description |
-|:------|:------------|
-| `since` | The history window that the section read, for example `"12 months"` |
-| `commits_analyzed` | Commits that changed at least one analyzed file and that fallow did not skip |
-| `commits_skipped` | Commits that fallow skipped, because they changed more analyzed files than `thresholds.max_files_per_commit` |
-| `total_pairs` | Hidden pairs in scope, before `--top` cuts `pairs` |
-| `thresholds` | The thresholds that the run applied, with `strong_degree` |
-| `pairs[]` | Hidden pairs, sorted by `degree` and then `shared_revisions` (both highest first), then by path |
-| `pairs[].path_a`, `pairs[].path_b` | The two files, relative to the project root. `path_a` sorts first |
-| `pairs[].revisions_a`, `pairs[].revisions_b` | Commits that changed each file in the window |
-| `pairs[].shared_revisions` | Commits that changed both files |
-| `pairs[].degree` | Coupling degree, from 0 to 1 |
-| `pairs[].strong` | Present and `true` when `degree` reaches `thresholds.strong_degree`. Absent otherwise |
-
-The section is present when the hotspot section ran and the run read git history. The `sections` list then has the token `change-coupling`. Fallow writes `degree` and the `thresholds` degrees as JSON numbers with a decimal point, for example `1.0` and `0.3`. The commit counts are integers.
-
-With `--group-by`, `change_coupling` stays at the root of the JSON envelope. No group has its own copy.
-
-### Other output formats
-
-The markdown output adds a table after the hotspots table. Fallow leaves out the table when `pairs` is empty:
-
-```markdown
-### Hidden Change Coupling (1 pair, since 12 months)
-
-| File A | File B | Degree | Shared | Commits A | Commits B | Strong |
-|:-------|:-------|:-------|:-------|:----------|:----------|:-------|
-| `src/a.ts` | `src/b.ts` | 100% | 6 | 6 | 6 | **strong** |
-
-*Files that change together in the commit history with no import between them.*
-```
-
-When `--top` cuts the list, a line under the table counts the pairs that are not shown.
-
-The compact output has one line for each pair. `degree` has two decimals, and `strong` is `true` or `false`:
-
-```
-change-coupling:<path_a>:<path_b>:degree=<degree>,shared=<shared_revisions>,commits_a=<revisions_a>,commits_b=<revisions_b>,strong=<strong>
-change-coupling:src/a.ts:src/b.ts:degree=1.00,shared=6,commits_a=6,commits_b=6,strong=true
-```
-
-The [VS Code extension](/integrations/vscode) shows the pairs in the Health view. The [GitHub Action](/integrations/ci) keeps a pair in a pull request when one of the two files changed.
+Two files change together in most commits, and no import connects them. A person who follows the imports does not find the second file. Make the dependency visible with an import, or move the shared logic to one file. Ignore a pair when it is a coincidence of the history. This section never fails a run.
 
 ### Change dispersion {#change-dispersion}
 
-Each hotspot entry has two change dispersion values. They show how far a change to the file usually spreads:
-
-- `median_files_per_commit`: the median number of analyzed files in the commits that changed this file.
-- `median_lines_per_commit`: the median number of added plus deleted lines, analyzed files only, in the commits that changed this file.
-
-Both values use the change coupling window and skip the same bulk commits. The human hotspot row shows `median_files_per_commit` at the end, for example `3.0 files/commit`. Both are absent when the history has no commit ids, for example a [`fallow-churn/v1`](/cli/health#importing-churn-from-a-non-git-vcs) import without the `commit` field. In that import format, events with the same `commit` form one commit.
-
-**When to act:** Look at the strong pairs first. If the two files must change together, make the dependency explicit with an import, or move the shared logic into one module. If the pair is a coincidence of the history, ignore it. The section never fails a run.
+Each hotspot shows how far a change to the file usually spreads: the median number of files, and of lines, in the commits that change the file. A high number means that a change to this file usually needs changes in many other files.
 
 ## Refactoring targets {#refactoring-targets}
 
-Refactoring targets are ranked recommendations that you can act on. [`fallow health --targets`](/cli/health) produces them. Fallow gives each file a priority score from the metrics above, and then sorts the targets by `efficiency` (priority divided by effort), highest first. Quick wins come first.
+`fallow health --targets` gives a list of files to refactor, with the reason, the expected effort and the confidence. The quick wins come first. Start at the top of the list, and act on the evidence of each target, for example the unused exports or the complex functions that it names.
 
-<Tip>
-**Quick start**: Run `fallow health --targets` to get a prioritized refactoring list. For the fastest improvements, add `--effort low`. To block new regressions, save a baseline with `--save-baseline` and pass `--baseline` in CI. Update the baseline as you fix targets.
-</Tip>
+Full reference: [Refactoring target](/rules/refactoring-target)
 
-<Info>
-The other sections show measurements. Targets tell you what to do about those measurements.
-</Info>
+## Styling findings {#styling-findings}
 
-### Priority score
-
-```
-priority = min(complexity_density, 1) × 30
-         + hotspot_boost × 25            (hotspot_score / 100 if in hotspots, else 0)
-         + dead_code_ratio × 20
-         + min(fan_in / fan_in_p95, 1) × 15
-         + min(fan_out / fan_out_p95, 1) × 10
-```
-
-`fan_in_p95` and `fan_out_p95` are the 95th percentiles of your project (floors 5 and 8), so the fan-in and fan-out terms adapt to the size of the codebase. Fallow normalizes all inputs to \[0, 1\], so each weight is a true percentage share. The formula does not use the Maintainability Index on purpose. MI already includes density and dead code, so they would count twice.
-
-| Score | Interpretation | Action |
-|:------|:---------------|:-------|
-| 70–100 | High priority | Address in the current sprint |
-| 40–70 | Moderate | Schedule for upcoming work |
-| 0–40 | Lower priority | Monitor, fix when you work on the file |
-
-### Effort estimation
-
-Every target has an effort estimate (`low`, `medium`, or `high`) based on three signals per file:
-
-| Effort | Criteria |
-|:-------|:---------|
-| **low** | < 100 lines AND ≤ 3 functions AND fan-in < P25 percentile |
-| **high** | ≥ 500 lines, OR fan-in ≥ P95 percentile, OR (≥ 15 functions AND density > 0.5) |
-| **medium** | Everything else |
-
-For "high", one criterion is enough (OR). For "low", all three must be true (AND). Fallow computes the fan-in percentiles from the file-score distribution of the project (P25 floor 2, P95 floor 5). A small file with fan-in at or above the P95 of the project is still "high", because a change to it affects many files.
-
-Fallow divides the priority by the effort (low = 1, medium = 2, high = 3) to get `efficiency`. The default sort uses `efficiency`.
-
-Every target also has a `confidence` level, based on the source of the data:
-
-| Confidence | Categories | Why |
-|:-----------|:-----------|:----|
-| **high** | dead code, circular dependency, complexity, untested risk | Deterministic graph and AST analysis |
-| **medium** | high impact, coupling, hidden coupling | Heuristic fan-in and fan-out thresholds, and git history for hidden coupling |
-| **low** | churn+complexity | Depends on the quality of the git history |
-
-In human output, the second line of each target shows the category, the effort, and the confidence, separated by ` · `:
-```text
-dead code · effort:low · confidence:high  Remove 12 unused exports to reduce surface area (86% dead)
-complexity · effort:high · confidence:high  Extract parseRow (cognitive: 34) in 520-LOC file into smaller functions
-```
-
-### Evidence
-
-Fallow adds structured evidence that links the target to specific analysis data. With this evidence, agents and scripts can act on a recommendation without a second tool call.
-
-| Category | Evidence fields | Example |
-|:---------|:---------------|:--------|
-| `remove_dead_code` | `unused_exports`: list of export names | `["assertEqual", "assertIs", "assertNever"]` |
-| `extract_complex_functions` | `complex_functions`: list of `{name, line, cognitive}` with cognitive complexity >= 30 | `[{"name": "processData", "line": 45, "cognitive": 113}]` |
-| `add_test_coverage` | `complex_functions`: up to 3 functions of the file with the highest cognitive complexity | `[{"name": "parseRow", "line": 12, "cognitive": 18}]` |
-| `break_circular_dependency` | `cycle_path`: list of file paths forming the cycle | `["src/a.ts", "src/b.ts", "src/c.ts"]` |
-| `resolve_hidden_coupling` | `co_change_partners`: up to 5 files that change together with the target without an import, strongest first, each with `path`, `shared_revisions`, and `degree` | `[{"path": "src/email/templates/invoice.html.ts", "shared_revisions": 9, "degree": 0.75}]` |
-| Any category | `direct_callers`: files that import the target, with the imported symbols. `clone_siblings`: other instances of clones in the file | `[{"path": "src/app.ts", "symbols": [...]}]` |
-
-When no evidence field has data, fallow omits `evidence` from the JSON.
-
-Evidence is for tools. In human output, the recommendation text already includes the key evidence (e.g., "Remove 12 unused exports" or "Extract processData (cognitive: 113)").
-
-### Baselines
-
-To track refactoring progress over time, use `--save-baseline` and `--baseline` with the health command. With an active baseline, fallow reports only *new* targets (targets that are not in the baseline).
-
-```bash
-# Save current targets as the baseline
-fallow health --targets --save-baseline fallow-baselines/health.json
-
-# On subsequent runs, only show new targets
-fallow health --targets --baseline fallow-baselines/health.json
-```
-
-Baseline keys use the format `relative_path:category_label` (e.g., `src/utils.ts:dead code`). A target is "known" if the baseline has the same file and category, even when its priority score or effort level changed.
-
-In CI, this blocks new tech debt, and you can fix the existing targets step by step.
-
-### Recommendation categories
-
-Fallow checks the rules in priority order and gives each target the category of the first rule that matches:
-
-| Category | Display label | Trigger | What it means |
-|:---------|:-------------|:--------|:-------------|
-| Urgent churn + complexity | `churn+complexity` | Hotspot score ≥ 50, accelerating trend, density > 0.5 | File that changes often and gets more complex, highest urgency |
-| Break circular dependency | `circular dependency` | File in an import cycle with fan-in ≥ 5 | Changes cascade through the cycle to many dependents |
-| Split high-impact file | `high impact` | Fan-in ≥ P95 (floor 5), or fan-in ≥ P75 (floor 3) with ≥ 5 functions, and density > 0.3 | Many files depend on it, so each new bug affects many files |
-| Remove dead code | `dead code` | Dead code ratio ≥ 0.5 with ≥ 3 value exports | Most exports are unused. Make the API smaller |
-| Extract complex functions | `complexity` | Top cognitive complexity ≥ 30 | Contains functions that are very hard to understand |
-| Reduce coupling | `coupling` | Fan-out ≥ P90 (floor 5) and MI < 60 (excluding entry points) | Too many imports reduce testability |
-| Add test coverage | `untested risk` | `crap_above_threshold` ≥ 2 and density > 0.3 | Multiple complex functions lack a test dependency path |
-| Break circular dependency | `circular dependency` | Any other file in an import cycle | The cycle spreads changes, but few files depend on this one |
-| Resolve hidden coupling | `hidden coupling` | A strong [hidden pair](#change-coupling) (degree ≥ 0.5) | The file changes together with another file, but no import connects them. Make the dependency explicit or move the shared logic into one module |
-
-A file can match more than one rule, but only the match with the highest priority sets the category. JSON output still shows all contributing factors.
-
-The `resolve_hidden_coupling` rule runs last. It claims a file only when no other rule matches, so an existing target keeps its category and its baseline key. A health baseline that you saved before this rule existed has no `resolve_hidden_coupling` target. A run against that baseline reports these targets as new. Save the baseline again to accept them. A strong hidden pair still adds the `hidden_coupling` factor to the target of each file, whatever the category. The factor has the `degree` as `value` and `0.5` as `threshold`.
-
-The `resolve_hidden_coupling` value moved the health `schema_version` to 12. Each envelope that embeds the health contract moved too: `fallow audit` to 13, the combined `fallow` report to 14, and the audit review brief to 13.
-
-Later, the runtime coverage totals became nullable for a partial capture. That change moved the health `schema_version` to 13, `fallow audit` to 14, the combined `fallow` report to 15, the audit review brief to 14, and `fallow coverage analyze` to `"3"`.
-
-```text fallow health --targets --top 5
-● Refactoring targets (5)
-  1 low effort · 1 medium · 3 high
-    score = quick-win ROI (higher = better) · pri = absolute priority
-
-   55.8  pri:55.8    src/legacy/old-api.ts
-         dead code · effort:low · confidence:high  Remove 8 unused exports to reduce surface area (73% dead)
-
-   30.8  pri:92.3    src/core/processor.ts
-         churn+complexity · effort:high · confidence:low  Actively-changing file with growing complexity, stabilize before adding features
-
-   26.0  pri:52.0    src/graph/resolver.ts
-         circular dependency · effort:medium · confidence:high  Break import cycle, 8 files depend on this, changes cascade through the cycle
-
-   23.7  pri:71.2    src/utils/helpers.ts
-         high impact · effort:high · confidence:medium  Split high-impact file (640 LOC), 15 dependents amplify every change
-
-   13.9  pri:41.8    src/components/Dashboard.tsx
-         complexity · effort:high · confidence:high  Extract renderMetrics (cognitive: 45) and renderFilters (cognitive: 32) in 520-LOC file into smaller functions
-
-  Prioritized refactoring recommendations based on complexity, churn, and
-  coupling signals
-  https://fallow.tools/docs/explanations/health/#refactoring-targets
-```
-
-### JSON structure
-
-With `--format json`, each target has structured data for tools:
-
-```json
-{
-  "targets": [
-    {
-      "path": "src/core/processor.ts",
-      "priority": 92.3,
-      "efficiency": 30.8,
-      "recommendation": "Actively-changing file with growing complexity, stabilize before adding features",
-      "category": "urgent_churn_complexity",
-      "effort": "high",
-      "confidence": "low",
-      "factors": [
-        {
-          "metric": "complexity_density",
-          "value": 0.67,
-          "threshold": 0.3,
-          "detail": "density 0.67 exceeds 0.3"
-        },
-        {
-          "metric": "fan_in",
-          "value": 12,
-          "threshold": 10,
-          "detail": "12 files depend on this"
-        }
-      ]
-    },
-    {
-      "path": "src/helpers/util.ts",
-      "priority": 38.8,
-      "efficiency": 38.8,
-      "recommendation": "Remove 12 unused exports to reduce surface area (86% dead)",
-      "category": "remove_dead_code",
-      "effort": "low",
-      "confidence": "high",
-      "factors": [
-        {
-          "metric": "dead_code_ratio",
-          "value": 0.86,
-          "threshold": 0.5,
-          "detail": "12 unused of 14 value exports (86%)"
-        }
-      ],
-      "evidence": {
-        "unused_exports": ["assertEqual", "assertIs", "assertNever", "oldConfig", "legacyHelper"]
-      }
-    }
-  ]
-}
-```
-
-Each factor has the raw `value` and `threshold`. For categories that support it, the `evidence` field gives the details you need to act. AI agents can use `evidence.unused_exports` to create removal PRs without a second tool call. Categories without evidence do not have the field.
-
-
-## Styling findings
-
-With `fallow health --css`, fallow reports first-class styling findings for CSS and CSS-in-JS. `fallow audit` also reports them when its CSS analysis is active. Each finding has a `code`, a `sub_kind`, an `effective_severity`, a location, an evidence value, and read-only actions. The JSON output has them in `styling_findings`.
-
-The five styling rules default to `warn`. A finding with `warn` shows in the output but does not change the audit verdict. Set a rule to `error` to make it fail the verdict. See [Rules](/configuration/rules).
-
-These findings are different from the [styling health grade](/analysis/css-analysis#styling-health-grade). The grade is a descriptive score and never fails a run.
+With `--css`, `fallow health` also checks stylesheets and CSS-in-JS. [Styling](/analysis/styling) explains this analysis. These findings are warnings by default.
 
 ### Token drift {#css-token-drift}
 
-`css-token-drift` reports a styling value that bypasses the design token system. Examples:
+A styling value does not use the design tokens of the project, for example a Tailwind arbitrary value or a color near a token. Use the existing token when it is correct.
 
-- A Tailwind arbitrary value in markup.
-- A hardcoded value that is near an existing design token.
-- A token that is almost a duplicate of another token.
-
-Make sure that the value is not intentional, then replace it with an existing scale token where that is correct.
+Full reference: [CSS token drift](/rules/css-token-drift)
 
 ### Duplicate declaration block {#css-duplicate-block}
 
-`css-duplicate-block` reports a declaration block that repeats across selectors or variant definitions. This usually shows copied styling that you can merge into one rule.
+The same block of declarations is in two or more rules. Merge the copies into one rule.
+
+Full reference: [CSS duplicate block](/rules/css-duplicate-block)
 
 ### Selector complexity {#css-selector-complexity}
 
-`css-selector-complexity` reports a rule that crosses a structural limit. The `sub_kind` gives the cause:
+A rule uses an id selector, deep nesting, `!important`, or a complex selector. Make the selector simpler when you can.
 
-| `sub_kind` | Cause |
-|:-----------|:------|
-| `high-specificity` | The selector uses an id selector. |
-| `deep-nesting` | The rule has a nesting depth of 3 or more. |
-| `important-density` | The rule uses `!important`. |
-| `complex-selector` | The selector is structurally complex. |
-
-Reset rules, accessibility rules, and overrides of third-party generated markup can be intentional. Make sure that the rule is not necessary before you change it.
+Full reference: [CSS selector complexity](/rules/css-selector-complexity)
 
 ### Dead surface {#css-dead-surface}
 
-`css-dead-surface` reports styling that the analyzed project does not appear to use. Examples:
+A class, a token, a `@keyframes` rule or other styling has no use in the project. Make sure that no dynamic class name uses it, then remove it.
 
-- A scoped component class with no local use.
-- An unused `@theme` token.
-- A class that no file references.
-- Unused `@keyframes`, `@property`, or `@layer` at-rules.
-- An unused `@font-face` family.
-- An unused CSS-in-JS export.
-
-Dynamic class names and external consumers are not always visible to static analysis. Make sure that no dynamic consumer exists before you delete the styling.
+Full reference: [CSS dead surface](/rules/css-dead-surface)
 
 ### Broken reference {#css-broken-reference}
 
-`css-broken-reference` reports a styling reference that has no stylesheet definition in the analyzed project. Examples:
+Code uses a class or an animation that no stylesheet of the project defines. Correct the name, unless an external stylesheet defines it.
 
-- A class name in markup that is one edit from a defined class.
-- An animation that references a `@keyframes` name that no file defines.
+Full reference: [CSS broken reference](/rules/css-broken-reference)
 
-The definition can come from an external stylesheet or from CSS-in-JS. Make sure that it does not exist before you fix the reference.
+## Health score {#health-score}
 
+The [health score](/analysis/health) is one number from 0 to 100 for the whole project. Higher is better. Fallow subtracts points for unused files and exports, complex functions, hotspots, cycles, duplication and other problems. The grade is A at 85 or more, B at 70, C at 55, D at 40 and F below 40. The JSON output lists each penalty, so you can see which problem costs the most points.
 
-## Health score
+## Related
 
-The health score is one 0–100 number for the overall quality of the codebase. Use [`fallow health --score`](/cli/health) to get it.
-
-```
-score = 100 - sum(penalties)
-```
-
-Fallow clamps the result to \[0, 100\]. Each penalty measures a different quality dimension:
-
-| Penalty | Formula | Max |
-|:--------|:--------|----:|
-| Dead files | `min(dead_file_pct × 0.2, 15)` | 15 |
-| Dead exports | `min(dead_export_pct × 0.2, 15)` | 15 |
-| Complexity | `min(critical_complexity_pct × 4, 20)` | 20 |
-| P90 complexity | `0` for formula v2 and later; older snapshots fall back to `min(max(0, p90_cyclomatic − 10), 10)` | 10 |
-| Maintainability | `min(maintainability_low_pct × 1.5, 15)` | 15 |
-| Hotspots | `min(hotspot_count / max(ceil(total_files × 0.01), 1) × 10, 10)` | 10 |
-| Unused deps | `min(unused_deps_per_k_files × 0.5, 25)` | 25 |
-| Circular deps | `min(circular_deps_per_k_files × 0.5, 25)` | 25 |
-| Unit size | `min(functions_over_60_loc_per_k × 0.5, 10)` | 10 |
-| Coupling | `min(coupling_high_pct × 0.5, 5)` | 5 |
-| Duplication | `min(max(0, duplication_pct − 5) × 1.0, 10)` | 10 |
-| Prop drilling | `min(prop_drilling_chain_count × 1, 5)`, only when the opt-in `prop-drilling` rule runs | 5 |
-
-`health_score.formula_version` identifies the formula. Version 3 keeps the density and tail metrics introduced in version 2. Its hotspot penalty counts files with a hotspot score of at least 50. Positive scores below that threshold contribute zero to this penalty. `hotspot_top_pct_count` remains a rank diagnostic.
-
-Snapshots record `score_formula_version`. Fallow compares scores only when the saved and current formula versions are known and equal. Older snapshots remain readable, and their raw metric trends remain available. Fallow omits the score delta when the formula version is missing or different, so a formula update does not appear as a code improvement.
-
-**Letter grades:** A (score >= 85), B (70–84), C (55–69), D (40–54), F (below 40).
-
-A penalty field is absent from JSON when its analysis did not run. `--score` computes the score and automatically runs the duplication analysis. With `duplicates.enabled: false` in the config, the score has no duplication measure and no duplication penalty. To include the churn-based hotspot penalty in the score, add `--hotspots` (or combine `--score --targets`).
-
-An input that failed to load is a different case. It adds zeros, and a zero looks like a clean measurement. Before you trust a zero, look in `workspace_diagnostics[]` for an entry with `degrades_analysis: true`. See [degraded inputs](/cli/health#degraded-inputs).
-
-
-## Limitations
-
-<Warning>
-A metric is a signal. It does not prove that code is good or bad. Know these edge cases:
-</Warning>
-
-- **Generated files** (GraphQL codegen, Prisma client, OpenAPI types) can have high complexity density, but you should not refactor them. Exclude them with `health.ignore` patterns.
-- **Test files** with many `it()`/`test()` blocks can have high cyclomatic complexity. This is usually fine, because test suites *should* cover many paths.
-- **Config files** (Webpack, ESLint) can show up as hotspots, because they change often during setup. Their churn usually goes down after the first configuration.
-- **MI scores are not portable.** The fallow formula is different from Visual Studio and SonarQube, so you cannot directly compare scores between these tools.
-- **Hotspot scores are relative to your project.** A score of 80 means "worst in your project," not "objectively bad." A well-maintained project can have a top score of 30.
-- **Fan-in/out counts modules, not imports.** `import { a, b, c } from './utils'` counts as 1 edge, not 3.
-
-
-## JSON `_meta` object
-
-When you pass `--explain`, or run through MCP, the JSON output of each command includes a `_meta` object:
-
-```json
-{
-  "schema_version": 13,
-  "_meta": {
-    "docs": "https://fallow.tools/docs/cli/health/",
-    "metrics": {
-      "maintainability_index": {
-        "name": "Maintainability Index",
-        "description": "Composite file score combining complexity density, dead code ratio, and coupling.",
-        "range": "[0, 100]",
-        "interpretation": "higher is better"
-      }
-    }
-  }
-}
-```
-
-With `_meta`, AI agents and CI systems can interpret metric values without external documentation.
-
-## See also
-
-<CardGroup cols={3}>
-  <Card title="fallow health" icon="terminal" href="/cli/health">
-    All flags for the health command.
-  </Card>
-  <Card title="Runtime coverage" icon="gauge" href="/analysis/runtime-coverage">
-    Add production evidence to health results.
-  </Card>
-  <Card title="Duplication explained" icon="clone" href="/explanations/duplication">
-    Read clone groups and families, and decide what to extract.
-  </Card>
-  <Card title="CRAP scores with Vitest" icon="flask-vial" href="/analysis/crap-scores-vitest">
-    Get exact CRAP scores from Vitest coverage.
-  </Card>
-</CardGroup>
+- [Health](/analysis/health): how fallow measures complexity and risk.
+- [`fallow health`](/cli/health): each option and the JSON output.
+- [Issue types](/reference/issue-types): each issue type of each command.

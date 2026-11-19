@@ -1,1845 +1,198 @@
 ---
-title: "Configure fallow with .fallowrc.json or fallow.toml"
+title: "How configuration works"
 sidebarTitle: "Configuration"
-description: "Configure fallow for a TypeScript or JavaScript project. Fallow runs with no config. Add .fallowrc.json or fallow.toml to set entry points, ignores, and rules."
-keywords: ["configuration", "fallowrc", "fallowrc.jsonc", "fallow.toml", "entry points", "ignore patterns", "rules", "schema", "fallow config"]
+description: "Reference: where fallow finds the config file, how config files merge, which source wins, and the keys that most projects set."
+keywords: ["configuration", "fallowrc", ".fallowrc.json", ".fallowrc.jsonc", "fallow.toml", "extends", "config precedence", "glob patterns", "fallow config", "fallow init"]
 icon: "gear"
 ---
 
-Fallow works with no configuration. Add a config file when the defaults do not fit your project, for example to add entry points, ignore generated files, or change rule severity. To create one, run:
+Fallow needs no config file for a first run. It finds the [entry points](/concepts/entry-points) of your project in `package.json`, in its scripts and through [plugins](/concepts/plugins). Add a **config file** when the defaults do not fit your project. Examples are an entry point that fallow cannot see, generated files, or a [rule](/concepts/findings#rules-and-severities) with another severity. The [config reference](/reference/config) has an entry for each key.
+
+## Create a config file
+
+Run `fallow init` in the project root. It writes a config file for the tools that it detects:
 
 ```bash
-fallow init          # Creates .fallowrc.json
-fallow init --toml   # Creates fallow.toml
+npx fallow init
 ```
-
-## Config file formats
-
-Fallow looks for config files in this order:
-
-1. `.fallowrc.json` (JSONC, comments allowed)
-2. `.fallowrc.jsonc` (same JSONC parser; editors detect the JSON-with-comments syntax from the extension)
-3. `fallow.toml`
-4. `.fallow.toml`
-
-Fallow checks each directory up to the workspace root, and the first match wins. `.fallowrc.json` and `.fallowrc.jsonc` behave the same. The `.jsonc` extension only tells editors to expect comments.
-
-If one directory has more than one of these files, fallow loads the file with the higher precedence. It prints a warning on stderr that names the ignored file. An old config from a migration therefore cannot take effect without a message.
-
-Fallow parses both JSON forms as JSONC, and the published schema declares this (`allowComments`, `allowTrailingCommas`). Editors that use the JSON language service, such as VS Code and Zed, therefore accept comments and trailing commas in a config that references `schema.json`.
-
-## Full example
-
-<CodeGroup>
-```jsonc .fallowrc.json
-{
-  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
-  "entry": ["src/workers/*.ts", "scripts/*.ts"],
-  "ignorePatterns": ["**/*.generated.ts", "**/*.d.ts"],
-  "ignoreDependencies": ["autoprefixer", "@types/node"],
-  "ignoreExports": [
-    { "file": "src/public-api.ts", "exports": ["*"] }
-  ],
-  "ignoreExportsUsedInFile": true,
-  "publicPackages": ["@myorg/sdk"],
-  "dynamicallyLoaded": ["src/plugins/**/*.ts"],
-  "rules": {
-    "unused-files": "error",
-    "unused-exports": "warn",
-    "unused-types": "off",
-    // Opt-in API hygiene check; default is "off"
-    "private-type-leaks": "warn",
-    "unresolved-imports": "error"
-  },
-  "duplicates": {
-    "mode": "mild",
-    "minTokens": 50,
-    "minLines": 5,
-    "threshold": 10
-  },
-  "similarCode": {
-    "threshold": 0.8,
-    "minLines": 3,
-    "ignore": ["src/generated/**"]
-  },
-  "health": {
-    "maxCyclomatic": 20,
-    "maxCognitive": 15,
-    "ignore": ["**/*.generated.ts"],
-    "thresholdOverrides": [
-      {
-        "files": ["src/legacy/**"],
-        "functions": ["parseLegacy"],
-        "maxCyclomatic": 40,
-        "maxCognitive": 35,
-        "reason": "Queued legacy parser cleanup"
-      }
-    ]
-  },
-  "audit": {
-    "gate": "new-only"
-  },
-  "security": {
-    "requestReceivers": ["h", "httpReq"]
-  },
-  "boundaries": {
-    "preset": "bulletproof"
-  },
-  "production": false
-}
-```
-
-```toml fallow.toml
-entry = ["src/workers/*.ts", "scripts/*.ts"]
-ignorePatterns = ["**/*.generated.ts", "**/*.d.ts"]
-ignoreDependencies = ["autoprefixer", "@types/node"]
-ignoreExportsUsedInFile = true
-publicPackages = ["@myorg/sdk"]
-dynamicallyLoaded = ["src/plugins/**/*.ts"]
-production = false
-
-[rules]
-unused-files = "error"
-unused-exports = "warn"
-unused-types = "off"
-# Opt-in API hygiene check; default is "off"
-private-type-leaks = "warn"
-unresolved-imports = "error"
-
-[duplicates]
-mode = "mild"
-minTokens = 50
-minLines = 5
-threshold = 10
-
-[similarCode]
-threshold = 0.8
-minLines = 3
-ignore = ["src/generated/**"]
-
-[health]
-maxCyclomatic = 20
-maxCognitive = 15
-ignore = ["**/*.generated.ts"]
-
-[[health.thresholdOverrides]]
-files = ["src/legacy/**"]
-functions = ["parseLegacy"]
-maxCyclomatic = 40
-maxCognitive = 35
-reason = "Queued legacy parser cleanup"
-
-[audit]
-gate = "new-only"
-
-[security]
-requestReceivers = ["h", "httpReq"]
-
-[boundaries]
-preset = "bulletproof"
-```
-</CodeGroup>
-
-## Path globs
-
-The config fields that select files use the same glob rules. A single `*` and a `?` match inside one path segment and do not match `/`. Only `**` crosses directories, as in picomatch.
-
-| Glob | Matches | Does not match |
-|:-----|:--------|:---------------|
-| `src/*.ts` | `src/a.ts` | `src/a/b.ts` |
-| `src/**/*.ts` | `src/a.ts`, `src/a/b.ts` | `lib/a.ts` |
-| `*.test.ts` | `a.test.ts` at the project root | `src/a.test.ts` |
-| `**/*.test.ts` | `a.test.ts`, `src/a.test.ts` | `src/a.spec.ts` |
-
-These rules apply to:
-
-- `entry` and `dynamicallyLoaded`
-- `ignorePatterns`, with its `!` exceptions
-- `ignoreFindings`, `overrides[].files`, `ignoreExports[].file` and `ignoreCatalogReferences[].consumer`
-- `duplicates.ignore`, `similarCode.ignore`, `health.ignore` and `health.thresholdOverrides[].files`
-- `boundaries.zones[].patterns` and `boundaries.coverage.allowUnmatched`
-- the `files`, `exclude` and `allowedFiles` globs of a rule pack
-- the `framework[]` fields `usedExports[].pattern`, `manifestEntries[].manifests` and `detection.pattern`
-
-A glob in these fields, and in `ignoreDependencies` and `ignoreUnresolvedImports`, can be at most 512 bytes long. A longer glob makes the config load fail. The time to build a glob matcher grows with the square of the glob length.
-
-<Warning>
-A single `*` in these fields does not match `/`. A config that uses `*` for nested files therefore matches fewer files than you expect, and a run can show new findings. You have two choices:
-
-- If you mean one folder level, write the names in place of `*`, for example `examples/{app,docs}`. The glob then matches the same files, and the warning stops.
-- If you mean nested folders, change the single `*` to `**`, for example `src/generated/**` or `**/*.test.ts`. The glob then matches the nested files.
-
-fallow prints a warning on stderr for each glob where a single `*` or `?` skips files in nested folders. The warning names the field, the pattern, up to 3 of the skipped files, and the `**` form, for example:
 
 ```text
-fallow: health.ignore glob "*.test.ts" matches 481 fewer files than before fallow 3.34.0. A single "*" or "?" now matches in one folder level only. These files no longer match: src/a/a.test.ts, src/b/b.test.ts, src/c/c.test.ts, and 478 more. To keep the one-level match and stop this warning, write the names in place of "*" or "?", for example "{name1,name2}". To match nested folders again, use "**/*.test.ts".
+Created .fallowrc.json
+  Detected: TypeScript
+  Detected: Vitest
+  Config includes test framework rules
+Added .fallow/ to .gitignore
 ```
 
-For `entry` and `dynamicallyLoaded`, a file that another entry source still declares, for example a plugin or `package.json`, does not count. When no file remains, fallow prints no warning.
+`fallow init --toml` writes a `fallow.toml` file. [`fallow init`](/cli/init) has the other options.
 
-`--quiet` hides the warning, and JSON output does not change.
-</Warning>
+## Config file names {#config-file-names}
 
-Globs that match package names or import specifiers do not use these rules. In `ignoreDependencies`, `ignoreUnresolvedImports` and `publicPackages`, a `*` still matches `/`, so `@scope/*` and `@*` keep their match.
+| File | Format |
+|:--|:--|
+| `.fallowrc.json` | JSONC: JSON with comments and trailing commas |
+| `.fallowrc.jsonc` | JSONC. The extension tells your editor to accept comments. |
+| `fallow.toml` | TOML |
+| `.fallow.toml` | TOML |
 
-## Config fields
+Fallow starts in the project root: the current directory, or the directory that `--root` names. It looks for the names in the order of the table, and the first file that exists wins. When the directory has no config file, fallow looks in each parent directory up to the repository root: the directory with `.git`, `.hg` or `.svn`. When one directory has two config files, fallow loads the file that is higher in the table. It writes a warning on stderr that names the other file. To load a file at another path, pass `--config <path>`.
 
-<Accordion title="entry">
-Extra entry point glob patterns. Fallow detects entry points from these sources:
+## Editor completion {#json-schema}
 
-- The `package.json` fields `main`, `module`, `types`, `typings`, `source`, `browser`, `bin`, and `exports`.
-- The files that `package.json` scripts run. See [Script binary analysis](/analysis/dead-code#script-binary-analysis).
-- Framework plugins.
-- The files that CI files run: `.gitlab-ci.yml` and `.github/workflows/*.yml`.
-- The files that infrastructure files run: Dockerfile, Procfile, and `fly.toml`. See [Infrastructure entry points](/analysis/dead-code#infrastructure-entry-points).
-- The `entry`, `supportEntry`, and [`dynamicallyLoaded`](#dynamicallyloaded) config keys.
-
-When the config, the `package.json` fields, and the scripts give no runtime entry point, fallow uses the default index files: `src/index`, `src/main`, `index`, or `main`, with a `.ts`, `.tsx`, `.js`, or `.jsx` extension.
-
-Add the files that fallow does not detect.
+Add the `$schema` key to a JSON config file. Your editor then completes the keys and checks the values:
 
 ```jsonc
-{
-  "entry": ["src/workers/*.ts", "scripts/*.ts", "src/cli.ts"]
-}
+// .fallowrc.json
+{ "$schema": "./node_modules/fallow/schema.json" }
 ```
 
-A single `*` matches inside one directory. `src/workers/*.ts` does not match `src/workers/jobs/send.ts`. Use `src/workers/**/*.ts` for nested files. See [Path globs](#path-globs).
-</Accordion>
+The local path matches the installed version and works offline. Without an npm install, use `https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json`. `fallow init` writes the URL form. [`fallow config-schema`](/cli/config-schema) prints the schema.
 
-<Accordion title="supportEntry">
-Glob patterns for entry points that do not run in production: dev scripts, setup files and other tooling. In a normal run, a support entry keeps its file and its imports reachable, the same as `entry`.
+## Unknown keys and `minimumVersion` {#minimumversion}
 
-```jsonc
-{
-  "entry": ["src/server.ts"],
-  "supportEntry": ["scripts/*.ts", "tools/seed.ts"]
-}
-```
+An unknown key in the config file stops the run with exit code 2. The error names the key and lists the valid keys, so a typo such as `ignorePaths` shows at once. An unknown name in `rules` gives a warning, and fallow ignores the entry. A key that a newer fallow version adds is unknown to an older version. Set [`minimumVersion`](/reference/config-files#minimumversion) in the change that adds the key. An older fallow then stops with a message that names the version to install.
 
-In production mode (`--production`, `production: true` or `production: { "deadCode": true }`), fallow leaves a file that only `supportEntry` matches out of the analysis. Its imports do not mark an export, a file or a dependency as used, and fallow reports no finding in the file. So production mode uses the files in `entry`, the framework production entries and the `package.json` entry points only.
+## Share a config with `extends` {#extends}
 
-A file that `entry`, a framework plugin or a `package.json` field also declares stays an entry point. A support file that production code imports stays a normal module. The glob syntax is the same as for `entry`.
-</Accordion>
-
-<Accordion title="Entry point auto-detection">
-Without an `entry` config, fallow still finds entry points in your `package.json` fields. These files are the roots of the module graph. Fallow treats all code that they reach as "used."
-
-Fallow reads these `package.json` fields:
-
-| Field | Description |
-|:------|:------------|
-| `main` | CJS entry point |
-| `module` | ESM entry point |
-| `types` / `typings` | TypeScript declaration entry point |
-| `source` | Source entry point before the build (a common convention for dev tooling) |
-| `browser` | Browser entry point (a string, or an object with per-path overrides) |
-| `bin` | CLI binaries (a string for one binary, an object for multiple) |
-| `exports` | Modern entry point map (resolved recursively, including conditional exports and subpath patterns) |
-
-Fallow resolves the `exports` field recursively. It follows nested conditions such as `"import"`, `"require"`, `"types"`, and `"default"` to their target files. It also includes subpath exports (for example `"./utils"`).
-
-When these fields point at output directories (`dist/`, `build/`, `out/`, `esm/`, `cjs/`), fallow maps the paths back to the same files in `src/` and tries the source extensions. Fallow ignores output directories by default. Fallow also maps a `lib/` path back to `src/`, but only when the `lib/` file is not in the analyzed files: it is not on disk, or `.gitignore` or `ignorePatterns` excludes it. A package with hand-written source in `lib/` keeps its `lib/` entry.
-
-Framework plugins add their own entry points to the `package.json` entry points. For example, Next.js adds `pages/**` and `app/**/page.tsx`, and Vitest adds `**/*.test.ts`. Run `fallow list` to see all detected entry points.
-</Accordion>
-
-<Accordion title="ignorePatterns">
-Glob patterns for files that fallow does not analyze at all.
+[`extends`](/reference/config-files#extends) loads one or more base configs before the keys of your file:
 
 ```jsonc
+// .fallowrc.json
 {
-  "ignorePatterns": ["**/*.generated.ts", "**/*.d.ts", "legacy/**"]
+  "extends": ["./configs/fallow-base.json", "npm:@acme/fallow-config"],
+  "ignorePatterns": ["src/generated/**"]
 }
 ```
 
-The built-in ignores apply at any depth: `**/node_modules/**`, `**/dist/**`, `**/build/**`, `**/coverage/**`, and the minified-bundle globs. Since 3.26.0, the `build` default is recursive like the others. Fallow therefore also skips a nested `build/` directory with hand-written source.
+| Source | Form | Notes |
+|:--|:--|:--|
+| Local file | `./configs/fallow-base.json` | Relative to the config file that has the `extends` key. JSON and TOML files can extend each other. |
+| Package | `npm:@acme/fallow-config` | An installed package. Fallow reads the file that its `exports` or `main` names, or a config file name in the package directory. |
+| URL | `https://example.com/fallow.json` | Only with the `--allow-remote-extends` option. Fallow rejects `http://`. The download has a time limit of 5 seconds and a size limit of 1 MB. |
 
-A source folder named `build`, for example the build step of a CLI in `src/cli/build/`, is then not analyzed. Its imports do not count, so a dependency that only this folder uses can be reported as unused. The run names the skipped folder in `workspace_diagnostics` with the kind `excluded-by-default-ignore`, and `fallow list` shows it too. To analyze the folder, add an exception such as `"!src/**/build/**"`, as in the example below. Keep the built-in default for the build output itself.
+The bases apply in list order, then your file applies. An object key merges key by key. An array or a single value in your file replaces the value of the base. A chain of `extends` can be 10 levels deep, and a cycle stops the load with an error. [`sealed`](/reference/config-files#sealed) limits `extends` to files in the directory of the config file. Use it for a package that must not take settings from outside.
 
-A `!`-prefixed entry is an exception. It brings back files that a built-in default, one of your own patterns, or the hidden-directory skip removes:
+## Which setting wins {#precedence}
+
+A setting can come from a command-line option, an [environment variable](/configuration/environment) and the config file. When more than one source sets it, fallow uses this order:
+
+1. The command-line option, for example `--production`.
+2. The environment variable, for example `FALLOW_PRODUCTION`.
+3. The config file, for example `"production": true`.
+4. The default of fallow.
+
+## Glob patterns {#path-globs}
+
+The keys that select files take glob patterns. Fallow matches each pattern against the path of a file relative to the project root, with `/` as the separator on each platform.
+
+| Pattern | Matches | Does not match |
+|:--|:--|:--|
+| `src/*.ts` | `src/a.ts` | `src/lib/a.ts` |
+| `src/**/*.ts` | `src/a.ts`, `src/lib/a.ts` | `test/a.ts` |
+| `*.test.ts` | `a.test.ts` | `src/a.test.ts` |
+| `**/*.test.ts` | `a.test.ts`, `src/a.test.ts` | `src/a.spec.ts` |
+
+- A single `*` or `?` does not match `/`. Use `**` to match files in nested directories.
+- A pattern copied from `.gitignore` can match fewer files. In `.gitignore`, `src/generated/*` also covers the subdirectories. Here, use `src/generated/**`.
+- An absolute path, a `..` segment or a pattern longer than 512 bytes stops the config load.
+- When a single `*` skips files in nested directories, fallow writes a warning on stderr. The warning names the key, the skipped files and the `**` form.
+
+A pattern that matches package names or import specifiers follows other rules. In `ignoreDependencies`, `ignoreUnresolvedImports` and `publicPackages`, `*` also matches `/`, so `@acme/*` matches each package in the `@acme` scope.
+
+## Most used keys {#config-fields}
+
+Each key has an entry in the [config reference](/reference/config) with its type and default.
+
+### `entry` {#entry}
+
+Add the files that start your code when fallow cannot find them, for example worker files. Fallow follows the imports of each matched file. For a script that does not run in production, use [`supportEntry`](/reference/config-files#supportentry). Reference: [`entry`](/reference/config-files#entry).
 
 ```jsonc
-{
-  "ignorePatterns": [
-    "legacy/**",
-    // lift the built-in **/coverage/** for this subtree only
-    "!src/policy/coverage/**",
-    // analyze source folders named build, not the build output
-    "!src/**/build/**",
-    // add the hidden directory .config to discovery
-    "!.config/**"
-  ]
-}
+{ "entry": ["src/workers/**/*.ts", "scripts/*.ts"] }
 ```
 
-- Fallow applies the built-in defaults first, then your own patterns, then the `!` exceptions.
-- An exception lifts only the paths that it matches. With `!src/policy/coverage/**`, a top-level `coverage/` output directory stays excluded.
-- In a hidden directory that only an exception opens, fallow keeps only the files that an exception matches.
-- Paths under `node_modules` or `.git` cannot be lifted. A `!` entry that names one of these segments is a config error (exit 2).
+### `ignorePatterns` {#ignorepatterns}
 
-To see which built-in pattern removed files, and how many, run with `--explain-skipped`.
-
-A line that you copy from `.gitignore` can match fewer files here. In `.gitignore`, `src/generated/*` also ignores the subfolders of `src/generated`, because git does not go into an ignored directory. Fallow matches each glob against the full file path, so in `ignorePatterns` the same line ignores only the files directly in `src/generated`. Use `src/generated/**` to ignore the subfolders too. See [Path globs](#path-globs).
-</Accordion>
-
-<Accordion title="ignoreFindings">
-Glob patterns for files where fallow does not report dead-code findings. Fallow still discovers and parses matching files and keeps them in the module graph, so everything they import stays reachable. To remove files from the analysis fully, use `ignorePatterns`.
+Remove generated or vendored files from the analysis. Fallow does not read these files, so their imports do not count. Your patterns add to the built-in ones, such as `**/dist/**`. Reference: [`ignorePatterns`](/reference/config-files#ignorepatterns).
 
 ```jsonc
-{
-  "ignoreFindings": [
-    "vitest.config.ts",
-    "src/generated/**",
-    // a leading ! keeps matching paths reportable
-    "!src/generated/keep.ts"
-  ]
-}
+{ "ignorePatterns": ["src/generated/**", "**/*.d.ts"] }
 ```
 
-Patterns are relative to the project root and use `/` on every platform, including Windows. Matching is case sensitive. `*` and `?` do not match `/`, so `src/*` covers only the files directly in `src`. Use `src/**` for the whole `src` subtree. See [Path globs](#path-globs). Fallow rejects absolute paths, `..` segments, and a bare `"!"` when it loads the config.
+### `ignoreDependencies` {#ignoredependencies}
 
-Order does not matter. A negation wins over any positive match, in any position in the array. An array with only negations hides every path except the paths that a negation matches.
-
-Fallow hides findings before it applies rules, severities, and `--fail-on-issues`. A hidden finding therefore cannot fail a run and does not show in any output format.
-
-Some findings belong to several files: circular dependencies, re-export cycles, package cycles (which belong to the files of their example imports), duplicate exports, prop drilling chains, and unlisted dependencies (which belong to their import sites). Fallow hides such a finding only when every owning file matches.
-
-These findings stay visible even when their path matches:
-
-- Dependency findings that belong to a manifest (unused, dev, optional, type-only, test-only, catalog, override).
-- Architecture boundary violations and policy violations.
-- Stale suppressions.
-- Framework correctness findings, such as client and server directives and route collisions.
-- Security candidates.
-
-A covered file that does not parse is broken on purpose, for example a syntax-error test fixture. Fallow therefore also hides its parse errors:
-
-- The run reports no `source-parse-degraded` or `source-nesting-too-deep` diagnostic and prints no parse warning for the file.
-- The file does not count for the [parse error gate](/cli/global-flags#parse-error-gate).
-- Other findings do not get the `incomplete-import-graph` or `incomplete-file-analysis` caveat because of the file, so their actions can be auto-fixable.
-- The pattern counts as matched.
-
-This also applies when the covered file is an entry point or is reachable. Use `ignoreFindings` this way only for files that are broken on purpose. A valid file that the parser cannot read, for example because of syntax that is newer than the parser, can hide an import. Another module can then read as unused, and no caveat shows this.
-
-A pattern that matched no finding has no effect. The usual cause is a typo. Every output of `fallow dead-code` names such a pattern, see [Unmatched config patterns](#unmatched-config-patterns).
-</Accordion>
-
-<Accordion title="ignoreDependencies">
-Package names that fallow always treats as used and as available.
-Fallow does not report listed dependencies as unused or as unlisted.
-Use it for packages that the runtime provides, such as `bun:sqlite`, and for other dependencies that are available without a declaration.
+Stop dependency findings for a package that the runtime provides, or that fallow cannot see in use. Fallow then reports the package neither as unused nor as unlisted. Reference: [`ignoreDependencies`](/reference/config-dead-code#ignoredependencies).
 
 ```jsonc
-{
-  "ignoreDependencies": ["autoprefixer", "@types/node", "bun:sqlite"]
-}
+{ "ignoreDependencies": ["bun:sqlite", "@types/*"] }
 ```
 
-An entry can also be a glob. An entry with `*`, `?`, `[` or `{` is a glob with the same syntax as `ignorePatterns`, and fallow matches it against the package name. An entry without these characters matches one package name exactly.
+### `ignoreExports` {#ignoreexports}
 
-```jsonc
-{
-  // Every package in the @acme scope, and every @types package.
-  "ignoreDependencies": ["@acme/*", "@types/*", "eslint-plugin-*"]
-}
-```
-
-- `@acme/*` matches `@acme/lib` and `@acme/ui`, but not `@other/lib`.
-- A glob applies to the same checks as an exact name: unused, unlisted, type-only, test-only and dev-in-production dependencies.
-- An invalid glob, for example `@acme/[`, stops the config load with an `ignoreDependencies` error.
-
-A glob that matches no dependency that a `package.json` of the project declares has no effect. The usual cause is a typo in the scope. Every output of `fallow dead-code` names such a glob, see [Unmatched config patterns](#unmatched-config-patterns).
-</Accordion>
-
-<Accordion title="ignoreBinaries">
-Binary names that the [`unlisted-binaries`](/explanations/dead-code#unlisted-binaries) rule does not report.
-Use it for a binary that the operating system, the CI image, or a tool outside `node_modules` provides.
+Keep the exports of a public API file, which code outside your project imports. Fallow does not report these exports as unused. Reference: [`ignoreExports`](/reference/config-dead-code#ignoreexports).
 
 ```jsonc
-{
-  "ignoreBinaries": ["gnome-extensions", "tailscale", "xcrun*"]
-}
+{ "ignoreExports": [{ "file": "src/index.ts", "exports": ["*"] }] }
 ```
 
-An entry with `*`, `?`, `[` or `{` is a glob, and fallow matches it against the binary name. An entry without these characters matches one binary name exactly. An invalid glob stops the config load with an `ignoreBinaries` error.
-</Accordion>
+### `rules` {#rules}
 
-<Accordion title="ignoreCommandEntries">
-Command names whose file arguments do not become entry points.
-
-Fallow reads the commands in `package.json` scripts, CI files, Dockerfiles, Procfiles, and `fly.toml`. A file that a command names, such as `node scripts/seed.ts`, normally becomes an entry point. Formatters and linters (ESLint, Prettier, Oxlint, Oxfmt, Biome, Stylelint, textlint, and similar tools) never make their targets entry points, so you do not have to list them. Use this field for another command that reads files as data:
+Set the severity of an [issue type](/concepts/findings#findings-and-issue-types): `error`, `warn` or `off`. Use `warn` to see findings of a type without a failed run. [Rules and severities](/configuration/rules) explains the defaults and `overrides`.
 
 ```jsonc
-{
-  "ignoreCommandEntries": ["my-codegen"]
-}
+{ "rules": { "unused-exports": "warn", "private-type-leaks": "error" } }
 ```
 
-- A listed command is still a used dependency, and its `--config` file is still tracked.
-- A name matches the command after env, package-manager, and wrapper prefixes (`cross-env`, `dotenv -e .env --`, `npx`, `pnpm exec`, `pnpm --filter web exec`, `yarn run`, `varlock run --`, `dotenvx run --`). The match is on the exact file name.
-- A script call such as `npm run gen -- src/input.ts` or `npm run gen src/input.ts` matches the command in the body of the `gen` script.
-- `"*"` matches every command. Use `["*"]` to turn off entry points from all commands, and declare the real entry points in `entry`. This also drops the modules that a linter loads through a flag, such as `eslint -f ./tools/fmt.js`. Add those modules to `entry` too.
-- The field does not change commands that a plugin reads from a tool config, such as Playwright `webServer.command`.
-</Accordion>
+### `production` {#production}
 
-<Accordion title="ignoreCatalogReferences">
-Entries that suppress `unresolved-catalog-reference` findings. This finding is a `catalog:` dependency or a `catalog:` pnpm override value that points at a catalog that does not declare the package. Most findings are in `package.json`, and JSON has no comments. `// fallow-ignore-next-line` cannot work there, so a config entry is the only way to suppress them.
+Analyze only the code that ships, without tests and development tools. The object form sets [production mode](/concepts/production-mode) for each analysis. Reference: [`production`](/reference/config-files#production).
 
 ```jsonc
-{
-  "ignoreCatalogReferences": [
-    // Placeholder package; the `upcoming` catalog lands in a later change.
-    {
-      "package": "future-dep",
-      "catalog": "upcoming",
-      "consumer": "packages/placeholder/package.json"
-    },
-    // Staged migration: any catalog, every workspace package.
-    { "package": "old-react", "consumer": "packages/**/package.json" }
-  ]
-}
+{ "production": { "deadCode": true, "health": false } }
 ```
 
-`package` is required. Fallow compares it to the dependency key as an exact, case-sensitive string, so `"@scope/*"` matches nothing. For a pnpm override, `package` is the target package of the override: write `child` for `"parent>child"`. `catalog` and `consumer` are optional. When you leave one out, it matches any value.
+### `duplicates` {#duplicates}
 
-Fallow compares `catalog` to the normalized catalog name. `"react": "catalog:"` and `"react": "catalog:default"` are both `default`, and `"catalog:react17"` is `react17`.
-
-`consumer` is a glob for the path of the `package.json` that uses the catalog. The path is relative to the project root and uses `/` on every platform: `package.json` for the root manifest, `packages/app/package.json` for a workspace member. For a pnpm override, the consumer is the file that declares the override: `pnpm-workspace.yaml` or the root `package.json`. The glob must match the whole path, and `*` and `?` match across `/`.
-
-All fields of one entry must match. Any matching entry in the array suppresses the finding.
-
-Each `unresolved-catalog-reference` finding in `fallow dead-code --format json` output has an `add-to-config` action with `package`, `catalog`, and `consumer` already filled in.
-
-This field changes only `unresolved-catalog-reference`. `unused-catalog-entries` and `empty-catalog-groups` do not change. To turn off the rule for a path, use `overrides` with `"unresolved-catalog-references": "off"`. To turn it off everywhere, set `rules.unresolved-catalog-references` to `"off"`.
-
-`ignoreFindings` does not apply here, because findings that belong to a manifest stay visible when their path matches. A `consumer` value with invalid glob syntax, an absolute path, or a `..` segment makes the config load fail.
-</Accordion>
-
-<Accordion title="ignoreDependencyOverrides">
-Package-manager override entries that fallow does not report, for example a CVE pin that must stay. The field suppresses `unused-dependency-override` and `misconfigured-dependency-override` for matching entries in these places:
-
-- `overrides` (`pnpm-workspace.yaml`)
-- `pnpm.overrides`
-- npm `overrides`
-- bun `resolutions`
-
-These findings are in manifests, not in source files. `// fallow-ignore-next-line` cannot work there, so a config entry is the only way to suppress them.
+Set how fallow finds duplicated code and the limit for a run. `threshold` fails `fallow dupes` above a percentage of duplicated lines. Reference: [`duplicates`](/reference/config-duplication#duplicates).
 
 ```jsonc
-{
-  "ignoreDependencyOverrides": [
-    // overrides: { "lodash": "^4.17.21" } in pnpm-workspace.yaml
-    // No source filter, so the entry matches in either file
-    { "package": "lodash" },
-    // pnpm.overrides: { "@scope/legacy-pkg": "^1.0.0" } in package.json
-    { "package": "@scope/legacy-pkg", "source": "package.json" },
-    // resolutions: { "**/trim-newlines": "^3.0.1" } in a bun package.json
-    { "package": "trim-newlines", "source": "package.json" }
-  ]
-}
+{ "duplicates": { "minTokens": 80, "threshold": 5, "ignore": ["**/*.stories.tsx"] } }
 ```
 
-Fallow compares `package` to the target package of the override as an exact, case-sensitive string. It is not a glob and not the raw key. Write `react-dom` for `"react>react-dom"` and `@types/react` for `"@types/react@<18"`.
+### `health` {#health}
 
-Fallow removes the `**` path segments from bun `resolutions` keys, so `"**/trim-newlines"` matches as `trim-newlines`. Fallow does not remove a `**/` prefix from an `overrides` key. When fallow cannot parse a key, it compares the key as written, so `"react>"` needs `{ "package": "react>" }`.
-
-`source` is the label of the file that declares the override: `"pnpm-workspace.yaml"` or `"package.json"`. It is not a path. Leave it out to match both. Any other value loads without an error and never matches. `pnpm.overrides`, npm `overrides`, and bun `resolutions` all report `"package.json"`, so `source` cannot tell them apart.
-
-Fallow skips a pnpm source that the declared pnpm version does not read. For example, pnpm 11 does not read `pnpm.overrides`. See [override sources and the pnpm version](/explanations/dead-code#pnpm-override-sources). An entry for a skipped source matches nothing.
-
-Fallow reads the `resolutions` of a bun project only when the root manifest declares no `overrides` key. When `overrides` exists, fallow ignores `resolutions` and never reports them, so an entry for them matches nothing.
-
-Both fields must match. Any matching entry in the array suppresses the finding.
-
-Both findings have an `add-to-config` action in JSON output, with `package` and `source` already filled in. An entry that matches nothing gives no warning. To turn off either finding fully, set `rules.unused-dependency-overrides` or `rules.misconfigured-dependency-overrides` to `"off"`. `ignoreFindings` does not apply here, because findings that belong to a manifest stay visible when their path matches.
-</Accordion>
-
-<Accordion title="ignoreUnresolvedImports">
-Glob patterns that fallow matches against the import specifier as written, not against a file path. Fallow never reports a matching specifier as `unresolved-import`. Use it for imports that fallow cannot resolve on disk:
-
-- Code that a later build step generates.
-- A package with an `exports` map that points at build artifacts that are not in the checkout.
-- A bundler alias that fallow does not model.
+Set the complexity limits of `fallow health`. A function above a limit is a finding. [`health`](/reference/config-health#health) also sets limits for some files only.
 
 ```jsonc
-{
-  "ignoreUnresolvedImports": [
-    "@example/icons",     // the bare specifier
-    "@example/icons/**",  // its subpaths, not the bare name
-    "../generated/**"     // parent-relative codegen output
-  ]
-}
+{ "health": { "maxCyclomatic": 25, "maxCognitive": 20 } }
 ```
 
-Matching is case-sensitive, and a pattern must match the whole specifier. `*` and `?` match across `/`, but a trailing `/**` requires the separator. To match the package and its subpaths, list the bare package name and the subpath pattern. Fallow removes a leading `./` from each pattern and tries each specifier with and without its own `./`. `"./generated/x.js"` and `"generated/x.js"` therefore cover the same imports.
+## Warnings about the config {#config-warnings}
 
-A `..` segment is allowed here, because these patterns match specifiers, not paths. The file-path glob fields do not allow it. There is no negation syntax and no ordering. Fallow suppresses a specifier if any pattern matches. A pattern with invalid glob syntax makes the config load fail, with a message that names the field and the pattern.
+Fallow compares some config entries with the result of the run. It reports an entry that has no effect as a warning. Each warning is an entry in the `workspace_diagnostics` array of the [JSON output](/reference/json-output#workspace-diagnostics), and a note in the other formats. A warning does not change the exit code.
 
-The field covers static imports, dynamic imports, and re-export sources, for value imports and type-only imports. Resolution and the module graph do not change, and neither does the dependency usage count. `unlisted-dependency` therefore does not change. For that finding, use `ignoreDependencies`, which matches package names as exact strings.
+### Unmatched config patterns {#unmatched-config-patterns}
 
-Each `unresolved-import` finding in JSON output has an `add-to-config` action for this field with the reported specifier. When you move an import here from an inline `// fallow-ignore-next-line unresolved-import` comment, delete the comment. The config check runs first, so fallow then reports the comment as `stale-suppression`.
-</Accordion>
+An `ignoreDependencies` glob matches no declared dependency, or an `ignoreFindings` pattern matches no finding. The usual cause is a typo. `fallow dead-code`, `fallow audit` and the bare `fallow` run report it.
 
-<Accordion title="ignoreExports">
-Entries that tell fallow to ignore specific exports. Use them for public API packages. Use them also for UI libraries with namespace barrels (shadcn, Radix, bits-ui), where many `components/ui/<name>/index.ts` files export the same short names on purpose.
+### Redundant config entries {#redundant-config-entries}
 
-`ignoreExports` suppresses `unused-export` findings, `duplicate-export` grouping and `duplicate-export-alias` findings for matching files. For `duplicate-export-alias`, a listed name exempts the binding that has that name. Use `exports: ["*"]` to exclude every export from the matched files. Use a list of names to exclude only those names.
+An `entry`, `ignoreDependencies` or `ignorePatterns` entry changes nothing, because fallow does the same without it. Remove the entry, unless it is for files that only a build makes. The same commands report it.
 
-```jsonc
-{
-  "ignoreExports": [
-    { "file": "src/index.ts", "exports": ["*"] },
-    { "file": "src/utils/*.ts", "exports": ["default"] },
-    // shadcn / Radix / bits-ui barrels
-    { "file": "src/lib/components/ui/**", "exports": ["*"] }
-  ]
-}
-```
+### Override rules with no effect {#override-rules-with-no-effect}
 
-A per-file `overrides.rules.duplicate-exports = "off"` has no effect, because the rule spans multiple files. A duplicate-export finding groups N locations in N files. When fallow detects this override, it prints a warning at load time and points you to `ignoreExports`.
-</Accordion>
+An `overrides[].rules` entry cannot change the result for its files. [Overrides](/configuration/rules#overrides) names the rules that read only the top-level severity.
 
-<Accordion title="ignoreExportsUsedInFile">
-Suppress unused-export findings when the file that declares the export also uses it. Fallow still reports exports with no references at all. This is the same as the [`ignoreExportsUsedInFile`](https://knip.dev/reference/configuration#ignoreexportsusedinfile) option of knip.
+### Requested rules that are off {#requested-rules-that-are-off}
 
-```jsonc
-{
-  "ignoreExportsUsedInFile": true
-}
-```
+An option such as `--unused-deps` asks for a rule that the config sets to `off`, so fallow does not run that check. A count of zero then measures nothing. `fallow dead-code` and `fallow architecture` report it. Set the rule to `warn` or `error` to run the check.
 
-For knip compatibility, fallow also accepts an object form:
+## See the resolved config
 
-```jsonc
-{
-  "ignoreExportsUsedInFile": { "type": true, "interface": true }
-}
-```
+`fallow config` prints the config that fallow uses, after `extends`, as JSON. `fallow config --path` prints only the path of the config file. [`fallow config`](/cli/config) has the exit codes.
 
-Fallow reports type aliases and interfaces under the same `unused-types` issue. `{ "type": true }`, `{ "interface": true }`, and `{ "type": true, "interface": true }` therefore behave the same: fallow suppresses any type export that the same file uses. The two fields exist only for knip-config compatibility.
+## Related
 
-A reference in the export specifier itself (`export { foo }`, `export { foo as bar }`, `export default foo`) does not count as a same-file use. Fallow still reports such an export when no other file and no other expression in the file references the binding.
-</Accordion>
-
-<Accordion title="includeEntryExports">
-Report unused exports in entry files (package.json `main` and `exports`, framework pages, and so on). By default, fallow marks these exports as used. This option finds typos in framework-convention exports, such as `meatdata` instead of `metadata`.
-
-```jsonc
-{
-  "includeEntryExports": true
-}
-```
-
-The global CLI flag `--include-entry-exports` does the same. When both are set, the CLI flag takes precedence.
-
-To set the option for some workspaces only, use [`workspaces.settings`](/configuration/workspaces#per-workspace-settings).
-
-The `default` export of a tool config file of an active plugin (for example `tailwind.config.js`, `jest.config.js` or `next.config.mjs`) counts as used, because the tool loads the file and reads that export. Named exports of a config file stay reportable, unless the tool reads them: every export of a Cucumber config file (each named export is a profile) and of `vercel.ts` counts as used. GraphQL Codegen `codegen*`, Serverless `serverless.*` and Vercel `vercel.*` files get this credit only at the project root and at the root of each workspace package, because these names also match ordinary source files. Gatsby `gatsby-node`, `gatsby-browser` and `gatsby-ssr` do not get the credit, because Gatsby reads named exports from them.
-</Accordion>
-
-<Accordion title="showCascade">
-Also report the unused exports, unused types, unused class members, and unused enum members of a file that fallow reports as an unused file. The default is `false`. When you delete an unused file, you also remove these findings, so the report hides them and counts them in `cascade_hidden`.
-
-```jsonc
-{
-  "showCascade": true
-}
-```
-
-The CLI flag `--show-cascade` does the same for one run. See [Findings in unused files](/analysis/dead-code#findings-in-unused-files).
-</Accordion>
-
-<Accordion title="typeAware">
-Use the TypeScript type checker for more exact results. With this option, fallow
-gets checker evidence for exact symbol use, class contracts, cross-file private
-type leaks, affected tests, and public-signature coupling. The option is off by
-default, so the normal analysis stays fast and does not need the TypeScript
-companion.
-
-```jsonc
-{
-  "typeAware": {
-    "enabled": true,
-    "projects": ["tsconfig.json"],
-    "require": "best-effort"
-  }
-}
-```
-
-`projects` is optional and takes tsconfig paths relative to the project root.
-With an empty list, fallow discovers the projects automatically. Start with
-`best-effort`. It keeps conservative findings when the checker evidence is
-partial or not available. Choose `complete` only when an incomplete checker pass
-must fail the run.
-
-This option does not replace `tsc` or Oxlint. For installation, performance,
-safety, and library-consumer boundaries, see
-[Type-aware TypeScript analysis](/analysis/type-aware).
-</Accordion>
-
-<Accordion title="security">
-Configure the catalogue of `fallow security`. `security.categories` selects the candidate categories that run. `security.requestReceivers` adds the names of your own HTTP request objects to the built-in receiver allowlist (`req`, `request`, `ctx`, `context`, `event`).
-
-`requestReceivers` only adds names. It does not replace the built-in names. Fallow trims the values and matches them case-insensitively for `*.query`, `*.params`, and `*.body` source reads. The field has no effect on `*.searchParams`.
-
-```jsonc
-{
-  "security": {
-    "requestReceivers": ["h", "httpReq"],
-    "categories": {
-      "include": ["command-injection"],
-      "exclude": ["dynamic-regex"]
-    }
-  }
-}
-```
-</Accordion>
-
-<Accordion title="autoImports">
-Resolve framework auto-imports (Nuxt components) as real edges in the module graph. Frameworks such as Nuxt make components available to templates by file name, with no `import` statement: `<Card001 />` resolves to `components/Card001.vue`.
-
-```jsonc
-{
-  "autoImports": true
-}
-```
-
-Fallow always creates the edges for these tag references, so `includeEntryExports` counts a default export that a `<Card />` tag uses. The rules below do not change this. A template tag or a composable call marks its file as used, whatever your `nuxt.config` says.
-
-`autoImports: true` also removes the convention entry patterns. A convention file is then no longer an entry point, and fallow reports it as `unused-file` when nothing references it.
-
-Fallow reads two settings from `nuxt.config.ts` or `nuxt.config.js` and handles each one separately:
-
-- `components:` controls the component patterns.
-- `imports:` controls the composable, util, `shared/utils`, and `shared/types` patterns.
-
-Fallow removes the patterns of a setting when the config does not have the key, or when the value scans no more than the Nuxt defaults:
-
-- `components: false`, `components: null`, `components: []`, `components: true`, or `components: { dirs: [] }`. `components: true` gives the same directories as a missing key. Other keys next to an empty `dirs` do not change the result.
-- `imports: {}`, `imports: { dirs: [] }`, or `imports: { scan: false }` with no `imports.dirs` or an empty array. The first two are the Nuxt defaults: `imports.dirs` starts empty, and Nuxt registers the convention directories itself.
-
-Fallow reads every other shape as a custom layout. That setting keeps its entry patterns:
-
-- `components: {}`, the array form (`components: [{ path: '~/ui' }]`), and an object with no empty `dirs`. A non-empty `dirs`, or only a `prefix` or `pathPrefix`, keeps the patterns. Any other value is also custom.
-- `imports: { scan: true }`, a non-empty `imports.dirs`, and `imports: { scan: false }` next to a non-empty `imports.dirs`, which Nuxt scans either way.
-- `imports: { autoImport: false }` alone. It turns off the injection, not the scan, and the documented replacement (`import { useThing } from '#imports'`) resolves to no file.
-- A config with a top-level `extends`, a spread or a repeated key in either object, or a config object that fallow cannot resolve statically.
-- A top-level property that fallow cannot read statically: a spread such as `{ ...base, devtools: {} }`, a computed key such as `['imports']`, an accessor, or a shorthand method. That property can configure either setting, so both settings keep their patterns for that root.
-
-Only a top-level property counts when the config object is readable. A nested key, such as a `routeRules` path that ends in `components` or `imports`, does not keep a fallback on its own.
-
-Two nested locations still count for a setting, because Nuxt reads them the same way as the top level:
-
-- `$production`, `$development`, `$test`, and each `$env.<name>` override, when it carries a nested `components` or `imports` key.
-- A `hooks` entry for `components` or `imports`, in the flat form (`'components:dirs': fn`) and in the nested form (`components: { dirs() {} }`), because Nuxt joins nested hook names with `:`.
-
-An override object or a `hooks` object that fallow cannot read statically falls back to a text match for the `components` and `imports` keys, inside that object. An unrelated hook or override does not change the static reading.
-
-For each setting that fallow reads as custom, it adds a `plugin-effect-not-modeled` entry to `workspace_diagnostics[]`, one entry per config file and setting. The entry has `plugin`, `key`, and `reason`, with the config file in `path`. The entry does not make the analysis less complete, and fallow prints no warning for it. For the diagnostic kinds, see [Debugging](/analysis/debugging).
-
-Fallow reads the config of each root separately: the project root and every workspace root, plus each [local layer](/frameworks/built-in#nuxt-local-layers) of that root. The config of the root, and of its local layers, that contains a pattern decides that pattern. One custom `nuxt.config` in a monorepo does not keep the patterns of another app.
-
-Component names follow Nuxt. Nuxt names a component directly under `components/global/` or `components/islands/` after its own directory. `components/global/Foo.vue` is then `<Foo>`, and `components/base/global/Card.vue` stays `<BaseGlobalCard>`. Fallow removes the `.client`, `.server`, `.global`, and `.island` suffixes.
-
-A name that you import or re-export by hand from `#components` or `#imports` marks its convention file as used, like a template tag. A member access on a namespace import, such as `C.Card` on `import * as C from '#components'`, marks `components/Card.vue` as used. A file with `export * from '#components'` or `export * from '#imports'` passes on the names that its importers take from it. When fallow cannot read which names a file takes, for example a spread of the namespace, every name of that module counts as used. A `plugin-effect-not-modeled` diagnostic then names the file, with `key` set to the module. `#layers/<name>/` resolves to a [local layer](/frameworks/built-in#nuxt-local-layers) by its `$meta.name`.
-
-An auto-import name marks as used only the files of the app that renders or calls it, and of the layers that this app extends. In a monorepo, a `<Card />` in one app does not keep the unused `Card.vue` of another app. See [Nuxt auto-import scope](/frameworks/built-in#nuxt-auto-import-scope).
-
-Some component files stay entry points with `autoImports` on, because fallow cannot see how they render:
-
-- `components/global/` files and `*.global.vue` files. A string reference such as `resolveComponent('Name')` can render a global component.
-- `components/content/` files of the project and of each local layer, when `@nuxt/content` is in `modules` (as a string or as a `['@nuxt/content', { ... }]` entry), or when a [package layer](/frameworks/built-in#nuxt-local-layers) such as `docus` registers it. Markdown content renders these components, and fallow does not read Markdown.
-
-An OG image template that a `defineOgImage('Name')` or `defineOgImageComponent('Name')` call names with a static string counts as used. See [Nuxt auto-import scope](/frameworks/built-in#nuxt-auto-import-scope).
-
-The default is `false`. Fallow tracks Pinia store auto-imports separately.
-</Accordion>
-
-<Accordion title="ignoreDecorators">
-Decorator names that do not mean reflective use. By default, fallow skips every class member with a decorator. Fallow checks a member that has only listed decorators like a member with no decorators. A member with any decorator that is not in the list stays skipped, so framework defaults (NestJS, Angular, TypeORM) do not change.
-
-Use this for utility decorators that do not mean runtime reflection. Examples are `@step("label")` from Playwright, internal labeling decorators such as `@measure`, `@log`, and `@retry`, and custom decorators that wrap a method for logging or tracing.
-
-```jsonc
-{
-  "ignoreDecorators": ["@step"]
-}
-```
-
-The behavior is conservative. A method with both `@step` and `@Inject` stays skipped, because `@Inject` is not in the list. Fallow applies the standard usage check only to methods where every decorator is in the list.
-
-### Matching
-
-- **Bare entries** (`"step"` or `"decorators"`) match the leftmost segment of the decorator path. One bare `"decorators"` entry covers every `@decorators.*` decorator. Use this when an internal namespace has many utility decorators that are all non-reflective.
-- **Dotted entries** (`"decorators.log"`) match the full dotted path exactly. A sibling such as `@decorators.audit` stays skipped, unless you also list `"decorators.audit"` or use the bare `"decorators"` form.
-- `"@step"` and `"step"` are the same. Fallow removes a leading `@` before matching.
-
-### Unmatched-entry warning
-
-When an entry matches no decorator in the analyzed codebase, fallow prints one warning at the end of the run. `usedClassMembers` does the same for unmatched patterns. Remove unmatched entries, because they have no effect.
-
-The default is an empty list, which keeps the behavior that skips all decorated members. Existing NestJS, Angular, and TypeORM projects see no change. The first run after you enable this option can report new `unused-class-members` findings on members that fallow skipped before.
-</Accordion>
-
-<Accordion title="unusedComponentProps">
-Options for the `unused-component-props` rule. Some props stay in the public API but are not used inside the component. To stop fallow from reporting them, set `ignorePattern` to a regex. Fallow skips each prop where the local destructure binding name matches.
-
-This supports the convention that a leading underscore marks an accepted but intentionally unused value. TypeScript `noUnusedParameters` and the `varsIgnorePattern` and `argsIgnorePattern` options of ESLint `@typescript-eslint/no-unused-vars` use the same convention:
-
-```jsonc
-{
-  "rules": { "unused-component-props": "warn" },
-  "unusedComponentProps": {
-    "ignorePattern": "^_"
-  }
-}
-```
-
-```svelte
-<script lang="ts">
-  interface Props { stage: string; variant?: string }
-  // `_stage` is exempted by `^_`; `variant` is still reported if unused.
-  let { stage: _stage, variant }: Props = $props();
-</script>
-```
-
-This applies to Vue, Svelte, Astro, React, and Preact props. The default behavior does not change: with no `ignorePattern`, fallow reports every unused prop.
-
-### Matching
-
-- Fallow matches the regex against the **local destructure binding name** (`_stage` in `let { stage: _stage } = $props()`). It does not match the public prop name that the finding reports (`stage`). When a prop has no alias, the local name is the public name.
-- Matching is **unanchored** (like `RegExp.test` in ESLint). `_` with no anchor matches any prop that contains an underscore (`on_click`, `aria_label`). To match a leading underscore, use `^_`.
-- An invalid regex makes the config load fail with a clear error.
-
-When the pattern skips at least one prop, fallow prints a one-line note with the count. If the note does not show, your pattern matches nothing, which is often a typo.
-
-The Angular rules `unused-component-input` and `unused-component-output` do not change, because their declarations are class fields, not destructured locals.
-</Accordion>
-
-<Accordion title="usedClassMembers">
-Names of class methods and properties that fallow never reports as unused. The names add to the built-in Angular and React lifecycle allowlist, for methods that third-party libraries call.
-
-Use this when a library calls methods on your class at runtime through an interface or contract. Common examples are ag-Grid (`agInit`, `refresh`), TypeORM migrations (`up`, `down`), and Web Components (`connectedCallback`, `disconnectedCallback`, `attributeChangedCallback`).
-
-Each entry is one of these:
-
-- A plain member name, which applies to all classes.
-- A scoped object, which matches only classes with the configured `extends` or `implements` identifier in their heritage clause.
-
-Strings can be exact names or glob patterns:
-
-```jsonc
-{
-  "usedClassMembers": [
-    "agInit",
-    { "implements": "ICellRendererAngularComp", "members": ["refresh"] },
-    { "extends": "BaseCommand", "members": ["execute"] },
-    { "implements": "CanActivate", "members": ["canActivate"] },
-    { "extends": "GrammarBaseListener", "members": ["enter*", "exit*"] }
-  ]
-}
-```
-
-A name such as `agInit` is unique enough to suppress for all classes. A common name such as `refresh` or `execute` would hide real findings in unrelated classes, so scope it with `implements` or `extends`. A scoped rule needs at least one of `extends` or `implements`. Fallow rejects an object rule with no heritage field (`{ "members": [...] }`) at load time.
-
-Heritage matching is syntactic. Fallow compares the identifier in the `extends Foo` or `implements IBar` clause of the source to the string in the rule. For a renamed import (`import { IBar as IBaz }`), use the identifier that the class declaration shows.
-
-### Glob patterns
-
-Fallow treats a member string that contains `*` or `?` as a glob pattern. Exact strings keep their meaning.
-
-- `"*"` matches every member of a matching class.
-- `"enter*"` matches any member with a name that starts with `enter`.
-- `"*Handler"` matches any member with a name that ends with `Handler`.
-- `"on*Event"` combines a prefix and a suffix.
-
-Use glob patterns for parser-generator listeners (ANTLR), generated bridges, and abstract framework base classes that call members by a name prefix.
-
-When a glob pattern matches zero members in the codebase, fallow prints a `WARN` at the end of the run, so you can remove the entry. Exact-string entries give no warning, because they are common boilerplate that can match in some configurations and not in others.
-
-The allowlist applies only to class methods and properties. Fallow still checks enum members with the same names.
-
-For an allowlist that applies only when a library is installed, use a plugin file with the `usedClassMembers` field. For the plugin format, see [Custom plugins](/frameworks/custom-plugins).
-</Accordion>
-
-<Accordion title="publicPackages">
-Workspace packages with a public API. Fallow never reports exports, exported enum members, or exported class members from these packages as unused, also when no code in the repo imports them. Use it for library packages that other projects use.
-
-```jsonc
-{
-  "publicPackages": ["@myorg/sdk", "@myorg/types"]
-}
-```
-</Accordion>
-
-<Accordion title="dynamicallyLoaded">
-Glob patterns for files that your code loads at runtime, for example with `import()`, lazy routes, or plugin systems. Fallow treats these files as entry points and does not report them as unused.
-
-```jsonc
-{
-  "dynamicallyLoaded": ["src/plugins/**/*.ts", "src/routes/**/page.tsx"]
-}
-```
-
-A single `*` matches inside one directory. `src/plugins/*/index.ts` matches `src/plugins/alpha/index.ts`, but not `src/plugins/alpha/ui/index.ts`. See [Path globs](#path-globs).
-</Accordion>
-
-<Accordion title="markupExtensions">
-File extensions of server-side templates that `fallow health --css` reads as CSS class references. Write each extension without the leading dot. Fallow always reads `liquid`, `njk`, `hbs`, `handlebars`, `twig`, and `blade.php`. Use this key for other template languages:
-
-```jsonc
-{
-  "markupExtensions": ["tpl", "erb"]
-}
-```
-
-- Each class-like word in a template counts as a use of that class, also a common word such as `hidden` or `title`.
-- An extension matches the end of a file name, and case does not matter. `blade.php` matches `welcome.blade.php`.
-- A value can contain only letters, digits, `.`, `-`, and `_`.
-- A value that ends in a script, stylesheet, data, or asset extension is a config error, for example `module.css` or `d.ts`. A value that ends in a markup extension that fallow already reads, such as `page.html`, is also a config error.
-- Template files do not join source discovery, so fallow never reports them as unused files.
-- The walk obeys `.gitignore`, `ignorePatterns`, `health.ignore`, and `--max-file-size`. It skips `node_modules`, `vendor`, and build output directories.
-- In `extends`, the list of the child config replaces the list of the parent.
-
-See [Classes in server-side templates](/analysis/css-analysis#classes-in-server-side-templates).
-</Accordion>
-
-<Accordion title="duplicates">
-Configuration for `fallow dupes`:
-
-| Field | Type | Default | Description |
-|:------|:-----|:--------|:------------|
-| `mode` | `"strict"` \| `"mild"` \| `"weak"` \| `"semantic"` | `"mild"` | Detection mode. `strict` and `mild` match exact tokens. `weak` ignores string literal values. `semantic` ignores identifiers and all literal values for structural (Type-2) detection. |
-| `near` | `boolean` | `false` | Also report near-miss clones: functions that differ by small structural edits. |
-| `minTokens` | `number` | `50` | Minimum token count for a code block to count as a clone |
-| `minLines` | `number` | `5` | Minimum line count for a clone group |
-| `minOccurrences` | `number` | `2` | Minimum number of occurrences before fallow reports a clone group. Must be at least `2`. |
-| `threshold` | `number` | `0` | Maximum duplication percentage. Above it, the run fails (exit code 1). `0` turns off the limit. |
-| `enabled` | `boolean` | `true` | Turn duplication detection on or off. `false` turns off each duplication analysis that runs by default: the duplication analysis of the bare `fallow` command, the duplication sub-analysis of `fallow audit`, the duplication measure and penalty of the [health score](/explanations/health), and the clone diagnostics in the editor. A command line that names the analysis still runs it: `--only dupes`, `--include-dupes`, `audit.dupes: true` and the `fallow dupes` command. A `--dupes-baseline` flag then has no effect, and fallow prints a note on stderr. The health score does not depend on the analyses that one run selects: `--only dupes,health --score` reports the clone groups and keeps the score without a duplication penalty. A run with duplication off in this way still records a [Fallow Impact](/cli/impact) entry |
-| `ignore` | `string[]` | `[]` | Glob patterns to exclude from duplication analysis. Fallow adds the built-in defaults (see `ignoreDefaults`) unless `ignoreDefaults` is `false`. |
-| `ignoredClones` | `string[]` | `[]` | Clone groups that you reviewed and want to hide. Each key uses `<fingerprint>:<instance_count>`, for example `dup:6f12ab34:2`. When the tokens or the occurrence count change, fallow reports the group again. |
-| `ignoreDefaults` | `boolean` | `true` | Add the built-in ignores for generated output (`**/.next/**`, `**/.nuxt/**`, `**/.svelte-kit/**`, `**/.turbo/**`, `**/.parcel-cache/**`, `**/.vite/**`, `**/.cache/**`, `**/out/**`, `**/storybook-static/**`) to `ignore`. Set to `false` to use only your `ignore` list. |
-| `skipLocal` | `boolean` | `false` | Report only duplicates across directories. Skip clones inside one file |
-| `crossLanguage` | `boolean` | `false` | Find clones between `.ts` and `.js` files. Fallow removes TypeScript type annotations before it compares |
-| `ignoreImports` | `boolean` | `true` | Exclude module wiring (imports and re-exports) from clone detection. By default, fallow excludes ES imports, re-export declarations, and top-level static `require()` binding declarations. Set to `false` to count them again. Fallow still counts runtime code, local exports, side-effect or nested `require()` calls, dynamic require arguments, and mixed declarations. |
-| `ignoreSymlinks` | `boolean` | `false` | Omit clone instances whose path is a symlink, or lies under a symlinked directory, inside the project root. Set to `true` to report only duplication between real files. Fallow does not report a clone group with fewer than two remaining instances. The file and line totals and the `threshold` percentage then count only real files. With `false`, JSON output marks these instances with `is_symlink: true`. See [Symlinked files](/cli/dupes#symlinked-files). |
-| `normalization` | `object` | none | Fine-grained normalization overrides: `ignoreIdentifiers`, `consistentIdentifiers`, `ignoreStringValues`, `ignoreNumericValues`. See [Normalization overrides](/analysis/duplication#normalization-overrides) |
-| `minCorpusSizeForShingleFilter` | `number` | `1024` | Performance setting. Above this number of tokenized files, focused duplication runs (`--changed-since` or `audit`) prefilter unchanged files with k-token shingles. Below it, fallow skips the prefilter, because the shingle index costs more time than it saves. |
-| `minCorpusSizeForTokenCache` | `number` | `5000` | Performance setting. Above this number of source files, fallow uses the persistent duplication token cache under `<root>/.fallow/cache/dupes-tokens-vN/`. Below it, loading and saving the cache costs more time than it saves, so the cache stays off, also without `--no-cache`. |
-
-```jsonc
-{
-  "duplicates": {
-    "mode": "mild",
-    "near": true,
-    "minTokens": 50,
-    "minLines": 5,
-    "minOccurrences": 2,
-    "threshold": 5,
-    "ignore": ["**/*.generated.ts"],
-    "ignoredClones": ["dup:6f12ab34:2"],
-    "skipLocal": true,
-    "ignoreImports": true
-  }
-}
-```
-</Accordion>
-
-<Accordion title="similarCode">
-Project settings for the separate `fallow similar-code` workflow:
-
-| Field | Type | Default | Description |
-|:------|:-----|:--------|:------------|
-| `threshold` | `number` from 0 to 1 | `0.8` | Model-specific cutoff for unverified candidates. It is not a probability and not a gate. |
-| `minLines` | positive `number` | `3` | Exclude functions with fewer source lines than this number. |
-| `ignore` | `string[]` | `[]` | Extra globs, relative to the root, that fallow excludes from similar-code extraction only. |
-
-```jsonc
-{
-  "similarCode": {
-    "threshold": 0.8,
-    "minLines": 3,
-    "ignore": ["src/generated/**"]
-  }
-}
-```
-
-The config cannot select the provider, model, executable, download, or credential.
-The model setup always needs a separate, explicit action from you. For the
-discovery, inspect, and verdict flow, see
-[Semantic similar code](/analysis/similar-code).
-</Accordion>
-
-<Accordion title="mutation">
-Project defaults for the opt-in `fallow mutation` command:
-
-| Field | Type | Default | Description |
-|:------|:-----|:--------|:------------|
-| `runner` | `"auto"` \| `"vitest"` \| `"node-test"` \| `"bun-test"` | `"auto"` | The test runner. `auto` detects it from the project. The runners are Vitest 4.1 to 5, `node:test` of Node.js 22.18 to 26, and `bun test` of Bun 1.4 and later. See [Runners](/cli/mutation#runners). |
-| `operators` | `string[]` | the default set | The mutation operators to use, for example `"arithmetic-operator"`, `"removed-call"`, or `"block-statement"`. A list replaces the default set, so name an opt-in operator together with each default operator that you want to keep. `--operators` wins. |
-| `minScore` | `number` from 0 to 100 | unset | The minimum mutation score, in percent. A lower score exits with code 1. Unset never fails a run. `--min-score` wins. |
-| `concurrency` | `number`, 1 or more | half the logical cores | The number of test processes. `--concurrency` wins. |
-| `mutantsPerLine` | `number`, 1 or more | unset | The maximum number of planned mutants on one source line. The others are `pending` with the reason `sampled-out`. Unset keeps each mutant. `--mutants-per-line` wins. See [Mutants per line](/cli/mutation#mutants-per-line). |
-| `functionScope` | `boolean` | `false` | Widen each changed line to the whole function that holds it. Only the changed-code scope uses it. `--function-scope` turns it on for one run. No flag turns it off. See [Function scope](/cli/mutation#function-scope). |
-| `typecheck` | `boolean` | `false` | Type-check each survivor after the tests. A survivor that adds a type error gets the status `compile_error`. An optional-chaining or `nullish-fallback` survivor can get an advisory `equivalence_hint`. `--typecheck` turns it on for one run. No flag turns it off. See [Type check of survivors](/cli/mutation#type-check-of-survivors). |
-| `runnerConfig` | `string` | unset | The Vitest config file of each run, relative to the project root, for example `"vitest.integration.config.mjs"`. The file must exist inside the project root. Only the Vitest runner accepts it. Unset uses the default config discovery of Vitest. `--runner-config` wins. See [Runner config](/cli/mutation#runner-config). |
-| `runnerProjects` | `string[]` | unset | The Vitest projects of each run, as the Vitest `--project` flag selects them, for example `["unit"]`. A name can hold a `*` wildcard. Only the Vitest runner accepts it. Unset uses each project. `--runner-project` wins. See [Runner projects](/cli/mutation#runner-projects). |
-
-```jsonc
-{
-  "mutation": {
-    "runner": "auto",
-    "operators": ["arithmetic-operator", "relational-operator"],
-    "minScore": 80,
-    "concurrency": 4,
-    "mutantsPerLine": 2,
-    "functionScope": true,
-    "typecheck": true,
-    "runnerConfig": "vitest.integration.config.mjs",
-    "runnerProjects": ["unit"]
-  }
-}
-```
-
-The section rejects unknown keys. No key starts a run. The option that keeps
-mutants near file system, process, network, or database calls is the
-`--allow-side-effects` flag only, so the config rejects `allowSideEffects`.
-For the operators, statuses, and exit codes, see
-[fallow mutation](/cli/mutation).
-</Accordion>
-
-<Accordion title="health">
-Configuration for `fallow health`:
-
-| Field | Type | Default | Description |
-|:------|:-----|:--------|:------------|
-| `maxCyclomatic` | `number` | `20` | Maximum cyclomatic complexity. Fallow reports functions above it |
-| `cyclomaticPolicy` | `string` | `"standard"` | How the cyclomatic gate counts complexity. `"literal-membership"` counts a chain of strict equality checks of one identifier against primitive literals (`kind === "a" \|\| kind === "b"`) as one predicate. The policy applies to `maxCyclomatic` and to every CRAP score. The health score, complexity density, and hotspots keep the standard count. See [Literal membership chains](/cli/health#literal-membership-chains). |
-| `maxCognitive` | `number` | `15` | Maximum cognitive complexity. Fallow reports functions above it |
-| `maxCrap` | `number` | `30` | Maximum CRAP score. Fallow reports functions above it |
-| `maxFileLines` | `number` | `0` | Maximum file length in physical lines. `0` turns the check off. Fallow reports a longer file as a complexity finding with `exceeded: "file_lines"`. Blank lines and comment lines count. A final newline does not add a line. See [File length](/explanations/health#file-length). |
-| `maxUnitSize` | `number` | `60` | Maximum function length in lines of code. Fallow reports longer functions as a "large function". Raise it for generated or test files, where a `describe()` block can span hundreds of lines. The complexity checks stay on. |
-| `crapRefactorBand` | `number` | `5` | Band below `maxCyclomatic`. In this band, a CRAP-only finding also gets a secondary `refactor-function` action when the cognitive complexity is at least half of `maxCognitive` |
-| `ignore` | `string[]` | `[]` | Glob patterns for files to exclude from complexity analysis |
-| `tailwindIgnorePatterns` | `string[]` | `[]` | Regular expressions (not globs) for Tailwind arbitrary-value utilities to exclude from `--css` findings, analytics and CVA token drift. Each pattern matches the normalized `prefix-[value]` token, without variants, a negative sign or an opacity modifier. For example, `^icon-\[` excludes Iconify classes such as `hover:icon-[mdi--home]`. An invalid regex fails config loading. |
-| `coverage` | `string` | none | Path to Istanbul coverage data (`coverage-final.json`) or raw V8 coverage (a `NODE_V8_COVERAGE` directory, or one V8 coverage JSON file) for exact per-function CRAP scores. A relative path resolves against the project root. The `--coverage` flag and [`FALLOW_COVERAGE`](/configuration/environment#fallow_coverage) take precedence |
-| `coverageRoot` | `string` | none | Absolute prefix that fallow removes from the file paths in the coverage data. Use it when CI or Docker generated the coverage in a different checkout root. The `--coverage-root` flag and [`FALLOW_COVERAGE_ROOT`](/configuration/environment#fallow_coverage_root) take precedence |
-| `ownership` | `object` | see description | Settings for `--ownership` output: `botPatterns` (globs for bot and service-account authors, which replace the defaults) and `emailMode` (`raw`, `handle`, or `anonymized`; default `handle`). See [fallow health](/cli/health) |
-| `changeCoupling` | `object` | see description | Thresholds for the [change coupling](/explanations/health#change-coupling) section and the `resolve_hidden_coupling` refactoring targets: `minRevisions` (minimum commits for each file of a pair, default `5`), `minSharedRevisions` (minimum commits that change both files, default `5`), `minDegree` (minimum coupling degree, from `0` to `1`, default `0.3`), and `maxFilesPerCommit` (skip a commit that changes more analyzed files than this, from `2` to `1000`, default `30`). The defaults are the Code Maat defaults. Fallow rejects an unknown key. A value out of range stops the config load with exit code 2 and a message that names the key, the range, and the value. An older fallow version rejects `changeCoupling` as an unknown key, so also set [`minimumVersion`](#minimumversion) to the first release that has the key |
-| `thresholdOverrides` | `array` | `[]` | Per-file threshold exceptions. Each entry has `files` globs, optional exact `functions`, one or more of `maxCyclomatic`, `maxCognitive`, `maxCrap`, `maxUnitSize`, `maxFileLines`, and an optional `reason`. An entry that sets `maxFileLines` applies to whole files, so it must leave `functions` empty. Leave `functions` empty to relax every function in the matching files, including a `describe()` wrapper and its `it()` blocks. JSON health output shows the override state in `threshold_overrides`. It has one row per threshold dimension (`complexity` for the cyclomatic, cognitive, unit-size, and file-length limits; `crap` for `maxCrap`), with the status `active`, `stale`, `insufficient`, or `no_match`. Rows from one entry share `override_index`, so group on it to count configured entries. |
-| `suggestInlineSuppression` | `boolean` | `true` | Add `suppress-line` action hints to health findings in JSON output. Fallow always leaves them out when `--baseline` or `--save-baseline` is active. Set to `false` to turn off inline suppression hints for the whole project, for example when you do not want CI to suggest inline suppressions. |
-
-```jsonc
-{
-  "health": {
-    "maxCyclomatic": 20,
-    "maxCognitive": 15,
-    "maxCrap": 30,
-    "crapRefactorBand": 5,
-    "ignore": ["**/*.generated.ts", "src/legacy/**"],
-    "thresholdOverrides": [
-      {
-        "files": ["src/legacy/**"],
-        "functions": ["parseLegacy"],
-        "maxCyclomatic": 40,
-        "maxCognitive": 35,
-        "reason": "Queued legacy parser cleanup"
-      },
-      {
-        "files": ["**/*.test.*", "**/*.spec.*"],
-        "maxUnitSize": 500,
-        "reason": "Test suites: describe/it blocks are long by design"
-      }
-    ],
-    "changeCoupling": {
-      "minRevisions": 5,
-      "minSharedRevisions": 5,
-      "minDegree": 0.3,
-      "maxFilesPerCommit": 30
-    },
-    "suggestInlineSuppression": true
-  }
-}
-```
-
-Change coupling reads 12 months of git history when you do not pass `--since`. Hotspots keep their 6 month default. With `--since`, both read the same window.
-</Accordion>
-
-<Accordion title="audit">
-Configuration for `fallow audit`, the command that reviews changed files:
-
-| Field | Type | Default | Description |
-|:------|:-----|:--------|:------------|
-| `gate` | `"new-only"` \| `"all"` | `"new-only"` | Which findings affect the audit verdict. `new-only` fails only on issues that the current changeset introduces, and shows inherited findings as context. `all` gates every finding in changed files and skips the extra base-snapshot attribution pass. |
-| `worsened` | `"warn"` \| `"error"` \| `"off"` | `"warn"` | The effect of an inherited complexity finding that got worse under `gate: new-only`. `warn` makes the verdict at least `warn` and does not fail the run. `error` counts the finding like an introduced finding. `off` reports only growth of an exceeded metric as worsened, which makes the verdict at least `warn`. Other growth stays inherited. The `--worsened` flag takes precedence. See [Worsened complexity findings](/cli/audit#worsened-complexity-findings). |
-| `deadCode` | `boolean` | `true` | Run the dead-code sub-analysis in `fallow audit`, including the cycles, boundary violations and policy violations. Set to `false` to match `--skip dead-code`. |
-| `health` | `boolean` | `true` | Run the health sub-analysis in `fallow audit`: complexity, CRAP and styling findings. Set to `false` to match `--skip health`. |
-| `dupes` | `boolean` | value of `duplicates.enabled` | Run the duplication sub-analysis in `fallow audit`. The default is `true` unless `duplicates.enabled` is `false`. Set to `false` to match `--skip dupes`. A skipped sub-analysis leaves the verdict, on the head and on the base snapshot. `--skip` removes from this selection and `--only` replaces it. The review brief keeps every sub-analysis. |
-| `css` | `boolean` | `true` | Include styling analytics in `fallow audit`. Set to `false` to match `--no-css`. |
-| `cssDeep` | `boolean` | `true` | Include project-wide styling reachability checks in `fallow audit`. Set to `false` to match `--no-css-deep`. Set to `true` to force the same behavior as `--css-deep`. |
-| `cacheMaxAgeDays` | `number` | `30` | Maximum age of a base-snapshot worktree cache that `fallow audit` keeps and reuses, in days since the last reuse or since creation. The next `fallow audit` removes older entries when it starts. The same age applies to the base-snapshot files in the fallow cache directory, counted from the last use. `0` turns off the age-based cleanup. Independent of the age, audit keeps only the newest 32 snapshot files. The [`FALLOW_AUDIT_CACHE_MAX_AGE_DAYS`](/configuration/environment#fallow_audit_cache_max_age_days) env var overrides it per run and takes precedence when both are set. |
-| `deadCodeBaseline` | `string` | none | Dead-code baseline file (from `fallow dead-code --save-baseline`). Issues in the baseline do not count toward the verdict. The `--dead-code-baseline` flag takes precedence |
-| `healthBaseline` | `string` | none | Health baseline file (from `fallow health --save-baseline`). The `--health-baseline` flag takes precedence |
-| `dupesBaseline` | `string` | none | Duplication baseline file (from `fallow dupes --save-baseline`). The `--dupes-baseline` flag takes precedence |
-| `typeAware` | `boolean` | inherits `typeAware.enabled` | Turn type-aware analysis on or off for `fallow audit` only. The `--type-aware` and `--no-type-aware` flags and `FALLOW_TYPE_AWARE` take precedence |
-
-```jsonc
-{
-  "audit": {
-    "gate": "new-only",
-    "worsened": "warn",
-    "css": true,
-    "cssDeep": true,
-    "cacheMaxAgeDays": 14
-  }
-}
-```
-
-```toml
-[audit]
-gate = "all"
-worsened = "error"
-css = true
-cssDeep = true
-cacheMaxAgeDays = 14
-```
-</Accordion>
-
-<Accordion title="fix">
-Configure the behavior of `fallow fix`.
-
-| Field | Type | Default | Description |
-|:------|:-----|:--------|:------------|
-| `catalog.deletePrecedingComments` | `"auto" \| "always" \| "never"` | `"auto"` | What happens to a YAML comment block directly above a removed pnpm catalog entry. |
-
-```jsonc
-{
-  "fix": {
-    "catalog": {
-      "deletePrecedingComments": "auto"
-    }
-  }
-}
-```
-
-`auto` removes a leading comment block when it clearly belongs to the deleted catalog entry. That is the case when the block directly follows the parent `catalog:` or `catalogs.<name>:` header, or follows a blank line. Use `always` to remove every adjacent leading comment block. Use `never` to keep leading comments for manual review.
-
-Two mechanisms keep your comments, whatever the setting:
-
-- Add `# fallow-keep` to any line in a comment block to keep the whole block, also under `always`. This works like the `fallow-ignore-next-line` and `fallow-ignore-file` inline suppression comments:
-
-  ```yaml
-  catalog:
-    # fallow-keep: audit trail, CVE-2024-XXXX
-    react: ^18.2.0
-  ```
-
-- Under `auto`, fallow keeps section banners. A banner is a comment where the text after `#` and optional whitespace starts with three or more of the same character: `=`, `-`, `*`, `_`, `~`, `+`, or `#`:
-
-  ```yaml
-  catalog:
-    # === React 18 production pins ===
-    react: ^18.2.0
-  ```
-
-  Under `always`, the banner rule does not apply. To keep banners with `always`, use `# fallow-keep`.
-
-The JSON action in `fixes[N]` has two line fields:
-
-- `line`: the first deleted line (1-based). This is the leading comment when `auto` or `always` removes one.
-- `entry_line`: the original line of the catalog entry (1-based).
-
-CI annotators and dedup caches that key on the entry position should use `entry_line`, which stays stable. Tools that point at the actual file edit should use `line`.
-</Accordion>
-
-<Accordion title="production">
-Enable [production mode](/analysis/production-mode) to analyze only the code that ships to users. The field takes the legacy boolean form, which applies to every analysis. It also takes a per-analysis object. For example, you can run health on production code only, and dead-code and duplication on the full tree:
-
-```jsonc
-{
-  "production": true
-}
-```
-
-```jsonc
-{
-  "production": {
-    "deadCode": false,
-    "health": true,
-    "dupes": false
-  }
-}
-```
-
-The CLI flags `--production`, `--production-dead-code`, `--production-health`, and `--production-dupes` (bare combined runs and `fallow audit`) override the config. The matching env vars `FALLOW_PRODUCTION`, `FALLOW_PRODUCTION_DEAD_CODE`, `FALLOW_PRODUCTION_HEALTH`, and `FALLOW_PRODUCTION_DUPES` follow the same precedence order. A per-analysis env var takes precedence over the global env var. For the full order, see [global flags](/cli/global-flags#per-analysis-production-mode).
-</Accordion>
-
-<Accordion title="workspaces">
-Extra workspace patterns, added to the workspaces that fallow detects automatically (`package.json` `workspaces`, `pnpm-workspace.yaml`, a root Deno config, and `tsconfig.json` `references`). See [Workspaces](/configuration/workspaces):
-
-```jsonc
-{
-  "workspaces": {
-    "patterns": ["tools/*", "shared/*"]
-  }
-}
-```
-
-Each package that these patterns find gets its own plugins, entry points, and dependency checks. `fallow list --workspaces`, `--workspace`, `--changed-workspaces`, and `--group-by package` also use these packages. See [Additional workspace patterns](/configuration/workspaces#additional-workspace-patterns).
-</Accordion>
-
-<Accordion title="extends">
-Inherit from one or more base config files. Use it to share one config across projects, or to keep a base config with per-project overrides.
-
-```jsonc
-{
-  "extends": ["./configs/base.json", "./configs/strict.json"]
-}
-```
-
-```toml
-extends = ["./configs/base.json", "./configs/strict.toml"]
-```
-
-The `extends` field accepts these source types:
-
-| Source | Example | Description |
-|:-------|:--------|:------------|
-| Relative path | `"./configs/base.json"` | Local file, relative to the config file |
-| npm package | `"npm:@my-org/fallow-config"` | Reads the main entry of the package from `node_modules` |
-| HTTPS URL | `"https://example.com/fallow-base.json"` | Remote file, fetched over HTTPS |
-
-```jsonc
-{
-  "extends": [
-    "./configs/local-overrides.json",
-    "npm:@my-org/fallow-config",
-    "https://example.com/shared/fallow-base.json"
-  ]
-}
-```
-
-How `extends` works:
-
-- **Deep merge:** fallow deep-merges object fields (such as `rules`). The child config overrides the base, and the child inherits the fields that it does not set.
-- **Array replacement:** array fields (such as `entry` and `ignorePatterns`) replace the base value. Fallow does not concatenate them. If the child sets `entry`, it overrides the base `entry`.
-- **Cross-format support:** a JSON config can extend a TOML config, and a TOML config can extend a JSON config.
-- **Circular detection:** fallow detects circular extends chains and reports an error.
-- **Max depth:** an extends chain can have 10 levels at most, to prevent accidental deep nesting.
-- **String shorthand:** you can pass one path as a string instead of an array: `"extends": "./base.json"`.
-
-Fallow resolves paths relative to the config file that contains the `extends` field.
-
-### URL extends
-
-URL sources must use `https://`. Fallow rejects plain HTTP. It fetches the config on every run, with no cache.
-
-- **Timeout:** 5 seconds by default. Change it with `FALLOW_EXTENDS_TIMEOUT_SECS`.
-- **Body limit:** 1 MB maximum response size.
-- **Chaining:** a config from a URL can extend other URLs or `npm:` packages. It cannot extend relative paths, because there is no file system location to resolve them against.
-
-<Warning>
-Fallow fetches URL extends on every run. If the remote server is slow or not available, your analysis fails. For important shared configs, use a versioned URL or an `npm:` package.
-</Warning>
-</Accordion>
-
-<Accordion title="minimumVersion">
-The lowest fallow version that this config needs, as `MAJOR.MINOR.PATCH`. It gives a clear upgrade message instead of an "unknown field" error on older fallow versions.
-
-An unknown config key fails the run with exit 2. This catches mistakes such as `ignorePaths` instead of `ignorePatterns`. It also means that every new config field needs a coordinated upgrade.
-
-When a team commits a field from a newer version, every runner on an older version breaks. The failure comes on the commit that adds the field, not on an upgrade. The error names the field, so the first guess is a typo.
-
-With `minimumVersion`, the older runner shows a clear message instead.
-
-```jsonc
-{
-  "minimumVersion": "3.21.0",
-  "entry": ["src/main.ts"]
-}
-```
-
-A fallow binary below the minimum version stops before it reports any unknown field:
-
-```
-fallow.json requires fallow 3.21.0 or newer, running 3.19.0.
-Upgrade fallow, or remove minimumVersion and the fields that need it.
-```
-
-How `minimumVersion` works:
-
-- **Inherited through `extends`:** a monorepo base config sets it once, and every config that extends the base inherits the minimum version.
-- **Checked before unknown keys:** the version message replaces the misleading field-name error. It does not only come first.
-- **No other effect:** at or above the minimum version, an unknown key still fails, because there it is a real typo.
-- **Optional:** unset by default. Without it, nothing changes.
-- **Validated:** a value that is not `MAJOR.MINOR.PATCH` (for example `v3.21`) is a config error.
-
-<Tip>
-Set it in the same change that adds a field from a newer version. Do not set it in advance. A minimum version higher than the config needs blocks runners for no reason.
-</Tip>
-</Accordion>
-
-<Accordion title="failOnParseError">
-Fail the run with exit code 1 when fallow cannot parse a source file cleanly. Boolean, default `false`. It arms the `parse-error` gate on `fallow dead-code`, `fallow health`, `fallow audit`, and the bare `fallow` run. The `--fail-on-parse-error` flag arms the same gate for one run.
-
-```jsonc
-{
-  "failOnParseError": true
-}
-```
-
-The gate is off by default, because the parser also rejects valid syntax that is newer than the parser. An older fallow version rejects this key as unknown, so set `minimumVersion` to the first release that has the key. See [Parse error gate](/cli/global-flags#parse-error-gate) for the output and the CI behavior.
-</Accordion>
-
-<Accordion title="overrides">
-Apply different rules to specific file patterns. For example, relax rules in test files, or make them stricter in critical paths.
-
-```jsonc
-{
-  "overrides": [
-    {
-      "files": ["**/*.test.ts", "**/*.spec.ts"],
-      "rules": {
-        "unused-exports": "off"
-      }
-    },
-    {
-      "files": ["src/core/**/*.ts"],
-      "rules": {
-        "unused-exports": "error",
-        "unused-types": "error"
-      }
-    }
-  ]
-}
-```
-
-```toml
-[[overrides]]
-files = ["**/*.test.ts", "**/*.spec.ts"]
-
-[overrides.rules]
-unused-exports = "off"
-
-[[overrides]]
-files = ["src/core/**/*.ts"]
-
-[overrides.rules]
-unused-exports = "error"
-unused-types = "error"
-```
-
-Each override object has these fields:
-
-- **`files`**: array of glob patterns, matched against paths relative to the project. A single `*` does not match `/`, so `*.test.ts` matches only test files at the project root. Use `**/*.test.ts` for test files at any depth.
-- **`rules`**: rule severities for the files that match the patterns.
-
-When multiple overrides match the same file, the later override takes precedence.
-</Accordion>
-
-<Accordion title="sealed">
-Mark a config as **sealed** to make sure that no config from a parent directory can change it through `extends`. When `sealed: true`:
-
-- `extends` paths must be relative to the file.
-- `extends` paths must resolve **inside** the directory of the config (no `../` paths).
-- Fallow rejects `npm:` and `https:` extends with a clear error.
-
-```jsonc
-{
-  "sealed": true,
-  "extends": ["./base.json"]
-}
-```
-
-```toml
-sealed = true
-extends = ["./base.json"]
-```
-
-Use cases:
-
-- **Library publishers** who ship a `.fallowrc.json` in an npm package can make sure that the config is self-contained.
-- **Monorepo sub-packages** (for example a shared component library that multiple apps use) that do not inherit from the monorepo root config on purpose.
-
-`sealed: true` does **not** change config discovery. Fallow already stops at the nearest config in the directory tree (first match wins). This option only limits what `extends` can reference.
-</Accordion>
-
-<Accordion title="circularDependencies">
-Options for the `circular-dependencies` rule: `ignoreLazyImports` (default `false`) and `allow` (default `[]`).
-
-<CodeGroup>
-```jsonc .fallowrc.json
-{
-  "circularDependencies": { "ignoreLazyImports": true }
-}
-```
-
-```toml fallow.toml
-[circularDependencies]
-ignoreLazyImports = true
-```
-</CodeGroup>
-
-With `ignoreLazyImports: true`, an import edge that loads its target on demand or on another thread does not take part in cycle detection. These edges are lazy:
-
-- an `import()` inside a function
-- a template `import()`
-- a lazy `import.meta.glob`
-- a worker URL
-- a webpack inline request through a worker loader, such as `worker-loader!./work.js` (see [inline loader requests](/frameworks/built-in#webpack-inline-loader-requests))
-
-These edges stay in the cycle graph: a top-level `await import()`, `require()`, an eager `import.meta.glob`, and an edge that also has a static import. Fallow removes the lazy edges before it counts the cycles of a group, so lazy cycles do not fill the cycle limit and hide a static cycle.
-
-A top-level `await import()` in a Vue `<script setup>` block, a Svelte instance script, or an Astro frontmatter stays lazy, because that code runs for each component instance.
-
-#### Accepted cycles
-
-`allow` lists the cycles that you accept. Each entry is the list of files of one cycle, in import order, relative to the project root. Do not repeat the first file at the end.
-
-<CodeGroup>
-```jsonc .fallowrc.json
-{
-  "circularDependencies": {
-    "allow": [
-      ["src/a.ts", "src/b.ts", "src/c.ts"]
-    ]
-  }
-}
-```
-
-```toml fallow.toml
-[circularDependencies]
-allow = [["src/a.ts", "src/b.ts", "src/c.ts"]]
-```
-</CodeGroup>
-
-An entry accepts only the cycle with exactly these files in this order. The cycle can start at any file of the entry, so the entry above also accepts `src/b.ts -> src/c.ts -> src/a.ts`. A cycle with another set of files stays reported, also when it uses an import of an accepted cycle. A `// fallow-ignore-next-line circular-dependency` comment hides each cycle through that import, also a new one.
-
-- Write each path from the project root, also in a monorepo (`packages/app/src/a.ts`).
-- The match is case-sensitive. Globs are not supported.
-- An entry needs at least 2 files and lists each file once. Otherwise the config does not load.
-- An accepted cycle does not count toward the limit of 20 listed cycles per group of files that import each other.
-
-An entry that matches no cycle gives a `circular-dependencies-allow-unmatched` diagnostic. The diagnostic shows in JSON, SARIF, Markdown and the stderr note, and it does not change the exit code. A `--production` run and a run with the rule `off` give no diagnostic. Fallow cannot check some entries, so these entries give no diagnostic:
-
-- an entry with more than 12 files, because the detector lists no cycle with more than 12 files;
-- an entry whose files are all in a group that reached the limit of 20 cycles.
-
-When you add an entry, remove the `fallow-ignore-next-line circular-dependency` comment of that cycle. Otherwise fallow reports the comment as a stale suppression.
-</Accordion>
-
-<Accordion title="effect">
-Options for projects that use the [Effect](https://effect.website) library. The only option is `schemaExportsAsTypes` (default `false`).
-
-<CodeGroup>
-```jsonc .fallowrc.json
-{
-  "effect": { "schemaExportsAsTypes": true }
-}
-```
-
-```toml fallow.toml
-[effect]
-schemaExportsAsTypes = true
-```
-</CodeGroup>
-
-An exported Effect schema defines a runtime value and a type (`typeof User.Type`). Some teams keep exported types as contracts and set `"unused-types": "off"`. With `schemaExportsAsTypes: true`, fallow treats an unused schema export the same way: it reports the schema under [unused types](/explanations/dead-code#unused-types), not under unused exports. With `"unused-types": "off"`, fallow does not report the schema.
-
-Fallow finds a schema from the syntax of its declaration. These declarations are schemas:
-
-- a class that extends a `Schema` class factory: `Schema.Class`, `Schema.TaggedClass`, `Schema.TaggedError`, `Schema.TaggedRequest` (Effect 3), `Schema.Error` or `Schema.Opaque` (Effect 4), also when the class has a body
-- a class that extends a schema class of the same file, such as `class Admin extends User.extend<Admin>("Admin")({...}) {}`
-- a const whose value is a `Schema` constructor or member, such as `Schema.Struct({...})`, `Schema.Literal("a")` or `Schema.String`. A type name such as `Schema.Schema` or `Schema.Top` is not a constructor.
-- a const whose value is a pipe or annotation chain on a schema, such as `Schema.String.pipe(Schema.brand("UserId"))` or `User.pipe(Schema.extend(...))`. Each `pipe` argument must be a `Schema` transform, such as `Schema.brand(...)`, `Schema.minLength(...)`, `Schema.check(...)` or a bare `Schema.NullOr`
-- a default export of a schema, such as `export default Schema.Struct({...})`. The finding has the export name `default`.
-- a re-export of a schema of another module, such as `import { User } from "./schemas"; export { User }` or `export { User } from "./schemas"`, also through `export *` barrels
-- in a module that imports Effect, a chain on an imported schema, such as `export const UserId = User.pipe(Schema.brand("UserId"))` or `User.annotations({...})`, and an alias, such as `export const Copy = User`. This also applies to a default export.
-
-A re-export of a value that is not a schema stays an unused export.
-
-`Schema` must be an import from `effect`, `effect/Schema` or `@effect/schema`: a named import (`import { Schema } from "effect"`, also with an alias) or a namespace import (`import * as Schema from "effect/Schema"`). A local object with the name `Schema` does not match.
-
-These exports stay unused exports:
-
-- a value that a schema function returns, such as `Schema.decodeUnknownSync(User)`, `Schema.is(User)` or `User.make({...})`
-- a pipe with an argument that is not a `Schema` transform, such as `User.pipe(Schema.decodeUnknownSync)` or `User.pipe((user) => ...)`
-- a re-export of a schema from another file
-- a schema whose chain starts at a schema imported from another file
-
-When a schema and its type alias with the same name (`export type User = typeof User.Type`) are both unused, fallow reports one unused type at the schema. An existing `// fallow-ignore-next-line unused-export` comment on a schema keeps its effect, and an `unused-type` comment also works. `fallow fix` does not remove these exports, the same as for other unused types, although the finding carries the `remove-export` action. In JSON output, the finding is in `unused_types` with `is_type_only: false`, because the export is a value. The finding moves to another issue type, so a saved baseline does not cover it. Save the baseline again when you turn on the option.
-
-Fallow versions before this option reject the `effect` key. Set [`minimumVersion`](#minimumversion) when the config is shared.
-</Accordion>
-
-<Accordion title="boundaries">
-Define architecture boundary zones and import rules. Use a built-in preset, or define custom zones.
-
-```jsonc
-{
-  "boundaries": {
-    "preset": "bulletproof"
-  }
-}
-```
-
-Available presets: `layered`, `hexagonal`, `feature-sliced`, `bulletproof`. For full control, define custom zones and rules.
-
-For presets, custom zones, examples, and output formats, see [Architecture boundaries](/analysis/boundaries).
-</Accordion>
-
-<Accordion title="sharedStateAllowlist">
-Exclude exact global name and property pairs from the shared-state inventory of `fallow architecture --shared-state`. Each entry is a pair of two strings: the global root and the direct property.
-
-```jsonc
-{
-  "sharedStateAllowlist": [["window", "analyticsQueue"]]
-}
-```
-
-This example excludes `window.analyticsQueue`. Fallow matches each pair exactly, without globs. See [`fallow architecture`](/cli/architecture).
-</Accordion>
-
-<Accordion title="rulePacks">
-Rule packs let you enforce project policies for calls, imports, exports, effects, and gdp-ts proof producers. A rule pack is a standalone JSON or JSONC file. Fallow loads packs as data only and never runs project code. Paths are relative to the project root. Fallow reports matches as `policy-violation` findings with the ID `<pack>/<rule-id>`.
-
-```jsonc
-{
-  "rulePacks": ["./rule-packs/team-policy.jsonc"]
-}
-```
-
-A pack file declares `version: 1`, a unique `name`, and a non-empty `rules` array. Pack names and rule IDs must use ASCII letters, digits, `.`, `_`, or `-`, so that scoped suppression comments can name them without ambiguity.
-
-- `banned-call` rules match callee paths per segment, through imports. `child_process.*` covers named, namespace, and default imports from `child_process` and `node:child_process`. A pattern matches a call and a `new` expression, so `Date` covers `Date()` and `new Date()`.
-- `banned-import` rules match import specifiers as written, per segment. `moment` covers `moment/locale/nl`, never `moment-timezone`.
-- An optional `allowNames` list on a `banned-import` rule bans a package and keeps some of its exports. Each entry is an exact imported name, with no globs. `default` allows a default import. The rule compares the source-side name, so `import { Mesh as Vector3 }` reports `three: Mesh`. A namespace import, a star re-export, and a side-effect import always report. Other rule kinds reject `allowNames`. See [Policy violations](/explanations/dead-code#policy-violations).
-- `banned-effect` rules match effect classes from the security catalogue, such as `network` and `database`. These rules read calls only, not `new` expressions.
-- `banned-export` rules match exported names. A trailing `*` matches a name prefix.
-- `gdp-proof-producer` rules restrict calls to `@gdp-ts/core.defineProof` to `allowedFiles` globs. Optional `proofKinds` labels restrict the rule to those literal proof kinds.
-- Optional `files` and `exclude` globs limit where a rule applies.
-- `"ignoreTypeOnly": true` skips type-only imports.
-- An optional per-rule `severity` overrides the main `rules."policy-violation"` severity (default `warn`).
-
-To suppress one rule, use `// fallow-ignore-next-line policy-violation:<pack>/<rule-id>` or the file-level form. Bare `policy-violation` still suppresses all rule-pack findings.
-
-For editor autocomplete, point `$schema` at the schema in the npm package. This schema matches the fallow version that you installed:
-
-```jsonc title="rule-packs/team-policy.jsonc"
-{
-  "$schema": "../node_modules/fallow/rule-pack-schema.json",
-  "version": 1,
-  "name": "team-policy",
-  "rules": [
-    {
-      "id": "no-moment",
-      "kind": "banned-import",
-      "specifiers": ["moment"],
-      "message": "Use date-fns instead of moment."
-    }
-  ]
-}
-```
-
-The editor reads the path relative to the pack file. For a pack in the project root, use `./node_modules/fallow/rule-pack-schema.json`. The package also exports the file as `fallow/rule-pack-schema.json`. Without the npm package, run `fallow rule-pack-schema` to print the schema, or point `$schema` at `https://raw.githubusercontent.com/fallow-rs/fallow/main/rule-pack-schema.json`. An invalid or missing pack makes the config load fail with exit code 2. Fallow does not continue with a pack that enforces nothing.
-
-Keep pack files in a committed directory such as `rule-packs/`. `.fallow/` is the gitignored cache directory, so packs there are missing from the checkouts of your teammates.
-
-#### gdp-ts proof producers
-
-Use a global producer rule to allow proof factories only in your authorization modules. Add a rule for a specific proof kind to require its factory to live in one owner file:
-
-```json title="rule-packs/gdp.json"
-{
-  "version": 1,
-  "name": "gdp",
-  "rules": [
-    {
-      "id": "trusted-producers",
-      "kind": "gdp-proof-producer",
-      "allowedFiles": ["src/auth/**"],
-      "severity": "error"
-    },
-    {
-      "id": "delete-project-owner",
-      "kind": "gdp-proof-producer",
-      "allowedFiles": ["src/auth/project.ts"],
-      "proofKinds": ["CanDeleteProject"],
-      "severity": "error"
-    }
-  ]
-}
-```
-
-Add `"rulePacks": ["rule-packs/gdp.json"]` to your fallow config. Each matching rule reports independently. A call outside `src/auth/**` can violate both rules. A call in `src/auth/other.ts` violates only the owner rule.
-
-`allowedFiles` must contain at least one project-root-relative glob. It grants producer permission. `files`, `exclude`, and `zones` limit where the rule checks code. Neither `allowedFiles` nor `proofKinds` applies to other rule kinds.
-
-An absent or empty `proofKinds` checks every recognized factory call, including dynamic labels. A nonempty list matches exact static string labels; dynamic labels are skipped by that rule. Keep the global rule to restrict those calls too.
-
-The rule checks every analyzed file, including files unreachable from entry points. Files excluded from discovery are outside its scope. It follows named and namespace imports, import aliases, and unambiguous project re-export chains to the gdp-ts factory. See [Policy violations](/explanations/dead-code#policy-violations) for supported forms and limits.
-
-Inspect the configured permissions with `fallow rule-pack list --format json` or `fallow guard src/routes/project.ts --format json`. Use `fallow rule-pack test rule-packs/gdp.json --format json` to inspect matches while authoring the pack. This command exits successfully when it reports findings. For CI enforcement, run [`fallow architecture --policy`](/cli/architecture). An error-severity finding exits with code 1.
-
-For details on the issue type, see [Policy violations](/explanations/dead-code#policy-violations).
-</Accordion>
-
-<Accordion title="rules">
-Severity per issue type: `error` (fails CI with exit code 1), `warn` (reports but exits 0), or `off` (no detection). Each rule has its own default. See [Rules](/configuration/rules#available-rule-names) for the default of each rule.
-
-```jsonc
-{
-  "rules": {
-    "unused-files": "warn",
-    "unused-exports": "error",
-    "circular-dependency": "off",
-    "css-token-drift": "warn",
-    "css-duplicate-block": "warn",
-    "css-selector-complexity": "warn",
-    "css-dead-surface": "warn",
-    "css-broken-reference": "warn"
-  }
-}
-```
-
-The `complexity-cyclomatic`, `complexity-cognitive`, `complexity-crap`, and `complexity-file-lines` rules decide if a complexity finding fails `fallow health` and `fallow audit`. See [Complexity rules](/configuration/rules#complexity-rules).
-
-Styling audit findings use the same severity map. The styling rules are `css-token-drift`, `css-duplicate-block`, `css-selector-complexity`, `css-dead-surface`, and `css-broken-reference`. They default to `warn`, so they show in the output but do not change the verdict, unless you set them to `error` or `off`.
-
-[Rules and severity](/configuration/rules) has the full list of issue types, with the default severities. It includes the pnpm catalog rules such as `unused-catalog-entries` and `empty-catalog-groups`. For per-glob severities, use the `overrides` field.
-</Accordion>
-
-<Accordion title="flags">
-Customize feature flag detection. Fallow detects the SDKs of LaunchDarkly, Statsig, Unleash, GrowthBook, Split, PostHog, Vercel Flags, ConfigCat, Flagsmith, Optimizely, and Eppo by default. With this field you can:
-
-- Add SDK call patterns.
-- Declare environment variable prefixes.
-- Enable opt-in heuristic detection.
-
-| Field | Type | Default | Description |
-|:------|:-----|:--------|:------------|
-| `sdkPatterns` | `SdkPattern[]` | `[]` | Extra SDK call patterns to detect as feature flags, added to the built-ins. Each entry has `function` (function name to match), `nameArg` (zero-based index of the argument with the flag name, default `0`), and `provider` (optional label in the output). |
-| `envPrefixes` | `string[]` | `[]` | Environment variable prefixes that mark feature flags, added to the built-ins. Fallow reports only `process.env.*` and `import.meta.env.*` accesses that match these prefixes. |
-| `configObjectHeuristics` | `boolean` | `false` | Enable heuristic detection. Fallow reports property accesses on objects with "feature", "flag", or "toggle" in the name as low-confidence flags. Opt-in, because it gives more false positives. |
-| `vendorKeyPrefix` | `string` | - | Prefix to remove from each key of a `fallow flags --flag-state` vendor export before the key is compared with the flag names in the code. For example, `"web."` makes `web.new-checkout` match `new-checkout`. |
-
-```jsonc
-{
-  "flags": {
-    "sdkPatterns": [
-      { "function": "useFlag", "nameArg": 0, "provider": "LaunchDarkly" },
-      { "function": "client.getFeatureValue", "nameArg": 0 }
-    ],
-    "envPrefixes": ["FEATURE_", "NEXT_PUBLIC_ENABLE_"],
-    "configObjectHeuristics": false
-  }
-}
-```
-
-[`fallow flags`](/cli/flags) is the command that uses this configuration.
-</Accordion>
-
-<Accordion title="resolve">
-Module resolver configuration. It controls how fallow matches the `exports` and `imports` maps of `package.json`.
-
-| Field | Type | Default | Description |
-|:------|:-----|:--------|:------------|
-| `conditions` | `string[]` | `[]` | Extra export and import condition names that fallow uses during resolution. They add to the built-in set: `development`, `import`, `require`, `default`, `types`, `node` (plus `react-native` and `browser` when the React Native or Expo plugin is active). Your conditions have a higher priority than the built-in set. |
-
-Use this for community conditions such as `worker`, `edge-light`, and `deno`, or for any custom condition that your bundler uses. The built-in set already has `development`. A package with a `development` branch therefore resolves to source with no config. This is common in monorepos, where `development` points at source and `import` points at compiled output.
-
-```jsonc
-{
-  "resolve": {
-    "conditions": ["worker", "edge-light"]
-  }
-}
-```
-
-With this config, a `package.json` like:
-
-```jsonc
-{
-  "exports": {
-    "./api": {
-      "worker": "./src/api.worker.ts",
-      "import": "./dist/api.js"
-    }
-  }
-}
-```
-
-resolves `./api` to `src/api.worker.ts` instead of `dist/api.js`.
-
-For the full list of established condition names, see the [Node.js community conditions reference](https://nodejs.org/api/packages.html#community-conditions-definitions).
-</Accordion>
-
-<Accordion title="codeowners">
-Path to a CODEOWNERS file for `--group-by owner`. When unset, fallow looks for `CODEOWNERS`, `.github/CODEOWNERS`, `.gitlab/CODEOWNERS`, and `docs/CODEOWNERS`. Set this field when your file is in a different location.
-
-```jsonc
-{
-  "codeowners": ".github/CODEOWNERS"
-}
-```
-</Accordion>
-
-<Accordion title="framework">
-Inline framework plugin definitions. Define custom entry points, ignored files, or test patterns without a separate plugin file.
-
-```jsonc
-{
-  "framework": [
-    {
-      "name": "my-framework",
-      "entry": ["src/server.ts"],
-      "ignore": ["**/*.internal.ts"]
-    }
-  ]
-}
-```
-</Accordion>
-
-<Accordion title="plugins">
-Paths to external plugin files or directories. Fallow also finds `*.toml`, `*.json`, and `*.jsonc` files in `.fallow/plugins/`, and `fallow-plugin-*.{toml,json,jsonc}` in the project root, automatically.
-
-```jsonc
-{
-  "plugins": ["./my-plugins/custom.toml", "./plugins/"]
-}
-```
-</Accordion>
-
-<Accordion title="cache">
-Settings for the incremental cache. Use `dir` to move the extraction cache. Use `maxSizeMb` to limit its serialized size. Above the limit, fallow removes entries when it saves.
-
-```jsonc
-{
-  "cache": {
-    "dir": ".cache/fallow",
-    "maxSizeMb": 64
-  }
-}
-```
-
-The default cache file is `.fallow/cache.bin` under the project root. When `cache.dir` is set, fallow stores the cache file in that directory. The directory must be inside the project root and outside `.git`. A relative path resolves from the project root. Fallow ignores another value, prints a warning and uses `.fallow`. To put the cache outside the project, set `FALLOW_CACHE_DIR`. When both are set, the env var `FALLOW_CACHE_DIR` overrides `cache.dir`.
-
-The default limit is 256 MB. The limit applies to the serialized extraction cache. When a save goes past 80% of the limit, fallow removes the entries for the files that the latest run did not discover, until the cache is at 60%. An example is the test files after a `--production` run. Fallow keeps the entries of the latest run while they fit in the limit, so the cache can stay near the full limit. When they do not fit, fallow removes only the entries that go past the limit. A file that every run reads stays, also when it never changes. When both are set, the env var `FALLOW_CACHE_MAX_SIZE` overrides `cache.maxSizeMb`. Both values are in whole megabytes.
-
-Fallow rebuilds the cache automatically when config that affects extraction
-changes: the active plugin names and the inline framework definition names.
-Fields that affect only detection, such as `entry`, `ignorePatterns`, and
-severity overrides, do not invalidate the extraction cache.
-
-`--no-cache` turns off the cache fully. This section then has no effect.
-</Accordion>
-
-<Accordion title="regression">
-Regression baseline in the config. It stores the issue counts of a known-good state, so CI can fail when the counts go up. `--save-regression-baseline` (with no path argument) writes it, and `--fail-on-regression` reads it.
-
-The count keys use camelCase, for example `totalIssues` and `unusedExports`. Fallow ignores snake_case keys such as `unused_exports` and treats a missing count as `0`.
-
-```jsonc
-{
-  "regression": {
-    "baseline": {
-      "totalIssues": 68,
-      "unusedFiles": 11,
-      "unusedExports": 48,
-      "unusedTypes": 5,
-      "unusedDependencies": 3,
-      "circularDependencies": 1
-    }
-  }
-}
-```
-</Accordion>
-
-## Unmatched config patterns
-
-An `ignoreDependencies` glob that matches no declared dependency, or an `ignoreFindings` pattern that matches no finding, has no effect. The usual cause is a typo. `fallow dead-code`, `fallow audit` and the combined `fallow` run report such an entry in every output format. The presentation is different per format, but each format names the same entries.
-
-| Output | Where the entry shows |
-| --- | --- |
-| JSON | `workspace_diagnostics[]`, with `kind` set to `ignore-dependencies-glob-unmatched` or `ignore-findings-pattern-unmatched`, and a `pattern` field. `fallow audit` puts the list under `dead_code` |
-| SARIF | `invocations[0].toolConfigurationNotifications[]` of the dead-code run, with `descriptor.id` set to the kind, and `properties.setting` and `properties.pattern` |
-| Markdown, `github-summary`, `pr-comment-github`, `pr-comment-gitlab` | An `Unmatched config patterns` section after the findings |
-| `review-github`, `review-gitlab` | An `Unmatched config patterns` section in the summary `body` of the review envelope, before the markers |
-| Human, compact, CodeClimate, `github-annotations` | A note on stderr, so stdout does not change. `--quiet` removes the note, also on `fallow report --from` |
-| Editor (LSP) | An information diagnostic on the entry in the config file. The code is the kind, and the message is the `message` of the JSON entry. For an `extends` chain, the diagnostic goes on the file that declares the list. A pattern that the server cannot find in a local file (for example from a remote `extends` config) goes to the output log, once for each changed set |
-
-`fallow report --from` shows the entries at the same place as the live run of the same format. The GitHub Action and the GitLab template post the job summary and the PR or MR comment, so the entries reach the pull request. They also write one warning with the entries to the job log. The integrations run fallow with `--quiet`, and they post a review only when it has new inline comments, so the log warning also covers a setup that posts only the review.
-
-The MCP dead-code tool and the programmatic API carry the same `workspace_diagnostics[]` entries.
-
-```json
-{
-  "path": ".",
-  "kind": "ignore-dependencies-glob-unmatched",
-  "pattern": "@acm/*",
-  "message": "ignoreDependencies glob '@acm/*' matched no declared dependency in this run, so it has no effect. A glob matches package names, such as @scope/*. Fix the glob, or remove it from the config."
-}
-```
-
-An entry is advisory. It does not change the exit code, and `degrades_analysis` is not set.
-
-Fallow reports an `ignoreDependencies` glob only when the run shows dependency findings. These runs do not report it:
-
-- A run with an issue filter that does not include `--unused-deps` or `--unlisted-deps`, for example `--unused-files`.
-- A run with `--file`, because such a run drops dependency findings.
-- A run where every dependency rule is `off`.
-
-Fallow compares an `ignoreFindings` pattern with every finding of the analysis, before issue filters and scope filters. A filtered run therefore does not make a pattern look unused. A run with no findings at all reports no `ignoreFindings` pattern.
-
-## Redundant config entries
-
-A config entry can match and still change nothing, because fallow does the same without it. `fallow dead-code`, `fallow audit` and the combined `fallow` run report three such entries:
-
-| Kind | Config entry | When it has no effect |
-| --- | --- | --- |
-| `entry-pattern-redundant` | `entry` pattern | Each file that the pattern matches is already a runtime entry point from another source: a `package.json` field or script, a framework plugin, an infrastructure config or `dynamicallyLoaded` |
-| `ignore-dependencies-entry-redundant` | `ignoreDependencies` entry | The entry hid no dependency finding: each dependency that it matches is used, or no dependency matches it |
-| `ignore-patterns-entry-redundant` | `ignorePatterns` glob | The glob excluded no file that fallow would otherwise analyze: a built-in ignore (`dist`, `build`, `coverage`, minified bundles), `.gitignore` or the file type filter already skips each file that it matches |
-
-```json
-{
-  "path": ".",
-  "kind": "ignore-patterns-entry-redundant",
-  "pattern": "dist/**",
-  "message": "ignorePatterns entry 'dist/**' excluded no file that fallow would otherwise analyze in this run, so it has no effect. Remove it from the config, unless it is for files that exist only after a build."
-}
-```
-
-The entries use the same output places as [unmatched config patterns](#unmatched-config-patterns), with these differences:
-
-- Markdown, the job summary, the PR comment and the review summary body show the entries in a separate `Redundant config entries` section.
-- The GitHub Action and the GitLab template do not write them to the job log.
-
-An entry is advisory. It does not change the exit code.
-
-The answer applies to the run only:
-
-- An `ignorePatterns` glob for generated output has an effect only when that output is on disk. Keep it when a build creates the output before fallow runs.
-- A glob that names a hidden directory, such as `.cache/**`, is never reported. A `!` exception is not checked.
-- An `entry` pattern that matches no file is not reported.
-- An `ignoreDependencies` glob that matches no declared dependency is an [unmatched config pattern](#unmatched-config-patterns), not a redundant entry. The redundant `ignoreDependencies` entries use the same dependency-report rules as the unmatched glob.
-- A `--production` run reports no redundant entry, because it checks fewer files and dependency sections.
-
-## Override rules with no effect
-
-Some `overrides[].rules` entries cannot change a result. `fallow dead-code`, `fallow audit` and the combined `fallow` run report each one as a `workspace_diagnostics[]` entry with the kind `override-rule-ineffective`. The entry changes no finding and no exit code. Each entry has these fields:
-
-| Field | Meaning |
-| --- | --- |
-| `rule` | The canonical rule name, also when the config uses an alias |
-| `files` | The `overrides[].files` globs, as written |
-| `reason` | `project-level` or `base-rule-off`. The set of values is open, so tolerate a new value |
-
-| Reason | Meaning |
-| --- | --- |
-| `project-level` | The rule reads only the top-level severity. This covers `unused-dependencies`, `unused-dev-dependencies`, `unused-optional-dependencies`, `unlisted-dependencies`, `unlisted-binaries`, `type-only-dependencies`, `test-only-dependencies`, `dev-dependencies-in-production`, `duplicate-exports`, `re-export-cycle` and `unused-catalog-entries` |
-| `base-rule-off` | The rule is off at top level, and the override sets `warn` or `error`. The detector does not run. This covers `unused-files`, `unused-exports`, `unused-types`, `private-type-leaks`, `unused-enum-members`, `unused-class-members`, `unresolved-imports`, `circular-dependencies` and `deprecated-exports-in-use` |
-
-The message names the mechanism that works:
-
-| Rule | Mechanism |
-| --- | --- |
-| Dependency rules | Add the package to `ignoreDependencies`, or set the top-level rule |
-| `type-only-dependencies` | Move the package to `devDependencies`, or set the top-level rule |
-| `duplicate-exports` | Add the file and export names to `ignoreExports` |
-| `re-export-cycle` | Add `// fallow-ignore-file re-export-cycle` to one file in the cycle, or set the top-level rule |
-| `unused-catalog-entries` | Add `# fallow-ignore-next-line unused-catalog-entry` in `pnpm-workspace.yaml`, or set the top-level rule |
-| A `base-rule-off` rule | Set the top-level rule on, then use an override to set `off` for the other files |
-
-```json
-{
-  "path": ".",
-  "kind": "override-rule-ineffective",
-  "rule": "dev-dependencies-in-production",
-  "files": ["tools/**"],
-  "reason": "project-level"
-}
-```
-
-The entries use the same output places as [unmatched config patterns](#unmatched-config-patterns), with these differences:
-
-- SARIF carries each entry as a `toolConfigurationNotifications[]` note with `properties.setting` set to `overrides`, plus `rule`, `files` and `reason`.
-- Markdown, the job summary, the PR comment and the review summary body show the entries in a separate `Override rules with no effect` section.
-- The LSP marks the key in `overrides[].rules`.
-- A `--production` run keeps the entries.
-
-## Requested rules that are off
-
-An issue-type flag can ask for a rule that the config sets to `off`. Fallow does not run that check, so a zero count for the rule measures nothing. `fallow dead-code` and `fallow architecture` then add one `workspace_diagnostics[]` entry for each such rule, with the kind `requested-rule-off`:
-
-| Field | Meaning |
-| --- | --- |
-| `rule` | The canonical rule name in `rules` |
-| `flag` | The canonical CLI selector of the request, for example `--unused-deps`. A typed API or MCP request reports the same selector |
-
-```json
-{
-  "path": ".",
-  "kind": "requested-rule-off",
-  "rule": "unused-dependencies",
-  "flag": "--unused-deps",
-  "message": "unused-dependencies is off in config, so --unused-deps did not check it. Set the rule to \"error\" or \"warn\" to run this check."
-}
-```
-
-An entry is advisory. It does not change the findings or the exit code. A script that passes `--unused-deps` with the rule at `off` still exits `0`. To fail the script on a finding, set the rule to `error`. A rule at `warn` reports the finding, but it does not fail the run.
-
-Fallow adds an entry only for an explicit selection:
-
-- The `fallow dead-code` filter flags, such as `--unused-files` and `--stale-suppressions`, and `fallow architecture --cycles`, `--boundaries` and `--policy`. `--cycles` checks `circular-dependencies`, `re-export-cycle` and `package-cycle`.
-- `--unused-deps` checks only `unused-dependencies`, `unused-dev-dependencies` and `unused-optional-dependencies`. The placement rules `type-only-dependencies`, `test-only-dependencies` and `dev-dependencies-in-production` give no entry, because `off` is the way to remove them from the selection.
-- `--stale-suppressions` checks only `stale-suppressions`, not `require-suppression-reason`.
-- `--private-type-leaks`, `--absent-component-props`, `--constant-parameters` and `--deprecated-exports-in-use` turn their rule on, so they give no entry.
-- Production mode turns `unused-dev-dependencies` and `unused-optional-dependencies` off. A production run gives no entry for these two rules.
-- A run with no selection, a bare `fallow architecture`, the bare `fallow` run and `fallow audit` give no entry.
-
-The entries use the same output places as [unmatched config patterns](#unmatched-config-patterns), with these differences:
-
-- Human, compact, CodeClimate and `github-annotations` print one `Note:` line on stderr for each entry. `--quiet` removes the line, and the machine formats keep the entry.
-- SARIF carries each entry as a `toolConfigurationNotifications[]` note with `properties.setting` set to `rules`, plus `rule` and `flag`.
-- Markdown, the job summary, the PR comment and the review summary body show the entries in a separate `Requested checks that did not run` section.
-- The LSP shows no diagnostic for the entry.
-- The MCP tools add one sentence to the root `warnings[]` array.
-- `--lean` keeps the first entry of the kind plus a `count`. Run without `--lean` to see each rule.
-
-## JSON Schema
-
-Add the `$schema` field to get autocomplete and validation in your editor:
-
-```jsonc
-{
-  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json"
-}
-```
-
-To generate the schema locally, run:
-
-```bash
-fallow config-schema > schema.json
-```
-
-## See also
-
-<CardGroup cols={3}>
-  <Card title="Rules & Severity" icon="scale-balanced" href="/configuration/rules">
-    Control issue severity for incremental CI adoption.
-  </Card>
-  <Card title="Inline Suppression" icon="comment-slash" href="/configuration/suppression">
-    Suppress single findings in source code.
-  </Card>
-  <Card title="Custom Plugins" icon="puzzle-piece" href="/frameworks/custom-plugins">
-    Add entry point detection for your own frameworks.
-  </Card>
-  <Card title="fallow recommend" icon="terminal" href="/cli/recommend">
-    Get a proposed config for your project.
-  </Card>
-  <Card title="fallow config" icon="terminal" href="/cli/config">
-    Print the resolved config and its file.
-  </Card>
-</CardGroup>
+- [Config reference](/reference/config): each key, its type and its default.
+- [Rules and severities](/configuration/rules): the `rules` and `overrides` keys.
+- [Environment variables](/configuration/environment): the settings for a shell or a CI job.

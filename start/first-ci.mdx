@@ -1,0 +1,99 @@
+---
+title: "Check each pull request"
+description: "Tutorial: add one GitHub workflow that runs fallow audit on each pull request, and read the comment and the verdict."
+keywords: ["CI", "GitHub Actions", "pull request", "fallow audit", "verdict", "PR comment", "changed code"]
+icon: "shield-check"
+---
+
+On this page, you add one workflow file to your repository. After that, fallow checks the code that each pull request changes. It posts a comment on the pull request, and it fails the check when the change adds a problem.
+
+## Before you start
+
+- Your repository is on GitHub, and GitHub Actions is turned on.
+- You did the [first run](/quickstart) and know how to read a report.
+
+## Add the workflow
+
+Create this file in your repository and commit it:
+
+```yaml
+# .github/workflows/fallow.yml
+name: Fallow
+
+on: pull_request
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  fallow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: npm ci
+      - uses: fallow-rs/fallow@v3
+        with:
+          command: audit
+          comment: true
+```
+
+What each part does:
+
+- `command: audit` runs a [changed-code check](/concepts/changed-code): the analyses on the files that the pull request changes, with one verdict.
+- `fetch-depth: 0` gives the job the full git history, so fallow can compare the branch with its base.
+- `npm ci` installs your dependencies. Fallow reads the packages in `node_modules`. Use the install command of your package manager.
+- `comment: true` posts the result as a comment and as a check named Fallow. The comment needs `pull-requests: write`, and the check needs `checks: write`.
+
+The action installs the fallow version that your `package.json` names. When `package.json` does not name fallow, the action installs the latest release.
+
+## Open a pull request
+
+Open a pull request that changes code. The audit gives one verdict:
+
+| Verdict | Meaning | Job |
+|:--|:--|:--|
+| `pass` | The change adds no finding. | Passes. |
+| `warn` | The change adds only findings at the `warn` level, for example a clone group. | Passes. |
+| `fail` | The change adds a finding at the `error` level, for example an unused export. | Fails. |
+
+For a pull request that adds an unused export, the comment starts like this:
+
+```markdown
+### Quality gate failed
+
+Fallow audit report, 1 finding: 1 error.
+
+> Gates: failed audit-verdict.
+```
+
+Below the heading, a table lists each finding with its rule, its file, its line and a description. Each rule links to a page that explains it. By default, the comment shows only the findings on the lines that the pull request adds. When a pull request has no findings, fallow posts no new comment. It updates an older fallow comment to the clean result.
+
+The check uses the exit code of fallow. `fallow audit` exits with code 0 on `pass` and `warn`, and with code 1 on `fail`. Code 2 means that fallow could not run, for example because the config is not valid. [Exit codes](/reference/exit-codes) lists each code.
+
+## A repository with many findings
+
+You can add this workflow to a project that has hundreds of findings. The verdict counts only the findings that the pull request adds. An old finding in a changed file does not fail the check. [Changed code](/concepts/changed-code) explains how fallow tells new findings from old ones. To fix the old findings step by step, follow [Adopt fallow in an existing project](/guides/adopt).
+
+## Other CI systems
+
+On another CI system, run the audit as a command in the job. Give the branch to compare with:
+
+```bash
+npx fallow audit --base origin/main --quiet
+```
+
+The job fails on exit code 1. [CI integration](/integrations/ci) shows the setup for other systems. For GitLab, fallow has a CI template that posts merge request comments: see [GitLab CI](/integrations/ci-gitlab).
+
+## What you learned
+
+- `command: audit` checks only the code that a pull request changes.
+- The verdict is `pass`, `warn` or `fail`. Only `fail` fails the check.
+- Old findings do not block a pull request.
+
+## Next
+
+Give your coding agent the same check: [Use fallow with a coding agent](/start/first-agent).

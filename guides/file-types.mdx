@@ -1,0 +1,121 @@
+---
+title: "How fallow reads Vue, Svelte, Astro, MDX, HTML and CSS files"
+sidebarTitle: "File types"
+description: "Guide: which file types fallow analyzes besides JavaScript and TypeScript, what it reads from each type, and what it reports."
+keywords: ["file types", "Vue", "Svelte", "Astro", "MDX", "HTML", "CSS modules", "SCSS", "GraphQL", "Glimmer", "React Native", "JSON"]
+icon: "file-code"
+---
+
+Use this page to predict the findings for a file that is not plain JavaScript or TypeScript. A file that only an HTML page, a Vue template or a stylesheet uses is not unused. Fallow reads these references from the file extension, with no plugin and no config.
+
+## The file types
+
+| File type | Extensions | What fallow reads | What fallow reports |
+|:--|:--|:--|:--|
+| JavaScript and TypeScript | `.js` `.jsx` `.mjs` `.cjs` `.ts` `.tsx` `.mts` `.cts` | Imports, exports, `require()`, dynamic imports, and JSDoc `import()` types | Each [dead code](/analysis/dead-code) issue type |
+| Vue | `.vue` | Each `<script>` block, and the names that the `<template>` uses | Unused files and unused exports |
+| Svelte | `.svelte` | Each `<script>` block, and the names that the markup uses | Unused files. No unused exports. |
+| Astro | `.astro` | The frontmatter, and the client scripts in the body | Unused files and unused exports |
+| MDX | `.mdx` | The `import` and `export` lines, and the names that the content uses | Unused files and unused exports |
+| HTML | `.html` | `<script src>`, `<link rel="stylesheet">` and `<link rel="modulepreload">` | Unused files |
+| CSS, Sass, Less | `.css` `.scss` `.sass` `.less` | `@import`, `@use`, `@forward`, Tailwind directives | Unused files. In a CSS module, unused classes. |
+| GraphQL | `.graphql` `.gql` | Relative `#import` lines | Unused files |
+| Glimmer | `.gjs` `.gts` | The script, and the names that each `<template>` uses | Unused files and unused exports |
+
+Fallow does not analyze other files, for example `.json` and `.md` files. It never reports them as unused. An import of a `.json` file resolves like any other import.
+
+## An example
+
+This project has an `index.html`, a Vue component, a CSS module and GraphQL documents:
+
+```text
+index.html                       loads ./src/main.ts and ./src/styles/global.css
+src/main.ts                      imports Card.vue, data/config.json, graphql/user.graphql
+src/components/Card.vue          uses formatDate and styles.root in its template
+src/format.ts                    exports formatDate and formatTime
+src/styles/card.module.css       defines .root and .shadow
+src/graphql/user.graphql         #import "./fields"
+src/graphql/old.graphql
+src/Old.svelte
+```
+
+```bash
+npx fallow dead-code
+```
+
+```text
+  2 entry points detected (1 default index, 1 plugin)
+
+── Unused Code ─────────────────────────────────────
+
+● Unused files (2)
+  src/Old.svelte
+  src/graphql/old.graphql
+  Files not reachable from any entry point
+  https://fallow.tools/docs/explanations/dead-code/#unused-files
+
+● Unused exports (2)
+  src/format.ts
+    :3 formatTime
+  src/styles/card.module.css
+    :3 shadow
+  Exported symbols with no known consumers
+  https://fallow.tools/docs/explanations/dead-code/#unused-exports
+
+✗ 2 files · 2 exports (0.19s)
+```
+
+- `global.css` is used, because `index.html` loads it. The Vite plugin makes `index.html` an [entry point](/concepts/entry-points).
+- `formatDate` is used, because the template of `Card.vue` calls it. The script block alone does not use it.
+- `.shadow` is an unused export of the CSS module. Fallow treats each class of a `.module.css` file as an export.
+- `fields.graphql` is used through `#import "./fields"`. Fallow tries `.graphql` and `.gql` for a path without an extension.
+
+## Notes for each type
+
+### Vue and Svelte
+
+Fallow parses `<script>` and `<script setup>`, also with `lang="ts"`. In the template, it counts component tags, directives and expressions as uses of the imported names. A name that only the template uses is therefore used.
+
+A Svelte component declares its props as exports. Fallow cannot tell a prop from a helper export, so it does not report unused exports of a `.svelte` file. Put helpers in a `.ts` file, where fallow checks them.
+
+### Astro
+
+Fallow parses the frontmatter between the two `---` lines as TypeScript. It also follows `<script src>` and the imports of inline `<script>` blocks, because Astro bundles them into the page. [Health](/analysis/health) scores the functions of inline scripts.
+
+### HTML
+
+An HTML file is reachable only when an entry point or a plugin names it. The Vite and Parcel plugins make `index.html` an entry point. Fallow resolves a path that starts with `/` against the directory of the HTML file, then against the project root, then against `public/`.
+
+`fallow health` also reports the complexity of Angular templates: external `.html` templates and inline `template` strings.
+
+Fallow reads the same tags in an `` html`...` `` tagged template in JavaScript and TypeScript, for example in a Hono layout. It does not read `<script src>` in JSX: there it is a string, not an import.
+
+### CSS
+
+Fallow reads the import rules and treats a CSS module class as an export. An `@apply` or `@tailwind` directive counts as a use of `tailwindcss`. A Tailwind `@plugin` directive counts as a use of its package or file. [Styling](/analysis/styling) covers the analysis of the classes themselves.
+
+### MDX and Markdown
+
+Fallow adds the `import` and `export` lines of an `.mdx` file to the module graph. It does not read `.md` files, so it does not see the `<script setup>` of a VitePress page. A module that only a `.md` page imports is reported as unused. Add it to [`entry`](/reference/config-files#entry).
+
+### JSDoc in JavaScript
+
+In a JavaScript file, fallow reads the `import()` types of `/** */` comments, for example `@param {import('./types').Config} cfg`. The type then counts as used. Fallow ignores `/* */` comments.
+
+### React Native
+
+When the React Native or Expo plugin is active, fallow resolves an import of `./Button` to each platform file: `Button.ios.tsx`, `Button.android.tsx`, `Button.native.tsx` and `Button.web.tsx`. Each platform file is then reachable.
+
+## If a result surprises you
+
+| Problem | Cause | Fix |
+|:--|:--|:--|
+| A file that an HTML page loads is unused. | No entry point or plugin names the HTML file. | Add the HTML file to [`entry`](/reference/config-files#entry). |
+| An import that a template uses is unused. | The template uses the name in a way that fallow does not read, for example a computed component name. | [Trace the export](/guides/trace-a-finding), and [suppress it](/guides/suppress) when the use is real. |
+| An unused helper in a `.svelte` file is not reported. | Fallow does not check the exports of Svelte files. | Move the helper to a `.ts` file. |
+
+## Related
+
+- [Entry points and reachability](/concepts/entry-points): how fallow decides that a file is used.
+- [Built-in plugins](/frameworks/built-in): the frameworks that add entry points.
+- [Known limits](/guides/limits): what fallow cannot know.

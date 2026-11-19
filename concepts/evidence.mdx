@@ -1,0 +1,87 @@
+---
+title: "Evidence levels"
+description: "Concept: what fallow knows from syntax, what the TypeScript type checker adds, and what runtime coverage adds about code that ran."
+keywords: ["static analysis", "syntactic analysis", "type-aware", "runtime coverage", "evidence", "dead code confidence", "static vs runtime"]
+icon: "layer-group"
+---
+
+Fallow can base a finding on three kinds of evidence: the source text, the TypeScript type checker, and data from the running app. Each level answers other questions. When you know the levels, you can judge how sure a finding is, and you can add the level that your decision needs.
+
+## The problem
+
+The example project has an unused export, `cancelOrder` in `src/services/orders.ts`. No file imports it. Before you delete it, you want to know two more facts:
+
+- Does code reach the function in a way that the types show and the imports do not?
+- Does the deployed app call the function at all?
+
+The default analysis answers neither question. Each question needs a different level of evidence.
+
+## Three levels
+
+| | Syntax | Type-aware analysis | Runtime coverage |
+|:--|:--|:--|:--|
+| Turn it on | Default | `--type-aware` | `fallow health --runtime-coverage ./coverage` |
+| Source | The source text of each file | The TypeScript type checker | Function calls in a deployed app with real traffic |
+| Sees | Files, imports, exports, re-export chains, function bodies | The exact declaration that each use names | The functions that ran during the capture |
+| Needs | Nothing more | Node.js 20 or later, and the `fallow-type-aware` package or `fallow type-aware setup` | Coverage data from the app |
+
+### Syntax
+
+The default analysis reads the source text of each file. It does not need Node.js, the TypeScript compiler or installed packages to parse your code. From the text, fallow builds the [module graph](/concepts/entry-points#the-module-graph), and each analysis reads that graph. Dead code, duplication, complexity, circular dependencies and boundaries all come from this level.
+
+Syntax cannot see the type of a value. In a call such as `item.render()`, it cannot always tell the class that `render` belongs to. Syntax also cannot see a value that the code computes when it runs, for example a path in a variable or a call such as `handlers[name]()`.
+
+### Type-aware analysis
+
+[Type-aware analysis](/analysis/type-aware) runs the TypeScript type checker in a separate process. It checks the candidates that the syntax level found, and it resolves each use to its exact declaration.
+
+The check can only remove a finding. For unused exports, unused types, unused class members and private type leaks, it does these steps:
+
+- When the checker finds a use of the exact declaration, fallow removes the finding.
+- When an interface, an abstract class or a framework contract needs the declaration, fallow removes the finding.
+- When the checker finds no use, or cannot decide, fallow keeps the finding.
+
+Type-aware analysis also gives exact symbol traces and the tests that a change of a symbol affects. The cost is a second process with the type checker, and a longer run. Keep `tsc --noEmit` for type errors: fallow does not report compiler errors.
+
+### Runtime coverage
+
+[Runtime coverage](/analysis/runtime-coverage) is data about the functions that ran in a deployed app with real traffic. Fallow merges it into the health report and marks each function with one of these values:
+
+| Static result | Calls in the capture | Value |
+|:--|:--|:--|
+| Unused | None | `safe_to_delete`: the strongest signal to delete |
+| Used | None | `review_required`: the function can be seasonal, on an error path, or dead |
+| Any | A few, below the low-traffic threshold | `low_traffic` |
+| Any | The capture could not track the function | `coverage_unavailable`: no signal |
+
+A function with zero calls did not run during the capture. It can still run later: at the end of the year, after an error, or for one customer. A short capture or low traffic makes this more likely.
+
+## Which question does each level answer
+
+| Question | Answered by |
+|:--|:--|
+| Which files does no entry point reach? | Syntax |
+| Which exports does no file import? | Syntax |
+| Which code is a copy of other code? | Syntax |
+| Does code use this exact declaration through an alias, a re-export or a method call? | Type-aware analysis |
+| Which tests does a change of this symbol affect? | Type-aware analysis |
+| Did this function run in production? | Runtime coverage |
+| Which functions handle the most traffic? | Runtime coverage |
+| Can I delete this function? | All three. Each level removes one kind of doubt. |
+
+## What static analysis can never know
+
+Syntax and the type checker both read the code. They do not run it. Thus, they cannot know these facts:
+
+- If a path through the code runs. A reachable function is a function that can run, not a function that ran.
+- A value from outside the program: an environment variable, user input, a response from a server, or a file name that a config computes.
+- A call by a name in a string, for example through reflection or a registry of handlers.
+- A user of your published package in another repository.
+
+Runtime coverage answers only the first question, and only for the period of the capture. [Limits of fallow](/guides/limits) lists the known gaps and the fix for each.
+
+## Next
+
+- [Production mode](/concepts/production-mode): analyze only the code that ships.
+- [Type-aware analysis](/analysis/type-aware): install the checker and read its results.
+- [Runtime coverage](/analysis/runtime-coverage): collect coverage from a deployed app.

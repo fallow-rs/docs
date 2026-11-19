@@ -1,184 +1,103 @@
 ---
-title: "fallow guard: architecture rules for a file before you edit"
-sidebarTitle: "fallow guard"
-description: "Check the architecture rules for a file before you edit it. fallow guard reports the boundary zone, allowed imports, forbidden calls, and rule-pack policies."
-keywords: ["fallow guard", "boundaries", "architecture", "rule packs", "policy", "agent", "pre-edit", "CLI"]
+title: "fallow guard"
+description: "Reference: fallow guard shows the architecture rules that apply to a file before you change it. Output fields and exit codes."
+keywords: ["fallow guard", "boundaries", "zones", "policy rules", "rule pack", "cli reference"]
 icon: "terminal"
 ---
 
-Before you write code in a file, `fallow guard` tells you what the file is allowed to do. You can then choose an allowed import from the start, and you do not have to fix a violation later. For each file, `guard` reports:
+Show the architecture rules that apply to one or more files before you change them: the zone, the zones that the file can import, the forbidden calls, and the policy rules.
 
-- the boundary zone of the file
-- the zones that the file can import from
-- the calls that are forbidden in that zone
-- each rule-pack policy in scope, with the token that suppresses it
+For zones and their rules, read [Architecture](/analysis/architecture).
 
-`guard` reads the configuration and runs no analysis. It is fast enough to call on every edit, and it works on files that do not exist yet.
+## Synopsis
 
-```bash
-fallow guard src/ui/App.ts
-fallow guard src/ui/App.ts src/db/query.ts --format json
-```
-
-<Info>
-  `guard` shows the rules before an edit. For violations that already exist in the code, run [`fallow architecture`](/cli/architecture) after the edit. [`fallow audit`](/cli/audit) also reports `boundary-violation` and `policy-violation` findings in the changed files.
-</Info>
-
-## Output
-
-```text
-src/ui/App.ts (zone: ui)
-  note: Same-zone imports are always allowed.
-  may import zones: shared, ui (same zone)   type-only: db
-  forbidden calls in zone: child_process.*, eval
-  policy rules:
-    warn  house-rules/no-child-process  banned-call: child_process.*
-           suppress: // fallow-ignore-next-line policy-violation:house-rules/no-child-process -- <reason>
-  severities: boundary-violation=error  policy-violation=warn
-```
-
-## Files that do not exist yet
-
-`guard` matches the path against the zone patterns and does not read the file. You can call it for a file that you are about to create:
+{/* generated:start cli-synopsis guard */}
 
 ```bash
-fallow guard src/ui/NewScreen.tsx
+fallow guard [OPTIONS] <FILES>...
 ```
 
-The JSON has `"exists": false`, and the human output adds an `exists: false` line. `guard` fills every rule field as usual.
-
-## Paths outside every zone
-
-For a path that matches no configured zone, `guard` returns `"zone": null` and an empty rule set. This is a normal answer and not an error: import rules do not restrict files outside every zone.
-
-```text
-src/orphan/thing.ts (zone: none)
-  note: Files outside every zone are unrestricted for import and call checks.
-  may import zones: none   type-only: none
-  forbidden calls in zone: none
-  policy rules:
-    warn  house-rules/no-moment  banned-import: moment
-           suppress: // fallow-ignore-next-line policy-violation:house-rules/no-moment -- <reason>
-  severities: boundary-violation=error  policy-violation=warn
-```
-
-A file outside every zone has no import rules, but the policy rules still apply. A rule-pack rule that declares no `zones` applies everywhere, so it still appears in the output. A `banned-import` rule with `allowNames` adds the list to its line, for example `banned-import: three (allowed names: Vector3, Quaternion)`.
-
-Some projects set `boundaries.coverage.requireAllFiles`. If the path does not match an `allowUnmatched` glob, the JSON has `"coverage_required": true`. An analysis run then reports the file as a `boundary-coverage-violation` because it belongs to no zone. The human output adds a second note that says `boundaries.coverage.requireAllFiles` is enabled. In scripts, read `coverage_required` from the JSON.
+{/* generated:end */}
 
 ## Options
 
-| Flag | Default | Description |
-|:-----|:--------|:------------|
-| `<FILES>...` | required | One or more files to report on. Paths can be root-relative or absolute. The output shows them root-relative. |
-| `--root <ROOT>` | current directory | Project root directory. |
-| `--config <CONFIG>` | discovered | Path to the Fallow config file. |
-| `--allow-remote-extends` | off | Allow trusted config files to extend HTTPS URLs. |
-| `--format <FORMAT>` | `human` | `human` or `json` only. |
-| `--pretty` | off | Indent JSON output. |
-| `--quiet` | off | Suppress progress output. |
+{/* generated:start cli-options guard */}
 
-`--help` also lists the analysis flags. They have no effect on `guard` because it runs no analysis. This includes the scoping, baseline, and severity-gate flags. Any format other than `human` or `json` exits `2` with `guard supports --format json or human`.
+| Argument | Description |
+|:--|:--|
+| `<FILES...>` | Files to report on (root-relative or absolute; may not exist yet) |
+
+This command has no options of its own.
+
+{/* generated:end */}
+
+Fallow reads only the [config file](/configuration/overview) and matches each path against the zone patterns. It runs no analysis and does not read the file, so the file can be new. The analysis options that `--help` shows have no effect. `--format` takes only `human` or `json`.
+
+## Output
+
+```bash
+fallow guard src/reports/invoice.ts src/lib/new-helper.ts
+```
+
+```text
+src/reports/invoice.ts (zone: reports)
+  note: Same-zone imports are always allowed.
+  may import zones: lib, reports (same zone), services   type-only: none
+  forbidden calls in zone: none
+  policy rules: none
+  severities: boundary-violation=error  policy-violation=warn
+
+src/lib/new-helper.ts (zone: lib)
+  exists: false
+  note: Same-zone imports are always allowed.
+  may import zones: lib (same zone)   type-only: none
+  forbidden calls in zone: none
+  policy rules: none
+  severities: boundary-violation=error  policy-violation=warn
+```
+
+Each file shows its zone, the zones that it can import, the zones that it can import types from, the forbidden calls, and the policy rules in scope. A file outside each zone shows `zone: none` and has no import rules. Policy rules without `zones` still apply to it. Each policy rule shows its severity, its id, its kind and its patterns, and the suppression comment for it.
+
+With `--format json`, the output has `kind: "guard"` and `files`, with one object for each file:
+
+| Field | Content |
+|:--|:--|
+| `path` | The path from the project root. |
+| `exists` | `false` for a file that does not exist yet. |
+| `zone` | `name` and `patterns` of the zone, or `null`. |
+| `boundary` | `configured`, `unrestricted`, `allowed_zones`, `allowed_type_only_zones`, `forbidden_calls`, `coverage_required`. |
+| `policy_rules` | One object for each rule in scope: `pack`, `rule_id`, `kind`, `patterns`, `message`, `severity`, `suppress_token`. A `gdp-proof-producer` rule also has `allowed_files` and `proof_kinds`. |
+| `severities` | The severity of `boundary_violation` and `policy_violation`. |
+| `notes` | Notes about the rules. |
+
+`allowed_zones` always holds the zone of the file. `unrestricted` is `true` when no import rule applies. `coverage_required` is `true` when `boundaries.coverage.requireAllFiles` is on and the file is outside each zone. `policy_rules` is empty when the severity of `policy-violation` is `off`. The [JSON output reference](/reference/json-output) has each field.
+
+The suppression comment of a policy rule uses the token `policy-violation:<pack>/<rule-id>`, for example `// fallow-ignore-next-line policy-violation:house-rules/no-moment -- <reason>`.
 
 ## Exit codes
 
 | Code | Meaning |
-|:-----|:--------|
-| `0` | The rules were reported, including when a path matches no zone or does not exist. |
-| `2` | Invalid input or configuration, such as an unsupported `--format` or a rule pack that fails to parse. |
+|:--|:--|
+| `0` | Fallow printed the rules, also for a file outside each zone or a file that does not exist. |
+| `2` | Invalid input or config, for example `--format sarif`, or a rule pack that does not parse. |
 
-`guard` reports no findings, so it never exits `1`.
+The command reports no findings, so it never exits with code 1. See [Exit codes](/reference/exit-codes).
 
-## JSON output
-
-```json title="$ fallow guard src/ui/App.ts --format json --pretty"
-{
-  "files": [
-    {
-      "path": "src/ui/App.ts",
-      "exists": true,
-      "zone": {
-        "name": "ui",
-        "patterns": ["src/ui/**"]
-      },
-      "boundary": {
-        "configured": true,
-        "unrestricted": false,
-        "allowed_zones": ["shared", "ui"],
-        "allowed_type_only_zones": ["db"],
-        "forbidden_calls": ["child_process.*", "eval"],
-        "coverage_required": false
-      },
-      "policy_rules": [
-        {
-          "pack": "house-rules",
-          "rule_id": "no-child-process",
-          "kind": "banned-call",
-          "patterns": ["child_process.*"],
-          "message": null,
-          "severity": "warn",
-          "suppress_token": "policy-violation:house-rules/no-child-process"
-        }
-      ],
-      "severities": {
-        "boundary_violation": "error",
-        "policy_violation": "warn"
-      },
-      "notes": ["Same-zone imports are always allowed."]
-    }
-  ],
-  "kind": "guard"
-}
-```
-
-- `allowed_zones` always contains the zone of the file itself, because same-zone imports are never restricted.
-- `unrestricted` is `true` when no import rule applies to the file. This happens when boundaries are not configured, or when the path is outside every zone.
-- `policy_rules` contains only the rules in scope for that file. A rule that declares `zones` appears only for files in those zones. The array is empty when `rules.policy-violation` is `off`.
-- For a `gdp-proof-producer` policy, `allowed_files` lists the globs where proof factories are permitted. `proof_kinds`, when present, lists the exact label filter. An absent filter checks every recognized factory call, including dynamic labels. The human output also shows the allowed producers and proof kinds. These fields describe permission; the rule's scope still comes from `files`, `exclude`, and `zones`.
-
-## Suppression tokens
-
-Each policy rule reports the exact token that suppresses it. You can copy the comment directly from the output:
-
-```ts
-// fallow-ignore-next-line policy-violation:house-rules/no-moment -- vendored, migrating in Q3
-import moment from "moment";
-```
-
-The token is `policy-violation:<pack>/<rule-id>`. Rule ids are unique in a pack, so the pair identifies one rule in all places.
-
-## For agents
-
-Call `guard` on the files you are about to change, while you can still choose what to write. An agent that reads the rules first can pick an allowed import. An agent that runs an analysis after the edit can only fix the violation it already wrote.
+## Examples
 
 ```bash
-fallow guard --format json --quiet <files>
+# Show the rules of a file before you change it
+fallow guard src/ui/App.ts
+
+# Show the rules of a new file
+fallow guard src/ui/NewScreen.tsx
+
+# Get the rules of two files as JSON for an agent
+fallow guard src/ui/App.ts src/db/query.ts --format json --quiet
 ```
 
-After the edit, run `fallow architecture` to find the violations in the code:
+## Related
 
-```bash
-fallow architecture --format json --quiet
-```
-
-The `guard` MCP tool gives the same output as `fallow guard`. The [MCP integration guide](/integrations/mcp) describes it.
-
-## See also
-
-<CardGroup cols={2}>
-  <Card title="fallow architecture" icon="terminal" href="/cli/architecture">
-    Find import cycles, boundary violations, and policy violations after an edit.
-  </Card>
-  <Card title="Architecture boundaries" icon="layer-group" href="/analysis/boundaries">
-    How fallow detects imports that cross zone boundaries.
-  </Card>
-  <Card title="Boundaries configuration" icon="sliders" href="/configuration/boundaries">
-    Define zones, import rules, and forbidden calls.
-  </Card>
-  <Card title="Suppression" icon="eye-slash" href="/configuration/suppression">
-    Suppress a finding with an inline comment.
-  </Card>
-  <Card title="MCP integration" icon="plug" href="/integrations/mcp">
-    Call `guard` and other fallow tools from an agent.
-  </Card>
-</CardGroup>
+- [`fallow architecture`](/cli/architecture): find the boundary and policy violations in the code.
+- [Boundaries config](/configuration/boundaries): define zones and their rules.
+- [`fallow rule-pack`](/cli/rule-pack): write and test policy rules.

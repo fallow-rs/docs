@@ -1,0 +1,170 @@
+---
+title: "Remove unused code with fallow fix"
+sidebarTitle: "Auto-fix"
+description: "Guide: preview, review, apply and verify the changes of fallow fix, which removes unused exports and unused dependencies."
+keywords: ["auto-fix", "fallow fix", "remove unused exports", "remove unused dependencies", "dry run", "cleanup"]
+icon: "wand-magic-sparkles"
+---
+
+At the end of this guide, `fallow fix` has removed the unused exports and unused dependencies of your project, and your tests still pass.
+
+## Before you start
+
+- Commit or stash your work. Then `git diff` shows only the changes of `fallow fix`, and `git checkout .` undoes them.
+- Run `fallow dead-code` and read the findings. Each change of `fallow fix` comes from one [finding](/concepts/findings).
+- Correct the false positives first. A wrong finding gives a wrong fix. [Fix a false positive](/guides/false-positives) shows how.
+
+## What fallow fix changes
+
+| Finding | Change |
+|:--|:--|
+| [Unused export](/rules/unused-export) | Fallow removes the `export` keyword. The declaration stays in the file. |
+| [Unused dependency](/rules/unused-dependency), also in `devDependencies` and `optionalDependencies` | Fallow removes the line from `package.json`. |
+| Unused enum member | Fallow removes the member from the enum. |
+| Unused pnpm catalog entry | Fallow removes the entry from `pnpm-workspace.yaml`. |
+| Duplicate export | Fallow adds an `ignoreExports` rule to your config file. |
+
+`fallow fix` never deletes a file. It never removes a function body, and it does not add an unlisted dependency to `package.json`. Delete an [unused file](/rules/unused-file) yourself.
+
+An exported enum that the file does not use is an exception: fallow removes the whole declaration. A class member is removed only when the [type-aware analysis](/analysis/type-aware) proves that no code uses it.
+
+The [issue types](/reference/issue-types) reference lists each issue type. Its rule page tells you if the type is fixable.
+
+## Steps
+
+### 1. Preview the changes
+
+```bash
+npx fallow fix --dry-run
+```
+
+```text
+Would remove export from src/lib/index.ts:1 `formatPercent`
+Would remove export from src/services/orders.ts:18 `cancelOrder`
+Would remove export from src/lib/format.ts:3 `formatPercent`
+Would remove `left-pad` from dependencies in package.json
+Dry run complete. No files were modified.
+```
+
+A dry run changes no file.
+
+### 2. Review each line
+
+For each line, ask one question: can code that fallow does not see use this name or this package? Examples are a script outside the repository, a test that loads a file by path, or a package that the runtime loads without an import.
+
+When the answer is yes, do not apply the fix. Tell fallow about the use, and run the dry run again. [Trace a finding](/guides/trace-a-finding) shows where fallow looked.
+
+### 3. Apply the changes
+
+```bash
+npx fallow fix
+```
+
+In a terminal, fallow asks for a confirmation. In a script, CI or an agent, there is no terminal, so add `--yes`:
+
+```bash
+npx fallow fix --yes
+```
+
+```text
+Fixed 4 issue(s).
+```
+
+Without `--yes`, a run without a terminal stops with exit code 2 and changes no file:
+
+```text
+Error: fix command requires --yes (or --force) in non-interactive environments. Use --dry-run to preview changes first, then pass --yes to confirm.
+```
+
+### 4. Read the diff
+
+```bash
+git diff
+```
+
+```diff
+-export const cancelOrder = (order: Order): Order => ({ ...order, quantity: 0 });
++const cancelOrder = (order: Order): Order => ({ ...order, quantity: 0 });
+```
+
+```diff
+-export { formatPrice, formatPercent } from "./format";
++export { formatPrice } from "./format";
+```
+
+```diff
+   "dependencies": {
+-    "zod": "^3.23.8",
+-    "left-pad": "^1.3.0"
++    "zod": "^3.23.8"
+   },
+```
+
+After the fix, `cancelOrder` is a local function that no code calls. Fallow does not report unused local code, so delete it yourself, or let your linter find it.
+
+### 5. Build and test
+
+```bash
+npm run build && npm test
+```
+
+After a dependency removal, also run `npm install` (or the install command of your package manager) to update the lockfile.
+
+## Fix from a script or an agent
+
+A script cannot answer a prompt, and it cannot review prose. Use the JSON output for both steps:
+
+```bash
+npx fallow fix --dry-run --format json --quiet
+```
+
+```json
+{"dry_run":true,"fixes":[{"type":"remove_export","path":"src/lib/index.ts","line":1,"name":"formatPercent"},{"type":"remove_export","path":"src/services/orders.ts","line":18,"name":"cancelOrder"},{"type":"remove_export","path":"src/lib/format.ts","line":3,"name":"formatPercent"},{"type":"remove_dependency","package":"left-pad","location":"dependencies","file":"package.json"}],"total_fixed":0,"skipped":0,"skipped_content_changed":0,"skipped_mixed_line_endings":0,"skipped_low_confidence_exports":0,"skipped_low_confidence_dependencies":0,"skipped_low_confidence_members":0,"skipped_kept_re_exports":0,"skipped_shared_declarations":0}
+```
+
+The script checks the `fixes` array. When it accepts the changes, it runs:
+
+```bash
+npx fallow fix --yes --format json --quiet
+```
+
+In the JSON output of `fallow dead-code`, each finding has an `actions` array. An action with `auto_fixable: true` is a change that `fallow fix` makes. The value can differ between two findings of the same issue type. [`fallow fix`](/cli/fix) describes the output fields.
+
+## Check the result
+
+Run the analysis again:
+
+```bash
+npx fallow dead-code
+```
+
+```text
+● Unused files (1)
+  src/utils/legacy-currency.ts
+  Files not reachable from any entry point
+  https://fallow.tools/docs/explanations/dead-code/#unused-files
+
+● Unlisted dependencies (1)
+  uuid
+  Packages imported in code but missing from package.json
+  https://fallow.tools/docs/explanations/dead-code/#unlisted-dependencies
+
+✗ 1 file · 1 unlisted dependency (0.04s)
+```
+
+The unused exports and the unused dependency are gone. The unused file and the unlisted dependency stay, because `fallow fix` does not change them.
+
+## If it fails
+
+| Problem | Cause | Fix |
+|:--|:--|:--|
+| The dry run lists fewer changes than the report has findings. | Fallow does not change a file in a directory such as `__mocks__`, `fixtures`, `e2e` or `examples`, or a file with an unresolved import. It also skips a finding when some files did not parse. | Fix the unresolved import or the parse error, and run the dry run again. Change the other files by hand. |
+| `skipped_content_changed` is above 0. | A file changed between the analysis and the write. | Run `fallow fix` again. |
+| The build fails after the fix. | Code that fallow did not see used a removed export. | Undo the change with Git. Tell fallow about the use, for example with [`entry`](/reference/config-files#entry). |
+| A duplicate export is not fixed in a monorepo. | Fallow does not create a config file inside one package. | Run `fallow fix` from the root of the workspace. |
+
+## Related
+
+- [`fallow fix`](/cli/fix): each option, the JSON output and the exit codes.
+- [Suppress a finding](/guides/suppress): keep a finding on purpose.
+- [Dead code](/analysis/dead-code): what fallow reports and how it decides.

@@ -1,104 +1,110 @@
 ---
-title: "jscpd alternative: migrate to fallow duplication"
-sidebarTitle: "Migrating from jscpd"
-description: "Migrate from jscpd to fallow. One command converts your jscpd config to fallow duplication settings for TypeScript and JavaScript. See how detection modes map."
-keywords: ["jscpd", "migration", "duplication", "config conversion", "jscpd alternative", "migrate from jscpd"]
+title: "Migrate from jscpd"
+sidebarTitle: "From jscpd"
+description: "Guide: convert a jscpd config to the duplicates settings of fallow with fallow migrate, check the result, and run both tools for a while."
+keywords: ["jscpd", "migration", "duplication", "config conversion", "migrate from jscpd", "fallow migrate"]
 icon: "right-left"
 ---
 
-The `fallow migrate` command translates your jscpd configuration to the `duplicates` section of a fallow config. This page shows the steps, the field mapping, and the detection mode mapping.
+`fallow migrate` reads your jscpd config and writes the `duplicates` section of a fallow [config file](/configuration/overview). `fallow dupes` then finds the duplicated code. [Duplication](/analysis/duplication) explains how fallow compares code.
 
-## Migration workflow
+## Before you start
 
-<Steps>
-  <Step title="Preview the migration">
-    Run `fallow migrate --dry-run` to see the generated config. The command writes no files.
+- A jscpd config: `.jscpd.json`, or the `jscpd` field of `package.json`.
+- No fallow config file in the project. `fallow migrate` does not overwrite one.
 
-    ```bash
-    fallow migrate --dry-run
-    ```
+## What maps to what
 
-    fallow looks for `.jscpd.json` and the `jscpd` field in `package.json`.
-  </Step>
-
-  <Step title="Generate the config">
-    When the preview looks correct, run the migration:
-
-    ```bash
-    fallow migrate            # Write .fallowrc.json
-    fallow migrate --toml     # Or output as fallow.toml
-    ```
-  </Step>
-
-  <Step title="Review the config">
-    Open the generated config. Check the translated thresholds, token counts, and ignore patterns.
-  </Step>
-
-  <Step title="Run fallow dupes">
-    Run your first duplication analysis:
-
-    ```bash
-    fallow dupes
-    ```
-  </Step>
-</Steps>
-
-## What gets migrated
-
-| jscpd | Fallow |
-|:------|:-------|
-| `threshold` | `duplicates.threshold` |
-| `minTokens` | `duplicates.minTokens` |
-| `minLines` | `duplicates.minLines` |
-| `mode` | `duplicates.mode` (fallow warns that `weak` can differ) |
-| `skipLocal` | `duplicates.skipLocal` |
-| `ignore` | `duplicates.ignore` |
-| `ignoreIdentifiers: true` or `"consistent"` | `duplicates.normalization.ignoreIdentifiers: true` and `consistentIdentifiers: true` |
+| jscpd | fallow |
+|:--|:--|
+| `threshold` | [`duplicates.threshold`](/reference/config-duplication#duplicates-threshold) |
+| `minTokens` | [`duplicates.minTokens`](/reference/config-duplication#duplicates-mintokens) |
+| `minLines` | [`duplicates.minLines`](/reference/config-duplication#duplicates-minlines) |
+| `mode` | [`duplicates.mode`](/reference/config-duplication#duplicates-mode) |
+| `skipLocal` | [`duplicates.skipLocal`](/reference/config-duplication#duplicates-skiplocal) |
+| `ignore` | [`duplicates.ignore`](/reference/config-duplication#duplicates-ignore) |
+| `ignoreIdentifiers: true` or `"consistent"` | `duplicates.normalization.ignoreIdentifiers` and `consistentIdentifiers`, both `true` |
 | `ignoreIdentifiers: "blind"` | `duplicates.normalization.ignoreIdentifiers: true` |
-| `ignoreLiterals: true` | `duplicates.normalization.ignoreStringValues: true` and `ignoreNumericValues: true` |
-| `format` | -- (fallow auto-detects languages) |
+| `ignoreLiterals: true` | `duplicates.normalization.ignoreStringValues` and `ignoreNumericValues`, both `true` |
+| `format` | Nothing. Fallow finds the JavaScript and TypeScript files itself. |
 
-## Detection mode mapping
+## Steps
 
-jscpd v5 has `strict`, `mild`, and `weak` modes. For exact token matching, the closest fallow mode is `strict`.
+1. Preview the config. The command writes no file:
 
-Fallow uses `mild` mode by default. This mode normalizes syntax variations, so a migrated project can show clones that `strict` mode does not report. To report only exact token matches, use `strict` mode:
+   ```bash
+   npx fallow migrate --dry-run
+   ```
+
+   For this `.jscpd.json`:
+
+   ```json
+   { "threshold": 5, "minTokens": 60, "minLines": 6, "mode": "weak", "ignore": ["**/*.generated.ts"], "ignoreIdentifiers": true, "format": ["typescript"] }
+   ```
+
+   the output is:
+
+   ```text
+   {
+     "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+     // Migrated from .jscpd.json
+     "duplicates": {
+       "minTokens": 60,
+       "minLines": 6,
+       "threshold": 5.0,
+       "mode": "weak",
+       "ignore": [
+         "**/*.generated.ts"
+       ],
+       "normalization": {
+         "ignoreIdentifiers": true,
+         "consistentIdentifiers": true,
+         "ignoreStringValues": false
+       }
+     }
+   }
+
+   Migrated from: .jscpd.json
+
+   Warnings (2):
+     [jscpd] `mode`: jscpd's "weak" mode may differ semantically from fallow's "weak" mode. jscpd uses lexer-based tokens while fallow uses AST-based tokens. (suggestion: test with both "weak" and "mild" to find the best match)
+     [jscpd] `format`: fallow auto-detects JS/TS files
+   ```
+
+2. Write the config file:
+
+   ```bash
+   npx fallow migrate
+   ```
+
+   Add `--toml` to write `fallow.toml`.
+
+3. Run the analysis:
+
+   ```bash
+   npx fallow dupes
+   ```
+
+## Check the result
+
+Compare the clone groups of fallow with the result of jscpd. The fallow modes `strict` and `mild` (the default) give the same result, because fallow compares parsed code. To also match copies with other names, try the `semantic` mode:
 
 ```bash
-fallow dupes --mode strict
+npx fallow dupes --mode semantic
 ```
 
-To also match clones with renamed variables, use `semantic` mode:
+## What differs
 
-```bash
-fallow dupes --mode semantic
-```
+- The fallow `weak` mode ignores the text of strings. When the jscpd config has `mode: "weak"` without `ignoreLiterals: true`, the migration adds `ignoreStringValues: false`, so that strings stay compared.
+- Fallow compares parsed code, so comments and formatting never hide a copy.
+- An `ignoreIdentifiers` value other than `true`, `false`, `"consistent"` or `"blind"` gets a warning, and the migration skips it.
 
-The jscpd `weak` mode skips comments, but it still compares string values. The fallow `weak` mode ignores string values. When the jscpd config has `mode: "weak"` without `ignoreLiterals: true`, the migration adds `normalization.ignoreStringValues: false`. The migrated config then keeps string values compared.
+## Run both tools for a while
 
-An `ignoreIdentifiers` value other than `true`, `false`, `"consistent"` or `"blind"` gets a warning, and the migration skips it. See [Normalization overrides](/analysis/duplication#normalization-overrides) for the meaning of each fallow field.
+`fallow migrate` does not change or delete the jscpd config, so you can run both tools in CI. When the results agree, remove jscpd and its config.
 
-## Other analyses
+## Related
 
-The same binary runs the other fallow analyses:
-
-```bash
-fallow dead-code    # Unused code + circular deps + boundaries
-fallow dupes        # Code duplication
-fallow health       # Complexity hotspots + maintainability scores
-fallow              # All of the above in one pass
-```
-
-## See also
-
-<CardGroup cols={2}>
-  <Card title="Duplication analysis" icon="clone" href="/analysis/duplication">
-    Learn how fallow detects duplication.
-  </Card>
-  <Card title="fallow dupes" icon="terminal" href="/cli/dupes">
-    Read the full CLI reference for `fallow dupes`.
-  </Card>
-  <Card title="fallow migrate" icon="terminal" href="/cli/migrate">
-    Convert your existing config with one command.
-  </Card>
-</CardGroup>
+- [`fallow migrate`](/cli/migrate): each option of the command.
+- [Duplication](/analysis/duplication): how fallow finds copies.
+- [`fallow dupes`](/cli/dupes): each option and the output.

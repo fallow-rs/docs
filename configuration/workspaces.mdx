@@ -1,300 +1,72 @@
 ---
-title: "Configure fallow for a monorepo with workspaces"
+title: "Workspace configuration"
 sidebarTitle: "Workspaces"
-description: "Monorepo analysis with no workspace setup. Fallow detects npm, yarn, pnpm, and Deno workspaces, resolves cross-package imports, and supports per-package config."
-keywords: ["workspaces", "monorepo", "pnpm", "yarn", "npm", "deno", "cross-package imports", "per-package config", "monorepo analysis", "pnpm workspaces"]
+description: "Reference: the options and config keys for a monorepo. Scope a run to packages, add workspace patterns, and set keys for some packages only."
+keywords: ["workspaces", "monorepo", "pnpm workspaces", "--workspace", "--changed-workspaces", "workspaces.patterns", "workspaces.settings", "workspaces.changedSince", "publicPackages", "per-package config"]
 icon: "folder-tree"
 ---
 
-Fallow analyzes a monorepo as one project graph. When only a sibling package uses an export, fallow does not report it as unused. You do not configure workspaces, because fallow reads the npm, yarn, pnpm, and Deno workspace formats.
+This page lists the options and config keys for a monorepo. [Workspaces](/concepts/workspaces) explains how fallow finds the packages and follows imports between them. [Analyze a monorepo](/guides/monorepo) shows the steps.
 
-Fallow resolves cross-package imports through `node_modules` symlinks or Deno import maps. You can scope the output to one package or to a set of packages.
-
-<Info>
-Workspace detection is automatic. Fallow finds and analyzes all packages if your repo has one of these:
-
-- A `workspaces` field in `package.json`.
-- A `pnpm-workspace.yaml` file.
-- A `workspace` field in a root `deno.json` or `deno.jsonc`.
-- A `references` field in the root `tsconfig.json` (TypeScript project references).
-</Info>
-
-## Workspace auto-detection
-
-Fallow detects workspaces from these sources:
-
-| Source | Example |
-|:-------|:--------|
-| `package.json` `workspaces` field | `"workspaces": ["packages/*"]` |
-| `pnpm-workspace.yaml` | `packages: ["packages/*", "apps/*"]` |
-| `deno.json` / `deno.jsonc` `workspace` field | `"workspace": ["./packages/*"]` |
-| `tsconfig.json` `references` field | `"references": [{ "path": "./packages/core" }]` |
-
-Fallow adds the packages from all sources together. When the repo declares no workspace patterns, fallow also scans the directories up to two levels below the root. It adds each directory with a `package.json` as a workspace package.
-
-<CodeGroup>
-```json package.json (npm / yarn)
-{
-  "workspaces": [
-    "packages/*",
-    "apps/*"
-  ]
-}
-```
-
-```yaml pnpm-workspace.yaml
-packages:
-  - "packages/*"
-  - "apps/*"
-```
-</CodeGroup>
-
-### Nested pnpm projects
-
-A directory with its own `package.json` and `pnpm-workspace.yaml` is an independent pnpm project, for example a `docs` site next to the packages. When no root workspace pattern declares such a directory, fallow still analyzes it as a workspace:
-
-- Its `package.json` owns its files and declares their dependencies.
-- Its framework plugins activate.
-- Fallow does not report its directories as undeclared workspaces.
-- The members that the `packages` list of its `pnpm-workspace.yaml` declares are workspaces too. `fallow list --workspaces` shows them below the nested project root.
-- A `catalog:` or `catalog:<name>` reference in the project or its members resolves against the nested `pnpm-workspace.yaml`, not against the root catalog.
-
-Fallow looks for these directories up to two levels below the root, and only when the root declares workspace patterns. Each one gets a `nested-project-root` diagnostic, which is information only. You do not need a `workspaces.patterns` entry for it. To leave the project out of the analysis, add it to `ignorePatterns`.
-
-The `unused-catalog-entries`, `empty-catalog-groups` and `unresolved-catalog-references` findings of a nested project name the nested files. `fallow fix` removes an unused entry from the nested `pnpm-workspace.yaml`. A `packages` entry of the nested file whose directory does not exist gets a `workspace-pattern-dir-missing` diagnostic. Fallow then does not report the unused entries of that nested catalog. A member that a root workspace pattern declares keeps the root catalog. Fallow does not read the nested `workspaces` of npm and yarn projects.
-
-### Missing pattern directories
-
-A workspace pattern can name a directory that exists only in CI, for example a repository that a CI step clones into the workspace. When the directory does not exist, fallow reports a `workspace-pattern-dir-missing` diagnostic and does not report `unused-catalog-entries`, because the packages in that directory can use the entries. See [workspace diagnostics](/cli/list#workspace-diagnostics).
-
-## Deno workspaces
-
-Fallow reads a root `deno.json` or `deno.jsonc` the same way it reads `package.json` for npm. The `workspace` field lists member globs. It accepts the bare array form and the object form:
-
-<CodeGroup>
-```jsonc deno.json (array form)
-{
-  "workspace": ["./apps/*", "./packages/*"]
-}
-```
-
-```jsonc deno.json (object form)
-{
-  "workspace": {
-    "members": ["./apps/*", "./packages/*"]
-  }
-}
-```
-</CodeGroup>
-
-Fallow reads the `name` and `exports` of each member like the same fields in `package.json`. For example, `@scope/lib` with `"exports": { ".": "./mod.ts" }` resolves like an npm package export map. When a member directory has both a `package.json` and a `deno.json`, fallow takes the package identity from `package.json`.
-
-Fallow resolves import maps (`imports` in the root or member configs) per package. An exact specifier match wins. If there is no exact match, the longest matching slash-prefix entry applies.
-
-Deno workspace member names count as listed dependencies. When you import a sibling package by name, fallow does not report it as an unlisted dependency.
-
-With a pure Deno root (no root `package.json`), fallow does not warn about a missing `node_modules` directory. If the root `deno.json` or `deno.jsonc` is malformed, fallow stops with an analysis error (exit 2). It does not continue with an empty workspace list.
-
-## Cross-workspace imports
-
-When `apps/web` imports from `@myorg/ui`, fallow follows the `node_modules` symlink back to the workspace source files. Fallow canonicalizes symlinked paths, so it records the usage on the real source file.
-
-```ts apps/web/src/App.tsx
-// Resolves to packages/ui/src/Button.tsx via node_modules symlink
-import { Button } from '@myorg/ui'
-```
-
-### Nested package manifests
-
-Fallow checks imports against the nearest valid `package.json` inside the project. This includes standalone nested packages omitted from explicit workspace patterns, such as `scripts/tool/package.json`. Recognizing that manifest for dependency checks does not add the package to the workspace list.
-
-### Workspace dependency declarations
-
-[npm links workspace packages into `node_modules` during installation](https://docs.npmjs.com/cli/v11/using-npm/workspaces/). That link lets an import resolve. Fallow also checks whether the importing package declares the dependency, including imports from the repository root.
-
-For example, if `src/index.ts` imports `@myorg/ui`, the root manifest needs a dependency declaration even when `packages/ui` is already listed as a workspace:
-
-```json package.json
-{
-  "name": "app",
-  "private": true,
-  "workspaces": ["packages/*"],
-  "dependencies": {
-    "@myorg/ui": "^1.0.0"
-  }
-}
-```
-
-Use a version that matches your workspace package and package-manager setup. Put a dependency used only by root tests or tooling in `devDependencies` instead.
-
-A private package, or a test, config, or build script, may use a dependency declared in an ancestor manifest. Runtime source in a publishable package needs its own declaration. A package can import itself by name without declaring a dependency on itself.
-
-If your project deliberately permits undeclared workspace imports, add the package name to [`ignoreDependencies`](/configuration/overview). This suppresses dependency findings for that package; it does not add a declaration to `package.json`.
-
-See [unlisted dependencies](/explanations/dead-code#unlisted-dependencies) for the rule and its alias behavior.
-
-### Pnpm content-addressable store
-
-pnpm uses a content-addressable store with a `.pnpm` virtual store inside `node_modules`. Fallow detects these paths and maps them back to the workspace source files. Fallow also tracks cross-package usage correctly in the strict isolation mode of pnpm.
-
-### Workspace aliases
-
-A dependency can be an alias of a workspace package: `"vite": "workspace:@myorg/core@*"`. pnpm installs `@myorg/core` under the name `vite`. Fallow resolves `vite/<subpath>` through the `exports` of `@myorg/core`, also when another workspace member has the name `vite`. The usage counts for the declared dependency `vite`.
-
-### Gitignored workspace members
-
-CI can clone an upstream repository into a directory that `pnpm-workspace.yaml` declares and `.gitignore` excludes. Fallow does not read the source files of such a member, so it does not report the dependencies of its `package.json` as unused. The member is still a workspace: imports and catalog references still reach its manifest.
-
-## Package exports resolution
-
-Fallow resolves the `exports` field in the `package.json` of each package, including subpath patterns:
-
-```json packages/ui/package.json
-{
-  "name": "@myorg/ui",
-  "exports": {
-    ".": "./src/index.ts",
-    "./icons": "./src/icons/index.ts",
-    "./theme/*": "./src/theme/*.ts"
-  }
-}
-```
-
-An import of `@myorg/ui/icons` resolves to `packages/ui/src/icons/index.ts`.
-
-## Output directory mapping
-
-Packages often point `exports` or `main` at build output. Fallow maps these paths back to the source file, so usage counts against the code you edit. This applies to the `dist`, `build`, `out`, `esm`, and `cjs` directories. Fallow tries the same relative path under `src/` with the source extensions `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, and `.cjs`.
-
-Fallow also maps `lib/` targets back to `src/`, but only when the `lib/` file is not in the analyzed files. This is the case before the build, or when `.gitignore` or `ignorePatterns` excludes `lib/`. A package with hand-written source in `lib/` keeps its result. A relative import of a missing `lib/` file stays an unresolved import.
-
-```json packages/utils/package.json
-{
-  "main": "dist/index.js"
-}
-```
-
-Fallow maps `dist/index.js` back to `src/index.ts` (or `.js`, `.tsx`, and so on) if the source file exists.
-
-The same rule applies to a nested path and to a type target. For example, `dist/define/index.mjs` maps to `src/define/index.ts`, and a `types` entry `dist/index.d.ts` maps to `src/index.ts`. When a `tsconfig.json` maps the output path to a file that does not exist, fallow also tries the file under `src/`.
-
-## Per-package tsconfig.json
-
-Fallow finds the `tsconfig.json` file in each workspace package automatically. It uses the path aliases of a package to resolve imports in that package.
-
-A framework plugin alias of a workspace package, such as SvelteKit `$lib` or Nuxt `~/`, also applies only to the files of that package. An alias from the project root applies to all files. When the package has no target for the import, fallow reports an `unresolved-import` finding.
-
-```json packages/ui/tsconfig.json
-{
-  "compilerOptions": {
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["src/*"]
-    }
-  }
-}
-```
-
-## Scoping output to workspaces
-
-To see the issues of one or more workspaces only, pass `-w` or `--workspace`. Fallow still analyzes the full monorepo graph and filters only the reported issues.
-
-A pattern has one of these forms:
-
-- **Exact package name** or **workspace path**: `web`, `@myorg/ui`, `apps/web`
-- **Glob**, matched against both the package name and the workspace path relative to the repo root: `apps/*`, `@scope/*`
-- **Negation** with a `!` prefix: `!apps/legacy`
-
-Separate values with commas, or repeat the flag. Quote patterns that contain `!` or glob characters, so that your shell does not expand them.
+To see the packages that fallow found, run:
 
 ```bash
-# Single package (back-compat with earlier fallow versions)
-fallow dead-code -w @myorg/ui
+npx fallow workspaces
+```
 
-# Multiple packages (comma-separated or repeated)
-fallow dead-code -w web,admin
-fallow dead-code -w web -w admin
+## Scope a run to packages
 
-# Glob: all apps, all scoped packages
-fallow dead-code -w 'apps/*'
-fallow dead-code -w '@myorg/*'
+These options limit the report to some [workspaces](/concepts/workspaces). Fallow still analyzes each package, so an export that another package uses stays used.
 
-# Everything under apps/ except legacy
+| Option | Effect |
+|:--|:--|
+| `--workspace <PATTERN>`, `-w` | Report only the selected packages. A pattern is a package name, a workspace path, a glob or a `!` exclusion. Separate patterns with commas, or repeat the option. |
+| `--changed-workspaces <REF>` | Report only the packages with a file that changed since the Git ref. You cannot use it together with `--workspace`. |
+| `--group-by package` | Group the report by package. |
+
+```bash
+# All apps except one
 fallow dead-code -w 'apps/*,!apps/legacy'
 
-# Everything except a workspace (negation only)
-fallow dead-code -w '!apps/legacy'
+# Only the packages that this branch changed
+fallow dead-code --changed-workspaces origin/main
 ```
 
-```bash title="$ fallow dead-code -w 'apps/*,!apps/legacy'"
-● Unused exports (2)
-  apps/web/src/Button.tsx
-    :15 ButtonVariant
-  apps/admin/src/Modal.tsx
-    :8  ModalContext
-  Exported symbols with zero references
+Put a pattern with `!` or `*` in quotes, so that your shell does not change it. [Global options](/cli/global-flags) has each option.
 
-✗ 2 issues (31ms, 1,247 files)
-```
+## Config keys
 
-To scope the output to the workspaces that changed since a git ref, pass `--changed-workspaces <REF>` instead. You cannot combine it with `--workspace`.
+| Key | Use |
+|:--|:--|
+| [`workspaces.patterns`](/reference/config-workspaces#workspaces-patterns) | Add packages that the package manager does not declare. |
+| [`workspaces.settings`](/reference/config-workspaces#workspaces-settings) | Set `ignoreDependencies` and `includeEntryExports` for some packages. |
+| [`workspaces.changedSince`](/reference/config-workspaces#workspaces-changedsince) | Give each package its own Git ref for the changed files. |
+| [`publicPackages`](/reference/config-files#publicpackages) | Keep the exports of packages that code outside the repository uses. |
+| [`overrides`](/configuration/rules#overrides) | Set rule severities for the files of some packages. |
 
-<Tip>
-For CI matrix jobs, combine `--workspace` with `--changed-since`. Fallow applies both filters, so you get only the changed files inside the matched workspaces.
-</Tip>
+Fallow loads one config file for each run. It looks in the project root and then in each parent directory. Thus a run in a package directory uses the root config when the package has no config file. [Config file names](/configuration/overview#config-file-names) has the order. The keys of a workspace, such as `workspaces.settings`, name each package by its path relative to the project root, as `fallow workspaces` prints it.
 
-## Per-package change baselines
+## Additional workspace patterns {#additional-workspace-patterns}
 
-In a monorepo, packages often follow different release branches. `workspaces.changedSince` maps a workspace root to its own Git ref. For a mapped package, `check`, `dead-code`, `dupes` and the editor report only the findings in files that changed since that ref. Unlisted packages and files outside every workspace stay in full scope.
+Fallow reads the workspace patterns of `package.json`, `pnpm-workspace.yaml`, a root `deno.json` and the `references` of `tsconfig.json`. Add the packages that none of these files declare:
 
-<CodeGroup>
-```jsonc .fallowrc.json
+```jsonc
+// .fallowrc.json
 {
   "workspaces": {
-    "changedSince": {
-      "packages/web": "main",
-      "packages/legacy": "release/2024.10"
-    }
+    "patterns": ["tools/*", "shared/*"]
   }
 }
 ```
 
-```toml fallow.toml
-[workspaces.changedSince]
-"packages/web" = "main"
-"packages/legacy" = "release/2024.10"
-```
-</CodeGroup>
+A package that a pattern finds is a full workspace. It gets its own plugins, entry points and dependency checks. `--workspace`, `--changed-workspaces`, `--group-by package` and `fallow workspaces` use it too.
 
-Write each key as `fallow list --workspaces` prints the workspace root: relative to the project root, with `/` separators. A file belongs to its nearest workspace, so a nested workspace uses its own entry. A clone group or a cycle stays in the report when one of its files is in scope.
+## Per-workspace settings {#per-workspace-settings}
 
-The map follows these rules:
+`workspaces.settings` sets two keys for the packages that a key selects. A key is a workspace path or a glob over workspace paths.
 
-- A global `--changed-since` replaces the map for one run.
-- `--no-package-baselines` or `FALLOW_PACKAGE_BASELINES=false` turns the map off, so every package is in full scope. In VS Code, set `fallow.packageBaselines` to `false`.
-- `audit`, `health` and `security` do not read the map. In a bare `fallow` run, the health section is not scoped by it.
-- A malformed key or ref is a config error and exits with code 2.
-- A key that names no workspace of the project, or a ref that Git cannot resolve (for example in a shallow CI clone), turns the whole map off for that run. Fallow prints a warning and reports every package in full scope. The report is wider than you asked for, never narrower. A run from a package subdirectory loads the parent config, so its keys name no workspace there, and the map turns off in the same way.
-
-JSON reports list the applied refs in `package_baselines`, for example `[{ "workspace_root": "packages/web", "reference": "main" }]`. `request_outcomes["package-baselines"]` is `applied` when the map scoped the run, and `not-applied` with a `reason` and a `message` when it turned off. A narrowed run names `package-baselines` in `baseline_staleness.scope_reasons`.
-
-<Warning>
-The map applies to every run, so a baseline saved under it holds only the findings in changed files of the mapped packages. Fallow warns when it saves such a baseline and records the scope in the file. Save and gate a whole-project baseline with `--no-package-baselines`:
-
-```bash
-fallow dead-code --no-package-baselines --save-baseline fallow-baselines/dead-code.json
-fallow dead-code --no-package-baselines --baseline fallow-baselines/dead-code.json --fail-on-stale-baseline
-```
-
-The GitHub Action and the GitLab template add `--no-package-baselines` to their whole-project baseline check for you.
-</Warning>
-
-## Per-workspace settings
-
-`workspaces.settings` sets `ignoreDependencies` and `includeEntryExports` for some workspaces only. The global keys continue to apply to every workspace.
-
-<CodeGroup>
-```jsonc .fallowrc.json
+```jsonc
+// .fallowrc.json
 {
   "workspaces": {
     "settings": {
@@ -305,72 +77,51 @@ The GitHub Action and the GitLab template add `--no-package-baselines` to their 
 }
 ```
 
-```toml fallow.toml
-[workspaces.settings."packages/*"]
-includeEntryExports = true
+- `ignoreDependencies`: a package gets the global list and the list of each key that selects it.
+- `includeEntryExports`: an exact path wins over a glob, and a longer glob wins over a shorter glob. A package that no key selects uses the global value. The `--include-entry-exports` option turns the check on in each package.
+- The root package uses only the global keys. A key that selects no package gives a warning.
 
-[workspaces.settings."apps/server"]
-ignoreDependencies = ["pg-native"]
-```
-</CodeGroup>
+## Per-package change baselines {#per-package-change-baselines}
 
-Write each key as `fallow list --workspaces` prints the workspace root, or as a glob over workspace roots. A single `*` matches inside one path segment. A file belongs to its deepest workspace, so a nested workspace uses its own keys.
+`workspaces.changedSince` gives a package its own Git ref. For that package, fallow reports only the findings in files that changed since the ref. Other packages and the files outside each package stay in full scope.
 
-The settings follow these rules:
-
-- `ignoreDependencies`: a workspace gets the global list plus the list of each key that selects it. An unused dependency uses the workspace of its `package.json`. An unlisted dependency uses the workspace of the file that imports it.
-- `includeEntryExports`: an exact root wins over a glob, and a glob with more literal segments wins over a shorter glob. A workspace that no key sets uses the global value. When two keys of the same precedence give different values, fallow warns and uses the global value.
-- The `--include-entry-exports` flag turns the check on in every workspace, also where a key sets `false`.
-- The root package uses only the global keys.
-- A key that selects no workspace has no effect, and fallow prints a warning. Fallow also warns about an unknown key under `workspaces`.
-
-An older fallow version ignores `workspaces.settings`. Add [`minimumVersion`](/configuration/overview#minimumversion) to the config, so that an older binary stops with a clear message.
-
-## Additional workspace patterns
-
-If fallow does not detect all your workspace packages, add patterns in your config:
-
-<CodeGroup>
-```jsonc .fallowrc.json
+```jsonc
+// .fallowrc.json
 {
   "workspaces": {
-    "patterns": ["tools/*", "shared/*"]
+    "changedSince": {
+      "packages/web": "main",
+      "packages/legacy": "release/2024.10"
+    }
   }
 }
 ```
 
-```toml fallow.toml
-[workspaces]
-patterns = ["tools/*", "shared/*"]
-```
-</CodeGroup>
+- `fallow dead-code`, `fallow dupes`, the bare `fallow` run and the editor read the map. `fallow audit`, `fallow health` and `fallow security` do not read it.
+- A `--changed-since` option replaces the map for the run.
+- `--no-package-baselines` or `FALLOW_PACKAGE_BASELINES=false` turns the map off.
+- A key that names no package, or a ref that Git cannot find, turns the map off for the run. Fallow writes a warning, and the report covers each package.
+- A malformed key or ref stops the config load with exit code 2.
 
-These patterns add to the packages that fallow detects from `package.json`, `pnpm-workspace.yaml`, a root Deno config, or `tsconfig.json` references.
-
-Each package that these patterns find is a full workspace package. It gets its own plugins, entry points, and dependency checks. Use this for packages that the package manager does not declare, for example app packages in an Nx monorepo that only have a `project.json` and a `package.json`.
-
-These commands and options use the packages from `workspaces.patterns`:
-
-- The analysis of every command that loads a config.
-- `fallow list --workspaces`.
-- `--workspace` and `--changed-workspaces`.
-- `--group-by package`.
-
-The base checkout of `fallow audit` and `fallow security` also uses them, and the `scope-workspaces` next step lists the packages that they declare. `fallow init` and `fallow coverage setup` read only the patterns in `package.json`, `pnpm-workspace.yaml`, and the other manifests.
-
-To make sure that fallow finds a package, run this command:
+The map also limits a saved [baseline](/concepts/changed-code#baselines). To save a baseline of the whole project, add `--no-package-baselines`:
 
 ```bash
-fallow list --workspaces
+fallow dead-code --no-package-baselines --save-baseline fallow-baselines/dead-code.json
 ```
 
-## See also
+## Public packages {#public-packages}
 
-<CardGroup cols={2}>
-  <Card title="Configuration" icon="gear" href="/configuration/overview">
-    Reference for every field in the config file.
-  </Card>
-  <Card title="fallow dead-code" icon="terminal" href="/cli/dead-code">
-    CLI reference for running analysis across workspaces.
-  </Card>
-</CardGroup>
+A library package can have exports that only code outside the repository uses. List the package in `publicPackages`, and fallow treats its entry points and exports as used:
+
+```jsonc
+// .fallowrc.json
+{ "publicPackages": ["@acme/sdk", "@acme/ui-*"] }
+```
+
+A value is a package name or a glob over package names.
+
+## Related
+
+- [Workspaces](/concepts/workspaces): how fallow finds the packages.
+- [Analyze a monorepo](/guides/monorepo): the steps for a first run.
+- [`fallow workspaces`](/cli/workspaces): list the packages and the discovery problems.
