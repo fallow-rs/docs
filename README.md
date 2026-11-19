@@ -16,7 +16,8 @@ artifacts come from, and how synchronization works.
 
 ## Structure
 
-The pages are grouped by user task. The complete placement map is in
+The directory of a page sets its page type, for example `concepts/`,
+`analysis/`, `guides/` or `cli/`. The complete placement map is in
 [CONTRIBUTING.md](CONTRIBUTING.md#content-placement). `docs.json` is the source
 of truth for navigation order.
 
@@ -25,5 +26,5 @@ of truth for navigation order.
 Edit any `.mdx` file and open a pull request against `main`. The fallow.tools
 site renders the pages from a pinned commit of this repository, so a merged
 change goes live when the site updates its pin. The old host,
-`docs.fallow.tools`, now only redirects to [fallow.tools/docs](https://fallow.tools/docs/).
+`docs.fallow.tools`, redirects to [fallow.tools/docs](https://fallow.tools/docs/).
 [CONTRIBUTING.md](CONTRIBUTING.md) explains the checks to run before you push.

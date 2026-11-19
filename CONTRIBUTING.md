@@ -66,8 +66,13 @@ budget.
 
 The other directories hold pages without a page type: `configuration/`,
 `explanations/`, `frameworks/`, `integrations/`, `migration/`, `reference/`
-and `cloud/`. The root also holds `index.mdx`, `installation.mdx` and
-`adoption.mdx`. `images/` and `logo/` hold public visual assets.
+and `cloud/`. The root also holds `index.mdx` and `installation.mdx`.
+`images/` and `logo/` hold public visual assets.
+
+The generator writes `rules/`, the `reference/config*`,
+`reference/exit-codes` and `reference/issue-types` pages, and the generated
+blocks of the `cli/` pages.
+[PAGE-TYPES.md](PAGE-TYPES.md#generated-blocks) tells how to refresh them.
 
 When you change the tool:
 
@@ -79,7 +84,17 @@ Each fact has one owner page. Other pages link to it. Use the terms in
 [TERMS.md](TERMS.md).
 
 Add every user-facing page to `docs.json`. `docs.json` is the source of truth
-for navigation order.
+for navigation order. The site reads only `navigation.tabs[].groups[]`:
+
+- Each group has a `group` name, an `icon` and a flat `pages` list of page
+  paths. A group cannot hold another group.
+- Each page appears in exactly one group.
+- Each content directory needs at least one group that holds only pages of
+  that directory, because the site makes a landing page for each directory
+  from that group.
+- The site does not read other keys, such as `redirects`. When you move a
+  page that a released fallow version links to, add the old path to `moved`
+  in `scripts/inbound-links.json`.
 
 ## Developer Certificate of Origin
 

@@ -20,8 +20,8 @@ the pages and reads `docs.json` as its navigation source.
 
 ## File structure
 
-- `docs.json`: navigation source. Edit this to add or reorder pages.
-- `*.mdx` files: content pages. YAML frontmatter (`title`, `description`, `keywords`, `icon`) required on every page.
+- `docs.json`: navigation source. Edit this to add or reorder pages. The site reads only `navigation`. [CONTRIBUTING.md](CONTRIBUTING.md#content-placement) gives the group rules.
+- `*.mdx` files: content pages. Every page needs `title` and `description` in its YAML frontmatter. The site also accepts `keywords`, `icon`, `sidebarTitle` and `mode`, and no other key.
 - `logo/`, `images/`: static assets.
 - `custom.css`: theme overrides.
 - `CONTRIBUTING.md`: canonical content placement map.
@@ -31,8 +31,12 @@ the pages and reads `docs.json` as its navigation source.
 ## Key files
 
 - `index.mdx`: landing page. Positioning of Fallow (static analysis) and Fallow Cloud (production data), feature overview.
-- `quickstart.mdx`: first run and reading the output, then links into VS Code, CI, MCP, and Fallow Cloud.
-- `integrations/mcp.mdx`: agent integration via CLI and MCP. Core page for agent audience.
+- `quickstart.mdx` and `start/`: the first-hour path. The quickstart gives the first run. `start/first-cleanup`, `start/first-ci` and `start/first-agent` follow it.
+- `concepts/`: the ideas that the analyses depend on. `TERMS.md` names the concept page that owns each term.
+- `integrations/agents.mdx`: the entry page for coding agents. It links to the CLI contract, MCP, skills and hooks.
+- `cli/index.mdx` and `cli/global-flags.mdx`: the entry points of the command reference.
+- `rules/` and `reference/`: generated reference. Refresh them with `npm run docs:reference:write`, never by hand.
+- `scripts/inbound-links.json`: the URLs that released fallow versions link to, and the `moved` map for pages that moved.
 
 ## Writing conventions
 
