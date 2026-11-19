@@ -16,11 +16,12 @@ Fallow classifies clones with the standard taxonomy from clone detection researc
 |:-----------|:-------------|:---------------|
 | **Type-1** | Exact token sequences (whitespace and comments already stripped) | `strict`, `mild` |
 | **Type-2** | Same structure, but identifiers, literals, or both differ | `weak`, `semantic` |
+| **Type-3** | Function-scoped clones with small inserted or deleted statements | `--near` flag |
 
 From `strict` to `semantic`, recall increases (fallow finds more clones) and precision decreases (you get more possible false positives).
 
 <Accordion title="Research: clone taxonomy">
-The Type-1 through Type-4 clone taxonomy was surveyed by [Roy, Cordy, and Koschke (2009)](https://doi.org/10.1016/j.scico.2009.02.007). Fallow detects Type-1 and Type-2 clones. Type-3 clones (gapped clones with inserted or deleted statements) and Type-4 clones (semantically equivalent but syntactically different) need more than token comparison. Fallow does not currently support them.
+The Type-1 through Type-4 clone taxonomy was surveyed by [Roy, Cordy, and Koschke (2009)](https://doi.org/10.1016/j.scico.2009.02.007). `fallow dupes` detects Type-1 and Type-2 clones. With `--near`, it also detects function-scoped Type-3 clones (gapped clones with inserted or deleted statements). Type-4 clones (semantically equivalent but syntactically different) need more than token comparison, and `fallow dupes` does not detect them.
 </Accordion>
 
 ### Detection modes in detail
@@ -87,9 +88,9 @@ The number of locations where the same code appears. A clone group with 5 instan
 A **clone group** is one duplicated code block that fallow found at 2+ locations. Each location is an **instance**.
 
 ```text
-● Clone group 1 (8 lines, 2 instances)
-  src/validators/userValidator.ts:12-19
-  src/validators/orderValidator.ts:8-15
+      8 lines  2 instances  dup:5b0e7c2d
+    src/validators/orderValidator.ts:8-15
+    src/validators/userValidator.ts:12-19
 ```
 
 One block of 8 lines appears in both files:
@@ -123,13 +124,13 @@ return errors;
 One clone group is one duplicated block. The same two files can share more than one block:
 
 ```text
-● Clone group 2 (6 lines, 2 instances)
-  src/validators/userValidator.ts:24-29
-  src/validators/orderValidator.ts:20-25
+      6 lines  2 instances  dup:a3d91f60
+    src/validators/orderValidator.ts:20-25
+    src/validators/userValidator.ts:24-29
 
-● Clone group 3 (5 lines, 2 instances)
-  src/validators/userValidator.ts:35-39
-  src/validators/orderValidator.ts:31-35
+      5 lines  2 instances  dup:e7146b8a
+    src/validators/orderValidator.ts:31-35
+    src/validators/userValidator.ts:35-39
 ```
 
 These are three separate clone groups between the same two files. This pattern is a **clone family**.
@@ -139,10 +140,15 @@ These are three separate clone groups between the same two files. This pattern i
 A **clone family** is a set of clone groups that involve the same files. Those files share several distinct clones, so someone probably copy-pasted one from the other.
 
 ```text
-Family: src/validators/userValidator.ts ↔ src/validators/orderValidator.ts
-  3 clone groups, 19 duplicated lines
-  → Extract shared validation module
+● Clone families (1 with multiple groups)
+
+  3 groups, 19 lines across src/validators/orderValidator.ts, src/validators/userValidator.ts
+    → Extract shared function (8 lines) from orderValidator.ts, userValidator.ts
+    → Extract shared function (6 lines) from orderValidator.ts, userValidator.ts
+    → Extract shared function (5 lines) from orderValidator.ts, userValidator.ts
 ```
+
+When a family has 50 or more duplicated lines, fallow gives one suggestion for the family: extract the shared clone groups into a module.
 
 A family needs a different refactor. For a single clone group, you extract a function. For a clone family, you merge or restructure the files.
 
@@ -192,7 +198,7 @@ Token-based clone detection was pioneered by [Baker (1995)](https://doi.org/10.1
 ## Limitations
 
 - **Type-3 clones** (gapped clones with inserted or deleted lines): fallow does not detect these by default. To find function-scoped near-miss clones with small structural edits, add `--near`. Near-miss detection uses semantic normalization and requires at least 80% shingle similarity between every pair in a group.
-- **Type-4 clones** (semantically equivalent but syntactically different): fallow does not detect these. Fallow does not flag two functions that do the same thing but are written differently.
+- **Type-4 clones** (semantically equivalent but syntactically different): `fallow dupes` does not detect these. To find functions that can have the same intent with a different structure, use the opt-in [`fallow similar-code`](/analysis/similar-code) workflow. You must review its results.
 - **Cross-file-type detection** works only between `.ts` and `.js` files (with `--cross-language`). Fallow does not support other language pairs.
 - **Minimum size thresholds**: fallow does not report clones below `--min-tokens` or `--min-lines`. This is intentional, because small clones are usually idiomatic patterns.
 - **Semantic mode false positives**: When fallow normalizes identifiers and literals, it can match code that is structurally similar but semantically unrelated. Review semantic-mode results before you act on them.
