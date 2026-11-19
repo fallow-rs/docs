@@ -36,6 +36,7 @@ export const RULES = [
   "ending",
   "em-dash",
   "mdx-syntax",
+  "diagram",
   "inbound-links",
 ];
 
@@ -43,6 +44,11 @@ export const CHARACTER_LIMIT = 50_000;
 const DESCRIPTION_LIMIT = 160;
 const ENDING_LINK_LIMIT = 3;
 const MOVED_HOP_LIMIT = 10;
+
+/** The Mermaid diagram types that the site renders well, and the limits of PAGE-TYPES.md. */
+export const DIAGRAM_TYPES = new Set(["flowchart", "sequenceDiagram", "stateDiagram-v2"]);
+export const DIAGRAM_NODE_LIMIT = 11;
+export const DIAGRAM_PAGE_LIMIT = 2;
 
 /** Line budgets of the page types in PAGE-TYPES.md, by directory or root page. */
 export const LINE_BUDGETS = new Map([
@@ -461,6 +467,125 @@ export const checkMdxSyntax = (path, text) =>
   findBareMdx(text).map(({ line, message }) => violation("mdx-syntax", path, line, message));
 
 // ---------------------------------------------------------------------------
+// diagram
+
+const MERMAID_BLOCK = /^[ \t]*```mermaid[ \t]*\n([\s\S]*?)^[ \t]*```/gmu;
+const DIAGRAM_STYLING = /^\s*(style|classDef|class|click|linkStyle)\b|:::/mu;
+const QUOTED = /"[^"\n]*"/gu;
+const IDENTIFIER = /[A-Za-z_][\w]*/gu;
+const FLOWCHART_KEYWORDS = new Set(["flowchart", "graph", "subgraph", "end", "direction", "TB", "TD", "BT", "LR", "RL"]);
+const SEQUENCE_MESSAGE = /^\s*([\w]+)\s*(?:<<)?-{1,2}(?:>>|>|x|\))[+-]?\s*([\w]+)\s*:/u;
+const SEQUENCE_PARTICIPANT = /^\s*(?:participant|actor)\s+([\w]+)/u;
+const STATE_TRANSITION = /^\s*(\[\*\]|[\w]+)\s*-->\s*(\[\*\]|[\w]+)/u;
+const STATE_DEFINITION = /^\s*(?:state\s+(?:"[^"]*"\s+as\s+)?([\w]+)|([\w]+)\s*:)/u;
+
+/** The source lines of a diagram without its comments and blank lines. */
+const diagramLines = (source) =>
+  source
+    .split("\n")
+    .filter((line) => line.trim() !== "" && !line.trim().startsWith("%%"));
+
+/**
+ * The nodes of a flowchart. Each identifier outside quotes, shapes and edge
+ * labels counts once, so an unquoted edge label counts as a node too: the
+ * count can be too high, never too low. A subgraph is a box around nodes and
+ * does not count.
+ */
+const flowchartNodes = (lines) => {
+  const nodes = new Set();
+  const subgraphs = new Set();
+  for (const line of lines.slice(1)) {
+    const bare = line
+      .replace(QUOTED, "")
+      .replace(/\|[^|]*\|/gu, " ")
+      .replace(/\[[^\]]*\]|\([^)]*\)|\{[^}]*\}|(?<=\w)>[^\]]*\]/gu, " ")
+      .replace(/<?[-=.]{2,}[>xo]?/gu, " ");
+    const subgraph = bare.match(/^\s*subgraph\s+([A-Za-z_]\w*)/u);
+    if (subgraph !== null) {
+      subgraphs.add(subgraph[1]);
+      continue;
+    }
+    for (const [word] of bare.matchAll(IDENTIFIER)) {
+      if (!FLOWCHART_KEYWORDS.has(word)) {
+        nodes.add(word);
+      }
+    }
+  }
+  return [...nodes].filter((node) => !subgraphs.has(node)).length;
+};
+
+const sequenceNodes = (lines) => {
+  const nodes = new Set();
+  for (const line of lines.slice(1)) {
+    const participant = line.match(SEQUENCE_PARTICIPANT);
+    const message = line.match(SEQUENCE_MESSAGE);
+    if (participant !== null) {
+      nodes.add(participant[1]);
+    }
+    if (message !== null) {
+      nodes.add(message[1]).add(message[2]);
+    }
+  }
+  return nodes.size;
+};
+
+/** A start `[*]` and an end `[*]` count as two nodes, as the picture draws them. */
+const stateNodes = (lines) => {
+  const nodes = new Set();
+  for (const line of lines.slice(1)) {
+    const transition = line.match(STATE_TRANSITION);
+    if (transition !== null) {
+      nodes.add(transition[1] === "[*]" ? "[*]start" : transition[1]);
+      nodes.add(transition[2] === "[*]" ? "[*]end" : transition[2]);
+      continue;
+    }
+    const definition = line.replace(QUOTED, '""').match(STATE_DEFINITION);
+    if (definition !== null) {
+      nodes.add(definition[1] ?? definition[2]);
+    }
+  }
+  return nodes.size;
+};
+
+const NODE_COUNTERS = { flowchart: flowchartNodes, sequenceDiagram: sequenceNodes, "stateDiagram-v2": stateNodes };
+
+/** The type and the node count of one Mermaid diagram source. */
+export const describeDiagram = (source) => {
+  const lines = diagramLines(source);
+  const type = (lines[0] ?? "").trim().split(/\s+/u)[0];
+  const counter = NODE_COUNTERS[type];
+  return { type, nodes: counter === undefined ? 0 : counter(lines) };
+};
+
+/**
+ * Checks each `mermaid` code block: a supported type, at most
+ * DIAGRAM_NODE_LIMIT nodes, no styling of its own (the site sets the colors),
+ * and at most DIAGRAM_PAGE_LIMIT diagrams on one page.
+ */
+export const checkDiagrams = (path, text) => {
+  const found = [];
+  const blocks = [...text.matchAll(MERMAID_BLOCK)];
+  for (const block of blocks) {
+    const line = lineAt(text, block.index);
+    const { type, nodes } = describeDiagram(block[1]);
+    if (!DIAGRAM_TYPES.has(type)) {
+      found.push(violation("diagram", path, line, `The diagram type "${type}" is not supported. Use ${[...DIAGRAM_TYPES].join(", ")}.`));
+      continue;
+    }
+    if (nodes > DIAGRAM_NODE_LIMIT) {
+      found.push(violation("diagram", path, line, `The diagram has ${nodes} nodes. The limit is ${DIAGRAM_NODE_LIMIT}: split it, or join nodes.`));
+    }
+    if (DIAGRAM_STYLING.test(block[1])) {
+      found.push(violation("diagram", path, line, "The diagram sets its own style, class or click action. Remove it: the site sets the colors."));
+    }
+  }
+  if (blocks.length > DIAGRAM_PAGE_LIMIT) {
+    found.push(violation("diagram", path, lineAt(text, blocks[DIAGRAM_PAGE_LIMIT].index), `The page has ${blocks.length} diagrams. The limit is ${DIAGRAM_PAGE_LIMIT}.`));
+  }
+  return found;
+};
+
+// ---------------------------------------------------------------------------
 // inbound-links
 
 const inboundFix = (anchor) =>
@@ -558,6 +683,7 @@ export const checkProject = ({ pages, docsJson, inboundJson, assetExists = () =>
       ...checkEnding(path, text),
       ...checkEmDash(path, text),
       ...checkMdxSyntax(path, text),
+      ...checkDiagrams(path, text),
     );
   }
   found.push(...checkNavigation(pages, docsJson));

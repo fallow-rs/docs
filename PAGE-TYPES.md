@@ -134,10 +134,15 @@ and what to do with each finding.
 2. "What fallow finds": real output, and a table that explains each part of
    it.
 3. "How fallow decides".
-4. "Act on a finding".
-5. "Set a limit": the gates. Only when the analysis has a gate.
-6. "Limits".
+4. "Act on a finding". `analysis/similar-code.mdx` says "Act on a
+   candidate", because a similar-code candidate is not a finding.
+5. "Fail a run": the gates, or the reason why the analysis has none.
+6. "What fallow cannot see": the limits of the analysis.
 7. "Reference": links to the command reference and the config reference.
+
+Each analysis page has these H2 headings, in this order, and no other H2
+heading. Put an extra topic, such as the setup of the analysis, in an H3
+section under the H2 that it belongs to.
 
 **Line budget.** 250 lines.
 
@@ -160,9 +165,9 @@ Opening paragraph.
 
 ## Act on a finding
 
-## Set a limit
+## Fail a run
 
-## Limits
+## What fallow cannot see
 
 ## Reference
 ```
@@ -423,6 +428,31 @@ HTML.
 - Never put a prerequisite, a limit, a warning or a default value inside a
   `Tab` or an `Accordion`. A reader who does not open it does not see it.
 
+## Diagrams
+
+The site renders a code block with the language `mermaid` as a picture. The
+Markdown export keeps the source, so an agent reads it as text.
+
+Use a diagram when the reader must see a structure that text gives only one
+step at a time: the module graph, the path of a change through an audit, or a
+decision with branches. Do not use a diagram to repeat a table or a list.
+
+- Use `flowchart` (`flowchart LR` or `flowchart TD`), `sequenceDiagram` or
+  `stateDiagram-v2`. The site does not render other types well.
+- Give a diagram at most 11 nodes. A subgraph is a box around nodes and does
+  not count.
+- Put a label with special characters in quotes: `a["src/index.ts"]`. Keep
+  labels short, because the layout does not wrap text.
+- Do not use `style`, `classDef`, `class`, `linkStyle`, `:::` or `click`. The
+  site sets the colors.
+- Put at most two diagrams on a page.
+- Put one sentence before the diagram that tells the reader what to look at.
+  The text around the diagram names the same facts, so that a reader who
+  cannot see the picture misses nothing.
+
+The `diagram` check enforces the type, the node limit, the styling rule and
+the limit of two diagrams.
+
 ## Ending
 
 A page ends with at most 3 links, in a list under "Next", "Reference" or
@@ -464,6 +494,7 @@ whole lines. Do not edit, merge or invent a line.
 | `ending` | No card grid after the last H2, and at most 3 links under "Next", "Reference" or "Related". Tutorial, concept, analysis, guide and rule pages only. |
 | `em-dash` | No em dash outside code. |
 | `mdx-syntax` | No text that stops the MDX build of the site. Outside code blocks, code spans, MDX comments and escapes, a `<` must start a known component or HTML tag, a closing tag or an autolink. A `{` or `}` must be part of an MDX comment, an explicit heading id or an attribute of a tag (`cols={2}`). Each known tag closes, and no line starts with `import` or `export`. Table cells and link text count as prose. Write the text in backticks, or escape it as `\<` or `\{`. |
+| `diagram` | Each `mermaid` block is a `flowchart`, a `sequenceDiagram` or a `stateDiagram-v2`, has at most 11 nodes, and sets no style, class or click action. A page has at most two diagrams. The node count includes each name outside quotes, shapes and edge labels, so it is never too low. See [Diagrams](#diagrams). |
 | `inbound-links` | Each entry of `scripts/inbound-links.json` resolves to a page and to an explicit heading id. |
 
 Pages that existed before a rule can break it. The baseline

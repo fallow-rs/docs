@@ -8,6 +8,7 @@ import {
   buildBaseline,
   buildIndex,
   checkComponents,
+  checkDiagrams,
   checkEmDash,
   checkEnding,
   checkFrontmatter,
@@ -20,6 +21,7 @@ import {
   checkProject,
   checkSize,
   compareBaseline,
+  describeDiagram,
   nextBaseline,
   parseArguments,
   summarize,
@@ -517,4 +519,59 @@ test("the line budgets match the page types in PAGE-TYPES.md", () => {
     }
   }
   assert.deepEqual(written, LINE_BUDGETS);
+});
+
+// ---------------------------------------------------------------------------
+// diagram
+
+const mermaid = (source) => `\`\`\`mermaid\n${source}\n\`\`\``;
+const chain = (count) =>
+  ["flowchart LR", ...Array.from({ length: count - 1 }, (_, index) => `  n${index}["step ${index}"] --> n${index + 1}`)].join("\n");
+
+test("diagram counts the nodes of a flowchart, without labels, shapes and subgraphs", () => {
+  const source = [
+    "flowchart TD",
+    '  subgraph box["Entry points"]',
+    '    main["src/index.ts"]',
+    "  end",
+    '  main -->|"import x"| lib["src/lib/index.ts"]',
+    '  lib -. "re-export" .-> format["src/lib/format.ts"]',
+    '  verdict{"Verdict?"} -- "fail" --> fix(["fix it"])',
+    "  %% a comment is not a node",
+  ].join("\n");
+  assert.deepEqual(describeDiagram(source), { type: "flowchart", nodes: 5 });
+});
+
+test("diagram counts an unquoted edge label as a node, so the count is never too low", () => {
+  assert.equal(describeDiagram("flowchart LR\n  a -- yes --> b").nodes, 3);
+});
+
+test("diagram counts the participants of a sequence diagram and the states of a state diagram", () => {
+  const sequence = "sequenceDiagram\n  participant You\n  You->>Fallow: audit\n  Fallow-->>Git: diff\n  Note over You,Git: text";
+  assert.deepEqual(describeDiagram(sequence), { type: "sequenceDiagram", nodes: 3 });
+  const states = 'stateDiagram-v2\n  [*] --> open\n  open --> paid\n  state "Cancelled" as cancelled\n  paid --> [*]';
+  assert.deepEqual(describeDiagram(states), { type: "stateDiagram-v2", nodes: 5 });
+});
+
+test("diagram accepts a diagram at the node limit and two diagrams on a page", () => {
+  assert.deepEqual(checkDiagrams("concepts/a.mdx", page(`${mermaid(chain(11))}\n\n${mermaid(chain(3))}`)), []);
+});
+
+test("diagram reports an unsupported type, too many nodes, styling and a third diagram", () => {
+  const text = page(
+    [
+      mermaid("graph LR\n  a --> b"),
+      mermaid(chain(12)),
+      mermaid("flowchart LR\n  a --> b\n  style a fill:#f00"),
+      mermaid("flowchart LR\n  a:::hot --> b"),
+    ].join("\n\n"),
+  );
+  const found = checkDiagrams("concepts/a.mdx", text);
+  assert.ok(found.every((entry) => entry.rule === "diagram"));
+  assert.match(found[0].message, /type "graph" is not supported/u);
+  assert.match(found[1].message, /12 nodes\. The limit is 11/u);
+  assert.match(found[2].message, /own style/u);
+  assert.match(found[3].message, /own style/u);
+  assert.match(found[4].message, /4 diagrams\. The limit is 2/u);
+  assert.deepEqual(lines(found), [6, 11, 26, 32, 26]);
 });
