@@ -53,6 +53,7 @@ import {
   replaceBlocks,
   replaceDashes,
   ruleDescription,
+  wrapSourcePaths,
   ruleTitle,
   selectEnvironment,
   sentenceCase,
@@ -177,21 +178,30 @@ test("keeps the first two sentences and a parenthesized default after them", () 
 test("cuts a description at a word boundary", () => {
   assert.equal(cutAtWord("one two three", 9), "one two");
   assert.equal(cutAtWord("short", 9), "short");
-  const long = ruleDescription({ id: "x", explanation: { summary: "word ".repeat(60) } });
+  const long = ruleDescription({ id: "x".repeat(200), command: "dead-code" });
   assert.ok(long.length <= 160);
-  assert.ok(long.startsWith("Reference: "));
 });
 
-test("gives each rule page its own description, also when issue types share a summary", () => {
-  const shared = { issue_types: [
-    { id: "a", explanation: { name: "Dangerous HTML sink", summary: "Catalogue security candidate for CWE-79" } },
-    { id: "b", explanation: { name: "JQuery HTML sink", summary: "Catalogue security candidate for CWE-79" } },
-    { id: "c", explanation: { name: "Unused file", summary: "File is not reachable from any entry point" } },
-  ] };
-  assert.equal(ruleDescription(shared.issue_types[0], shared), "Reference: Dangerous HTML sink (catalogue security candidate for CWE-79)");
-  assert.equal(ruleDescription(shared.issue_types[2], shared), "Reference: File is not reachable from any entry point");
-  const descriptions = CONTRACT.issue_types.map((issue) => ruleDescription(issue, CONTRACT));
+test("gives each rule page a plain description that names the issue type and its command, not the summary", () => {
+  const unused = { id: "unused-file", command: "dead-code", explanation: { summary: "File is not reachable from any entry point" } };
+  assert.equal(ruleDescription(unused), "What an unused-file finding of fallow dead-code means, why it matters and how to fix it.");
+  assert.equal(ruleDescription({ id: "high-crap-score" }), "What a high-crap-score finding means, why it matters and how to fix it.");
+  const descriptions = CONTRACT.issue_types.map((issue) => ruleDescription(issue));
   assert.equal(new Set(descriptions).size, descriptions.length);
+  for (const [index, description] of descriptions.entries()) {
+    assert.ok(description.length <= 160, description);
+    assert.ok(!description.startsWith("Reference:"), description);
+    assert.notEqual(description, CONTRACT.issue_types[index].explanation?.summary);
+  }
+});
+
+test("writes a file path of a prose rule example as code", () => {
+  assert.equal(
+    wrapSourcePaths("src/old-widget.ts is not imported by any entry point, route, or config file."),
+    "`src/old-widget.ts` is not imported by any entry point, route, or config file.",
+  );
+  assert.equal(wrapSourcePaths("Both ./a/b.tsx and @scope/pkg/index.mjs."), "Both `./a/b.tsx` and `@scope/pkg/index.mjs`.");
+  assert.equal(wrapSourcePaths("keep `src/a.ts`, index.ts, src/data and a/b.tsv"), "keep `src/a.ts`, index.ts, src/data and a/b.tsv");
 });
 
 test("renders a doc comment: joined paragraphs, kept fences, headings as bold lines", () => {
@@ -692,7 +702,7 @@ test("renders an example as a code block only when the contract fences it or eac
   assert.equal(isCodeExample("```ts\nconst a = 1\n```"), true);
   const contract = { ...CONTRACT, issue_types: CONTRACT.issue_types.map((issue) => (issue.id === "unused-export" ? { ...issue, explanation: { ...issue.explanation, example: "import { a } from './a';\nexport const b = a();" } } : issue)) };
   assert.match(renderRule(contract, "unused-export"), /## Example\n\n```ts\nimport \{ a \} from '.\/a';\nexport const b = a\(\);\n```\n/u);
-  assert.match(generated.files.get("rules/unused-export.mdx"), /^`export const formatPrice = \.\.\.` exists in src\/money\.ts/mu);
+  assert.match(generated.files.get("rules/unused-export.mdx"), /^`export const formatPrice = \.\.\.` exists in `src\/money\.ts`/mu);
 });
 
 test("writes the note of an issue type below the facts table, not in a cell", () => {

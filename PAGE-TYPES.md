@@ -7,6 +7,13 @@ Each page has one type. The directory of the page sets its type, because the
 site accepts only these frontmatter keys: `title`, `description`, `keywords`,
 `icon`, `sidebarTitle` and `mode`. A page cannot declare its type.
 
+The site shows the `description` as the first paragraph below the title,
+and the one-line page index for agents (`llms.txt`) uses it. Write it as one
+plain sentence that says what the reader gets. It names the command or the
+concept, makes sense without the page, and does not start with a page type
+or with "This page". Each description is unique and has at most 160
+characters.
+
 `npm run check` runs `scripts/check-pages.mjs`, which checks the rules in this
 file. [Checks](#checks) lists what each check enforces.
 
@@ -103,7 +110,7 @@ to the reference), output fields, and the details of one analysis.
 ```mdx
 ---
 title: "Entry points and reachability"
-description: "How fallow decides that a file or an export is used: it starts at the entry points and follows each import."
+description: "Learn how fallow decides that a file or an export is used: it starts at the entry points and follows each import."
 icon: "diagram-project"
 ---
 
@@ -255,7 +262,7 @@ No other page in `cli/` may use this order.
 ```mdx
 ---
 title: "fallow dupes"
-description: "Options, output fields and exit codes of fallow dupes."
+description: "Find the options, output fields and exit codes of fallow dupes."
 icon: "clone"
 ---
 
@@ -310,7 +317,7 @@ concept (link to it), and the options of the command.
 ```mdx
 ---
 title: "Unused files"
-description: "Reference: File is not reachable from any entry point"
+description: "What an unused-file finding of fallow dead-code means, why it matters and how to fix it."
 keywords: ["unused-file", "fallow/unused-file", "unused-files"]
 icon: "skull-crossbones"
 ---

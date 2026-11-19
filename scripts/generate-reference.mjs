@@ -975,18 +975,17 @@ export const cutAtWord = (text, limit) => {
 
 const ruleSummary = (issue) => replaceDashes(issue.explanation?.summary || issue.description || "").trim();
 
-const lowerFirst = (text) => (/^[A-Z][a-z]/u.test(text) ? `${text.charAt(0).toLowerCase()}${text.slice(1)}` : text);
+const article = (word) => (/^[aeiou]/iu.test(word) ? "an" : "a");
 
 /**
- * The description of a rule page: the summary of the issue type. Some issue
- * types share one summary, for example the security candidates of one CWE.
- * Their descriptions then start with the title, so that each page has its own.
+ * The description of a rule page: one sentence from the issue type id and
+ * its command. The site shows the description above the page, and the page
+ * starts with the summary, so the description must not repeat the summary.
+ * The issue type id makes each description unique.
  */
-export const ruleDescription = (issue, contract = { issue_types: [] }) => {
-  const summary = ruleSummary(issue);
-  const shared = contract.issue_types.some((other) => other.id !== issue.id && ruleSummary(other) === summary);
-  const text = shared ? `${ruleTitle(issue)} (${lowerFirst(summary)})` : summary;
-  return cutAtWord(`Reference: ${text}`, DESCRIPTION_LIMIT);
+export const ruleDescription = (issue) => {
+  const command = issue.command ? ` of fallow ${issue.command}` : "";
+  return cutAtWord(`What ${article(issue.id)} ${issue.id} finding${command} means, why it matters and how to fix it.`, DESCRIPTION_LIMIT);
 };
 
 const yamlString = (value) => JSON.stringify(value);
@@ -1062,13 +1061,19 @@ export const isCodeExample = (text) => {
 
 const LANGUAGE = "ts";
 
+/** A file path with a slash and a source file extension, such as `src/old-widget.ts`. */
+const SOURCE_PATH = /(?<![\w`/.@-])(?:\.{1,2}\/)?[\w@.-]+(?:\/[\w@.[\]-]+)+\.(?:[cm]?[jt]sx?|vue|svelte|astro|css|scss|sass|less|html|mdx?)(?![\w-])/gu;
+
+/** Wraps each file path of a prose example in a code span. Text in a code span stays as it is. */
+export const wrapSourcePaths = (text) => mapProse(text, (prose) => prose.replace(SOURCE_PATH, (path) => `\`${path}\``));
+
 const exampleSection = (text) => {
   const value = (text ?? "").trim();
   if (value === "") {
     return [];
   }
   if (!isCodeExample(value)) {
-    return section("Example", value);
+    return section("Example", wrapSourcePaths(value));
   }
   const body = value.startsWith("```") ? renderDoc(value) : ["```" + LANGUAGE, value.replaceAll(EM_DASH, ","), "```"].join("\n");
   return ["## Example", "", body, ""];
@@ -1108,7 +1113,7 @@ export const newRulePage = (contract, issue, configLink) =>
   [
     "---",
     `title: ${yamlString(ruleTitle(issue))}`,
-    `description: ${yamlString(ruleDescription(issue, contract))}`,
+    `description: ${yamlString(ruleDescription(issue))}`,
     `keywords: ${JSON.stringify(ruleKeywords(issue))}`,
     `icon: ${yamlString(categoryIcon(issue))}`,
     "---",
@@ -1153,7 +1158,7 @@ export const updateRulePage = (contract, issue, existing, file, configLink) => {
   if (blocks.length !== 1 || blocks[0].argument !== issue.id) {
     throw new Error(`${file}:1: a rule page needs exactly one block ${startMarker("rule", issue.id)}.`);
   }
-  const withFields = setFrontmatter(existing, { title: ruleTitle(issue), description: ruleDescription(issue, contract) }, file);
+  const withFields = setFrontmatter(existing, { title: ruleTitle(issue), description: ruleDescription(issue) }, file);
   return replaceBlocks(withFields, (block) => renderBlock(contract, block, { configLink }), file);
 };
 
@@ -1705,7 +1710,7 @@ export const buildGeneratedFiles = ({ contract, schema, inbound, existing = () =
     files.set(
       "reference/config.mdx",
       generatedPage(
-        { title: "Config file", description: "Reference: each top-level key of the fallow config file, with its type and a link to its full entry.", keywords: CONFIG_KEYWORDS, icon: "gear" },
+        { title: "Config file", description: "Find each top-level key of the fallow config file, with its type and a link to its full entry.", keywords: CONFIG_KEYWORDS, icon: "gear" },
         "config-index",
         "",
         renderConfigIndex(schema, config.pages),
@@ -1717,7 +1722,7 @@ export const buildGeneratedFiles = ({ contract, schema, inbound, existing = () =
         generatedPage(
           {
             title: `Config: ${page.title.toLowerCase()}`,
-            description: `Reference: the config keys for ${page.title.toLowerCase()}, with type, default, allowed values and description.`,
+            description: `Find the fallow config keys for ${page.title.toLowerCase()}, with type, default, allowed values and description.`,
             keywords: [...CONFIG_KEYWORDS, ...page.keys.slice(0, 6)],
             icon: "gear",
           },
@@ -1731,7 +1736,7 @@ export const buildGeneratedFiles = ({ contract, schema, inbound, existing = () =
     files.set(
       "reference/config.mdx",
       generatedPage(
-        { title: "Config file", description: "Reference: each key of the fallow config file, with type, default, allowed values and description.", keywords: CONFIG_KEYWORDS, icon: "gear" },
+        { title: "Config file", description: "Find each key of the fallow config file, with type, default, allowed values and description.", keywords: CONFIG_KEYWORDS, icon: "gear" },
         "config",
         "",
         `${CONFIG_INTRO}\n\n${config.pages[0].body}`,
@@ -1741,7 +1746,7 @@ export const buildGeneratedFiles = ({ contract, schema, inbound, existing = () =
   files.set(
     "reference/exit-codes.mdx",
     generatedPage(
-      { title: "Exit codes", description: "Reference: the exit codes of fallow, the codes that each command shares and the codes that one command defines.", keywords: ["exit code", "exit status", "fallow exit codes", "ci gate"], icon: "door-open" },
+      { title: "Exit codes", description: "Find the exit codes of fallow: the codes that each command shares and the codes that one command defines.", keywords: ["exit code", "exit status", "fallow exit codes", "ci gate"], icon: "door-open" },
       "exit-codes",
       "",
       renderExitCodes(contract),
@@ -1750,7 +1755,7 @@ export const buildGeneratedFiles = ({ contract, schema, inbound, existing = () =
   files.set(
     "reference/issue-types.mdx",
     generatedPage(
-      { title: "Issue types", description: "Reference: each issue type that fallow reports, grouped by category, with its command, default severity and rule page.", keywords: ["issue types", "rules", "fallow rules", "findings"], icon: "list-check" },
+      { title: "Issue types", description: "Find each issue type that fallow reports, grouped by category, with its command, default severity and rule page.", keywords: ["issue types", "rules", "fallow rules", "findings"], icon: "list-check" },
       "issue-types",
       "",
       renderIssueIndex(contract),
