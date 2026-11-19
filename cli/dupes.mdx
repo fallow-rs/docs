@@ -56,13 +56,31 @@ The detection options and `--threshold` take their default from the [`duplicates
 | `weak` | The values of string literals. |
 | `semantic` | The names of identifiers, and the values of string and number literals. |
 
+### Normalization overrides {#normalization-overrides}
+
+The keys of `duplicates.normalization` turn one part of the comparison on or off, whatever the mode is. A key that is not set takes the value of the mode.
+
+| Key | Effect when `true` | On by default in |
+|:--|:--|:--|
+| `ignoreIdentifiers` | Fallow ignores the names of identifiers. | `semantic` |
+| `ignoreStringValues` | Fallow ignores the values of string literals. | `weak`, `semantic` |
+| `ignoreNumericValues` | Fallow ignores the values of number literals. | `semantic` |
+| `consistentIdentifiers` | The names of two instances must map one to one, so `a = b + c` matches `x = y + z` but not `x = x + x`. It has an effect only with `ignoreIdentifiers`. | No mode |
+
+The [configuration reference](/reference/config-duplication#duplicates-normalization) has the type of each key.
+
 ### Notes on options
 
 - `--trace` also accepts a [handle](/analysis/duplication), for example `fallow dupes --trace dup:f42424e8`. The trace shows each instance, an extract-function suggestion and the code fragment.
 - `--top` ranks a clone group by its token count times its instance count, with a boost of at most 15 percent for the spread. The spread is the largest directory distance between two instances. In one file, each 250 lines between instances count as one step.
 - `--top` and `--group-by` together exit with code 2. With `--group-by`, fallow puts each clone group in the group that holds most of its instances.
-- `--ignore-symlinks` removes symlinked files before the comparison. The file totals and the percentage that `--threshold` checks then count only real files. Without it, the human output marks a symlinked instance with `(symlink)`, and the JSON output sets `is_symlink: true` on it.
-- By default, fallow skips build output folders and test files (`*.test.*`, `*.spec.*`, `__tests__/`, `__mocks__/`). The [`duplicates.ignoreDefaults`](/reference/config-duplication#duplicates-ignoredefaults) key turns this off. `--explain-skipped` lists the skipped files for each pattern.
+- With `--ignore-symlinks`, the file totals and the percentage that `--threshold` checks count only real files. Without it, the human output marks a symlinked instance with `(symlink)`, and the JSON output sets `is_symlink: true` on it.
+- By default, fallow adds these patterns to `duplicates.ignore`: `**/.next/**`, `**/.nuxt/**`, `**/.svelte-kit/**`, `**/.turbo/**`, `**/.parcel-cache/**`, `**/.vite/**`, `**/.cache/**`, `**/out/**`, `**/storybook-static/**`, `**/*.test.*`, `**/*.spec.*`, `**/__tests__/**` and `**/__mocks__/**`. The [`duplicates.ignoreDefaults`](/reference/config-duplication#duplicates-ignoredefaults) key turns this off. `--explain-skipped` lists the skipped files for each pattern.
+- `--no-cache` turns off the token cache for one run. The token cache is on only for a project with at least `duplicates.minCorpusSizeForTokenCache` source files (default `5000`). Fallow stores it in `.fallow/cache/dupes-tokens-v<N>/`, with a `.gitignore` file that ignores the folder.
+
+### Handles {#handles}
+
+A handle has the form `dup:<8 hex digits>`, for example `dup:f42424e8`. When two clone groups of one report have the same 8 digits, fallow gives only these groups 16 digits (`dup:<16 hex digits>`). When two groups also have the same 16 digits, each gets a suffix `-r<N>`. An entry of `duplicates.ignoredClones` is a handle and an instance count, for example `dup:f42424e8:2`. A change of the tokens or of the instance count makes the group reportable again.
 
 ## Output
 
@@ -98,7 +116,7 @@ With `--format json`, the output has these top-level fields:
 | `elapsed_ms` | The run time in milliseconds. |
 | `clone_groups` | One object for each clone group: `instances`, `token_count`, `line_count`, `fingerprint`, `spread`, `suggested_name`, `actions`. |
 | `clone_families` | One object for each set of files that share clone groups. |
-| `stats` | The totals of all compared code: files, lines, tokens, clone groups, clone families, instances and `duplication_percentage`. |
+| `stats` | The totals of all compared code: files, lines, tokens, clone groups, clone families, instances and `duplication_percentage`. `--top` does not change these totals. `clone_groups_ignored` counts the groups that `duplicates.ignoredClones` hides. |
 | `clone_groups_shown`, `clone_groups_omitted` | The number of groups in `clone_groups`, and the number that `--top` left out. Together they are `stats.clone_groups`. |
 | `clone_families_shown`, `clone_families_omitted` | The same counts for `clone_families`. |
 | `mirrored_directories` | Pairs of directories that hold the same files. Present only when fallow finds one. |
@@ -108,8 +126,13 @@ With `--format json`, the output has these top-level fields:
 | `gate_outcomes` | One entry for each gate that the run set. Absent when the run set no gate. |
 | `request_outcomes` | The result of each scope request. See [Request outcomes](/cli/global-flags#request-outcomes). |
 | `next_steps` | Commands to run next. |
+| `package_baselines` | The Git ref that each workspace package used as its base. Absent when no package base applies. |
+| `workspace_diagnostics` | Problems with the project setup. Optional. |
+| `_meta` | Metadata of the run, for example `telemetry.analysis_run_id`. |
 
-Each instance has `file`, `start_line`, `end_line`, `start_col`, `end_col` and `fragment`. The lines are 1-based. The columns are 0-based byte offsets. `--no-fragments` leaves out `fragment`. The `fingerprint` field holds the handle. The [JSON output reference](/reference/json-output) has each field.
+Each instance has `file`, `start_line`, `end_line`, `start_col`, `end_col` and `fragment`. The lines are 1-based. The columns are 0-based byte offsets. `--no-fragments` leaves out `fragment`. The `fingerprint` field holds the handle.
+
+Each clone group has an `actions` array with `extract-shared`, `suppress-line` and `suppress-range`. Each action has `auto_fixable: false`. The `suppress-range` action has the start marker in `comment` and the end marker in `end_comment`. The [JSON output reference](/reference/json-output) has each field.
 
 ## Exit codes
 

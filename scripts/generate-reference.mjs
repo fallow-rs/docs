@@ -174,6 +174,19 @@ const TAG = /<([A-Za-z/!][^<>\n`]*)>/gu;
 
 const wrapTags = (prose) => prose.replace(TAG, (tag) => `\`${tag}\``);
 
+/** A rustdoc intra-doc link, such as ``[`Type::field`]``, that is not a Markdown link. */
+const RUSTDOC_LINK = /\[(`[^`\n]+`)\](?![([])/gu;
+const AUTOLINK = /<(https?:\/\/[^\s<>`]+)>/gu;
+
+/**
+ * Removes the markup of the Rust doc comments that the tool text comes from.
+ * A rustdoc link keeps only its code span, because its target is a Rust item
+ * and not a page. An autolink such as `<https://example.com>` becomes a
+ * Markdown link, so that the tag escape does not turn it into code.
+ */
+export const cleanToolText = (text) =>
+  mapProse(text.replace(RUSTDOC_LINK, "$1"), (prose) => prose.replace(AUTOLINK, "[$1]($1)"));
+
 const escapeCharacters = (prose) =>
   prose
     .replace(MARKDOWN_PUNCTUATION, "\\\\")
@@ -184,7 +197,7 @@ const escapeCharacters = (prose) =>
  * bare `<`, `{`, `}` or `*` gets a backslash, because MDX reads `<` as JSX,
  * braces as an expression and `*` as emphasis. Code spans stay as they are.
  */
-export const escapeProse = (text) => mapProse(mapProse(replaceDashes(text), wrapTags), escapeCharacters);
+export const escapeProse = (text) => mapProse(mapProse(replaceDashes(cleanToolText(text)), wrapTags), escapeCharacters);
 
 /**
  * {@link escapeProse} for a text that starts a paragraph. MDX reads a
@@ -531,14 +544,71 @@ export const renderCliSubcommands = (contract, path) => {
 export const renderGlobalOptions = (contract) => renderOptionTables(contract.global_options, { includeGlobal: true });
 
 /**
- * The `environment-variables [prefix]` block. The contract has no group
- * field for a variable, so the optional argument is a name prefix, for
- * example `FALLOW_COV`.
+ * The variables of one `environment-variables [selector...]` block. The
+ * contract has no group field for a variable, so a page selects them by name
+ * prefix. Each selector is a prefix that includes the matching variables, or
+ * a prefix with a leading `!` that excludes them. Without an including
+ * selector, the block starts from all variables. A selector that matches no
+ * variable of the contract is an error, so a renamed variable shows.
  */
-export const renderEnvironment = (contract, prefix = "") => {
-  const variables = contract.environment_variables.filter((variable) => variable.name.startsWith(prefix));
+export const selectEnvironment = (contract, argument = "") => {
+  const selectors = argument.split(/\s+/u).filter((token) => token !== "");
+  const includes = selectors.filter((token) => !token.startsWith("!"));
+  const excludes = selectors.filter((token) => token.startsWith("!")).map((token) => token.slice(1));
+  const names = contract.environment_variables.map((variable) => variable.name);
+  for (const prefix of [...includes, ...excludes]) {
+    if (prefix === "" || !names.some((name) => name.startsWith(prefix))) {
+      throw new Error(`No environment variable starts with "${prefix}".`);
+    }
+  }
+  const matches = (name, prefixes) => prefixes.some((prefix) => name.startsWith(prefix));
+  return contract.environment_variables.filter(
+    (variable) => (includes.length === 0 || matches(variable.name, includes)) && !matches(variable.name, excludes),
+  );
+};
+
+/** Whether a block selects the variables that the other blocks leave: no including selector. */
+const isRestSelector = (argument) => argument.split(/\s+/u).every((token) => token === "" || token.startsWith("!"));
+
+/**
+ * Checks the `environment-variables` blocks of one page: no variable is in
+ * two blocks. A page with a block that has no including selector lists each
+ * variable of the contract, so that block must not exclude a variable that
+ * no other block of the page holds.
+ */
+export const checkEnvironmentBlocks = (contract, text, file) => {
+  const blocks = findBlocks(text, file).filter((block) => block.type === "environment-variables");
+  if (blocks.length < 2) {
+    return;
+  }
+  const owner = new Map();
+  for (const block of blocks) {
+    for (const variable of selectEnvironment(contract, block.argument)) {
+      if (owner.has(variable.name)) {
+        throw new Error(`${file}:${block.line}: ${variable.name} is also in the block on line ${owner.get(variable.name)}. Exclude it with !${variable.name}.`);
+      }
+      owner.set(variable.name, block.line);
+    }
+  }
+  const rest = blocks.find((block) => isRestSelector(block.argument));
+  if (rest === undefined) {
+    return;
+  }
+  const missing = contract.environment_variables.filter((variable) => !owner.has(variable.name)).map((variable) => variable.name);
+  if (missing.length > 0) {
+    throw new Error(`${file}:${rest.line}: no block of the page holds ${missing.join(", ")}. Remove the exclusion, or add the variable to a block.`);
+  }
+};
+
+/**
+ * The `environment-variables [selector...]` block. See
+ * {@link selectEnvironment} for the selectors, for example
+ * `FALLOW_COV` or `!FALLOW_COV !FALLOW_MCP`.
+ */
+export const renderEnvironment = (contract, argument = "") => {
+  const variables = selectEnvironment(contract, argument);
   if (variables.length === 0) {
-    throw new Error(`No environment variable starts with "${prefix}".`);
+    throw new Error(`The selectors "${argument}" select no environment variable.`);
   }
   return table(
     ["Variable", "Description"],
@@ -634,7 +704,36 @@ const categoryIcon = (issue) => {
 };
 
 /** The title of a rule page: the sentence-case label of the issue type when the contract has one. */
-export const ruleTitle = (issue) => replaceDashes(issue.summary_label || issue.label || issue.explanation?.name || issue.id);
+export const ruleTitle = (issue) =>
+  replaceDashes(issue.summary_label || sentenceCase(issue.label || issue.explanation?.name || issue.id));
+
+/** Names that keep their capital letter inside a sentence. */
+const PROPER_NAMES = new Set(["Angular", "Astro", "Effect", "Electron", "Lit", "Next.js", "Node.js", "Nuxt", "React", "Svelte", "TypeScript", "JavaScript", "Vue"]);
+
+const isTitleWord = (word) => /^[A-Z][a-z]*(?:-[A-Za-z][a-z]*)*[).,]?$/u.test(word.replace(/^\(/u, ""));
+
+/**
+ * Converts a name in Title Case, such as "High Cognitive Complexity", to
+ * sentence case: "High cognitive complexity". An acronym (`CSS`), a word with
+ * an inner capital (`WebView`) and a proper name keep their case. A name with
+ * a lowercase word is already in sentence case and does not change.
+ */
+export const sentenceCase = (name) => {
+  const words = name.split(" ");
+  if (!words.every((word) => !/^\(?[a-z]/u.test(word))) {
+    return name;
+  }
+  return words
+    .map((word, index) => {
+      const bare = word.replace(/^\(/u, "").replace(/[).,]$/u, "");
+      if (PROPER_NAMES.has(bare) || !isTitleWord(word)) {
+        return word;
+      }
+      const lower = word.toLowerCase();
+      return index === 0 ? `${lower.charAt(0).toUpperCase()}${lower.slice(1)}` : lower;
+    })
+    .join(" ");
+};
 
 /** Cuts a text to `limit` characters at a word boundary. */
 export const cutAtWord = (text, limit) => {
@@ -716,7 +815,7 @@ export const renderRule = (contract, id, configLink) => {
   const lines = [
     "## What it reports",
     "",
-    escapeParagraph(ruleSummary(issue)),
+    escapeParagraph(terminate(ruleSummary(issue))),
     "",
     `[${teaching.title}](${teaching.page}) explains how fallow finds it.`,
     "",
@@ -1213,6 +1312,31 @@ export const renderConfigPages = (schema, limit = PAGE_CHARACTER_LIMIT) => {
 const CONFIG_INTRO = "The config file holds the settings of fallow. [How config works](/configuration/overview) explains where fallow finds the file and how files merge.";
 
 /** The index page of a split config reference: one row for each top-level key. */
+/** The length above which a config index cell keeps only the text before a list. */
+const INDEX_SUMMARY_LIMIT = 300;
+
+/**
+ * A config index cell. The first sentence of some keys introduces a long
+ * list of nested keys after a colon. The cell then keeps the text before the
+ * colon, because the entry of the key has the full list.
+ */
+export const indexSummary = (sentence) => {
+  if (sentence.length <= INDEX_SUMMARY_LIMIT) {
+    return sentence;
+  }
+  const colon = splitCode(sentence).reduce(
+    (found, part, index, parts) => {
+      if (found.done || part.code) {
+        return { ...found, offset: found.done ? found.offset : found.offset + part.text.length };
+      }
+      const at = part.text.indexOf(": ");
+      return at === -1 ? { ...found, offset: found.offset + part.text.length } : { done: true, offset: found.offset + at };
+    },
+    { done: false, offset: 0 },
+  );
+  return colon.done ? terminate(sentence.slice(0, colon.offset).trim()) : sentence;
+};
+
 export const renderConfigIndex = (schema, pages) => {
   const lines = [CONFIG_INTRO, ""];
   for (const page of pages) {
@@ -1220,7 +1344,7 @@ export const renderConfigIndex = (schema, pages) => {
     const rows = page.keys.map((key) => {
       const node = schema.properties[key];
       const shape = describeSchema(schema, node);
-      const summary = firstSentences(replaceDashes((node.description ?? resolveRef(schema, node)?.description ?? "").trim()), 1);
+      const summary = indexSummary(firstSentences(replaceDashes((node.description ?? resolveRef(schema, node)?.description ?? "").trim()), 1));
       return [`[${code(key)}](/reference/${page.slug}#${anchorId(key)})`, cellCode(shape.type), escapeCell(summary)];
     });
     lines.push(...table(["Key", "Type", "Description"], rows), "");
@@ -1406,6 +1530,7 @@ const plan = async () => {
     if (!text.includes("generated:")) {
       continue;
     }
+    checkEnvironmentBlocks(contract, text, path);
     const expected = replaceBlocks(text, (block) => renderBlock(contract, block, { configLink: config.link }), path);
     entries.push({ path, expected, actual: text, whole: false });
   }

@@ -6,11 +6,11 @@ keywords: ["Claude Code", "Codex", "hooks", "PreToolUse", "commit gate", "agent 
 icon: "shield-check"
 ---
 
-Install the commit gate, so that Claude Code and Codex cannot commit or push code that fails `fallow audit`. The agent gets the findings, fixes the code, and tries again.
+Install the **commit gate**, a hook that runs `fallow audit` before Claude Code or Codex commits or pushes. The hook blocks the command when the audit fails, so the agent gets the findings, fixes the code, and tries again.
 
-## How the gate works
+## How the commit gate works
 
-The gate is a `PreToolUse` hook on the shell tool of the agent. It is not a Git hook. When the agent runs `git commit` or `git push`, the hook runs:
+The commit gate is a `PreToolUse` hook on the shell tool of the agent. It is not a Git hook. When the agent runs `git commit` or `git push`, the hook runs:
 
 ```bash
 fallow audit --format json --quiet --explain --gate-marker agent
@@ -20,16 +20,16 @@ fallow audit --format json --quiet --explain --gate-marker agent
 - On `fail`, the hook blocks the command and gives the agent a short list of the findings.
 - When the audit cannot run, for example on an invalid config, the hook writes a notice and lets the command continue.
 
-The audit uses the default gate `new-only`, so only the findings that the change adds block a commit. [Changed code](/concepts/changed-code) explains the verdict. The gate does not replace the check in CI: it checks only the commands that the agent runs.
+The audit uses the default [`audit.gate`](/reference/config-rules#audit-gate) value `new-only`, so only the findings that the change adds block a commit. [Changed code](/concepts/changed-code) explains the verdict. The commit gate does not replace the check in CI, because it checks only the commands that the agent runs.
 
 ## Before you start
 
-- Add fallow to the development dependencies of the project: `npm install --save-dev fallow`. The gate looks for fallow in this order: `./node_modules/.bin/fallow`, `fallow` on `PATH`, `yarn exec fallow`, then `npx --no-install fallow`.
-- The gate needs `bash`. On Windows, use Git Bash or WSL.
+- Add fallow to the development dependencies of the project: `npm install --save-dev fallow`. The hook looks for fallow in this order: `./node_modules/.bin/fallow`, `fallow` on `PATH`, `yarn exec fallow`, then `npx --no-install fallow`.
+- The hook needs `bash`. On Windows, use Git Bash or WSL.
 
-## Install the gate
+## Install the commit gate
 
-[`fallow agent install`](/integrations/agents) installs the gate together with the skills and the MCP server. To install only the gate:
+[`fallow agent install`](/integrations/agents) installs the commit gate together with the skills and the MCP server. This is the recommended setup. To install only the commit gate:
 
 1. Preview the files:
 
@@ -43,18 +43,18 @@ The audit uses the default gate `new-only`, so only the findings that the change
      .claude/hooks/fallow-gate.sh                would create
    ```
 
-2. Install the gate:
+2. Install the hook:
 
    ```bash
    npx fallow hooks install --target agent
    ```
 
-3. Commit the files, so that each team member gets the gate.
+3. Commit the files, so that each team member gets the commit gate.
 4. In Codex, trust the hook in `/hooks`. Codex does not run a project hook before you trust it.
 
-The installer chooses the agent from the folders in the project. With a `.claude/` folder, it installs the Claude Code gate. With a `.codex/` folder, it installs the Codex gate. With both, it installs both. With neither, it installs the Claude Code gate. To choose yourself, add `--agent claude` or `--agent codex`.
+The installer chooses the agent from the folders in the project. With a `.claude/` folder, it installs the hook for Claude Code. With a `.codex/` folder, it installs the hook for Codex. With both, it installs both. With neither, it installs the hook for Claude Code. To choose yourself, add `--agent claude` or `--agent codex`.
 
-To install the gate in your home folder for all repositories, add `--user`. [`fallow hooks`](/cli/hooks) lists each option.
+To install the commit gate in your home folder for all repositories, add `--user`. [`fallow hooks`](/cli/hooks) lists each option.
 
 ## The installed files {#codex-gate}
 
@@ -65,11 +65,11 @@ To install the gate in your home folder for all repositories, add `--user`. [`fa
 
 For Codex, the installer also writes a routing block in `AGENTS.md`. The block tells an agent without a hook to run the audit itself.
 
-The handler goes up from the directory of the session to the nearest directory with the gate script, and runs the audit there. It stops at the first `.git` entry, so a nested worktree does not use the gate of the checkout around it. The installer keeps each other handler in the settings file of the agent. Each install writes the script again, so do not edit it. Use the config file and the environment variables below.
+The handler goes up from the directory of the session to the nearest directory with the gate script, and runs the audit there. It stops at the first `.git` entry, so a nested worktree does not use the gate script of the checkout around it. The installer keeps each other handler in the settings file of the agent. Each install writes the gate script again, so do not edit it. Use the config file and the environment variables below.
 
 ## The block message
 
-When the gate blocks, the agent gets this message:
+When the hook blocks a command, the agent gets this message:
 
 ```text
 fallow-gate: blocked by fallow 3.44.0 at ./node_modules/.bin/fallow
@@ -82,12 +82,12 @@ The message lists at most 50 findings. The last line of the message gives the pa
 
 ## Set the policy
 
-- **Gate on each finding in the changed files.** Set `"audit": { "gate": "all" }` in the config file. See [`audit.gate`](/reference/config-rules#audit-gate).
-- **Compare with another branch.** The gate passes no `--base`, so the audit compares with the merge base of the upstream branch, or of `origin/main`. On a fork, or when your team merges into `develop`, set [`FALLOW_AUDIT_BASE`](/configuration/environment#fallow_audit_base), for example `FALLOW_AUDIT_BASE=upstream/main`.
+- **Block on each finding in the changed files.** Set `"audit": { "gate": "all" }` in the config file. See [`audit.gate`](/reference/config-rules#audit-gate).
+- **Compare with another branch.** The hook passes no `--base`, so the audit compares with the merge base of the upstream branch, or of `origin/main`. On a fork, or when your team merges into `develop`, set [`FALLOW_AUDIT_BASE`](/configuration/environment#fallow_audit_base), for example `FALLOW_AUDIT_BASE=upstream/main`.
 
 ## Version floor {#version-floor}
 
-The gate passes `--gate-marker agent`, and fallow 2.85.0 added this option. An older fallow rejects it, so the gate would let each commit through. The gate therefore blocks when the fallow that it finds is older than `FALLOW_GATE_MIN_VERSION`, with the default `2.85.0`, and shows how to update:
+The hook passes `--gate-marker agent`, and a fallow older than 2.85.0 rejects this option. Without a check, the audit would fail to run on such a version, and the hook would let each commit through. The hook therefore blocks when the fallow that it finds is older than `FALLOW_GATE_MIN_VERSION`, with the default `2.85.0`, and shows how to update:
 
 ```bash
 # Require a newer fallow in your team
@@ -112,23 +112,23 @@ Codex block: not installed
 
 Add `--format json` for a script. `npx fallow agent status` also reports a gate script from an older fallow as `stale`. To update it, run `npx fallow agent install` again.
 
-## Turn the gate off
+## Turn the commit gate off
 
-The gate has no option to skip one command. To turn it off, remove it:
+The hook has no option to skip one command. To turn the commit gate off, remove it:
 
 ```bash
 npx fallow hooks uninstall --target agent
 ```
 
-The command removes the fallow handler and each gate script that you did not edit. Other handlers stay. A person who runs `git` in a terminal is not affected by the gate.
+The command removes the fallow handler and each gate script that you did not edit. Other handlers stay. The hook does not run when a person runs `git` in a terminal.
 
 ## If it fails
 
-- **The gate does not block.** Run the agent command again with `FALLOW_GATE_DEBUG=1`. The gate then logs each command that it skips because it is not a commit or a push.
-- **"fallow binary not found".** The gate found no fallow, and lets the command continue. Install fallow in the project.
-- **"below required".** The fallow that the gate found is older than the version floor. Update it.
+- **The hook does not block.** Run the agent command again with `FALLOW_GATE_DEBUG=1`. The hook then logs each command that it skips because it is not a commit or a push.
+- **"fallow binary not found".** The hook found no fallow, and lets the command continue. Install fallow in the project.
+- **"below required".** The fallow that the hook found is older than the version floor. Update it.
 - **Codex commits without a check.** Trust the hook in `/hooks`.
-- **The gate blocks on old findings.** The audit compares with the wrong base. Set `FALLOW_AUDIT_BASE`.
+- **The hook blocks on old findings.** The audit compares with the wrong base. Set `FALLOW_AUDIT_BASE`.
 
 ## Reference
 

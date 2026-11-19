@@ -77,14 +77,79 @@ These options set the project root, the config file, the output format, the scop
 
 The [environment variables](/configuration/environment) set the defaults of some options, for example `FALLOW_FORMAT` and `FALLOW_QUIET`.
 
-## Scope options {#path-scope}
+### Scope options {#path-scope}
 
 - `--changed-since` reports only the findings in the files that changed since the git ref. Each command applies it in its own way: [Changed code](/concepts/changed-code) explains the scope of a run.
 - `--diff-file` and `--diff-stdin` keep only the findings on added lines. A finding that covers more than one file, for example a cycle, stays when the diff touches one of its files. Findings in `package.json` and other project files stay in the report.
 - A path argument (`fallow health src/api`) and `--workspace` narrow only the report. Fallow still builds the graph of the whole project. A path outside the project root exits with code 2.
 - `--workspace` and `--changed-workspaces` together exit with code 2. `--changed-workspaces` with a ref that git cannot resolve exits with code 2.
 
-## Request outcomes {#request-outcomes}
+### Gates {#gates}
+
+A gate makes the run exit with code 1. The [gate](/concepts/findings) options are `--fail-on-issues`, `--ci`, `--fail-on-regression`, `--fail-on-stale-baseline`, `--fail-on-baseline-growth` and `--fail-on-parse-error`. The JSON output names the result of each gate in `gate_outcomes`.
+
+#### Parse error gate {#parse-error-gate}
+
+`--fail-on-parse-error`, or `failOnParseError: true` in the config file, exits with code 1 when fallow cannot parse a source file. The gate counts each file with a `source-parse-degraded` or `source-nesting-too-deep` entry in `workspace_diagnostics`. `gate_outcomes["parse-error"].files` names each file. The gate works with `dead-code`, `architecture`, `health`, `audit` and the bare run. `fallow audit` checks each file that it parsed, also the files that the change did not touch.
+
+#### Baseline growth gate {#baseline-growth-gate}
+
+`--fail-on-baseline-growth` exits with code 1 when a loaded baseline has a key that the same file at the base ref does not have. A committed baseline can then only shrink.
+
+- `--baseline-base <REF>` sets the base ref. The default is the base of `fallow audit`.
+- A baseline that the base ref does not have passes, with a note.
+- A base ref that git cannot resolve exits with code 2, for example in a shallow clone. A default base that resolves to `HEAD` also exits with code 2.
+- The result is `gate_outcomes["baseline-growth"]`, with the number of new keys in `observed`.
+
+### Output files {#save-destinations}
+
+`--save-baseline`, `--save-regression-baseline`, `--save-snapshot`, `--output-file` and `--sarif-file` write only inside these directories:
+
+- the project root, and its git work tree when the working directory is inside it
+- `GITHUB_WORKSPACE` and `CI_PROJECT_DIR`, when they are set
+- `RUNNER_TEMP` and the system temp directory
+
+Another path exits with code 2 before the analysis runs. A device such as `/dev/null` or `/dev/stdout` is always allowed. `--sarif-file` works with `dead-code`, `architecture`, `security` and a bare run that includes dead code. With another command, use `--format sarif --output-file`.
+
+### Quiet runs {#quiet-runs}
+
+`--quiet`, `--ci` and `FALLOW_QUIET` hide the progress output and the stderr warnings that repeat a `workspace_diagnostics` entry. The JSON output does not change. The gate lines and the config warnings still print. `fallow audit` also prints a shorter report.
+
+### Production mode for one analysis {#per-analysis-production-mode}
+
+`--production-dead-code`, `--production-health` and `--production-dupes` turn on [production mode](/concepts/production-mode) for one analysis. Only the bare run and `fallow audit` accept them. Fallow takes the first value that it finds in this order:
+
+1. the options `--production` and `--production-<analysis>`
+2. the environment variables `FALLOW_PRODUCTION_DEAD_CODE`, `FALLOW_PRODUCTION_HEALTH` and `FALLOW_PRODUCTION_DUPES`
+3. the environment variable `FALLOW_PRODUCTION`
+4. the [`production`](/reference/config) key of the config file
+
+### Grouped output {#grouped-output}
+
+`--group-by` splits the findings into groups. These are the values:
+
+| Value | Group key |
+|:--|:--|
+| `owner` | The first owner of the file in `CODEOWNERS`, `.github/CODEOWNERS`, `.gitlab/CODEOWNERS` or `docs/CODEOWNERS`. |
+| `directory` | The first path segment, for example `src`. |
+| `package` | The [workspace](/concepts/workspaces) package. |
+| `section` | The `[Section]` header of a GitLab `CODEOWNERS` file. Each group also has an `owners` array. |
+
+The `json`, `human`, `sarif` and `codeclimate` formats show the groups. The JSON output has a `grouped_by` field and a `groups` array. For `dead-code` and `architecture`, the kind changes to `dead-code-grouped` and `architecture-grouped`. The other formats print one report and a note on stderr. `fallow flags` ignores the option.
+
+### Cache {#incremental-caching}
+
+Fallow keeps the parse results of each file in `.fallow/` and parses only the files that changed. `--no-cache` parses each file again. `cache.dir` in the config file or `FALLOW_CACHE_DIR` moves the cache. `--performance` shows the time of each step and the cache hits.
+
+## Output
+
+Each command page describes the output of that command. The options on this page add the parts below.
+
+### Loaded config file {#loaded-config-disclosure}
+
+In the `human` format, fallow prints the config file that it loaded on stderr, for example `loaded config: /repo/.fallowrc.json`. `--quiet` and the other formats hide the line. [`fallow config`](/cli/config) shows the merged config.
+
+### Request outcomes {#request-outcomes}
 
 When a run cannot apply `--changed-since`, a diff or `--sarif-file`, it continues and keeps its exit code. The JSON output then names the result in a `request_outcomes` object, keyed by request:
 
@@ -119,66 +184,28 @@ When a run cannot apply `--changed-since`, a diff or `--sarif-file`, it continue
 
 An absent object means that the run received no request. The set of names and values is open: read an unknown value as "not applied". `fallow audit` has no `request_outcomes`, because it exits with code 2 when its base ref does not resolve.
 
-## Gates {#gates}
+## Exit codes
 
-A gate makes the run exit with code 1. The [gate](/concepts/findings) options are `--fail-on-issues`, `--ci`, `--fail-on-regression`, `--fail-on-stale-baseline`, `--fail-on-baseline-growth` and `--fail-on-parse-error`. The JSON output names the result of each gate in `gate_outcomes`.
-
-### Parse error gate {#parse-error-gate}
-
-`--fail-on-parse-error`, or `failOnParseError: true` in the config file, exits with code 1 when fallow cannot parse a source file. The gate counts each file with a `source-parse-degraded` or `source-nesting-too-deep` entry in `workspace_diagnostics`. `gate_outcomes["parse-error"].files` names each file. The gate works with `dead-code`, `architecture`, `health`, `audit` and the bare run. `fallow audit` checks each file that it parsed, also the files that the change did not touch.
-
-### Baseline growth gate {#baseline-growth-gate}
-
-`--fail-on-baseline-growth` exits with code 1 when a loaded baseline has a key that the same file at the base ref does not have. A committed baseline can then only shrink.
-
-- `--baseline-base <REF>` sets the base ref. The default is the base of `fallow audit`.
-- A baseline that the base ref does not have passes, with a note.
-- A base ref that git cannot resolve exits with code 2, for example in a shallow clone. A default base that resolves to `HEAD` also exits with code 2.
-- The result is `gate_outcomes["baseline-growth"]`, with the number of new keys in `observed`.
-
-## Output files {#save-destinations}
-
-`--save-baseline`, `--save-regression-baseline`, `--save-snapshot`, `--output-file` and `--sarif-file` write only inside these directories:
-
-- the project root, and its git work tree when the working directory is inside it
-- `GITHUB_WORKSPACE` and `CI_PROJECT_DIR`, when they are set
-- `RUNNER_TEMP` and the system temp directory
-
-Another path exits with code 2 before the analysis runs. A device such as `/dev/null` or `/dev/stdout` is always allowed. `--sarif-file` works with `dead-code`, `architecture`, `security` and a bare run that includes dead code. With another command, use `--format sarif --output-file`.
-
-## Quiet runs {#quiet-runs}
-
-`--quiet`, `--ci` and `FALLOW_QUIET` hide the progress output and the stderr warnings that repeat a `workspace_diagnostics` entry. The JSON output does not change. The gate lines and the config warnings still print. `fallow audit` also prints a shorter report.
-
-## Loaded config file {#loaded-config-disclosure}
-
-In the `human` format, fallow prints the config file that it loaded on stderr, for example `loaded config: /repo/.fallowrc.json`. `--quiet` and the other formats hide the line. [`fallow config`](/cli/config) shows the merged config.
-
-## Production mode for one analysis {#per-analysis-production-mode}
-
-`--production-dead-code`, `--production-health` and `--production-dupes` turn on [production mode](/concepts/production-mode) for one analysis. Only the bare run and `fallow audit` accept them. Fallow takes the first value that it finds in this order:
-
-1. the options `--production` and `--production-<analysis>`
-2. the environment variables `FALLOW_PRODUCTION_DEAD_CODE`, `FALLOW_PRODUCTION_HEALTH` and `FALLOW_PRODUCTION_DUPES`
-3. the environment variable `FALLOW_PRODUCTION`
-4. the [`production`](/reference/config) key of the config file
-
-## Grouped output {#grouped-output}
-
-`--group-by` splits the findings into groups. These are the values:
-
-| Value | Group key |
+| Code | Meaning |
 |:--|:--|
-| `owner` | The first owner of the file in `CODEOWNERS`, `.github/CODEOWNERS`, `.gitlab/CODEOWNERS` or `docs/CODEOWNERS`. |
-| `directory` | The first path segment, for example `src`. |
-| `package` | The [workspace](/concepts/workspaces) package. |
-| `section` | The `[Section]` header of a GitLab `CODEOWNERS` file. Each group also has an `owners` array. |
+| `0` | No enforced gate failed. |
+| `1` | An enforced [gate](#gates) failed. |
+| `2` | Invalid input, for example an option that the command does not use, a path outside the project root, or `--workspace` together with `--changed-workspaces`. |
 
-The `json`, `human`, `sarif` and `codeclimate` formats show the groups. The JSON output has a `grouped_by` field and a `groups` array. For `dead-code` and `architecture`, the kind changes to `dead-code-grouped` and `architecture-grouped`. The other formats print one report and a note on stderr. `fallow flags` ignores the option.
+[Exit codes](/reference/exit-codes) has the codes of each command.
 
-## Cache {#incremental-caching}
+## Examples
 
-Fallow keeps the parse results of each file in `.fallow/` and parses only the files that changed. `--no-cache` parses each file again. `cache.dir` in the config file or `FALLOW_CACHE_DIR` moves the cache. `--performance` shows the time of each step and the cache hits.
+```bash
+# Report only the findings in the files that changed since main, as JSON
+fallow dead-code --changed-since main --format json --quiet
+
+# Group the health findings by the first directory of each path
+fallow health --group-by directory
+
+# Write an indented JSON report to a file
+fallow dead-code --format json --pretty --output-file fallow-results.json
+```
 
 ## Related
 

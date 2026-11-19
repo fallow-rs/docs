@@ -74,7 +74,7 @@ Without a section option, the run shows the health score, the complexity finding
 - `--hotspots` and `--ownership` need git history, or a `--churn-file`. Outside a git repository, the section is empty and the run continues.
 - `--score` alone does not read the git history, so the score has no hotspot penalty. Add `--hotspots` for the penalty.
 - `--coverage-gaps` and `--type-coupling` are opt-in. `--type-coupling` needs `--type-aware`.
-- `--coverage` reads an Istanbul map (`coverage-final.json`, or a directory that holds it) or raw V8 coverage. Without it, fallow looks for `coverage/coverage-final.json`, else it estimates the CRAP score. `FALLOW_COVERAGE` and `health.coverage` also set the path.
+- Fallow takes the coverage path from `--coverage`, else from `FALLOW_COVERAGE`, else from `health.coverage`. When none is set, fallow reads `coverage/coverage-final.json` when it exists, else it estimates the CRAP score. `--coverage-root` follows the same order with `FALLOW_COVERAGE_ROOT` and `health.coverageRoot`, and must be an absolute path.
 
 ### Values {#option-values}
 
@@ -118,7 +118,7 @@ Without a section option, the run shows the health score, the complexity finding
   dimension that breached
   https://fallow.tools/docs/explanations/health/#complexity-metrics
 
-● File health scores (3 files) · sorted by triage concern
+● File health scores (13 files) · sorted by triage concern
 
    86.2    src/services/customers.ts                       risk
              48 LOC    1 fan-in    0 fan-out    0% dead  0.48 density  552.0 risk
@@ -167,6 +167,12 @@ With `--format json`, the output has these top-level fields. The field of a sect
 | `gate_outcomes` | One entry for each gate of the run. Always present. |
 | `workspace_diagnostics` | Problems with the project or the inputs. |
 | `next_steps` | Commands to run next. |
+| `large_functions` | The functions longer than 60 lines. Present only when these functions are 3 percent or more of all functions. |
+| `prop_drilling_chains` | The prop-drilling chains. Present only when the opt-in `prop-drilling` rule is on. |
+| `framework_health` | The coverage of the framework detectors. Optional. |
+| `actions_meta` | Why fallow changed the `actions` arrays, for example no suppression hint when a baseline is active. Optional. |
+| `request_outcomes` | The result of each scope request. See [Request outcomes](/cli/global-flags#request-outcomes). |
+| `_meta` | Metadata of the run, for example `telemetry.analysis_run_id`. |
 
 The [JSON output reference](/reference/json-output) has each field.
 
@@ -179,20 +185,88 @@ An input that fallow cannot read gives zeros, for example a project without git 
 | Field | Content |
 |:--|:--|
 | `dead_file_pct`, `dead_export_pct` | The percentage of unused files and of unused value exports. |
-| `avg_cyclomatic`, `p90_cyclomatic`, `critical_complexity_pct` | The average and the 90th percentile of the cyclomatic complexity, and the percentage of functions at the critical band. |
+| `avg_cyclomatic`, `p90_cyclomatic`, `critical_complexity_pct` | The average and the 90th percentile of the cyclomatic complexity, and the percentage of functions with a cyclomatic complexity of 50 or more. |
+| `cyclomatic_population`, `total_loc` | The count, sum and maximum of the cyclomatic complexity for functions, module scopes and templates, and the lines of code. |
 | `duplication_pct` | The percentage of duplicated code. `null` without `--score`. |
 | `hotspot_count`, `hotspot_top_pct_count` | The files with a hotspot score of 50 or more, and the files in the top 1 percent of the ranking. |
 | `maintainability_avg`, `maintainability_low_pct` | The average maintainability index, and the percentage of files below 70. |
 | `unused_dep_count`, `unused_deps_per_k_files` | The unused dependencies. |
 | `circular_dep_count`, `circular_deps_per_k_files` | The circular dependencies. |
-| `unit_size_profile`, `functions_over_60_loc_per_k` | The distribution of the functions by size. |
-| `unit_interfacing_profile` | The distribution of the functions by parameter count. |
-| `p95_fan_in`, `coupling_high_pct` | The 95th percentile of the fan-in, and the percentage of files above the fan-in threshold. |
+| `unit_size_profile`, `functions_over_60_loc_per_k` | The distribution of the functions by lines, in percent: `low_risk` (1 to 15), `medium_risk` (16 to 30), `high_risk` (31 to 60) and `very_high_risk` (more than 60). `functions_over_60_loc_per_k` is the number of functions over 60 lines for each 1,000 functions. |
+| `unit_interfacing_profile` | The distribution of the functions by parameter count, in percent: `low_risk` (0 to 2), `medium_risk` (3 to 4), `high_risk` (5 to 6) and `very_high_risk` (7 or more). |
+| `p95_fan_in`, `coupling_high_pct` | The 95th percentile of the fan-in, and the percentage of files with a fan-in above the larger of `p95_fan_in` and 10. |
 | `counts` | The numbers behind each percentage. |
+
+### Health score {#health-score-formula}
+
+The score starts at 100. Fallow subtracts each penalty in `health_score.penalties`, rounds to one decimal, and keeps the result between 0 and 100. A penalty of an analysis that did not run is `null` and subtracts nothing.
+
+| Penalty | Formula | Maximum |
+|:--|:--|:--|
+| `dead_files` | `dead_file_pct` × 0.2 | 15 |
+| `dead_exports` | `dead_export_pct` × 0.2 | 15 |
+| `complexity` | `critical_complexity_pct` × 4 | 20 |
+| `p90_complexity` | (`p90_cyclomatic` − 10), only when `critical_complexity_pct` is absent | 10 |
+| `maintainability` | `maintainability_low_pct` × 1.5 | 15 |
+| `hotspots` | `hotspot_count` ÷ (1 percent of the files, at least 1) × 10 | 10 |
+| `unused_deps` | `unused_deps_per_k_files` × 0.5 | 25 |
+| `circular_deps` | `circular_deps_per_k_files` × 0.5 | 25 |
+| `unit_size` | `functions_over_60_loc_per_k` × 0.5 | 10 |
+| `coupling` | `coupling_high_pct` × 0.5 | 5 |
+| `duplication` | `duplication_pct` − 5 | 10 |
+| `prop_drilling` | 1 for each prop-drilling chain, only with the `prop-drilling` rule | 5 |
+
+The grade is `A` for a score of 85 or more, `B` for 70, `C` for 55, `D` for 40 and `F` below 40. `formula_version` is `3`.
+
+### Maintainability index {#maintainability-index-formula}
+
+`maintainability_index` of a file is:
+
+```text
+MI = 100 − complexity_density × 30 × min(lines ÷ 50, 1) − dead_code_ratio × 20 − min(ln(fan_out + 1) × 4, 15)
+```
+
+- `complexity_density` is the sum of the cyclomatic complexity of the file divided by its lines.
+- `dead_code_ratio` is the share of the value exports that nothing uses. It is 1 for an unused file, and 0 for a file without value exports.
+- Fallow keeps the result between 0 and 100.
+
+### CRAP {#crap-formula}
+
+```text
+CRAP = CC² × (1 − coverage)³ + CC
+```
+
+`CC` is the cyclomatic complexity of the function. With a coverage file, `coverage` is the measured coverage of the function (`coverage_model` `istanbul`). Without one, fallow estimates it (`coverage_model` `static_estimated`): 85 percent for a function that a test imports, 40 percent for another function in a file that a test reaches, and 0 for a function that no test reaches.
+
+### Refactoring targets {#refactoring-targets}
+
+```text
+priority = min(complexity_density, 1) × 30 + hotspot_score ÷ 100 × 25 + dead_code_ratio × 20 + min(fan_in ÷ fan_in_p95, 1) × 15 + min(fan_out ÷ fan_out_p95, 1) × 10
+efficiency = priority ÷ effort
+```
+
+`effort` is 1 for `low`, 2 for `medium` and 3 for `high`. The targets are sorted by `efficiency`, highest first.
+
+- `high` effort: 500 lines or more, a fan-in of `fan_in_p95` or more, or 15 functions or more with a complexity density above 0.5.
+- `low` effort: fewer than 100 lines, 3 functions or fewer, and a fan-in below the 25th percentile (at least 2).
+- `medium` effort: each other file.
+
+`target_thresholds` holds the percentiles of the project: `fan_in_p95` (at least 5), `fan_in_p75` (at least 3), `fan_out_p95` (at least 8) and `fan_out_p90` (at least 5).
+
+| `category` | `confidence` |
+|:--|:--|
+| `urgent_churn_complexity` | `low` |
+| `break_circular_dependency` | `high` |
+| `split_high_impact` | `medium` |
+| `remove_dead_code` | `high` |
+| `extract_complex_functions` | `high` |
+| `extract_dependencies` | `medium` |
+| `add_test_coverage` | `high` |
+| `resolve_hidden_coupling` | `medium` |
 
 ### Hotspots {#hotspots}
 
-Each hotspot has `path`, `score` (0 to 100), `commits`, `weighted_commits` (with a half-life of 90 days), `lines_added`, `lines_deleted`, `complexity_density`, `fan_in`, `trend` (`Accelerating`, `Stable` or `Cooling`) and `is_test_path`. `hotspot_summary` has `since`, `min_commits`, `files_analyzed`, `files_excluded` and `shallow_clone`.
+The hotspot `score` is the weighted commits of the file divided by the largest weighted commits, times its complexity density divided by the largest complexity density, times 100. Each hotspot has `path`, `score` (0 to 100), `commits`, `weighted_commits` (with a half-life of 90 days), `lines_added`, `lines_deleted`, `complexity_density`, `fan_in`, `trend` (`Accelerating` when the newer half of the window has more than 1.5 times the commits of the older half, `Cooling` below 0.67 times, else `Stable`) and `is_test_path`. `hotspot_summary` has `since`, `min_commits`, `files_analyzed`, `files_excluded` and `shallow_clone`.
 
 With `--ownership`, each hotspot also has these fields:
 
@@ -220,6 +294,7 @@ The `actions` of a hotspot can then have `low-bus-factor`, `unowned-hotspot` and
 | `score`, `grade`, `score_formula_version` | The health score. A trend compares scores only when the formula versions match. |
 | `coverage_model` | The source of the CRAP coverage. |
 | `groups` | The metrics of each group, when the run used `--group-by`. |
+| `analysis_identity` | The mode of the analysis, for example `syntactic`, and its completeness. |
 
 ### Churn file {#importing-churn-from-a-non-git-vcs}
 

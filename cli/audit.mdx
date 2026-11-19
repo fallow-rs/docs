@@ -115,7 +115,7 @@ With `--quiet`, the `human`, `compact` and `markdown` reports show only the intr
 ## Output
 
 ```text
-Audit scope: 3 changed files vs main (45089cb..HEAD)
+Audit scope: 3 changed files vs main (local main) (45089cb..HEAD)
 
 ── Dead Code ──────────────────────────────────────
 
@@ -176,47 +176,52 @@ With `--format json`, the output has these top-level fields:
 | `kind` | `"audit"`. The review brief gives `"audit-brief"`. |
 | `schema_version`, `version`, `elapsed_ms` | The version of this output format, the fallow version and the run time. |
 | `verdict` | `pass`, `warn` or `fail`. Use this field, or the exit code, to gate CI. |
-| `changed_files_count`, `base_ref`, `head_sha` | The changed files, the base and the commit of the run. |
+| `command` | `"audit"`. |
+| `changed_files_count`, `base_ref`, `base_description`, `head_sha` | The changed files, the base, how fallow found the base (for example `local main`), and the commit of the run. |
+| `base_snapshot_skipped` | `true` when fallow did not analyze the base, so it could not tell introduced findings from inherited findings. Optional. |
 | `summary` | The counts of all findings in the changed files, at each severity: `dead_code_issues`, `dead_code_has_errors`, `complexity_findings`, `max_cyclomatic`, `duplication_clone_groups`. `dead_code_skipped`, `complexity_skipped` and `duplication_skipped` are `true` when `--only` or `--skip` left out an analysis. |
 | `attribution` | `gate`, `worsened`, and the counts `<analysis>_introduced` and `<analysis>_inherited` for `dead_code`, `complexity`, `duplication` and `styling`. Also `complexity_worsened`, `duplication_demoted` and `diff_risk_introduced`. Under `gate: all`, the introduced and inherited counts are `0`. |
 | `gate_outcomes` | The `audit-verdict` gate, and each other gate of the run. |
 | `dead_code`, `duplication`, `complexity` | The results of [`fallow dead-code`](/cli/dead-code#output), [`fallow dupes`](/cli/dupes#output) and [`fallow health`](/cli/health#output) for the changed files. Each finding has `introduced`. A complexity finding has `attribution` (`introduced`, `worsened` or `inherited`) and `worsened_metrics`. |
-| `diff_risk` | The diff-risk findings: `rule`, `kind`, `path`, `line`, `message`, `evidence`, `severity`, `introduced`, `related`, `actions`. Absent when the change has none. |
+| `diff_risk` | An object with a `findings` array. Each finding has `rule`, `kind`, `path`, `line`, `message`, `evidence`, `severity`, `introduced`, `actions`, and `related` when it applies. Absent when the change has no diff-risk finding. |
+| `next_steps` | Commands to run next. |
+| `_meta` | Metadata of the run, for example `telemetry.analysis_run_id`. |
 
 The `summary` and `attribution` counts do not use the severity. Gate on `verdict`. The [JSON output reference](/reference/json-output) has each field.
 
-## Diff-risk rules {#diff-risk-rules}
+### Diff-risk rules {#diff-risk-rules}
 
 A diff-risk rule reports a fact about the change itself. Fallow compares the base text and the head text of each changed file, so each finding is introduced. Only `fallow audit` and the MCP `audit` tool run these rules. A finding has only suppression actions. Set the severity of each rule in [`rules`](/configuration/rules).
 
-### weakened-tests {#weakened-tests}
+#### weakened-tests {#weakened-tests}
 
 [`weakened-tests`](/rules/weakened-tests), default `warn`: the change makes the tests weaker. The `kind` field is `skip-only`, `removed-tests`, `assertion-drop`, `coverage-threshold`, `rule-severity` or `ignore-pattern`.
 
-### added-suppression {#added-suppression}
+#### added-suppression {#added-suppression}
 
 [`added-suppression`](/rules/added-suppression), default `warn`: the change adds a lint, type-check, coverage or fallow suppression comment.
 
-### test-only-branch {#test-only-branch}
+#### test-only-branch {#test-only-branch}
 
 [`test-only-branch`](/rules/test-only-branch), default `warn`: the change adds a check for the test environment in source code.
 
-### diverged-clone-sibling {#diverged-clone-sibling}
+#### diverged-clone-sibling {#diverged-clone-sibling}
 
 [`diverged-clone-sibling`](/rules/diverged-clone-sibling), default `off`: the change edits one instance of a clone group, and the other instances stay the same. `related` lists the other instances.
 
-### added-dependency {#added-dependency}
+#### added-dependency {#added-dependency}
 
 [`added-dependency`](/rules/added-dependency), default `off`: the change adds a dependency to a `package.json`. A `package.json` cannot hold a comment, so use an `overrides` entry to turn the rule off for a path.
 
-## Review brief {#review-brief-and-decision-surface}
+### Review brief {#review-brief-and-decision-surface}
 
 `--brief`, or `fallow review`, prints the review brief: the same analysis, sorted by where a reviewer must look. The brief always exits with code 0. It has the `kind` `"audit-brief"`, and these fields next to the audit fields:
 
 | Field | Content |
 |:--|:--|
 | `decisions` | The structural decisions of the change, at most `--max-decisions`. [`fallow decision-surface`](/cli/decision-surface) describes each field. |
-| `focus` | The changed units, each with a `score` (a sum of named components and a `total`) and a `reason`. An absent component is zero. |
+| `focus` | The changed units in `review_here` and `deprioritized`. Each unit has `file`, `label`, a `score` (a sum of named components and a `total`) and a `reason`. An absent component is zero. |
+| `branching` | The total branching of the change against the number of functions that hold it. Absent when fallow did not analyze the base. |
 | `triage` | The size class of the change. |
 | `deltas` | What the change adds, for example `dependency_added` and `dependency_major_bumped`. |
 | `weakening` | The guardrails that the change makes weaker: `kind` (`test-weakened`, `threshold-lowered`, `suppression-added`, `security-check-removed`), `file` and `evidence`. |
@@ -228,7 +233,7 @@ A diff-risk rule reports a fact about the change itself. Fallow compares the bas
 
 The focus `score` components are `fan_io`, `risk_zone`, `change_shape`, `churn`, `worsened`, `test_reach`, `mutation` (with `--mutation-report`), `runtime` (with `--runtime-coverage`) and `security_taint`.
 
-### Walkthrough contract {#json-envelope}
+#### Walkthrough contract {#json-envelope}
 
 `--walkthrough-guide --format json` prints a guide for a reviewing agent, with the `kind` `"review-walkthrough-guide"`. It has `digest`, `direction`, `change_anchors`, `graph_snapshot_hash`, `agent_schema` and `injection_note`. The agent returns a JSON file with the echoed `graph_snapshot_hash` and a `judgments` array. Each judgment cites a `signal_id` or a `change_anchor` from the guide, and has `framing`, an optional `concern` and an optional `action` (`block`, `address`, `consider` or `fyi`).
 

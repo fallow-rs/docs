@@ -13,6 +13,8 @@ import {
   RULE_LINE_BUDGET,
   buildGeneratedFiles,
   buildRuleAnchors,
+  checkEnvironmentBlocks,
+  cleanToolText,
   coverageRows,
   cutAtWord,
   describeSchema,
@@ -22,6 +24,7 @@ import {
   findBlocks,
   firstSentences,
   indexCommands,
+  indexSummary,
   overBudgetRules,
   parseArguments,
   renderBlock,
@@ -33,9 +36,13 @@ import {
   renderEnvironment,
   renderExitCodes,
   renderGlobalOptions,
+  renderRule,
   replaceBlocks,
   replaceDashes,
   ruleDescription,
+  ruleTitle,
+  selectEnvironment,
+  sentenceCase,
   singular,
   splitSentences,
   startMarker,
@@ -84,6 +91,38 @@ test("the MDX lint finds bare braces and angle brackets, and accepts code and es
 
 // ---------------------------------------------------------------------------
 // Text
+
+test("removes rustdoc links and turns autolinks into Markdown links", () => {
+  assert.equal(cleanToolText("Legacy spelling for [`EmailMode::Anonymized`]."), "Legacy spelling for `EmailMode::Anonymized`.");
+  assert.equal(cleanToolText("See [`docs`](/x) and [`a`][ref]."), "See [`docs`](/x) and [`a`][ref].");
+  assert.equal(cleanToolText("See <https://example.com/a#b> for more."), "See [https://example.com/a#b](https://example.com/a#b) for more.");
+  assert.equal(cleanToolText("Keep `<https://example.com>` in code."), "Keep `<https://example.com>` in code.");
+  assert.equal(escapeProse("Use <https://example.com>, not <PATH>."), "Use [https://example.com](https://example.com), not `<PATH>`.");
+});
+
+test("writes a Title Case name in sentence case and keeps acronyms and proper names", () => {
+  assert.equal(sentenceCase("High Cognitive Complexity"), "High cognitive complexity");
+  assert.equal(sentenceCase("High CRAP Score"), "High CRAP score");
+  assert.equal(sentenceCase("High Complexity (Both)"), "High complexity (both)");
+  assert.equal(sentenceCase("Test-Only Branches"), "Test-only branches");
+  assert.equal(sentenceCase("Unused Svelte Events"), "Unused Svelte events");
+  assert.equal(sentenceCase("Server-side request forgery sink"), "Server-side request forgery sink");
+  assert.equal(sentenceCase("JWT alg none"), "JWT alg none");
+  assert.equal(ruleTitle({ id: "x", label: "CSS Token Drift" }), "CSS token drift");
+  assert.equal(ruleTitle({ id: "x", summary_label: "Unused Files kept", label: "Unused Files" }), "Unused Files kept");
+  const summary = CONTRACT.issue_types.find((issue) => issue.id === "css-token-drift").explanation.summary;
+  assert.doesNotMatch(summary, /\.$/u);
+  assert.ok(renderRule(CONTRACT, "css-token-drift").includes(`## What it reports\n\n${summary}.\n`));
+});
+
+test("keeps the text before the list of a long config index summary", () => {
+  const list = Array.from({ length: 40 }, (_, index) => `\`key${index}\` (default ${index})`).join(", ");
+  assert.equal(indexSummary(`Configures clone detection: ${list}.`), "Configures clone detection.");
+  assert.equal(indexSummary(`Sets limits for \`a: b\` (x): ${list}.`), "Sets limits for `a: b` (x).");
+  assert.equal(indexSummary("A short summary: with a colon."), "A short summary: with a colon.");
+  const long = `A long summary without a colon ${"word ".repeat(80)}end.`;
+  assert.equal(indexSummary(long), long);
+});
 
 test("replaces an em dash and a spaced double hyphen with a comma", () => {
   assert.equal(replaceDashes(`fast ${EM_DASH} and small`), "fast, and small");
@@ -273,6 +312,25 @@ test("renders the environment variables, all or by name prefix", () => {
   assert.match(renderEnvironment(FIXTURE), /`FALLOW_FORMAT` \| Default format `<FORMAT>` \|/u);
   assert.doesNotMatch(renderEnvironment(FIXTURE, "FALLOW_COV"), /FALLOW_FORMAT/u);
   assert.throws(() => renderEnvironment(FIXTURE, "NOPE"), /No environment variable starts with "NOPE"/u);
+});
+
+test("selects environment variables by several prefixes and by excluded prefixes", () => {
+  const names = (argument) => selectEnvironment(FIXTURE, argument).map((variable) => variable.name);
+  assert.deepEqual(names("FALLOW_COV FALLOW_FORMAT"), ["FALLOW_FORMAT", "FALLOW_COV_TOKEN"]);
+  assert.deepEqual(names("!FALLOW_COV"), ["FALLOW_FORMAT"]);
+  assert.deepEqual(names("FALLOW_ !FALLOW_FORMAT"), ["FALLOW_COV_TOKEN"]);
+  assert.throws(() => names("!FALLOW_GONE"), /No environment variable starts with "FALLOW_GONE"/u);
+  assert.throws(() => names("!"), /No environment variable starts with ""/u);
+  assert.throws(() => renderEnvironment(FIXTURE, "FALLOW_COV !FALLOW_COV_TOKEN"), /select no environment variable/u);
+  assert.doesNotMatch(renderEnvironment(FIXTURE, "!FALLOW_COV"), /FALLOW_COV_TOKEN/u);
+});
+
+test("checks that the environment blocks of a page hold each variable once", () => {
+  const page = (...arguments_) => arguments_.map((argument) => `${startMarker("environment-variables", argument)}\n${END}`).join("\n\n");
+  assert.doesNotThrow(() => checkEnvironmentBlocks(FIXTURE, page("FALLOW_COV", "!FALLOW_COV"), "a.mdx"));
+  assert.doesNotThrow(() => checkEnvironmentBlocks(FIXTURE, page("FALLOW_COV"), "a.mdx"));
+  assert.throws(() => checkEnvironmentBlocks(FIXTURE, page("FALLOW_COV", ""), "a.mdx"), /a\.mdx:4: FALLOW_COV_TOKEN is also in the block on line 1/u);
+  assert.throws(() => checkEnvironmentBlocks(FIXTURE, page("FALLOW_FORMAT", "!FALLOW_FORMAT !FALLOW_COV"), "a.mdx"), /a\.mdx:4: no block of the page holds FALLOW_COV_TOKEN/u);
 });
 
 test("renders the shared exit codes and the codes of each command", () => {

@@ -87,11 +87,9 @@ fallow dead-code [OPTIONS] [PATH]
 `fallow dead-code` also accepts the [global options](/cli/global-flags).
 
 - A filter option such as `--unused-exports` reports only its [issue type](/reference/issue-types). You can give more than one filter. When a filter asks for a rule that the config sets to `off`, fallow does not run that check. It prints a note on stderr, and the JSON output gets a `requested-rule-off` entry in `workspace_diagnostics`.
-- `--unused-deps` selects six issue types: `unused-dependencies`, `unused-dev-dependencies`, `unused-optional-dependencies`, `type-only-dependencies`, `test-only-dependencies` and `dev-dependencies-in-production`.
-- `--circular-deps`, `--re-export-cycles`, `--package-cycles`, `--boundary-violations` and `--policy-violations` select findings of [`fallow architecture`](/cli/architecture). `fallow dead-code` also reports these findings by default.
-- `--file` reports only the findings in the named files, and leaves out the project-wide dependency findings. It warns about a path that does not exist.
-- `--symbol-impact` needs `--type-aware`.
-- `--top` changes only the human output. The machine formats always hold each finding.
+- Without a filter option, `fallow dead-code` also reports the findings of [`fallow architecture`](/cli/architecture): cycles, boundary violations and policy violations.
+- `--file` leaves out the findings that belong to no file, for example an unused dependency. It prints a warning for a path that does not exist.
+- `--symbol-impact` needs `--type-aware`. Without it, fallow prints `Error: --symbol-impact requires --type-aware`.
 
 ## Output
 
@@ -154,6 +152,10 @@ With `--format json`, the output has these top-level fields:
 | `request_outcomes` | The result of each scope request. See [Request outcomes](/cli/global-flags#request-outcomes). |
 | `workspace_diagnostics` | Problems with the project setup, for example a config pattern that matches nothing. |
 | `next_steps` | Commands to run next. |
+| `baseline_deltas` | The change of each count against the loaded baseline. Present only in a baseline run. |
+| `package_baselines` | The Git ref that each workspace package used as its base. Absent when no package base applies. |
+| `shared_state` | The shared-state inventory of [`fallow architecture`](/cli/architecture#shared-state-inventory). It does not count in `total_issues` or in a gate. Optional. |
+| `_meta` | Metadata of the run, for example `telemetry.analysis_run_id`. |
 
 Each finding has `path`, a position (`line`, `col`), a `finding_id`, an `effective_severity` (`error` or `warn`) and an `actions` array. The [JSON output reference](/reference/json-output) has each field.
 
@@ -163,7 +165,7 @@ Each action in the `actions` array of a finding has these fields:
 
 | Field | Content |
 |:--|:--|
-| `type` | The action, for example `remove-export`, `remove-file`, `suppress-line` or `add-to-config`. |
+| `type` | The action, for example `remove-export`, `delete-file`, `remove-dependency`, `suppress-line`, `suppress-file` or `add-to-config`. |
 | `auto_fixable` | `true` when `fallow fix` applies the action. Fallow sets it for each finding, so one `type` can be `true` on one finding and `false` on another. |
 | `description` | What the action does. |
 | `comment` | The suppression comment to add. Optional. |
@@ -201,13 +203,14 @@ A missing id means that the finding is gone only when `conclusive` is `true` and
 | `search_visibility` | `found`: a whole-word text search for the export name finds the consumer. `renamed`: the consumer has the name, but uses the export under another name. `missed`: the consumer does not have the name. |
 | `reason` | Why a search does not find the use: `import-alias`, `default-import`, `re-export-alias`, `namespace-use`, `dynamic-import` or `pass-through`. |
 | `search_as` | The name to search for in this consumer. Absent when no single name finds the use. |
-| `plugin_credits` | The plugin and the file pattern that mark the export as used, for example a Next.js page. Absent when no plugin marks it. |
+
+The trace object also has `is_used`, `reason`, `re_export_chains` (each barrel file that exports the name again) and `plugin_credits` (the plugin and the file pattern that mark the export as used, for example a Next.js page).
 
 The `coordination_gap` entries of `--impact-closure` have the same `search_visibility`, `reason` and `search_as` fields, and a `search_symbol` field.
 
 ### Baseline file {#baseline-file}
 
-`--save-baseline` writes a JSON file with `"kind": "dead-code"` and `"identity": "dc1"`. Each finding has one key of the form `<rule>:<path>:<name>`, for example `unused-export:src/lib/format.ts:formatPercent`. A key has no line and no column, so a line shift does not make it stale. A key that occurs N times hides at most N current findings. A save to a file of another `kind` exits with code 2. [Baselines](/guides/baselines) shows the workflow.
+`--save-baseline` writes a JSON file with `"kind": "dead-code"`, `"identity": "dc1"` and one array of keys for each issue type. A key has the form `<rule>:<path>:<name>`, for example `unused-export:src/lib/format.ts:formatPercent`, or `<rule>:<path>` for a file, for example `unused-file:src/utils/legacy-currency.ts`. A key has no line and no column, so a line shift does not make it stale. A key that occurs N times hides at most N current findings. A save to a file of another `kind` exits with code 2. [Baselines](/guides/baselines) shows the workflow.
 
 ## Exit codes
 
