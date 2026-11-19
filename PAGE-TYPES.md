@@ -434,6 +434,7 @@ whole lines. Do not edit, merge or invent a line.
 | `components` | Only the components that the site renders. |
 | `ending` | No card grid after the last H2, and at most 3 links under "Next", "Reference" or "Related". Tutorial, concept, analysis, guide and rule pages only. |
 | `em-dash` | No em dash outside code. |
+| `mdx-syntax` | No text that stops the MDX build of the site. Outside code blocks, code spans, MDX comments and escapes, a `<` must start a known component or HTML tag, a closing tag or an autolink. A `{` or `}` must be part of an MDX comment, an explicit heading id or an attribute of a tag (`cols={2}`). Each known tag closes, and no line starts with `import` or `export`. Table cells and link text count as prose. Write the text in backticks, or escape it as `\<` or `\{`. |
 | `inbound-links` | Each entry of `scripts/inbound-links.json` resolves to a page and to an explicit heading id. |
 
 Pages that existed before a rule can break it. The baseline

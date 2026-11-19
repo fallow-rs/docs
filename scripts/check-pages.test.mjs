@@ -15,6 +15,7 @@ import {
   checkHistory,
   checkInbound,
   checkLinks,
+  checkMdxSyntax,
   checkNavigation,
   checkProject,
   checkSize,
@@ -311,6 +312,52 @@ test("ending accepts a short link list, a card grid before the last H2, and page
 test("em-dash reports a dash in prose and ignores tool output in code", () => {
   const body = `Prose ${EM_DASH} here.\n\`a ${EM_DASH} b\`\n\`\`\`text\nfallow ${EM_DASH} output\n\`\`\`\nAn en dash – and a hyphen - pass.`;
   assert.deepEqual(lines(checkEmDash("guides/task.mdx", body)), [1]);
+});
+
+// ---------------------------------------------------------------------------
+// mdx-syntax
+
+test("mdx-syntax accepts each MDX construct that the pages use", () => {
+  const body = [
+    "{/* generated:start cli-options dupes */}",
+    "{/* a comment",
+    "   over two lines */}",
+    "## Exit codes {#exit-codes}",
+    '<CardGroup cols={2}>',
+    '  <Card title="A <b> & {c}" icon="x" href="/cli/dupes">',
+    "    Card text.",
+    "  </Card>",
+    "</CardGroup>",
+    '<div style={{ display: "flex", gap: "8px" }}>',
+    '  <img src="/images/a.svg" alt="a: B (71)" />',
+    "</div>",
+    "<Tabs>",
+    '<Tab title="npm">',
+    "```bash",
+    "fallow <path> {a,b} --x",
+    "```",
+    "</Tab>",
+    "</Tabs>",
+    "Read `<PATH>` and `{issue_type}`, escape \\< and \\{x\\}, see <https://fallow.tools/docs>.",
+    "| Cell `a<b` | [link `{x}`](/cli/dupes) | 1 > 0 |",
+    "A line<br />break.",
+  ].join("\n");
+  assert.deepEqual(checkMdxSyntax("cli/dupes.mdx", `---\ndescription: "A Vue <script setup> file {x}"\n---\n${body}\n`), []);
+});
+
+test("mdx-syntax reports a bare angle bracket, a bare brace, an unknown or unclosed tag and a module line", () => {
+  const body = [
+    "Strip types for TS<->JS clone matching.",
+    "| `fallow://explain` | Read fallow://explain/{issue_type}. |",
+    "Same payload as fallow explain <issue-type> --format json.",
+    "[See {x}](/cli/dupes)",
+    "Open a <div> here.",
+    "A <Badge> tag.",
+    "<!-- an HTML comment -->",
+    "export const a = 1",
+    "A 1 < 2 comparison.",
+  ].join("\n");
+  assert.deepEqual(lines(checkMdxSyntax("guides/task.mdx", page(body))), [6, 7, 7, 8, 9, 9, 10, 11, 12, 13, 14]);
 });
 
 // ---------------------------------------------------------------------------

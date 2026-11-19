@@ -6,8 +6,10 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  ALLOWED_COMPONENTS,
   collectAnchorSets,
   collectHeadings,
+  findBareMdx,
   lineAt,
   listPagePaths,
   stripCode,
@@ -33,6 +35,7 @@ export const RULES = [
   "components",
   "ending",
   "em-dash",
+  "mdx-syntax",
   "inbound-links",
 ];
 
@@ -60,23 +63,7 @@ const ENDING_HEADINGS = new Set(["Next", "Reference", "Related"]);
 const ALLOWED_FRONTMATTER = new Set(["title", "description", "keywords", "icon", "sidebarTitle", "mode"]);
 const REQUIRED_FRONTMATTER = ["title", "description"];
 
-export const ALLOWED_COMPONENTS = new Set([
-  "Accordion",
-  "Card",
-  "CardGroup",
-  "Check",
-  "CodeGroup",
-  "Icon",
-  "Info",
-  "Note",
-  "Step",
-  "Steps",
-  "Tab",
-  "Tabs",
-  "Tip",
-  "Tooltip",
-  "Warning",
-]);
+export { ALLOWED_COMPONENTS };
 
 const DOCS_HOSTS = [
   { prefix: /^https?:\/\/(?:www\.)?fallow\.tools\/docs(?=\/|$)/u, base: "" },
@@ -468,6 +455,12 @@ export const checkEmDash = (path, text) => {
 };
 
 // ---------------------------------------------------------------------------
+// mdx-syntax
+
+export const checkMdxSyntax = (path, text) =>
+  findBareMdx(text).map(({ line, message }) => violation("mdx-syntax", path, line, message));
+
+// ---------------------------------------------------------------------------
 // inbound-links
 
 const inboundFix = (anchor) =>
@@ -564,6 +557,7 @@ export const checkProject = ({ pages, docsJson, inboundJson, assetExists = () =>
       ...checkComponents(path, text),
       ...checkEnding(path, text),
       ...checkEmDash(path, text),
+      ...checkMdxSyntax(path, text),
     );
   }
   found.push(...checkNavigation(pages, docsJson));

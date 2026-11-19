@@ -49,7 +49,7 @@ import {
   teachingPage,
   updateRulePage,
 } from "./generate-reference.mjs";
-import { collectHeadings, stripFences } from "./mdx-source.mjs";
+import { collectHeadings, findBareMdx } from "./mdx-source.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const readJson = (path) => JSON.parse(readFileSync(resolve(ROOT, path), "utf8"));
@@ -57,37 +57,6 @@ const CONTRACT = readJson(CLI_CONTRACT);
 const SCHEMA = readJson(CONFIG_CONTRACT);
 const INBOUND = readJson("scripts/inbound-links.json");
 const EM_DASH = String.fromCodePoint(0x2014);
-
-// ---------------------------------------------------------------------------
-// A conservative MDX lint. The repository has no MDX compiler, so this check
-// fails on each `<`, `{` or `}` that MDX would read as JSX or as an
-// expression: outside code blocks, code spans, MDX comment lines and
-// explicit heading ids, and without a backslash.
-
-const bareMdx = (text) => {
-  const body = stripFences(text.replace(/^---\n[\s\S]*?\n---\n/u, (block) => block.replace(/[^\n]/gu, "")));
-  const found = [];
-  body.split("\n").forEach((line, index) => {
-    if (/^\s*\{\/\*.*\*\/\}\s*$/u.test(line)) {
-      return;
-    }
-    const rest = line
-      .replace(/\s\{#[\w-]+\}\s*$/u, "")
-      .replace(/(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/gu, "")
-      .replace(/\\[\\<{}*|]/gu, "");
-    if (/[<{}]/u.test(rest) || /^(?:import|export)\s/u.test(rest)) {
-      found.push(`${index + 1}: ${line}`);
-    }
-  });
-  return found;
-};
-
-test("the MDX lint finds bare braces and angle brackets, and accepts code and escapes", () => {
-  assert.deepEqual(bareMdx("a `<PATH>` b \\{c\\}\n{/* generated:end */}\n## x {#x}\n```\n<T>\n```"), []);
-  assert.equal(bareMdx("a <PATH> b").length, 1);
-  assert.equal(bareMdx("a {b} c").length, 1);
-  assert.equal(bareMdx("export const a = 1").length, 1);
-});
 
 // ---------------------------------------------------------------------------
 // Text
@@ -136,7 +105,7 @@ test("escapes nasty help text for MDX prose", () => {
   const nasty = "Read <PATH> or {a,b} with `x | y`, $VAR, src/*.ts and <div class=\"x\"> a < b";
   const escaped = escapeProse(nasty);
   assert.equal(escaped, "Read `<PATH>` or \\{a,b\\} with `x | y`, $VAR, src/\\*.ts and `<div class=\"x\">` a \\< b");
-  assert.deepEqual(bareMdx(escaped), []);
+  assert.deepEqual(findBareMdx(escaped), []);
   assert.equal(escapeProse("keep `{a}` and `<b>`"), "keep `{a}` and `<b>`");
   assert.equal(escapeProse("a C:\\{path"), "a C:\\\\\\{path");
 });
@@ -297,7 +266,7 @@ test("renders the options of a command: positionals, a pair row, help heading gr
       "| `--top <N>` (alias `--limit <N>`) | Show N groups, \\{a,b\\} |",
     ].join("\n"),
   );
-  assert.deepEqual(bareMdx(block), []);
+  assert.deepEqual(findBareMdx(block), []);
 });
 
 test("renders the synopsis, the subcommands and the global options", () => {
@@ -347,11 +316,11 @@ test("renders a block of every command of the real contract as safe MDX without 
       parts.push(renderCliSubcommands(CONTRACT, path));
     }
     const text = parts.join("\n\n");
-    assert.deepEqual(bareMdx(text), [], path);
+    assert.deepEqual(findBareMdx(text), [], path);
     assert.ok(!text.includes(EM_DASH), path);
   }
   for (const text of [renderGlobalOptions(CONTRACT), renderEnvironment(CONTRACT)]) {
-    assert.deepEqual(bareMdx(text), []);
+    assert.deepEqual(findBareMdx(text), []);
     assert.ok(!text.includes(EM_DASH));
   }
 });
@@ -379,7 +348,7 @@ test("each generated page is safe MDX, has no em dash and stays under the charac
     if (!path.endsWith(".mdx")) {
       continue;
     }
-    assert.deepEqual(bareMdx(text), [], path);
+    assert.deepEqual(findBareMdx(text), [], path);
     assert.ok(!text.includes(EM_DASH), path);
     assert.ok(text.length <= PAGE_CHARACTER_LIMIT, `${path} has ${text.length} characters`);
   }
