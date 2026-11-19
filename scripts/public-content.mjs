@@ -56,6 +56,7 @@ const REPOSITORY_ONLY_DIRECTORIES = new Set([
   ".git",
   ".github",
   ".plans",
+  "contracts",
   "dist",
   "launch-content",
   "node_modules",

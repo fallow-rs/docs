@@ -215,10 +215,10 @@ codes of one command.
 
 1. One sentence: the purpose of the command.
 2. A link to the teaching page: the analysis, concept or guide page.
-3. "Synopsis".
-4. "Options": a generated block between the markers
-   `{/* generated:start cli-options <command> */}` and `{/* generated:end */}`.
-   Do not edit the block by hand.
+3. "Synopsis": a `cli-synopsis` block. See
+   [Generated blocks](#generated-blocks).
+4. "Options": a `cli-options` block. A command with subcommands also has a
+   `cli-subcommands` block.
 5. "Output": a sample and the fields of the machine output.
 6. "Exit codes".
 7. "Examples".
@@ -262,13 +262,18 @@ one finding of it. Tool output links to these pages.
 
 **Sections, in this order.**
 
-1. What it reports.
-2. Why it matters.
-3. Example: code that fallow reports.
-4. When to keep the code.
-5. Fix.
-6. A facts table with these rows: default severity, config key, filter
-   option, suppression comment, fixable.
+1. A `rule <id>` block. The generator writes these sections in it from the
+   explanation of the issue type: "What it reports", "Why it matters",
+   "Example", "Fix" and "Facts". The facts table has the rows that the
+   contract gives: issue type, SARIF rule id, command, default severity,
+   config key, filter option, suppression comment, fixable, opt-in,
+   frameworks and a note.
+2. "When to keep the code": written by hand, below the block.
+
+The page path is `rules/<issue type id>.mdx`, for example
+`rules/unused-file.mdx`. The generator also owns the `title` and the
+`description` of the frontmatter. It keeps the other frontmatter keys and
+each line below the block.
 
 **Line budget.** 80 lines.
 
@@ -277,10 +282,13 @@ concept (link to it), and the options of the command.
 
 ```mdx
 ---
-title: "unused-files"
-description: "A file that no entry point reaches. What it means, when to keep it, and how to fix it."
-icon: "file-xmark"
+title: "Unused files"
+description: "Reference: File is not reachable from any entry point"
+keywords: ["unused-file", "fallow/unused-file", "unused-files"]
+icon: "skull-crossbones"
 ---
+
+{/* generated:start rule unused-file */}
 
 ## What it reports
 
@@ -288,11 +296,13 @@ icon: "file-xmark"
 
 ## Example
 
-## When to keep the code
-
 ## Fix
 
 ## Facts
+
+{/* generated:end */}
+
+## When to keep the code
 ```
 
 ## Owner rule
@@ -315,9 +325,9 @@ Use this table when you change the tool and must update the docs.
 
 | Change in the tool | Page that changes |
 |:--|:--|
-| A new option, flag or config key | Regenerate the reference. Do not add it to a teaching page. |
-| A new output field or exit code | The command reference of that command. |
-| A new issue type | A new rule reference page in `rules/`. |
+| A new option, flag, config key, environment variable or exit code | Refresh `contracts/` and run `npm run docs:reference:write`. Do not add it to a teaching page. |
+| A new output field | The command reference of that command. |
+| A new issue type | Refresh `contracts/` and run `npm run docs:reference:write`. The generator writes the rule page. Add "When to keep the code". |
 | A new concept | A new concept page in `concepts/`. |
 | A new task for the user | A new guide in `guides/`. |
 | A new analysis | A new analysis page in `analysis/`. |
@@ -326,6 +336,51 @@ Use this table when you change the tool and must update the docs.
 Describe the tool as it is. Never add version history, "now",
 "previously", or roadmap text to a page. The changelog of the tool holds the
 history.
+
+## Generated blocks
+
+The tool knows its options, config keys, exit codes, environment variables
+and issue types. Nobody types these facts by hand.
+`scripts/generate-reference.mjs` writes them from the two files in
+`contracts/`. `contracts/README.md` tells how to refresh these files.
+
+A generated block is a part of a page between two marker lines. The markers
+are MDX comments, because an HTML comment breaks the site build:
+
+```mdx
+{/* generated:start cli-options dupes */}
+{/* generated:end */}
+```
+
+Put each marker on its own line. Do not edit the text between the markers.
+The generator replaces it and does not touch the rest of the page.
+
+| Block | Argument | Content |
+|:--|:--|:--|
+| `cli-synopsis` | The command path, for example `dupes` or `coverage upload-inventory` | The usage line in a `bash` code block. |
+| `cli-options` | The command path | The positionals, then one options table, or one `###` heading and table for each option group. Global options and hidden options stay out. |
+| `cli-subcommands` | The command path, or `fallow` for the list of all commands | One row for each subcommand. A row links to `/cli/<name>` for a top-level command, else to the heading `#<name>` on the same page. |
+| `cli-global-options` | None | The global options. |
+| `environment-variables` | Optional: a name prefix, for example `FALLOW_COV` | The environment variables. |
+| `rule` | The issue type id, for example `unused-file` | The generated sections of a rule page. |
+
+The generator also writes these files in full: `rules/<id>.mdx` (a new page,
+or only the block and the `title` and `description` of a page that exists),
+`reference/issue-types.mdx`, `reference/exit-codes.mdx`,
+`reference/config.mdx`, the pages `reference/config-<area>.mdx` and
+`scripts/rule-anchors.json`. The config reference has one page for each area,
+because one page is longer than 50,000 characters.
+
+- To write the blocks and the files, run `npm run docs:reference:write`.
+  Add a path, for example `node scripts/generate-reference.mjs rules`, to
+  write only the files under it.
+- `npm run check` runs `npm run docs:reference`. It fails when a block or a
+  file is not the same as the output of the generator.
+- To see which command pages have which blocks, run
+  `node scripts/generate-reference.mjs --report`.
+
+An unknown command path, an unknown issue type, or a marker without a partner
+stops the generator with the file and the line.
 
 ## Components
 
