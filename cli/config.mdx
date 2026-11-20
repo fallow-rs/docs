@@ -31,8 +31,54 @@ loaded config: /repo/.fallowrc.json
 | Flag | Description |
 |:-----|:------------|
 | `--path` | Print only the config file path, on one line, with no JSON. Easier to use in shell scripts. |
+| `--resolved` | Print the settings of a run and the cause of each setting, as JSON. See [Show the settings of a run](#show-the-settings-of-a-run). |
+| `--for <COMMAND>` | With `--resolved`: apply the rules of this command. Values: `combined` (the bare `fallow` run, the default), `audit`, `dead-code`, `dupes`, `health`. |
+| `--only <ANALYSIS>` | With `--resolved`: run only these analyses, as `--only` of the bare run or of `fallow audit` does. Values: `dead-code`, `dupes`, `health`, `architecture`. |
+| `--skip <ANALYSIS>` | With `--resolved`: skip these analyses, as `--skip` of the bare run or of `fallow audit` does. Same values as `--only`. |
+| `--production-dead-code`, `--production-health`, `--production-dupes` | With `--resolved`: run that analysis in production mode. |
 
 The command obeys the global `--config <path>` flag. If you pass it, fallow loads that path directly and does not search the directory tree.
+
+## Show the settings of a run
+
+`fallow config --resolved` shows what a run will do and why. For each analysis, the output shows whether it runs and its production mode. It also shows the run settings, such as the thread count, the cache directory, the type-aware setting and the base ref of an audit. Each value has a `source`: a flag, an environment variable, a config key with its file, or a default.
+
+```bash
+fallow config --resolved --for audit --base main
+```
+
+```json
+{
+  "schema_version": 1,
+  "kind": "resolved-run",
+  "command": "audit",
+  "config_file": { "value": ".fallowrc.json", "source": { "kind": "derived", "from": "discovery" }, "scope": "global" },
+  "analyses": {
+    "dead_code": {
+      "selection": { "value": "run", "source": { "kind": "default", "rule": "runs-by-default" }, "scope": "analysis" },
+      "production": { "value": true, "source": { "kind": "config-file", "file": ".fallowrc.json", "key": "production" }, "scope": "global" }
+    },
+    ...
+  },
+  "settings": {
+    "threads": { "value": 10, "source": { "kind": "default", "rule": "available-parallelism" }, "scope": "global" },
+    "type_aware": { "value": false, "source": { "kind": "default", "rule": "type-aware-off" }, "scope": "global" },
+    "audit_base": { "value": "main", "source": { "kind": "given", "origin": { "kind": "flag", "name": "--base" } }, "scope": "global" },
+    ...
+  },
+  "env": { "read": [], "ignored": [] },
+  "fell_back": false
+}
+```
+
+- The JSON goes to stdout for each output format. `docs/output-schema.json` in the fallow repository describes it as the `ResolvedRunView` definition.
+- `settings.audit_base` is the base that `--base` or `FALLOW_AUDIT_BASE` names. It is `null` when the audit detects the base. It has a value only with `--for audit`.
+- `settings.type_aware` is `null` when `FALLOW_TYPE_AWARE` or `FALLOW_TYPE_AWARE_REQUIRE` has a value that the run cannot use.
+- The output names each environment variable and never shows its value. A variable with a value that fallow cannot read is in `env.ignored`. The human format also prints a note for it on stderr.
+- `--only` and `--skip` apply to `--for combined` and `--for audit` only. With another `--for` command, they exit with code `2`.
+- A config that does not resolve exits with code `2` and a structured error.
+
+`fallow config` without `--resolved` does not change.
 
 ## Exit codes
 
