@@ -912,6 +912,29 @@ const CATEGORY_ICONS = new Map([
   ["Tests", "flask"],
 ]);
 
+const NAVIGATION_FILE = "docs.json";
+const RULE_GROUP_PREFIX = "Rules: ";
+
+/**
+ * The groups of the rule pages in the navigation, in reading order: one
+ * group for each teaching page, so that a reader finds a rule next to the
+ * rules of the same analysis.
+ */
+export const RULE_GROUPS = [
+  { page: "/analysis/dead-code", title: "Dead code", icon: "skull-crossbones" },
+  { page: "/analysis/dependencies", title: "Dependencies", icon: "box" },
+  { page: "/analysis/architecture", title: "Architecture", icon: "layer-group" },
+  { page: "/analysis/health", title: "Health", icon: "chart-line" },
+  { page: "/analysis/styling", title: "Styling", icon: "paintbrush" },
+  { page: "/analysis/runtime-coverage", title: "Runtime coverage", icon: "chart-network" },
+  { page: "/analysis/duplication", title: "Duplication", icon: "clone" },
+  { page: "/analysis/feature-flags", title: "Feature flags", icon: "flag" },
+  { page: "/analysis/security", title: "Security", icon: "shield" },
+  { page: "/analysis/changed-code", title: "Changed code", icon: "code-pull-request" },
+  { page: "/analysis/mutation", title: "Mutation testing", icon: "flask" },
+  { page: "/guides/suppress", title: "Suppressions", icon: "comment-slash" },
+];
+
 /** The teaching page of an issue type. Throws when no entry of {@link TEACHING_PAGES} matches. */
 export const teachingPage = (issue) => {
   const match = TEACHING_PAGES.find((entry) =>
@@ -921,6 +944,49 @@ export const teachingPage = (issue) => {
     throw new Error(`The issue type "${issue.id}" (category "${issue.category}") has no teaching page. Add an entry to TEACHING_PAGES in ${SCRIPT}.`);
   }
   return match;
+};
+
+/**
+ * The navigation groups of the rule pages: the groups of {@link RULE_GROUPS}
+ * that have a rule, each with its pages in the order of their titles.
+ */
+export const ruleNavigationGroups = (contract) => {
+  const pages = new Map(RULE_GROUPS.map((group) => [group.page, []]));
+  for (const issue of contract.issue_types) {
+    const teaching = teachingPage(issue);
+    const list = pages.get(teaching.page);
+    if (list === undefined) {
+      throw new Error(`The teaching page "${teaching.page}" of the issue type "${issue.id}" has no rule group. Add it to RULE_GROUPS in ${SCRIPT}.`);
+    }
+    list.push({ slug: `rules/${issue.id}`, title: ruleTitle(issue) });
+  }
+  return RULE_GROUPS.filter((group) => pages.get(group.page).length > 0).map((group) => ({
+    group: `${RULE_GROUP_PREFIX}${group.title}`,
+    icon: group.icon,
+    pages: pages
+      .get(group.page)
+      .sort((left, right) => left.title.localeCompare(right.title, "en") || left.slug.localeCompare(right.slug, "en"))
+      .map((page) => page.slug),
+  }));
+};
+
+const isRuleGroup = (group) => Array.isArray(group.pages) && group.pages.length > 0 && group.pages.every((page) => typeof page === "string" && page.startsWith("rules/"));
+
+/**
+ * The text of `docs.json` with the rule groups of the contract in place of
+ * the groups that hold only rule pages. The other groups stay as they are.
+ */
+export const updateNavigation = (text, contract) => {
+  const navigation = JSON.parse(text);
+  const tab = (navigation.navigation?.tabs ?? []).find((entry) => (entry.groups ?? []).some(isRuleGroup));
+  if (tab === undefined) {
+    throw new Error(`${NAVIGATION_FILE} has no group of rule pages.`);
+  }
+  const first = tab.groups.findIndex(isRuleGroup);
+  const others = tab.groups.filter((group) => !isRuleGroup(group));
+  const before = tab.groups.slice(0, first).filter((group) => !isRuleGroup(group)).length;
+  tab.groups = [...others.slice(0, before), ...ruleNavigationGroups(contract), ...others.slice(before)];
+  return `${JSON.stringify(navigation, null, 2)}\n`;
 };
 
 const categoryIcon = (issue) => {
@@ -1035,9 +1101,110 @@ export const ruleFacts = (issue, configLink = () => undefined) => {
   return table(["Fact", "Value"], rows);
 };
 
+// A text of more words than this is split into paragraphs and lists.
+const LONG_TEXT_WORDS = 60;
+const PARAGRAPH_WORDS = 55;
+const PARAGRAPH_SENTENCES = 3;
+const LIST_ITEMS = 3;
+
+const wordCount = (text) => text.split(/\s+/u).filter(Boolean).length;
+
+/** The index of the `)` that closes the `(` at `open`, or -1. A parenthesis in a code span does not count. */
+const closingParenthesis = (text, open) => {
+  let depth = 0;
+  for (let index = open; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === "`") {
+      const end = text.indexOf("`", index + 1);
+      if (end === -1) {
+        return -1;
+      }
+      index = end;
+    } else if (character === "(") {
+      depth += 1;
+    } else if (character === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
+};
+
+/**
+ * The lead and the items of a sentence that lists code names, each with a
+ * text in parentheses, after a colon: "The kinds are: `a` (text), `b` (text)
+ * or `c` (text)." Null when the sentence has fewer than three such items, or
+ * other text after them.
+ */
+export const parseCodeList = (sentence) => {
+  const colon = sentence.indexOf(": `");
+  if (colon === -1) {
+    return null;
+  }
+  const items = [];
+  let rest = sentence.slice(colon + 1);
+  for (;;) {
+    rest = rest.replace(/^\s*(?:,\s*)?(?:(?:or|and)\s+)?/u, "");
+    const name = rest.match(/^`[^`]+`/u);
+    if (name === null) {
+      break;
+    }
+    const open = rest.slice(name[0].length).match(/^\s*\(/u);
+    if (open === null) {
+      return null;
+    }
+    const start = name[0].length + open[0].length - 1;
+    const end = closingParenthesis(rest, start);
+    if (end === -1) {
+      return null;
+    }
+    items.push({ name: name[0], text: rest.slice(start + 1, end).trim() });
+    rest = rest.slice(end + 1);
+  }
+  return items.length >= LIST_ITEMS && /^\s*\.?\s*$/u.test(rest) ? { lead: sentence.slice(0, colon + 1), items } : null;
+};
+
+/**
+ * The paragraphs and lists of a text of the tool. A short text is one
+ * paragraph. A long text gets a new paragraph after three sentences or 55
+ * words, and a sentence that {@link parseCodeList} reads becomes a list, so
+ * that a page has no wall of text.
+ */
+export const readableBlocks = (text) => {
+  const flat = text.replace(/\s+/gu, " ").trim();
+  if (wordCount(flat) <= LONG_TEXT_WORDS) {
+    return [escapeParagraph(flat)];
+  }
+  const blocks = [];
+  let paragraph = [];
+  const flush = () => {
+    if (paragraph.length > 0) {
+      blocks.push(escapeParagraph(paragraph.join(" ")));
+      paragraph = [];
+    }
+  };
+  for (const sentence of splitSentences(flat)) {
+    const list = parseCodeList(sentence);
+    if (list !== null) {
+      paragraph.push(list.lead);
+      flush();
+      blocks.push(list.items.map((item) => `- ${item.name}: ${escapeProse(terminate(item.text))}`).join("\n"));
+      continue;
+    }
+    if (paragraph.length >= PARAGRAPH_SENTENCES || (paragraph.length > 0 && wordCount([...paragraph, sentence].join(" ")) > PARAGRAPH_WORDS)) {
+      flush();
+    }
+    paragraph.push(sentence);
+  }
+  flush();
+  return blocks;
+};
+
 const section = (heading, text) => {
   const value = (text ?? "").trim();
-  return value === "" ? [] : [`## ${heading}`, "", escapeParagraph(value), ""];
+  return value === "" ? [] : [`## ${heading}`, "", ...readableBlocks(value).flatMap((block) => [block, ""])];
 };
 
 // A line of code: it ends with code punctuation, or starts with a comment
@@ -1766,6 +1933,10 @@ export const buildGeneratedFiles = ({ contract, schema, inbound, existing = () =
     files.set(path, updateRulePage(contract, issue, existing(path), path, config.link));
   }
   files.set(ANCHOR_FILE, `${JSON.stringify(buildRuleAnchors(contract, inbound), null, 2)}\n`);
+  const navigation = existing(NAVIGATION_FILE);
+  if (navigation !== undefined) {
+    files.set(NAVIGATION_FILE, updateNavigation(navigation, contract));
+  }
   files.set(CONTRACT_README, renderContractReadme(contract, { mainBuild: isMainBuild(existing(CONTRACT_README)) }));
   return { files, config };
 };
@@ -1832,7 +2003,7 @@ const plan = async () => {
   const schema = await readJson(CONFIG_CONTRACT);
   const inbound = await readJson(INBOUND_FILE);
   const rulePages = (await listDirectory("rules")).filter((name) => name.endsWith(".mdx")).map((name) => `rules/${name}`);
-  const current = new Map(await Promise.all([...rulePages, CONTRACT_README].map(async (path) => [path, await readIfExists(path)])));
+  const current = new Map(await Promise.all([...rulePages, CONTRACT_README, NAVIGATION_FILE].map(async (path) => [path, await readIfExists(path)])));
   const { files, config } = buildGeneratedFiles({ contract, schema, inbound, existing: (path) => current.get(path) });
   const entries = [];
   for (const [path, expected] of files) {
