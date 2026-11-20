@@ -1,0 +1,157 @@
+---
+title: "Dependencies"
+description: "Find unused, missing and misplaced packages in package.json with fallow dead-code, and fix each finding."
+keywords: ["unused dependencies", "unlisted dependencies", "devDependencies", "type-only dependencies", "test-only dependencies", "unlisted binaries", "package.json", "pnpm catalog"]
+icon: "box"
+---
+
+A package in `package.json` that no code uses makes each install slower and adds code that you must keep up to date. A package that your code imports and that `package.json` does not list is worse: it works only while another package installs it too. In the demo project, `src/services/orders.ts` imports `uuid`, and `package.json` does not list it. A clean install of the demo does not install `uuid`, so that import fails. `fallow dead-code` checks your `package.json` files against the code that uses them.
+
+```bash
+npx fallow dead-code --unused-deps --unlisted-deps --unlisted-binaries
+```
+
+## What fallow finds
+
+```text
+── Dependencies ─────────────────────────────────────
+
+● Unused dependencies (1)
+  left-pad
+  Listed in dependencies but never imported
+  https://fallow.tools/docs/explanations/dead-code/#unused-dependencies
+
+● Unlisted dependencies (1)
+  uuid
+  Packages imported in code but missing from package.json
+  https://fallow.tools/docs/explanations/dead-code/#unlisted-dependencies
+
+✗ 1 unused dependency · 1 unlisted dependency (0.06s)
+```
+
+Each [finding](/concepts/findings) names a package: `left-pad` is in `dependencies` and no file imports it, and `uuid` is the other way around. A package can also be in the wrong section of `package.json`. To see these findings, add `picocolors` to `dependencies` and import it only in `src/math.test.ts`, and add `ms` to `devDependencies` and import it in `src/index.ts`. The same command then also reports:
+
+```text
+● Test-only production dependencies (consider moving to devDependencies) (1)
+  picocolors
+
+● Dev dependencies used in production (consider moving to dependencies) (1)
+  ms
+  A runtime entry point imports these devDependencies; for a tool script, use a
+  support entry
+  https://fallow.tools/docs/explanations/dead-code/#dev-dependencies-in-production
+```
+
+| Section | Meaning | Rule |
+|:--|:--|:--|
+| Unused dependencies | A package in `dependencies` that no code uses. The same check runs for `devDependencies` ([`unused-dev-dependency`](/rules/unused-dev-dependency)) and `optionalDependencies` ([`unused-optional-dependency`](/rules/unused-optional-dependency)). | [`unused-dependency`](/rules/unused-dependency) |
+| Unlisted dependencies | Code imports the package, and no `package.json` that applies to the file lists it. | [`unlisted-dependency`](/rules/unlisted-dependency) |
+| Unlisted binaries | A script or a process call in the code runs a command, and no installed or listed package gives it. The finding also names the script. | [`unlisted-binary`](/rules/unlisted-binary) |
+| Test-only production dependencies | A package in `dependencies` that only test files import. | [`test-only-dependency`](/rules/test-only-dependency) |
+| Dev dependencies used in production | A package in `devDependencies` that code of the shipped app imports. A production install leaves it out. | [`dev-dependency-in-production`](/rules/dev-dependency-in-production) |
+
+One more check needs [production mode](/concepts/production-mode). With `--production`, fallow also reports a package in `dependencies` that only `import type` statements use, as a [type-only dependency](/rules/type-only-dependency), at the severity `warn` by default. It does not run the test-only check, because production mode leaves out the test files.
+
+In a pnpm workspace, fallow also checks the catalogs and the overrides in `pnpm-workspace.yaml`. Each check has a rule page: [unused catalog entries](/rules/unused-catalog-entry), [empty catalog groups](/rules/empty-catalog-group), [unresolved catalog references](/rules/unresolved-catalog-reference), [unused overrides](/rules/unused-dependency-override) and [overrides that pnpm rejects](/rules/misconfigured-dependency-override).
+
+## How fallow decides
+
+An import is not the only way to use a package, so fallow counts a package as used when one of these is true:
+
+| Use | Example |
+|:--|:--|
+| A [reachable](/concepts/entry-points) file imports it. | `import { z } from "zod"`, `require("zod")`, `import("zod")` |
+| A `package.json` script runs one of its binaries. | `"build": "tsc"` uses `typescript`. |
+| A config file that a [plugin](/concepts/plugins) reads names it. | `vite.config.ts` imports `esbuild`. |
+| An installed package that you use needs it as a peer dependency. | A used package that lists `react` in `peerDependencies`. |
+| It is the type package of a package that you list. | `@types/left-pad` next to `left-pad`. |
+
+For the scripts, fallow removes wrappers such as `cross-env`, `npx` and `pnpm exec` to find the real command. It reads the `bin` field of each installed package to map a command to its package. Fallow also checks CI files, such as GitHub workflows.
+
+When a result surprises you, trace the package. `vitest` is a used package of the demo, because a test file imports it and the `test` script runs it:
+
+```bash
+npx fallow dead-code --trace-dependency vitest
+```
+
+```text
+  USED vitest (1 import(s))
+
+  Imported by:
+    -> src/math.test.ts
+
+  Referenced from package.json scripts, CI configs or git hooks.
+```
+
+In a monorepo, fallow checks each [workspace](/concepts/workspaces) against its own `package.json`. Only the files of that workspace count as a use.
+
+## Act on a finding
+
+Each kind of finding has one fix in `package.json`:
+
+| Finding | Action |
+|:--|:--|
+| Unused dependency | Remove the package. If another workspace imports it, move it to that workspace. |
+| Unlisted dependency | Add the package to the `package.json` of the code that imports it. |
+| Unlisted binary | Add the package that gives the command to `devDependencies`. When the system gives the command, add its name to [`ignoreBinaries`](/reference/config-dead-code#ignorebinaries). |
+| Test-only or type-only dependency | Move the package to `devDependencies`. |
+| Dev dependency in production | Move the package to `dependencies`. |
+
+`fallow fix` removes unused dependencies, unused devDependencies, unused optionalDependencies and unused catalog entries from `package.json` and `pnpm-workspace.yaml`. It does not move a package from one section to another. Run the dry run first. In the demo, it also lists the unused exports:
+
+```bash
+npx fallow fix --dry-run
+```
+
+```text
+Would remove export from src/services/orders.ts:18 `cancelOrder`
+Would remove export from src/lib/index.ts:1 `formatPercent`
+Would remove export from src/lib/format.ts:3 `formatPercent`
+Would remove `left-pad` from dependencies in package.json
+Dry run complete. No files were modified.
+```
+
+[Remove unused code with fallow fix](/guides/auto-fix) explains the full command.
+
+### Common wrong results
+
+Most wrong results come from a use that fallow does not read:
+
+| Finding | Cause | Fix |
+|:--|:--|:--|
+| An unused devDependency that a tool loads by name, for example from a JSON config file. | No plugin reads that config file. | Add the package to [`ignoreDependencies`](/reference/config-dead-code#ignoredependencies), or write a [custom plugin](/guides/custom-plugins). |
+| An unused devDependency that only a shell script or a Makefile runs. | Fallow reads `package.json` scripts and CI files, not other shell files. | Run the command from a `package.json` script, or add the package to `ignoreDependencies`. |
+| An unlisted binary in a project without `node_modules`. | No check: without installed packages, fallow reports no unlisted binaries. | Install the packages before the run. |
+| A dev dependency in production for a tool script. | A runtime script reaches the file. | Declare the tool script in a `framework` entry with the [`support` role](/reference/config-plugins#framework-entrypointrole). |
+
+A finding in `package.json` cannot take a suppression comment, because JSON has no comments. Use `ignoreDependencies` for one package, or set the rule to `off`.
+
+## Fail a run
+
+Unused dependencies and unlisted dependencies have the [severity](/concepts/findings) `error` by default, so `left-pad` and `uuid` make the command exit with code 1. The other dependency rules default to `warn`: `picocolors` and `ms` show in the report and do not fail the run. Each rule page gives the default of its rule. To fail on `warn` findings too, add `--fail-on-issues`, or set their rules to `error`:
+
+```jsonc
+// .fallowrc.jsonc
+{
+  "rules": {
+    "unused-dev-dependencies": "error",
+    "test-only-dependencies": "error"
+  }
+}
+```
+
+The type-only rule and the dev-in-production rule are about the shipped code, so add a run with `--production` in CI to check them there. To fail only on the packages that a change adds, see [Changed code and baselines](/concepts/changed-code).
+
+## What fallow cannot see
+
+- A package that only a file outside the `package.json` scripts, the CI files and the plugin config files names. It can show as unused.
+- A command that the code builds when it runs.
+- The `bin` fields and the peer dependencies of packages that are not installed. Run an install before fallow.
+
+For each known case and its workaround, see [Known limits of fallow](/guides/limits).
+
+## Reference
+
+- [`fallow dead-code`](/cli/dead-code): each option, the JSON output and the exit codes.
+- [Dead code config](/reference/config-dead-code): `ignoreDependencies`, `ignoreBinaries` and the other keys.
+- [Issue types](/reference/issue-types): each issue type with its rule page.

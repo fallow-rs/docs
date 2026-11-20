@@ -7,7 +7,9 @@ import {
   LINE_BUDGETS,
   buildBaseline,
   buildIndex,
+  checkBareFlag,
   checkComponents,
+  checkDiagrams,
   checkEmDash,
   checkEnding,
   checkFrontmatter,
@@ -15,10 +17,13 @@ import {
   checkHistory,
   checkInbound,
   checkLinks,
+  checkMdxSyntax,
   checkNavigation,
   checkProject,
   checkSize,
   compareBaseline,
+  describeDiagram,
+  flowchartLabelProblems,
   nextBaseline,
   parseArguments,
   summarize,
@@ -168,6 +173,19 @@ test("history-text reports version history and roadmap wording", () => {
   );
 });
 
+test("history-text skips generated blocks and checks the text around them", () => {
+  const page = [
+    "{/* generated:start rule stale-suppression */}",
+    "The export is now used.",
+    "{/* generated:end */}",
+    "",
+    "The flag is now an alias.",
+  ].join("\n");
+  const found = checkHistory("rules/stale-suppression.mdx", page);
+  assert.deepEqual(found.map((entry) => entry.line), [5]);
+  assert.deepEqual(checkEmDash("rules/a.mdx", page.replace("now used", `now${String.fromCodePoint(0x2014)}used`)).length, 1);
+});
+
 test("history-text ignores the known false positives", () => {
   assert.deepEqual(
     history(
@@ -298,6 +316,52 @@ test("ending accepts a short link list, a card grid before the last H2, and page
 test("em-dash reports a dash in prose and ignores tool output in code", () => {
   const body = `Prose ${EM_DASH} here.\n\`a ${EM_DASH} b\`\n\`\`\`text\nfallow ${EM_DASH} output\n\`\`\`\nAn en dash – and a hyphen - pass.`;
   assert.deepEqual(lines(checkEmDash("guides/task.mdx", body)), [1]);
+});
+
+// ---------------------------------------------------------------------------
+// mdx-syntax
+
+test("mdx-syntax accepts each MDX construct that the pages use", () => {
+  const body = [
+    "{/* generated:start cli-options dupes */}",
+    "{/* a comment",
+    "   over two lines */}",
+    "## Exit codes {#exit-codes}",
+    '<CardGroup cols={2}>',
+    '  <Card title="A <b> & {c}" icon="x" href="/cli/dupes">',
+    "    Card text.",
+    "  </Card>",
+    "</CardGroup>",
+    '<div style={{ display: "flex", gap: "8px" }}>',
+    '  <img src="/images/a.svg" alt="a: B (71)" />',
+    "</div>",
+    "<Tabs>",
+    '<Tab title="npm">',
+    "```bash",
+    "fallow <path> {a,b} --x",
+    "```",
+    "</Tab>",
+    "</Tabs>",
+    "Read `<PATH>` and `{issue_type}`, escape \\< and \\{x\\}, see <https://fallow.tools/docs>.",
+    "| Cell `a<b` | [link `{x}`](/cli/dupes) | 1 > 0 |",
+    "A line<br />break.",
+  ].join("\n");
+  assert.deepEqual(checkMdxSyntax("cli/dupes.mdx", `---\ndescription: "A Vue <script setup> file {x}"\n---\n${body}\n`), []);
+});
+
+test("mdx-syntax reports a bare angle bracket, a bare brace, an unknown or unclosed tag and a module line", () => {
+  const body = [
+    "Strip types for TS<->JS clone matching.",
+    "| `fallow://explain` | Read fallow://explain/{issue_type}. |",
+    "Same payload as fallow explain <issue-type> --format json.",
+    "[See {x}](/cli/dupes)",
+    "Open a <div> here.",
+    "A <Badge> tag.",
+    "<!-- an HTML comment -->",
+    "export const a = 1",
+    "A 1 < 2 comparison.",
+  ].join("\n");
+  assert.deepEqual(lines(checkMdxSyntax("guides/task.mdx", page(body))), [6, 7, 7, 8, 9, 9, 10, 11, 12, 13, 14]);
 });
 
 // ---------------------------------------------------------------------------
@@ -457,4 +521,142 @@ test("the line budgets match the page types in PAGE-TYPES.md", () => {
     }
   }
   assert.deepEqual(written, LINE_BUDGETS);
+});
+
+// ---------------------------------------------------------------------------
+// diagram
+
+const mermaid = (source) => `\`\`\`mermaid\n${source}\n\`\`\``;
+const chain = (count) =>
+  ["flowchart LR", ...Array.from({ length: count - 1 }, (_, index) => `  n${index}["step ${index}"] --> n${index + 1}["step ${index + 1}"]`)].join("\n");
+
+test("diagram counts the nodes of a flowchart, without labels, shapes and subgraphs", () => {
+  const source = [
+    "flowchart TD",
+    '  subgraph box["Entry points"]',
+    '    main["src/index.ts"]',
+    "  end",
+    '  main -->|"import x"| lib["src/lib/index.ts"]',
+    '  lib -. "re-export" .-> format["src/lib/format.ts"]',
+    '  verdict{"Verdict?"} -- "fail" --> fix(["fix it"])',
+    "  %% a comment is not a node",
+  ].join("\n");
+  assert.deepEqual(describeDiagram(source), { type: "flowchart", nodes: 5 });
+});
+
+test("diagram counts an unquoted edge label as a node, so the count is never too low", () => {
+  assert.equal(describeDiagram("flowchart LR\n  a -- yes --> b").nodes, 3);
+});
+
+test("diagram counts the participants of a sequence diagram and the states of a state diagram", () => {
+  const sequence = "sequenceDiagram\n  participant You\n  You->>Fallow: audit\n  Fallow-->>Git: diff\n  Note over You,Git: text";
+  assert.deepEqual(describeDiagram(sequence), { type: "sequenceDiagram", nodes: 3 });
+  const states = 'stateDiagram-v2\n  [*] --> open\n  open --> paid\n  state "Cancelled" as cancelled\n  paid --> [*]';
+  assert.deepEqual(describeDiagram(states), { type: "stateDiagram-v2", nodes: 5 });
+});
+
+test("diagram accepts a diagram at the node limit and two diagrams on a page", () => {
+  assert.deepEqual(checkDiagrams("concepts/a.mdx", page(`${mermaid(chain(11))}\n\n${mermaid(chain(3))}`)), []);
+});
+
+test("diagram reports an unsupported type, too many nodes, styling and a third diagram", () => {
+  const text = page(
+    [
+      mermaid("graph LR\n  a --> b"),
+      mermaid(chain(12)),
+      mermaid("flowchart LR\n  a --> b\n  style a fill:#f00"),
+      mermaid("flowchart LR\n  a:::hot --> b"),
+    ].join("\n\n"),
+  );
+  const found = checkDiagrams("concepts/a.mdx", text);
+  assert.ok(found.every((entry) => entry.rule === "diagram"));
+  assert.match(found[0].message, /type "graph" is not supported/u);
+  assert.match(found[1].message, /12 nodes\. The limit is 11/u);
+  assert.match(found[2].message, /own style/u);
+  assert.match(found[3].message, /own style/u);
+  assert.match(found[4].message, /4 diagrams\. The limit is 2/u);
+  assert.deepEqual(lines(found), [6, 11, 26, 32, 26]);
+});
+
+test("diagram reports an id that an edge uses before a later line gives it a label", () => {
+  const source = [
+    "flowchart LR",
+    '  main["src/index.ts"] -->|"import formatPrice"| bPrice',
+    '  subgraph barrel["src/lib/index.ts"]',
+    '    bPrice["formatPrice"]',
+    "  end",
+  ].join("\n");
+  const problems = flowchartLabelProblems(source);
+  assert.equal(problems.length, 1);
+  assert.equal(problems[0].line, 4);
+  assert.match(problems[0].message, /node "bPrice" gets its label after line 2 uses it/u);
+  const text = page(mermaid(source));
+  assert.deepEqual(lines(checkDiagrams("concepts/a.mdx", text)), [10]);
+});
+
+test("diagram accepts nodes defined before their edges, a relabel and ids that never get a label", () => {
+  const source = [
+    "flowchart TD",
+    '  a["Agent edits code"]',
+    '  b{"Verdict?"}',
+    "  a --> b",
+    '  b -->|fail| a["Agent edits code"]',
+    "  b -- pass --> done",
+    "  x --> y",
+  ].join("\n");
+  assert.deepEqual(flowchartLabelProblems(source), []);
+});
+
+test("diagram reports markup characters in a label and a long subgraph title", () => {
+  const source = [
+    "flowchart TD",
+    '  lib["lib: src/lib/**"]',
+    '  run["safe_to_delete"]',
+    "  code[`fallow`]",
+    '  lib -->|"a *b*"| run',
+    '  subgraph codegen["tools/codegen is not a workspace"]',
+    '    gen["index.js"]',
+    "  end",
+    '  subgraph ok["packages/web app"]',
+    "  end",
+  ].join("\n");
+  const problems = flowchartLabelProblems(source);
+  assert.deepEqual(
+    problems.map((problem) => problem.line),
+    [2, 3, 4, 5, 6],
+  );
+  assert.match(problems[0].message, /\*, _ or backtick/u);
+  assert.match(problems[4].message, /more than 3 words/u);
+});
+
+// ---------------------------------------------------------------------------
+// bare-flag
+
+test("bare-flag reports a long flag in prose, a table cell, link text and the description", () => {
+  const text = [
+    "---",
+    'title: "Page"',
+    'description: "Run it with --quiet."',
+    'keywords: ["--production"]',
+    "---",
+    "",
+    "Pass --format json to get JSON.",
+    "| `--x` | Implies --score |",
+    "See [the --trend option](/cli/health#options).",
+  ].join("\n");
+  const found = checkBareFlag("cli/a.mdx", text);
+  assert.ok(found.every((entry) => entry.rule === "bare-flag"));
+  assert.deepEqual(lines(found), [3, 7, 8, 9]);
+  assert.match(found[1].message, /--format is outside code/u);
+});
+
+test("bare-flag ignores code, link targets, URLs, MDX comments and dashes that are no flag", () => {
+  const body = [
+    "Use `--quiet` or ``fallow --ci``.",
+    "```bash\nfallow dead-code --production\n```",
+    "Read [the guide](/cli/audit?x=--base) or https://example.com/a--b.",
+    "{/* generated:start cli-options --x */}",
+    "A range of 2--3, a re-export, -5, x -- y and a--b.",
+  ].join("\n");
+  assert.deepEqual(checkBareFlag("guides/a.mdx", page(body)), []);
 });

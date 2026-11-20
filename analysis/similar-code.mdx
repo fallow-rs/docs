@@ -1,285 +1,161 @@
 ---
-title: "Find semantically similar functions in TypeScript"
-sidebarTitle: "Semantic similar code"
-description: "Find similar functions in JavaScript and TypeScript that may do the same job under other names and syntax. A pinned local model finds them; a person decides."
-keywords: ["similar code", "semantic duplication", "function similarity", "local model", "code review", "refactoring", "find similar functions"]
+title: "Similar code"
+description: "Find functions that may do the same job with different code, with a local model, and review each candidate before you merge code."
+keywords: ["similar code", "semantic duplication", "function similarity", "local model", "fallow similar-code", "code review", "refactoring"]
 icon: "code-compare"
 ---
 
-`fallow similar-code` finds functions that may do the same kind of work, even
-when their code looks different. Use the results to find logic that you can
-possibly consolidate and that `fallow dupes` does not find.
+Two teams often solve one problem twice, with different code. For example, one function trims and lower-cases the email address of an order form. Another function cleans the email address of an imported order with a regular expression. When a new email rule arrives, the fix reaches one function, and the other keeps the bug. [`fallow dupes`](/analysis/duplication) does not find this pair, because it compares the code itself. `fallow similar-code` compares the meaning of whole functions with a model that runs on your machine. Use it after `fallow dupes`, to find logic that you can merge after a review.
 
-`fallow dupes` finds exact, normalized, and near-miss copies. Similar-code
-discovery compares the meaning of complete functions. Run it after
-`fallow dupes`.
+```bash
+npx fallow similar-code
+```
 
 <Warning>
-  Every result is an unverified candidate. A similarity score is not a
-  probability. It does not prove that the behavior matches, and it does not
-  mean that a refactor is safe. Inspect both functions and their tests before
-  you decide.
+  Each result is an unverified candidate. The score is not a probability. It does not prove that the two functions behave the same, and it does not mean that a merge is safe. Read both functions and their tests before you decide.
 </Warning>
 
-## Set up the local model
+The analysis is opt-in. It is not part of bare `fallow`, `fallow audit`, `fallow dupes`, CI gates, SARIF output or the editor diagnostics. It adds no issue type, and a candidate does not change the exit code.
 
-The `fallow` npm package does not install the native companion. Install it at
-the same version as `fallow`:
+## What fallow finds
+
+### Before the first run
+
+The analysis needs two parts that the `fallow` package does not install:
+
+1. The `fallow-similar-code` package, at the same version as `fallow`:
+
+   ```bash
+   npm install --save-dev fallow-similar-code@<fallow version>
+   ```
+
+2. The pinned model, a download of about 324 MB. The first download needs your confirmation:
+
+   ```bash
+   npx fallow similar-code setup --local
+   ```
+
+   Before it asks, setup shows the model, the license and the download size. Project config and agents cannot approve the download for you. Without a terminal, setup stops unless you pass `--yes`.
+
+To check that both parts are ready, run `fallow similar-code status`. Its `Ready` line says `yes` or `no`, and when a part is missing, a `Next` line names the step. A `fallow` binary from Homebrew or `cargo install` finds the `fallow-similar-code` program only in its own directory. [`fallow similar-code`](/cli/similar-code) explains that setup.
+
+After setup, the analysis runs offline. The source of your functions stays on your machine. Fallow stores the computed vectors in a cache in your user directory, with one namespace for each project. `fallow similar-code cache clear --yes` removes them and keeps the model.
+
+### The report
+
+For this example, add the two email functions of the opening to the demo project: `normalizeOrder` in `src/orders/normalize.ts` and `cleanImportedOrder` in `src/imports/clean.ts`. The human report has this form. Each candidate is a pair of functions, with the command that inspects it:
+
+```text
+Similar-code candidates (unverified)
+Model score is cosine similarity, not a probability or refactor verdict.
+
+similar-code:candidate:v1:<hex>  score 0.9123  High
+  src/orders/normalize.ts:12  normalizeOrder
+  src/imports/clean.ts:8  cleanImportedOrder
+  Inspect: fallow similar-code inspect similar-code:candidate:v1:<hex> --candidates similar-code.json
+
+Completion: Complete
+Cache: Miss (0 hits, 42 misses, 42 writes)
+```
+
+| Part | Meaning |
+|:--|:--|
+| `similar-code:candidate:v1:<hex>` | The id of the candidate. The inspect and review steps use it. |
+| `score 0.9123` | The cosine similarity of the two function vectors. 1 is the highest value. It has meaning only for the pinned model and the current settings. Use it to rank your review work. |
+| `High` | The band of the score: `VeryHigh` from 0.95, `High` from 0.88, and `Moderate` below 0.88. |
+| `Completion: Complete` | Each phase of the run finished. |
+| `Cache` | The vectors that fallow read from the cache, and the vectors that it computed. |
+
+An empty list proves that no candidate exists only when the completion is `Complete`. A `Partial` run tells you in its JSON output which limit or problem stopped the work.
+
+## How fallow decides
+
+Fallow takes each function of at least `similarCode.minLines` lines (default 3). The model turns each function into a vector, and fallow compares the vectors of each pair. A pair with a score at or above `similarCode.threshold` (default 0.8) is a candidate.
+
+A large project gives many pairs, so narrow the search with the scope options of the other analyses:
 
 ```bash
-npm install --save-dev fallow-similar-code@<fallow version>
+npx fallow similar-code --file src/orders/normalize.ts
+npx fallow similar-code --changed-since main
+npx fallow similar-code --threshold 0.88 --min-lines 6 --top 20
 ```
 
-The `fallow` launcher finds the package, verifies it, and passes its binary to
-fallow, which checks the signature again. A global `fallow` needs a global
-companion. For npx, start both packages together:
-`npx -p fallow@<version> -p fallow-similar-code@<version> fallow similar-code`.
-An MCP client that starts `npx fallow-mcp` needs the same pair.
+`--file` keeps the pairs that include the file. `--changed-since` keeps the pairs that touch a changed file.
 
-A `fallow` binary from Homebrew or `cargo install` has no npm launcher, so it
-finds the companion only next to its own executable. Download the release
-archive of the same version for your platform from
-[GitHub Releases](https://github.com/fallow-rs/fallow/releases). Copy
-`fallow-similar-code` from the archive into the directory of the `fallow`
-binary. For Homebrew, it is the Cellar directory, for example
-`/opt/homebrew/Cellar/fallow/<version>/bin`, not the directory of the
-`/opt/homebrew/bin/fallow` link. A Homebrew upgrade installs `fallow` in a new
-Cellar directory, so copy the companion of the new version again. You can also
-install `fallow` and the companion from npm instead.
+## Act on a candidate
 
-To check whether the companion and its pinned model are ready, run:
+A candidate is not a finding, so you record your decision in a file of your own. The review has three steps:
+
+1. Save the candidates as JSON:
+
+   ```bash
+   npx fallow similar-code --format json --quiet > similar-code.json
+   ```
+
+2. Inspect one candidate. Run the command from the same project root:
+
+   ```bash
+   npx fallow similar-code inspect similar-code:candidate:v1:<hex> \
+     --candidates similar-code.json --format json --quiet
+   ```
+
+   Inspect first checks that both functions did not change since the search. Then it adds the evidence that it can find, for example:
+
+   - the source of both functions and the imports between them,
+   - the callers, the callees and the related tests,
+   - the owners and the recent changes,
+   - overlap with `fallow dupes`, and hints such as `async` or `throw`.
+
+   Inspect marks each kind of evidence that it cannot find as missing.
+
+3. Write your decision in a separate verdict file. Fallow does not change the candidate file:
+
+   ```json
+   {
+     "schema_version": "1",
+     "verdicts": [
+       {
+         "candidate_id": "similar-code:candidate:v1:<hex>",
+         "review_key": "similar-code:review:v1:<hex>",
+         "candidate_worthy": true,
+         "behaviorally_equivalent": false,
+         "refactor_safe": false,
+         "outcome": "related-but-distinct",
+         "rationale": "Both normalize orders, but only the import path keeps external IDs."
+       }
+     ]
+   }
+   ```
+
+Each judgment is `true`, `false` or `null` (unknown). `refactor_safe: true` needs `behaviorally_equivalent: true`, and that needs `candidate_worthy: true`. The outcome is one of `same-responsibility`, `related-but-distinct`, `intentional-duplication`, `unrelated` and `needs-human-review`.
+
+When you merge two functions, run your tests and `fallow dupes` again.
+
+### With an agent
+
+The MCP server has two read-only tools: `find_similar_code` and `inspect_similar_code`. Neither tool downloads the model, changes code or writes a verdict. When setup is missing, the agent must ask you to run the setup. When the behavior is not clear, the agent must give the outcome `needs-human-review`. See [MCP server](/integrations/mcp).
+
+## Fail a run
+
+A candidate never changes the exit code, so the search itself cannot fail a run. The review can: to join the candidates and the verdicts, and to fail when a candidate has no verdict, run:
 
 ```bash
-fallow similar-code status
+npx fallow similar-code review --candidates similar-code.json \
+  --verdicts verdicts.json --require-verdict-for-each-candidate
 ```
 
-The first download needs your explicit confirmation:
+A candidate without a verdict then makes the command exit with code 2. [`fallow similar-code`](/cli/similar-code) has the other exit codes.
 
-```bash
-fallow similar-code setup --local
-```
+## What fallow cannot see
 
-Before it asks, setup shows the model, the license, and the download size.
-Use `--yes` only when you already approved the download and need a command
-without a prompt. Project config and agents cannot approve setup for you.
+- How two functions behave. A high score means that they read alike to the model, and the model runs no code.
+- A shared block inside two large functions. The model compares whole functions, and `fallow dupes` finds those blocks.
+- A meaning of a score outside one project. A score depends on the model and the settings. Do not compare scores between projects, and do not use a score as a quality limit.
 
-After setup, the analysis runs offline and function source stays on your
-machine. The companion receives size-limited source over local process input
-and does not save it. Fallow stores derived vectors in a user-local cache with
-a separate namespace for each project, so later runs are faster.
+Config can set the threshold, the minimum size and the `ignore` globs. It cannot choose another model, another provider or a remote service.
 
-## Find candidates
+## Reference
 
-```bash
-fallow similar-code
-```
-
-The JSON output has its own top-level format:
-
-```bash
-fallow similar-code --format json --quiet > similar-code.json
-```
-
-A candidate looks like this:
-
-```json
-{
-  "candidate_id": "similar-code:candidate:v1:...",
-  "review_key": "similar-code:review:v1:...",
-  "left": {
-    "path": "src/orders/normalize.ts",
-    "name": "normalizeOrder",
-    "start_line": 12,
-    "end_line": 34,
-    "source_sha256": "..."
-  },
-  "right": {
-    "path": "src/imports/clean.ts",
-    "name": "cleanImportedOrder",
-    "start_line": 8,
-    "end_line": 31,
-    "source_sha256": "..."
-  },
-  "similarity": 0.91,
-  "similarity_band": "high",
-  "verification_status": "unverified"
-}
-```
-
-The score has meaning only for the pinned model and the current settings. Use
-it to rank review work. Do not use it to compare projects or to set a general
-quality bar.
-
-The top level of the output also records:
-
-- The exact companion, model revision, artifact digest, and parameters.
-- Whether every analysis phase completed.
-- Limits and skipped work.
-- Vector-cache hits and misses.
-- Diagnostics without a severity.
-
-An empty candidate list proves that there are no candidates only when
-`completion.status` is `"complete"`. A `"partial"` run tells you which limit
-or provider problem made the result incomplete.
-
-### Focus the search
-
-```bash
-fallow similar-code --file src/orders/normalize.ts
-fallow similar-code --changed-since main
-fallow similar-code --workspace @acme/orders
-fallow similar-code --threshold 0.88 --min-lines 6 --top 20
-```
-
-`--file` keeps only the pairs that include the selected file. `--changed-since`
-and the workspace options scope the project in the same way as other fallow
-analyses.
-
-## Inspect before judging
-
-Copy the `candidate_id` from the discovery output. Pass the saved discovery
-JSON with `--candidates`:
-
-```bash
-fallow similar-code inspect similar-code:candidate:v1:... \
-  --candidates similar-code.json --format json --quiet
-```
-
-Run this command from the same project root. Inspect reads the candidate from
-the discovery JSON, so you do not repeat the discovery options. The human
-discovery output prints this inspect command for each candidate. MCP callers
-pass the `candidate_id` and the candidate snapshot from the
-`find_similar_code` response to `inspect_similar_code`.
-
-Inspect first reproduces the candidate against your current source. If either
-function changed since discovery, you do not review a stale result. Inspect
-then adds size-limited evidence, where it is available:
-
-- Source windows for both functions.
-- Import-graph relationship and entry-point reachability.
-- Callers and callees.
-- CODEOWNERS ownership and recent churn.
-- Related tests.
-- Overlap with deterministic duplication results.
-- Syntax clues such as async behavior, throws, awaits, and possible side effects.
-
-Every evidence source has an availability state. Fallow reports missing
-context as missing. It does not treat absent evidence as a positive verdict.
-
-## Record a separate verdict
-
-Fallow never changes the raw candidate document. After a person or agent
-inspects the code, they write a separate verdict:
-
-```json
-{
-  "schema_version": "1",
-  "verdicts": [
-    {
-      "candidate_id": "similar-code:candidate:v1:...",
-      "review_key": "similar-code:review:v1:...",
-      "candidate_worthy": true,
-      "behaviorally_equivalent": false,
-      "refactor_safe": false,
-      "outcome": "related-but-distinct",
-      "rationale": "Both normalize orders, but only the import path preserves external IDs."
-    }
-  ]
-}
-```
-
-To join the two documents, run:
-
-```bash
-fallow similar-code review \
-  --candidates similar-code.json \
-  --verdicts verdicts.json \
-  --require-verdict-for-each-candidate \
-  --format json --quiet
-```
-
-Review matches a verdict to a candidate by `candidate_id` first. A verdict
-with an unknown `candidate_id` matches by its `review_key`. The `review_key`
-hashes only the two function sources. When a function is copied verbatim into
-two files, two candidates can therefore share one `review_key`. The rules are:
-
-- Verdicts that match by `candidate_id` can repeat a `review_key`. Write one
-  verdict for each candidate to pass `--require-verdict-for-each-candidate`.
-- A `review_key` must be unique only among the verdicts that match by
-  `review_key`.
-- Review does not apply a `review_key` verdict that matches more than one
-  candidate.
-- A duplicate `candidate_id`, or a `review_key` that does not match its
-  `candidate_id`, fails the review.
-
-Each of the three judgments is yes, no, or unknown, and each answers a
-different question:
-
-| Field | Question |
-|:------|:---------|
-| `candidate_worthy` | Is this pair useful enough to review? |
-| `behaviorally_equivalent` | Do both functions behave the same for relevant inputs and side effects? |
-| `refactor_safe` | Is consolidation safe in the current architecture? |
-
-Use `null` when you cannot answer. `refactor_safe: true` requires
-`behaviorally_equivalent: true`, and `behaviorally_equivalent: true` requires
-`candidate_worthy: true`.
-
-The available outcomes are `same-responsibility`, `related-but-distinct`,
-`intentional-duplication`, `unrelated`, and `needs-human-review`.
-
-## Use it with an agent
-
-The MCP server has two read-only tools:
-
-- `find_similar_code` returns unverified candidates, with provenance and
-  completion status.
-- `inspect_similar_code` reproduces one candidate and returns its evidence
-  packet.
-
-Neither tool downloads a model, edits source, or produces a verdict. If setup
-is missing, the agent should ask you to run `fallow similar-code setup --local`.
-When tests, callers, behavior, or side effects are unclear, the agent should
-return `needs-human-review`.
-
-## Configure project defaults
-
-```jsonc
-{
-  "similarCode": {
-    "threshold": 0.8,
-    "minLines": 3,
-    "ignore": ["src/generated/**"]
-  }
-}
-```
-
-These fields change only candidate discovery. Config cannot choose a model,
-provider, executable, download, or credential.
-
-To clear the derived project vectors and keep the downloaded model, run:
-
-```bash
-fallow similar-code cache clear --yes
-```
-
-## Where it does not run
-
-Similar-code discovery does not run in bare `fallow`, `audit`, `dupes`, CI
-gates, SARIF, LSP, VS Code diagnostics, or auto-fix. It is a review aid and
-does not add a finding category. It accepts only the official pinned local
-model and never sends source to a remote provider.
-
-## See also
-
-<CardGroup cols={3}>
-  <Card title="Code duplication" icon="clone" href="/analysis/duplication">
-    Find deterministic and near-miss copied structure.
-  </Card>
-  <Card title="Agent integration" icon="robot" href="/integrations/mcp">
-    Connect the read-only discovery and inspect tools.
-  </Card>
-  <Card title="Configuration" icon="gear" href="/configuration/overview">
-    Set project thresholds, minimum function sizes, and ignore globs.
-  </Card>
-</CardGroup>
+- [`fallow similar-code`](/cli/similar-code): each subcommand, option and output field.
+- [`similarCode` config](/reference/config-duplication#similarcode): each key and its default.
+- [Duplication](/analysis/duplication): copies that have the same code.

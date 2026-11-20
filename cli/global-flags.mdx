@@ -1,490 +1,257 @@
 ---
-title: "Global CLI flags for every fallow command"
-sidebarTitle: "Global flags"
-description: "Global CLI flags that work the same on every fallow command: project root, config, output format, scope, cache, workspaces, score, trend, and snapshot options."
-keywords: ["global flags", "CLI options", "root", "config", "format", "cache", "threads", "workspace", "changed-workspaces", "score", "trend", "snapshot", "fallow CLI flags"]
+title: "Global options"
+sidebarTitle: "Global options"
+description: "Find the options that the bare fallow run and the analysis commands share, with the rules for paths, gates and request outcomes."
+keywords: ["global flags", "global options", "CLI options", "format", "changed-since", "workspace", "baseline", "fallow CLI flags"]
 icon: "sliders"
 ---
 
-These flags work the same way across fallow commands, so you learn them once. They set the project root, the config, the output format, the scope, the cache, and the CI gates. Some commands reject a flag that has no meaning for them.
+These options set the project root, the config file, the output format, the scope and the gates of a run. Most commands exit with code 2 when they get an option that they do not use.
 
-## Reference
+## Options {#reference}
 
-The `--dupes-*` flags apply to combined mode. When you do not set one, fallow uses the config value. Each one works like the [`fallow dupes`](/cli/dupes) flag with the same name.
+{/* generated:start cli-global-options */}
 
-| Flag | Description |
-|:-----|:------------|
-| `-r, --root <PATH>` | Project root directory (default: current working directory) |
-| `-c, --config <PATH>` | Path to config file (default: auto-detected) |
-| `--allow-remote-extends` | Allow trusted config files to extend HTTPS URLs (default: off, so an HTTPS `extends` entry exits 2). See [`fallow guard`](/cli/guard). |
-| `-f, --format <FORMAT>` | Output format: `human` (default), `json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`, `badge`, `github-annotations`, `github-summary`. Alias: `--output`. `--format json` is compact by default; add `--pretty` for indented output. |
-| `--pretty` | Indent `--format json` output so you can read it. JSON is compact by default, so machines and agents get the same schema with less output. Applies only to JSON output. SARIF, Code Climate, baselines, snapshots, caches, and other persisted JSON keep their format with or without this flag. |
-| `--lean` | Trim `--format json` output for agent context. Works on `fallow dead-code`, `fallow health` and bare `fallow`; other commands reject it. A lean document has the root field `profile: "lean"`. It leaves out empty arrays and zero dead-code `summary` counts, and keeps one `workspace_diagnostics` entry per `kind`, with a `count` when the kind has more than one. It keeps the first 10 rows of the health tables `hotspots`, `file_scores` and `large_functions`, and `<table>_omitted` gives the number of rows left out. Repeated action text moves to `_meta.actions`: an action without `description`, `note` or `comment` reads that field from `_meta.actions[<type>]`. `fallow report --from` refuses a lean document. Run without `--lean` for the full shape. |
-| `--full-tables` | With `--lean`, keep every row of the health tables. Cannot be combined with `fallow health --top`, which cuts the tables first. |
-| `-q, --quiet` | Suppress progress bars, status messages, and the stderr warnings that repeat a `workspace_diagnostics[]` entry. See [Quiet runs](#quiet-runs) |
-| `--no-cache` | Disable incremental caching and parse all files again. For `fallow mutation`, also run each mutant again instead of reusing an [earlier result](/cli/mutation#result-cache) |
-| `--threads <N>` | Number of parser threads (default: available parallelism) |
-| `--max-file-size <MB>` | At discovery, skip source files larger than this many megabytes and do not parse them (default `5`; `0` disables the guard). On large repositories, one multi-megabyte generated, vendored, or bundled file can make fallow run out of memory. This guard prevents that. While the guard is on, fallow also skips large one-line minified JS assets. Fallow always analyzes declaration files (`.d.ts`), for all sizes. Fallow reports skipped files on stderr and in `--format json` under `workspace_diagnostics` (`kind: "skipped-large-file"` or `"skipped-minified-file"`). You can also set it with `FALLOW_MAX_FILE_SIZE`. |
-| `--changed-since <REF>` (alias: `--base`) | Report only issues in files changed since this git ref. For this run, the ref replaces the per-package refs of [`workspaces.changedSince`](/configuration/workspaces#per-package-change-baselines). |
-| `--no-package-baselines` | Ignore the per-package refs of [`workspaces.changedSince`](/configuration/workspaces#per-package-change-baselines) for this run, so every workspace package is in full scope. Use it to save or gate a whole-project baseline. `--changed-since`, `--workspace` and `--diff-file` still apply. `security`, `doctor` and `similar-code` reject it. You can also set `FALLOW_PACKAGE_BASELINES=false`. |
-| `--diff-file <PATH>` | Path to a unified diff (for example, `git diff --unified=0 main...HEAD`). Fallow uses it to report only the source-anchored findings on lines inside an added hunk. It drops a point finding (unused-export, unresolved-import, boundary-violation, and others) when its source line is not in the diff. It drops a range finding (complexity hotspots, clone families) when its `[start_line, end_line]` does not overlap the diff. It keeps a circular dependency, a re-export cycle, a package cycle, and an unused file when the diff touches any file of the finding, and sticky PR and MR summaries keep them by the same rule. Project-level findings (unused deps, catalog entries, dependency overrides) skip this filter. They point at fixed lines in `package.json` or `pnpm-workspace.yaml`, and a PR rarely touches those lines, even when the PR caused the finding. To filter these project-level findings too, sticky PR and MR summaries can set `FALLOW_SUMMARY_SCOPE=diff`. The diff also scopes the runtime-coverage `hot-path-touched` verdict per line. To read the diff from stdin, pass `-` as the path or use `--diff-stdin` (`gh pr diff \| fallow audit --diff-file -`). With `--changed-since`, the diff controls the line-level filter and `--changed-since` still scopes file discovery. A one-line note on stderr tells you this. When you omit the flag, fallow uses the `FALLOW_DIFF_FILE` env var. |
-| `--diff-stdin` | Read the unified diff from stdin and not from a file. Equivalent to `--diff-file -`. Cannot be combined with a `--diff-file PATH` value other than `-`. Use it to pipe `gh pr diff` or `git diff` directly into fallow. |
-| `--churn-file <PATH>` | For projects with no git repository, import change history from a `fallow-churn/v1` JSON file and not from `git log`. Affects only the health signals that use churn. See [`fallow health` › Importing churn from a non-git VCS](/cli/health#importing-churn-from-a-non-git-vcs). |
-| `--baseline <PATH>` | Compare against a previously saved baseline file. Only the bare `fallow` run, `dead-code` (and `check`), `dupes`, and `health` use it. Other subcommands, `decision-surface` included, exit 2 with an error that names the subcommands that use the flag. `audit` has its own baseline flags. |
-| `--baseline-mode <MODE>` | How `--baseline` matches health findings: `count` (default) matches per file and category, `identity` matches per function identity. `identity` works only with a baseline that you saved with `--baseline-mode identity`. See [`fallow health` › Baseline](/cli/health#baseline). |
-| `--save-baseline <PATH>` | Save the current results as a baseline file. The same subcommands as `--baseline` accept it. See [Save destinations](#save-destinations) for the paths that fallow writes to. |
-| `--fail-on-stale-baseline` | Exit 1 when a loaded `--baseline` has an entry that matched nothing in this run. In the bare run, this also checks `--dupes-baseline` and `--health-baseline`. Applies to `dead-code` and `check`, the bare run, `dupes` and `health`, in every output format. It also exits 1 when the loaded file is a baseline of another `kind`, because such a file suppresses nothing. The result is the exit code and one stderr line with the stale count, the baseline path, the [`fallow baselines prune`](/cli/baselines) command that removes only the stale entries, and the command to save the baseline again. Some runs cannot judge the baseline: a narrowed scope, a `dead-code` run in another mode than the file (`--production` or `--include-entry-exports`), a `health` or `dupes` run in production mode, `health --report-only`, `audit` and `decision-surface`. These runs do not apply the gate. They print a warning on stderr and do not pass silently. A narrowed scope skips only the unmatched-entry check. It still applies the other-`kind` check, because the scope of the run does not change which command saved the file. The report output does not change. The run always reports the result as `baseline_staleness.gate_trips`, with or without this flag. That field describes the baseline and not the exit code, so it can be true even when the run did not apply the gate. `gate_outcomes["stale-baseline"].status` reports `fail` for both parts of the rule, and stays `skipped` on `audit`. |
-| `--fail-on-baseline-growth` | Exit 1 when a loaded baseline has a key that the same file at the base ref does not have. This makes a committed baseline shrink-only. See [Baseline growth gate](#baseline-growth-gate). |
-| `--baseline-base <REF>` | The git ref that `--fail-on-baseline-growth` compares the baseline with. Needs `--fail-on-baseline-growth`. Default: the `fallow audit` base. |
-| `--fail-on-regression` | Fail if the issue count grows by more than the tolerance, compared with a regression baseline. With `fallow list --entry-weight`, fail when the eager bytes of an entry grow by more than the tolerance. See [Startup import weight](/cli/list#gate-the-startup-weight-in-ci). |
-| `--tolerance <N>` | Allowed increase: `"2%"` (percentage) or `"5"` (absolute). Default: `"0"` |
-| `--regression-baseline <PATH>` | Path to regression baseline file (default: `.fallow/regression-baseline.json`) |
-| `--save-regression-baseline <PATH>` | Save the current issue counts as a regression baseline. See [Save destinations](#save-destinations). |
-| `--explain-skipped` | In human and markdown output, show why fallow skipped files. On `dupes`, it shows a per-pattern count of the files that the default duplicate ignores skipped. On `check`, `dead-code`, `audit` and the default run, it shows the built-in discovery ignore patterns that removed source files, with the count and the directory that lost the most files. Machine formats do not show the note. The counts are always in `workspace_diagnostics[]` as `excluded-by-default-ignore` entries. |
-| `--production` | Production mode: exclude test, story, and dev files, and use only start and build scripts |
-| `--no-production` | Turn production mode off for every analysis, even when the project config sets `production: true`. Conflicts with `--production`. |
-| `--production-dead-code` | Per-analysis production mode for dead-code in bare combined runs and `fallow audit`. See [Per-analysis production mode](#per-analysis-production-mode). |
-| `--production-health` | Per-analysis production mode for health in bare combined runs and `fallow audit`. |
-| `--production-dupes` | Per-analysis production mode for duplication in bare combined runs and `fallow audit`. |
-| `-w, --workspace <PATTERNS>` | Scope output to one or more workspaces. Accepts exact names, globs matched against the package name AND the workspace path (`apps/*`, `@scope/*`), and `!`-prefixed negations (`!apps/legacy`). Pass comma-separated values (`-w web,admin`) or repeat the flag. Put quotes around patterns with `!` or glob characters, so the shell does not expand them. |
-| `--changed-workspaces <REF>` | Monorepo CI scoping from git: scope output to the workspaces that contain a file changed since `REF` (for example, `origin/main`, `HEAD~1`). Fallow gets the workspace set from `git diff`, so your CI jobs do not need a hand-written `--workspace` list. Cannot be combined with `--workspace`. A missing ref or a non-git directory is a hard error (exit 2). Fallow does not fall back to the full scope. A diff that changes only root files maps to 0 workspaces and exits 0 with no issues. |
-| `--performance` | Show the time of each pipeline stage |
-| `--explain` | In human format, prints a `Description:` line under each section header. In JSON format, includes metric definitions in the output `_meta` object. Always enabled for MCP. |
-| `--ci` | CI mode: equivalent to `--format sarif --fail-on-issues --quiet` |
-| `--fail-on-issues` | Exit with code 1 if issues are found. Without it, bare `fallow` in a machine format exits 0 on findings (see [exit codes](/cli/dead-code#exit-codes)). Raises `warn` dead-code findings to `error`. In `health` and the bare run, it also raises `warn` complexity findings. In `dupes` and in a bare run that analyzes duplication, it also fails the run when at least one clone group remains (the `duplication-findings` gate). In the bare run, every output format exits 1 when `error-severity-findings`, `health-findings`, `health-coverage-gaps`, `duplication-threshold` or `duplication-findings` fails, and `gate_outcomes` marks these entries `enforced`. Without the flag, a bare run in the `json`, `sarif` or `codeclimate` format exits 0 on these findings, and the human, `compact` and `markdown` formats exit 1. `audit` ignores it. |
-| `--fail-on-parse-error` | Exit with code 1 when fallow cannot parse a source file cleanly. Applies to `dead-code`, `health`, `audit`, and the bare run, in every output format. `dupes` and `fix` reject the flag. The `failOnParseError` config key arms the same gate. See [Parse error gate](#parse-error-gate). |
-| `--sarif-file <PATH>` | Write SARIF output to a file, in addition to the primary `--format` output. Only the dead-code analysis writes this file, so the flag works with `dead-code`, `security`, and a bare run that includes dead-code. `dupes`, `health`, and a bare run without dead-code (`--skip dead-code`, `--only dupes`, `--only health`) exit 2. For those, use `--format sarif` with `--output-file`. See [Save destinations](#save-destinations) for the paths that fallow writes to. |
-| `-o, --output-file <PATH>` | Write the report to a file and not to stdout, for any `--format` (no ANSI codes). Use it on large projects, where the terminal scrollback cuts off the top of the report. Progress and a `Report written to <path>` confirmation stay on stderr (suppressed by `--quiet`). Valid with `dead-code`, `architecture`, `dupes`, `health`, `security`, and the bare command. Works together with `--sarif-file`. See [Save destinations](#save-destinations) for the paths that fallow writes to. |
-| `--report-path-prefix <PREFIX>` (alias: `--annotations-path-prefix`) | Override the repository-root offset that fallow adds in front of each path in the CI formats. An empty string disables the offset. See [Repository-root paths in CI formats](#repository-root-paths-in-ci-formats). |
-| `--group-by <MODE>` | Group output by CODEOWNERS ownership (`owner`), first directory component (`directory`), workspace package (`package`), or GitLab CODEOWNERS section (`section`). `json`, `human`, `sarif` and `codeclimate` show the groups. For `dead-code` and `architecture`, `compact` and `markdown` also show the groups. For `health`, `markdown` and `github-summary` also show the groups. All other formats render one flat document and print a warning on stderr. See [Grouped output](#grouped-output). |
-| `--group <KEY>` | With `--group-by`, keep only the matching groups. Accepts exact group keys, globs, and `!`-prefixed negations, comma-separated or repeated. Only `fallow health` supports this flag. See [`fallow health`](/cli/health#scoping). |
-| `--summary` | In human output, show only the issue counts per category, without the individual items. JSON output does not change. |
-| `--only <dead-code,architecture,dupes,health>` | Run only specific analyses when no subcommand is given. `check` is an alias for `dead-code`. `architecture` selects the import cycles, boundary violations, and policy violations. See [`fallow architecture`](/cli/architecture). |
-| `--skip <dead-code,architecture,dupes,health>` | Skip specific analyses when no subcommand is given. [`fallow audit`](/cli/audit) takes `--only` and `--skip` after `audit`, with the same values. `duplicates.enabled: false` in the config also skips `dupes`, unless `--only dupes` selects it |
-| `--coverage <PATH>` | In combined mode, give Istanbul coverage data to the health analysis. Same fallback chain as [`fallow health --coverage`](/cli/health#options). |
-| `--coverage-root <PATH>` | Absolute prefix to strip from Istanbul coverage paths in combined mode. See [`fallow health --coverage-root`](/cli/health#options). |
-| `--dupes-baseline <PATH>` | In combined mode, hide the clone groups in a baseline that `fallow dupes --save-baseline` wrote. With a subcommand, use `fallow dupes --baseline`. |
-| `--health-baseline <PATH>` | In combined mode, hide the complexity findings in a baseline that `fallow health --save-baseline` wrote. With a subcommand, use `fallow health --baseline`. |
-| `--dupes-mode <MODE>` | Override duplicate detection mode. |
-| `--dupes-near` | Include function-scoped near-miss clones. |
-| `--dupes-threshold <PCT>` | Override the duplication percentage failure threshold. |
-| `--dupes-min-tokens <N>` | Override the minimum token count for clone detection. |
-| `--dupes-min-lines <N>` | Override the minimum line count for clone detection. |
-| `--dupes-min-occurrences <N>` | Override the minimum clone occurrences (must be `>= 2`). |
-| `--dupes-skip-local` | Report only cross-directory duplicates. |
-| `--dupes-cross-language` | Enable TypeScript to JavaScript duplicate matching. |
-| `--dupes-ignore-imports` | Exclude module wiring from duplicate detection (default). |
-| `--dupes-no-ignore-imports` | Count module wiring as clone candidates. Conflicts with `--dupes-ignore-imports`. |
-| `--dupes-ignore-symlinks` | Omit clone instances whose path is a symlink, or lies under a symlinked directory. See [Symlinked files](/cli/dupes#symlinked-files). |
-| `--dupes-no-ignore-symlinks` | Report symlinked clone instances, also when the config sets `duplicates.ignoreSymlinks: true`. Conflicts with `--dupes-ignore-symlinks`. |
-| `--score` | In combined mode, compute the health score (0-100 with letter grade). Enables the health delta header in PR comments. Also available on [`fallow health`](/cli/health). |
-| `--trend` | Compare current health metrics against the most recent saved snapshot. Implies `--score`. Also available on [`fallow health`](/cli/health). |
-| `--trend-from <PATH>` | In combined mode, compare current health metrics against this snapshot file instead of the newest saved snapshot. Use it when CI restores the baseline from external storage. Implies `--trend` and `--score`. Also available on [`fallow health`](/cli/health). |
-| `--save-snapshot [PATH]` | Save a vital signs snapshot to track trends. Default path: `.fallow/snapshots/<timestamp>.json`. Always computes file scores and hotspots. Also available on [`fallow health`](/cli/health). See [Save destinations](#save-destinations). |
-| `--include-entry-exports` | Report unused exports in entry files. Without this flag, fallow marks them as used. The exception is an entry file for which a plugin declares the used exports: fallow checks the other exports of that file. Finds typos in framework exports (for example, `meatdata` instead of `metadata`). You can also set `includeEntryExports: true` in your fallow config. When you set the CLI flag, it takes priority. |
-| `--show-cascade` | Also report the unused exports, types, class members, and enum members of unused files. By default, fallow hides them and counts them in `cascade_hidden`. Same as `showCascade: true` in the config. See [Findings in unused files](/analysis/dead-code#findings-in-unused-files). |
-| `--type-aware` | Opt in to TypeScript semantic analysis for project-wide symbol evidence. It does not emit compiler diagnostics (default: off, or the `typeAware.enabled` config value). See [Type-aware analysis](/analysis/type-aware). |
-| `--no-type-aware` | Turn type-aware analysis off, even when `typeAware.enabled` or `FALLOW_TYPE_AWARE` turns it on. The run stays fully syntactic. |
-| `--type-aware-project <PATH>` | TypeScript project config for type-aware analysis. Repeatable. Default: the `typeAware.projects` config value, else automatic project selection. |
-| `--type-aware-require <MODE>` | `best-effort` keeps conservative findings and reports semantic gaps. `complete` fails the quality gate when a semantic query is incomplete. Default: `best-effort`. |
+### Project {#options-project}
 
-## Save destinations
+| Option | Description |
+|:--|:--|
+| `-r, --root <ROOT>` | Project root directory |
+| `-c, --config <CONFIG>` | Path to config file (`.fallowrc.json`, `.fallowrc.jsonc`, `fallow.toml`, or `.fallow.toml`) |
+| `--allow-remote-extends` | Allow trusted config files to extend HTTPS URLs |
+| `--churn-file <PATH>` | Import change history from a `fallow-churn/v1` JSON file instead of `git log`, powering hotspots, ownership, and bus-factor on projects with no git repository (Yandex Arc, Mercurial, Perforce). A small wrapper translates your VCS log into the contract. |
 
-The save flags (`--save-baseline`, `--save-regression-baseline`, `--save-snapshot`) and the report flags (`--output-file`, `--sarif-file`) write only inside these directories:
+### Output {#options-output}
 
-- the project root
-- its Git work tree, when the working directory is also inside that tree
-- the CI workspace: `GITHUB_WORKSPACE` and GitLab `CI_PROJECT_DIR`, when they are set
-- `RUNNER_TEMP`
-- the system temp directory
+| Option | Default | Description |
+|:--|:--|:--|
+| `-f, --format <FORMAT>` (alias `--output <FORMAT>`) | `human` | Output format (alias: `--output`). Values: `human`, `json`, `sarif`, `compact`, `markdown` (alias `md`), `codeclimate` (alias `gitlab-codequality`, `gitlab-code-quality`), `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`, `badge`, `github-annotations`, `github-summary`. |
+| `--pretty` |  | Indent JSON output for manual inspection. Requires the final output format to be JSON |
+| `--lean` |  | Trim JSON for agent context: leave out empty arrays and zero dead-code summary counts, group workspace diagnostics, cap health tables, and move repeated action text to `_meta.actions`. Requires JSON output. |
+| `--full-tables` |  | With `--lean`, keep every row of the health tables (`hotspots`, `file_scores`, `large_functions`) |
+| `-q, --quiet` |  | Suppress progress output; `audit` also prints only actionable findings |
+| `--group-by <GROUP_BY>` |  | Group output by owner or by directory. Values: `owner` (alias `team`, `codeowner`), `directory`, `package` (alias `workspace`, `pkg`), `section` (alias `gl-section`). |
+| `--group <KEY>` |  | Keep only the matching groups of a `--group-by` health run. Accepts exact group keys, glob patterns, and `!`-prefixed negations. |
+| `--explain` |  | Include metric definitions and rule descriptions in output |
+| `--explain-skipped` |  | Show per-pattern counts for skipped files: default duplicate ignores on dupes and audit, built-in discovery ignores on check, dead-code, audit and the default run |
+| `--summary` |  | Show only category counts without individual items |
+| `--sarif-file <PATH>` |  | Write SARIF output to a file (in addition to the primary `--format` output). Used by bare `fallow`, `dead-code`, `architecture` and `security`. |
+| `-o, --output-file <PATH>` |  | Write the report to a file instead of stdout, for any `--format` (no ANSI codes). Useful on large projects where the terminal scrollback truncates the top. |
+| `--report-path-prefix <PREFIX>` (alias `--annotations-path-prefix <PREFIX>`) |  | Prefix prepended to every path in the CI-facing formats (`github-annotations`, `github-summary`, `codeclimate`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`). CI platforms address files by repository-root-relative path, so when the analyzed project lives in a subdirectory (e.g. `packages/app/`), paths need that offset. fallow detects the offset via the git toplevel automatically; this flag overrides the detection. |
+| `--show-cascade` |  | Also report the unused exports, types, class members and enum members of unused files. By default the report hides them, because deleting the file removes them, and counts them in `cascade_hidden` |
 
-Before the analysis runs, fallow resolves the file that each flag writes, and resolves symlinks first. A path outside these directories, for example `../outside.json`, exits 2. The check also applies to the default destinations: `.fallow/snapshots` for a bare `--save-snapshot`, and the config file for a bare `--save-regression-baseline`. A committed `.fallow` or config symlink therefore cannot move the write. A relative path still resolves against the working directory.
+### Scope {#options-scope}
 
-Fallow writes a `.gitignore` with `*` into its cache directory (`.fallow/` by default), so Git does not commit a file there. When the `--save-baseline` path of bare `fallow`, `dead-code`, `architecture`, `dupes` or `health` is in the cache directory, fallow prints a warning on stderr. The warning names a path that you can commit, for example `fallow-baselines/dead-code.json`. The save still happens, and the exit code does not change.
+| Option | Description |
+|:--|:--|
+| `--changed-since <CHANGED_SINCE>` (alias `--base <CHANGED_SINCE>`) | Only report issues in files changed since this git ref (e.g., main, HEAD~5). For this run, the ref replaces the per-package refs of `workspaces.changedSince` in the config. |
+| `--no-package-baselines` | Ignore the per-package refs of `workspaces.changedSince` for this run. Every workspace package is then analyzed in full scope, for example to save or gate a whole-project baseline. |
+| `--diff-file <PATH>` | Unified diff for line-level scoping. Use `-` to read from stdin. |
+| `--diff-stdin` | Read the unified diff from stdin. Equivalent to `--diff-file -` |
+| `--max-file-size <MB>` | Skip source files larger than this many megabytes (default 5) instead of parsing them, guarding against the out-of-memory blowup a single multi-MB generated/vendored/bundled file causes on large repos. Use `0` for no limit. |
+| `--production`, `--no-production` | Production mode: exclude test/story/dev files, only start/build scripts, report type-only dependencies |
+| `-w, --workspace <WORKSPACE>` | Scope output to selected workspaces. Accepts exact names, glob patterns, and `!`-prefixed negations. |
+| `--changed-workspaces <REF>` | Scope output to workspaces touched since the given git ref. Git is required. |
+| `--include-entry-exports` | Report unused exports in entry files instead of auto-marking them as used |
 
-The CI workspace keeps a GitHub Action job working that checks out into a subdirectory (`actions/checkout` with `path: app`) and sets `root: app`. The job runs from the workspace, which is outside the Git work tree of the root.
+### Baselines {#options-baselines}
 
-An existing character device or named pipe is always allowed, because a write to it creates no file. So `-o /dev/null`, `--sarif-file /dev/stdout`, and process substitution keep working. When stdout is a regular file, `/dev/stdout` resolves to that file, and the directory rule applies to it. On Windows, `NUL` writes to the null device, in any case and with an optional colon, and so does `\\.\NUL`. A name with an extension, such as `NUL.txt`, stays a normal file name.
+| Option | Description |
+|:--|:--|
+| `--baseline <BASELINE>` | Compare against a previously saved baseline file. Used by bare `fallow`, `dead-code`, `architecture`, `dupes` and `health`; other subcommands reject it. |
+| `--baseline-mode <BASELINE_MODE>` | How `--baseline` matches health findings: per file and category (`count`, the default) or per function identity (`identity`, strict, and only against a baseline that was saved with `--baseline-mode identity`; such a baseline still reads in count mode). A finding's identity is its file path plus its function name, so renaming or moving a function that is still in the baseline reports it as new. Defaults to `count` when omitted. |
+| `--save-baseline <SAVE_BASELINE>` | Save the current results as a baseline file. Used by bare `fallow`, `dead-code`, `architecture`, `dupes` and `health`; other subcommands reject it. |
+| `--regression-baseline <PATH>` | Path to the regression baseline file |
+| `--save-regression-baseline <PATH>` | Save the current issue counts as a regression baseline. Omit PATH to update regression.baseline in the discovered fallow config, or create `.fallowrc.json` when none exists. |
 
-Fallow checks the resolved path again right before each write, and does not follow a symlink at the last path component. This makes the window for a swapped path smaller, but does not remove it for an intermediate directory. On Windows, the last check and the open are two steps.
+### Gates {#options-gates}
 
-When the default cache directory `.fallow` resolves outside these directories, for example through a committed symlink, the run does not use the cache and prints one note on stderr. The run does not fail. `FALLOW_CACHE_DIR`, `cache.dir`, and `--no-cache` do not change.
+| Option | Default | Description |
+|:--|:--|:--|
+| `--ci` |  | CI mode: equivalent to `--format` sarif `--fail-on-issues` `--quiet` |
+| `--fail-on-issues` |  | Exit 1 on issues, also where the default is 0: `dupes`, and bare `fallow` in the json, sarif, codeclimate, GitHub, comment and review formats |
+| `--fail-on-regression` |  | Fail if issue count increased beyond tolerance compared to a regression baseline. With `list --entry-weight`, fail when the eager source bytes of an entry grew beyond the tolerance. |
+| `--fail-on-stale-baseline` |  | Exit with code 1 if a loaded `--baseline` has entries that match nothing in this run. Stricter than the default advisory warning: any stale entry fails, not just a quarter of the baseline. |
+| `--fail-on-baseline-growth` |  | Exit with code 1 if a loaded baseline has a key that the same file at the base ref does not have. Makes a committed baseline shrink-only. |
+| `--baseline-base <REF>` |  | The git ref that `--fail-on-baseline-growth` compares the baseline with. Defaults to the `fallow audit` base resolution. |
+| `--fail-on-parse-error` |  | Exit with code 1 if fallow could not parse a source file cleanly. Arms the `parse-error` gate: a file with a `source-parse-degraded` or `source-nesting-too-deep` entry in `workspace_diagnostics[]` fails the run, and the gate entry in `gate_outcomes["parse-error"]` names each such file. Off by default, because the parser also rejects valid syntax that is newer than the parser. |
+| `--tolerance <TOLERANCE>` | `0` | Allowed issue count increase before a regression is flagged. With `list --entry-weight`, the value is the allowed growth of eager source bytes per entry: a byte count such as `1024`, or a percentage such as `5%`. |
 
-The MCP `save_baseline`, `save_regression_baseline`, and `save_snapshot` parameters return a tool error for the same paths.
+### Duplication {#options-duplication}
 
-## Quiet runs
+| Option | Description |
+|:--|:--|
+| `--dupes-mode <DUPES_MODE>` | Override duplication detection mode in combined mode. Values: `strict`, `mild`, `weak`, `semantic`. |
+| `--dupes-near` | Enable function-scoped near-miss clone detection in combined mode |
+| `--dupes-threshold <DUPES_THRESHOLD>` | Override duplication threshold in combined mode |
+| `--dupes-min-tokens <DUPES_MIN_TOKENS>` | Override the minimum token count for clones in combined mode |
+| `--dupes-min-lines <DUPES_MIN_LINES>` | Override the minimum line count for clones in combined mode |
+| `--dupes-min-occurrences <DUPES_MIN_OCCURRENCES>` | Override the minimum clone occurrences in combined mode (must be >= 2) |
+| `--dupes-skip-local` | Only report cross-directory duplicates in combined mode |
+| `--dupes-cross-language` | Enable cross-language duplicate detection in combined mode |
+| `--dupes-ignore-imports` | Exclude module wiring from duplicate detection in combined mode (default). Pass `--dupes-no-ignore-imports` to count it again |
+| `--dupes-no-ignore-imports` | Count module wiring as clone candidates in combined mode (opt out of the default exclusion) |
+| `--dupes-ignore-symlinks` | Omit clone instances whose path is a symlink, or lies under a symlinked directory, in combined mode |
+| `--dupes-no-ignore-symlinks` | Report symlinked clone instances in combined mode (opt out of a config `duplicates.ignoreSymlinks: true`) |
 
-A quiet run (`--quiet`, `--ci` or `FALLOW_QUIET`) hides progress output. It also hides the stderr warnings that repeat a `workspace_diagnostics[]` entry or describe the analysis inputs, for example:
+### Type-aware {#options-type-aware}
 
-- parse degradations
-- the tsconfig chain warning
-- re-export cycles
-- skipped `package.json` entry points
-- a graph cache that fallow cannot use
+| Option | Description |
+|:--|:--|
+| `--type-aware`, `--no-type-aware` | Opt in to TypeScript semantic analysis for project-wide symbol evidence. This does not emit compiler diagnostics or typed lint findings |
+| `--type-aware-project <PATH>` | TypeScript project config to use for type-aware analysis (repeatable) |
+| `--type-aware-require <TYPE_AWARE_REQUIRE>` | Decide whether incomplete type-aware analysis is advisory or gating. Values: `best-effort`, `complete`. |
 
-The JSON output does not change, so a script can still read every entry. To show these warnings in a quiet run, set `RUST_LOG`, for example `RUST_LOG=warn`. Config warnings, such as an unknown rule name, and the stderr lines of gates and baselines still print.
+### Performance {#options-performance}
 
-`fallow audit` also shortens its `human`, `compact` and `markdown` reports in a quiet run. See [Quiet audit report](/cli/audit#quiet-audit-report).
+| Option | Description |
+|:--|:--|
+| `--no-cache` | Disable incremental caching |
+| `--threads <THREADS>` | Number of parser threads |
+| `--performance` | Show pipeline performance timing breakdown |
 
-## Parse error gate
+{/* generated:end */}
 
-By default, a source file that fallow cannot parse does not change the exit code. The parser also rejects valid syntax that is newer than the parser, so the gate is off by default. To fail the run on such a file, pass `--fail-on-parse-error` or set `failOnParseError: true` in the config.
+The [environment variables](/configuration/environment) set the defaults of some options, for example `FALLOW_FORMAT` and `FALLOW_QUIET`.
 
-When the gate is on and a file has a `source-parse-degraded` or `source-nesting-too-deep` diagnostic, the run exits 1 in every output format. A file that [`ignoreFindings`](/configuration/overview#ignorefindings) covers has no such diagnostic, so it does not count. The `gate_outcomes["parse-error"]` entry has a `files` array. Each entry names a file and its parser error count. The human output prints one line per file.
+## Option details {#option-details}
 
-Fallow does not parse a file that nests brackets deeper than the parser cap (1024 levels) or that needs more stack than fallow reserves. Such a file can be valid code, so it gets the `source-nesting-too-deep` diagnostic instead of `source-parse-degraded`, with the cap in `limit`. Its entry in `files` has `reason: "nesting-too-deep"`, and the human output, the GitHub Action and the GitLab template say that the file nests too deep to parse. Add a generated file of this kind to `ignoreFindings`.
+### Lean JSON {#lean}
 
-A TypeScript, JSX or MDX file whose `<` tokens can nest as type-argument lists more than 10 levels deep gets the same diagnostic. The TypeScript parser tries each such level again, so the parse time grows exponentially with the level. The `limit` field still shows the bracket cap. Real code stays well below this cap.
+Only `fallow dead-code`, `fallow health` and the bare `fallow` run accept `--lean`, and only with JSON output. Another command, for example `fallow dupes` or `fallow audit`, exits with code 2. A run without `--format json` exits with code 2 too.
 
-A stylesheet that nests more than 8 color functions, such as `rgb(` or `light-dark(`, is not parsed by the CSS parser either, because its parse time also grows exponentially with that depth. Such a stylesheet gets no diagnostic: its CSS Modules classes come from the plain class scan, and it has no CSS analytics.
+### Scope rules {#path-scope}
 
-- `health --report-only` shows the verdict and does not fail.
-- `fallow audit` checks every file that it parsed, not only the changed files. A file that was already unparseable therefore fails every audit with the gate on, also with `--gate new-only`. The audit `verdict` does not include this gate. Read `gate_outcomes` for the exit reason.
-- The GitHub Action and the GitLab template fail the job when the gate fails. They have no input for this gate: set the config key, or pass the flag in `args` or `FALLOW_ARGS`.
+- `--changed-since` reports only the findings in the files that changed since the git ref. Each command applies it in its own way: [Changed code](/concepts/changed-code) explains the scope of a run.
+- `--diff-file` and `--diff-stdin` keep only the findings on added lines. A finding that covers more than one file, for example a cycle, stays when the diff touches one of its files. Findings in `package.json` and other project files stay in the report.
+- A path argument (`fallow health src/api`) and `--workspace` narrow only the report. Fallow still builds the graph of the whole project. A path outside the project root exits with code 2.
+- `--workspace` and `--changed-workspaces` together exit with code 2. `--changed-workspaces` with a ref that git cannot resolve exits with code 2.
 
-An older fallow version rejects `failOnParseError` as an unknown key. When you commit the key, also set [`minimumVersion`](/configuration/overview#minimumversion).
+### Gate rules {#gates}
 
-## Baseline growth gate
+A gate makes the run exit with code 1. The [gate](/concepts/findings) options are `--fail-on-issues`, `--ci`, `--fail-on-regression`, `--fail-on-stale-baseline`, `--fail-on-baseline-growth` and `--fail-on-parse-error`. The JSON output names the result of each gate in `gate_outcomes`.
 
-`--baseline` and `--fail-on-stale-baseline` pass when a change adds a finding and saves the baseline again in the same commit. `--fail-on-baseline-growth` stops this. It compares each loaded baseline with the same file at a base ref:
+#### Parse error gate {#parse-error-gate}
 
-- A key that the base file does not have is growth. The run exits 1 and lists each new key per category on stderr.
-- A renamed file gives a new key, so it counts as growth.
-- In a dead-code baseline with line-free keys (`"identity": "dc1"`), one more occurrence of a key also counts as growth. A moved line does not. The `dupes` and `health` baseline keys did not change.
-- A baseline that the base ref does not have is a new baseline. The gate passes and prints a note.
-- A base ref that git cannot resolve exits 2, for example in a shallow clone. Fetch the full history (`fetch-depth: 0` on GitHub Actions).
-- A default base that resolves to `HEAD` exits 2, because a comparison with `HEAD` cannot fail. This happens on a branch that tracks its own pushed copy. Pass `--baseline-base origin/main` in CI.
+`--fail-on-parse-error`, or `failOnParseError: true` in the config file, exits with code 1 when fallow cannot parse a source file. The gate counts each file with a `source-parse-degraded` or `source-nesting-too-deep` entry in `workspace_diagnostics`. `gate_outcomes["parse-error"].files` names each file. The gate works with `dead-code`, `architecture`, `health`, `audit` and the bare run. `fallow audit` checks each file that it parsed, also the files that the change did not touch.
 
-Without `--baseline-base`, the gate uses the `fallow audit` base: `--changed-since` (alias `--base`), then `FALLOW_AUDIT_BASE`, then the merge-base with the upstream or the remote default branch.
+#### Baseline growth gate {#baseline-growth-gate}
 
-The gate applies to the `dead-code`, `dupes` and `health` baselines, to the three baselines of the bare run, and to `--dead-code-baseline`, `--dupes-baseline` and `--health-baseline` of `fallow audit`. `health --report-only` and the review brief do not run the gate and say so on stderr. A command that loads no baseline rejects the flags.
+`--fail-on-baseline-growth` exits with code 1 when a loaded baseline has a key that the same file at the base ref does not have. A committed baseline can then only shrink.
 
-A commit can rewrite a dead-code baseline from an earlier release into the line-free form. When the base file has no `identity` and the head file is `dc1`, the gate translates each old key to its new key and compares by key and count. A commit that removes one finding and adds another in the same rewrite therefore still fails. Some old keys have no safe translation, for example keys with a line or bare package names. The gate compares the categories with such keys by their entry count.
+- `--baseline-base <REF>` sets the base ref. The default is the base of `fallow audit`.
+- A baseline that the base ref does not have passes, with a note.
+- A base ref that git cannot resolve exits with code 2, for example in a shallow clone. A default base that resolves to `HEAD` also exits with code 2.
+- The result is `gate_outcomes["baseline-growth"]`, with the number of new keys in `observed`.
 
-JSON output reports the verdict as `gate_outcomes["baseline-growth"]`. `observed` is the number of new keys and `threshold` is `0`.
+### Output files {#save-destinations}
 
-```bash
-fallow dead-code --baseline fallow-baselines/dead-code.json \
-  --fail-on-baseline-growth --baseline-base origin/main
-```
+`--save-baseline`, `--save-regression-baseline`, `--save-snapshot`, `--output-file` and `--sarif-file` write only inside these directories:
 
-## Path scope
+- the project root, and its git work tree when the working directory is inside it
+- `GITHUB_WORKSPACE` and `CI_PROJECT_DIR`, when they are set
+- `RUNNER_TEMP` and the system temp directory
 
-To get findings for one file or directory only, pass a path as the first
-argument. The bare `fallow` command and these commands accept it:
-[`check`](/cli/dead-code), [`dupes`](/cli/dupes),
-[`health`](/cli/health), [`audit`](/cli/audit), [`security`](/cli/security),
-[`fix`](/cli/fix), [`list`](/cli/list) and `similar-code`.
+Another path exits with code 2 before the analysis runs. A device such as `/dev/null` or `/dev/stdout` is always allowed. `--sarif-file` works with `dead-code`, `architecture`, `security` and a bare run that includes dead code. With another command, use `--format sarif --output-file`.
 
-```bash
-fallow src/components
-fallow health src/api/client.ts
-fallow fix src/legacy
-```
+### Quiet runs {#quiet-runs}
 
-Fallow still builds the graph of the whole project, so cross-file facts such as
-reachability, re-export chains and importer counts stay correct. Fallow narrows
-only the reported findings to the file or directory. `fix` plans and applies
-only the fixes that touch files in scope.
+`--quiet`, `--ci` and `FALLOW_QUIET` hide the progress output and the stderr warnings that repeat a `workspace_diagnostics` entry. The JSON output does not change. The gate lines and the config warnings still print. `fallow audit` also prints a shorter report.
 
-| Behavior | Detail |
-|:---------|:-------|
-| Resolution | Fallow resolves a bare relative path against the project root first. It resolves `./` and `../` against the current working directory. |
-| Invalid path | A missing path, or a path outside the project root, exits 2 with an error that tells you what to do. Fallow does not analyze the whole project silently. |
-| With `--workspace` | The scope acts as one more workspace root. |
-| With `--changed-since` / `--diff-file` | Fallow reports only files that are in both the scope and the changed-file set. |
-| [`audit`](/cli/audit) | The path narrows the set of changed files, so the verdict and the base attribution agree. The base pass stays unscoped, because it runs in another worktree. |
+### Production mode for one analysis {#per-analysis-production-mode}
 
-## Repository-root paths in CI formats
+`--production-dead-code`, `--production-health` and `--production-dupes` turn on [production mode](/concepts/production-mode) for one analysis. Only the bare run and `fallow audit` accept them. Fallow takes the first value that it finds in this order:
 
-CI platforms resolve file paths against the repository root. GitHub annotations, CodeClimate reports in GitLab, and inline review comments reject or misplace paths that are relative to another directory.
+1. the options `--production` and `--production-<analysis>`
+2. the environment variables `FALLOW_PRODUCTION_DEAD_CODE`, `FALLOW_PRODUCTION_HEALTH` and `FALLOW_PRODUCTION_DUPES`
+3. the environment variable `FALLOW_PRODUCTION`
+4. the [`production`](/reference/config) key of the config file
 
-When `--root` points at a subdirectory of a git repository (a monorepo package like `packages/app/`), fallow writes repository-root-relative paths in the CI formats: `github-annotations`, `github-summary`, `codeclimate`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, and `review-gitlab`. Fallow detects the offset between `--root` and the git toplevel and adds it in front of each path automatically, so annotations land on the correct lines.
+### Grouped output {#grouped-output}
 
-- In containerized or vendored checkouts, the git toplevel can differ from the CI workspace. Use `--report-path-prefix` to override the detected offset.
-- An empty string (`--report-path-prefix ''`) disables the offset and gives `--root`-relative paths again.
-- `--annotations-path-prefix` is the old name of `--report-path-prefix`. Fallow still accepts it as an alias, with the same behavior.
+`--group-by` splits the findings into groups. These are the values:
 
-For supplied diffs (`--diff-file`, `--diff-stdin`, `FALLOW_DIFF_FILE`), fallow works in the other direction. It detects if the paths in the diff are repository-root-relative or `--root`-relative, and filters findings to match. A diff that parses but touches no analyzable files (deletion-only, binary-only, or empty) filters the report to zero findings. Only when fallow cannot place the paths of a diff at all does it fall back to the full-scope report, with a warning.
+| Value | Group key |
+|:--|:--|
+| `owner` | The first owner of the file in `CODEOWNERS`, `.github/CODEOWNERS`, `.gitlab/CODEOWNERS` or `docs/CODEOWNERS`. The `codeowners` config key sets another path. |
+| `directory` | The first path segment, for example `src`. |
+| `package` | The [workspace](/concepts/workspaces) package. |
+| `section` | The `[Section]` header of a GitLab `CODEOWNERS` file. Each group also has an `owners` array. |
 
-## Request outcomes
+The `json`, `human`, `sarif` and `codeclimate` formats show the groups. The JSON output has a `grouped_by` field and a `groups` array. For `dead-code` and `architecture`, the kind changes to `dead-code-grouped` and `architecture-grouped`. The other formats print one report and a note on stderr. `fallow flags` ignores the option.
 
-`--changed-since`, a supplied diff and `--sarif-file` ask a run to narrow its report, or to write a file next to it. When the run cannot apply one of them, it continues and the exit code does not change. `--format json` tells you the result of each request in a root object, keyed by request name. `gate_outcomes` uses the same shape for the gate results of the run:
+### Cache {#incremental-caching}
+
+Fallow keeps the parse results of each file in `.fallow/` and parses only the files that changed. `--no-cache` parses each file again. `cache.dir` in the config file or `FALLOW_CACHE_DIR` moves the cache. `--performance` shows the time of each step and the cache hits.
+
+## Output
+
+Each command page describes the output of that command. The options on this page add the parts below.
+
+### Loaded config file {#loaded-config-disclosure}
+
+In the `human` format, fallow prints the config file that it loaded on stderr, for example `loaded config: /repo/.fallowrc.json`. `--quiet` and the other formats hide the line. [`fallow config`](/cli/config) shows the merged config.
+
+### Request outcomes {#request-outcomes}
+
+When a run cannot apply `--changed-since`, a diff or `--sarif-file`, it continues and keeps its exit code. The JSON output then names the result in a `request_outcomes` object, keyed by request:
 
 ```json
 {
-  "kind": "dead-code",
   "request_outcomes": {
     "changed-since": {
       "status": "not-applied",
       "affects": "scope",
-      "requested": "origin/main",
+      "requested": "main",
       "reason": "not-a-repository",
-      "message": "--changed-since 'origin/main' was ignored because not a git repository, so this report covers the whole project instead of the changed files. Run fallow from inside the repository, or drop --changed-since."
-    },
-    "diff-filter": {
-      "status": "applied",
-      "affects": "scope",
-      "requested": "--diff-file pr.diff",
-      "scope_size": 18
+      "message": "--changed-since 'main' was ignored because not a git repository, so this report covers the whole project instead of the changed files. Run fallow from inside the repository, or drop --changed-since."
     }
   }
 }
 ```
 
-| Member | Value |
-|:-------|:------|
-| `status` | `applied` when the run did what you asked. `not-applied` when the run could not, and continued. |
-| `affects` | `scope` when the request narrows the report, `artifact` when it writes a file next to the report. Read this field first, to see the effect of an entry that the run did not apply. On `scope`, the report is valid and wider than you asked for. On `artifact`, the run wrote no file, and the scope of the report did not change. |
-| `requested` | What you asked for, exactly as you wrote it: the git ref, the diff source label, or the `--sarif-file` path. Fallow does not change it. Do not join it to the project root, as you do for the other path fields. |
-| `scope_size` | How much the request left in scope. Present only when the run applied the request and measured that scope. Each request name has its own unit. `diff-filter` counts added lines. `changed-since` counts the changed files that the run analyzed: a changed file that discovery or an ignore rule drops does not count, so a change to a README only gives `0`. A combined run counts a changed file that any of its analyses kept. Read the unit from the key of the entry, and do not compare values across names. The count is what the run indexed. `diff-filter` indexes one million added lines at most, so read a value above zero as a lower bound. `0` means the request left nothing to analyze, so a report with no findings covered nothing. An absent field means the run did not measure the scope. It never means zero. |
-| `reason` | A kebab-case token, present exactly when `status` is not `applied`. |
-| `message` | One sentence that tells you what happened and what to do next. Present exactly when `status` is not `applied`. It is the same sentence that the run writes to stderr. |
+| Member | Content |
+|:--|:--|
+| `status` | `applied`, or `not-applied` when the run could not do the request. |
+| `affects` | `scope`: the report is wider than you asked. `artifact`: the run wrote no file. |
+| `requested` | The value as you wrote it. |
+| `scope_size` | How much the request left in scope, when the run measured it. `changed-since` counts the changed files that the run analyzed, `diff-filter` counts the added lines. `0` means that nothing was in scope. |
+| `reason` | A kebab-case token. Present only when `status` is not `applied`. |
+| `message` | The fix, the same text as on stderr. Present only when `status` is not `applied`. |
 
-The object also lists the requests that the run applied. An absent `request_outcomes` means that the run received no request. It never means that nothing failed.
-
-| Request | Asked by | `affects` | `reason` tokens |
-|:--------|:---------|:----------|:----------------|
+| Request | Asked by | `affects` | `reason` values |
+|:--|:--|:--|:--|
 | `changed-since` | `--changed-since`, `--base` | `scope` | `git-missing`, `not-a-repository`, `git-failed` |
 | `diff-filter` | `--diff-file`, `--diff-stdin`, `FALLOW_DIFF_FILE` | `scope` | `oversize`, `unreadable`, `not-utf8`, `foreign-namespace`, `ambiguous-base` |
 | `sarif-file` | `--sarif-file` | `artifact` | `directory-create-failed`, `write-failed`, `serialize-failed` |
 
-Expect new keys, `status` values and `affects` values in later releases. Read a name, a status or a class that you do not recognize as one more request and one more outcome. Do not read it as an error, and never as `applied` or as `scope`. Select on `affects` and not on a list of names, because a request added later has its own class. A diff that parsed but names no analyzable file reports `applied` with `scope_size: 0`, because the run applied the filter over an empty scope.
+An absent object means that the run received no request. The set of names and values is open: read an unknown value as "not applied". `fallow audit` has no `request_outcomes`, because it exits with code 2 when its base ref does not resolve.
 
-A request that the run did not apply also prints a warning on stderr. Fallow records the entry in the envelope with or without `--quiet`, so a script can rely on the envelope.
+## Exit codes
 
-- [`fallow audit`](/cli/audit) has no `request_outcomes` object. It exits 2 when its `--base` does not resolve, and it never widens the report.
-- [`fallow security`](/cli/security) records `sarif-file` as `applied` with the path it wrote. You can then tell a run that wrote the document from a run that asked for none. If the write fails, the run exits 2 with an error document, so no envelope has that entry as not applied.
-- [`fallow flags`](/cli/flags) and [`fallow suppressions`](/cli/suppressions) have only the `changed-since` entry, because neither applies a diff filter.
+| Code | Meaning |
+|:--|:--|
+| `0` | No enforced gate failed. |
+| `1` | An enforced [gate](#gates) failed. |
+| `2` | Invalid input, for example an option that the command does not use, a path outside the project root, or `--workspace` together with `--changed-workspaces`. |
 
-Formats other than `json` show the object as one line, and only when a request did not apply or applied over an empty scope. A request that applied as asked adds no line, because the report already is what you asked for:
-
-| Format | Request line |
-|:-------|:-------------|
-| `json` | The `request_outcomes` object itself |
-| `github-summary` | One `Request outcomes:` line after the report |
-| `github-annotations` | The same line as a `::notice::`, before the findings |
-| `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab` | The same line, joined into the body's status note |
-| `sarif`, `codeclimate`, `badge` | Nothing. Read the JSON envelope, or the job summary rendered from it |
-
-A request that narrows the report can apply over an empty scope. For `changed-since` and `diff-filter`, the line then reads: "No changed file has code that fallow analyzes. Check the diff or the base ref of this run." Another narrowing request is named, for example "group-filter left nothing to analyze."
-
-The GitHub Action and the GitLab template expose the `affects: "scope"` requests that the run could not apply. The Action uses a job output, and the template writes a dotenv variable. Both also print a warning on an empty scope. See [CI integration](/integrations/ci).
-
-## Loaded config disclosure
-
-When fallow loads a config file (auto-discovered or from `--config`), it prints one line to **stderr**:
-
-```text
-loaded config: /repo/.fallowrc.json
-```
-
-In a monorepo with more than one config, this line tells you which `.fallowrc.json` fallow uses. Fallow does not print the line when:
-
-- `--quiet` is set
-- `--format` is anything other than `human` (`json`, `sarif`, `compact`, `markdown`, `codeclimate`, `gitlab-codequality`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`, `badge`, `github-annotations`, `github-summary`)
-
-To see the resolved config with `extends` merged, use the [`fallow config`](/cli/config) subcommand.
+[Exit codes](/reference/exit-codes) has the codes of each command.
 
 ## Examples
 
 ```bash
-# Analyze a project in a different directory
-fallow dead-code -r /path/to/project
+# Report only the findings in the files that changed since main, as JSON
+fallow dead-code --changed-since main --format json --quiet
 
-# Use a specific config file
-fallow dead-code -c configs/fallow-strict.json
+# Group the health findings by the first directory of each path
+fallow health --group-by directory
 
-# JSON output with no progress messages
-fallow dead-code -f json --quiet
-
-# Limit parallelism to 4 threads
-fallow dead-code --threads 4
-
-# Scope to a single workspace package
-fallow dead-code -w @myorg/ui
-
-# Scope to whichever workspaces changed since origin/main (CI primitive)
-fallow --changed-workspaces origin/main
-
-# Show timing breakdown
-fallow dead-code --performance
-
-# Group issues by CODEOWNERS ownership (see Grouped output below)
-fallow dead-code --group-by owner
-
-# Health score in combined mode
-fallow --score
-
-# Save a snapshot and track trends
-fallow --save-snapshot
-fallow --trend
-
-# Let a trusted config file extend an HTTPS URL
-fallow dead-code --allow-remote-extends
-
-# Match a health baseline per function, not per file and category
-fallow health --save-baseline fallow-baselines/health.json --baseline-mode identity
-fallow health --baseline fallow-baselines/health.json --baseline-mode identity
-
-# Add TypeScript checker evidence, and fail when it is incomplete
-fallow dead-code --type-aware --type-aware-project tsconfig.json --type-aware-require complete
-
-# Keep one run syntactic when the config turns type-aware analysis on
-fallow dead-code --no-type-aware
+# Write an indented JSON report to a file
+fallow dead-code --format json --pretty --output-file fallow-results.json
 ```
 
-## Per-analysis production mode
+## Related
 
-With the per-analysis production flags, you can turn on production mode for one analysis and keep the other analyses on the full tree. Bare combined runs (`fallow` with no subcommand) and `fallow audit` accept three of these flags:
-
-```bash
-# Treat health as production-only, leave dead-code and dupes in full-tree mode
-fallow --production-health
-
-# Audit changed files with production-only health
-fallow audit --base main --production-health
-```
-
-The matching environment variables `FALLOW_PRODUCTION_DEAD_CODE`, `FALLOW_PRODUCTION_HEALTH`, and `FALLOW_PRODUCTION_DUPES` accept the same values as `FALLOW_PRODUCTION` (`true`, `false`, `1`, `0`, `yes`, `no`, `on`, `off`). The `production` config field also accepts a per-analysis object:
-
-```jsonc
-{
-  "production": {
-    "deadCode": false,
-    "health": true,
-    "dupes": false
-  }
-}
-```
-
-Fallow uses this order of precedence, from highest to lowest:
-
-1. CLI flags (`--production`, `--production-{dead-code,health,dupes}`)
-2. Per-analysis env var (`FALLOW_PRODUCTION_HEALTH`, and the others)
-3. Global env var (`FALLOW_PRODUCTION`)
-4. Config (`production: { ... }` or `production: true`)
-
-The legacy boolean form (`--production`, `production: true`, `FALLOW_PRODUCTION=true`) did not change and still applies to every analysis.
-
-With a subcommand other than `audit`, fallow rejects the per-analysis CLI flags (for example, `fallow dead-code --production-health` gives an error). In that case, use the bare command or the per-analysis env vars.
-
-## Grouped output
-
-With `--group-by`, each team or package sees its own issues. The flag splits all issues into labeled groups. It works with the analysis subcommands, and with the formats that can show groups. `fallow flags` ignores it.
-
-| Format | `--group-by` |
-|:-------|:-------------|
-| `json` | A grouped envelope, shown below |
-| `human` | A per-group section |
-| `sarif` | `properties.group` on each result |
-| `codeclimate` | A `group` field on each issue |
-| `compact` | For `dead-code` and `architecture`, each line starts with the group key and a tab. For `health` and `dupes`, one flat document and a note on stderr. |
-| `markdown` | For `dead-code` and `architecture`, a heading and a section per group. For `health` and `dupes`, one flat document and a note on stderr. |
-| `badge`, `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`, `github-annotations`, `github-summary` | One flat document, and a note on stderr that names the format you passed. The exit code does not change. The comment and review bodies also have a clause with the mode you requested, and that clause names `--format json`. |
-
-| Mode | Grouping | Requires |
-|:-----|:---------|:---------|
-| `owner` | CODEOWNERS file ownership. Fallow looks for `CODEOWNERS`, `.github/CODEOWNERS`, `.gitlab/CODEOWNERS`, `docs/CODEOWNERS`. On a line with more than one owner, the first owner wins. Patterns follow GitHub semantics: `/docs` owns the `docs` directory and everything below it, `docs/*` owns the direct children only, and the last matching line wins. Write a space in a path as `\ `, for example `/docs/Security\ Release.md`. A pattern can have at most 32 wildcards (`*`, `?`, `[`, `{`) and at most 512 bytes, and a file at most 4096 wildcards. A file over a limit is an error. | A CODEOWNERS file (or set `codeowners` in config) |
-| `directory` | First path component (for example, `src/utils/foo.ts` groups under `src`) | Nothing |
-| `package` | Workspace package name (for example, `@myorg/ui`). Fallow groups each issue under its package. | A monorepo with workspace packages |
-| `section` | GitLab CODEOWNERS `[Section]` header name. Each section stays in its own group, even when sections share a default reviewer. Teams with one lead reviewer for many sections can then triage per section, and do not get one large group. | A GitLab-style CODEOWNERS file with at least one `[Section]` header |
-
-With `--format json`, the output shape changes to a grouped envelope:
-
-```json
-{
-  "kind": "dead-code-grouped",
-  "grouped_by": "owner",
-  "total_issues": 12,
-  "groups": [
-    { "key": "@frontend-team", "total_issues": 8, "unused_files": [], "unused_exports": [] },
-    { "key": "@backend-team", "total_issues": 4, "unused_exports": [] }
-  ]
-}
-```
-
-`fallow architecture --group-by` writes the same shape with `kind: "architecture-grouped"`.
-
-Each finding goes to the group of its file. A fact about the whole project stays on the root. For example, `unused_load_data_keys_global_abstain: true` is on the root when the `unused-load-data-key` rule could not run safely for the project.
-
-The opt-in `prop-drilling`, `thin-wrapper`, and `duplicate-prop-shape` findings are in their groups, but they do not count toward `total_issues`. In `human` and `markdown` output, the group header names them next to the issue count, for example `src (0 issues; 3 health signals: 3 duplicate prop shapes)`.
-
-For `--group-by section`, each group also has an `owners` array with the default owners of the section:
-
-```json
-{
-  "kind": "dead-code-grouped",
-  "grouped_by": "section",
-  "total_issues": 6,
-  "groups": [
-    {
-      "key": "billing",
-      "owners": ["@core-reviewers", "@alice", "@bob"],
-      "total_issues": 2,
-      "unused_exports": []
-    },
-    {
-      "key": "notifications",
-      "owners": ["@core-reviewers", "@alice", "@bob"],
-      "total_issues": 1,
-      "unused_exports": []
-    }
-  ]
-}
-```
-
-`owner` puts all sections that share a lead reviewer into one group. `section` keeps the `[Section]` headers as group keys, and these keys stay the same when reviewers change.
-
-<Tip>
-  If your CODEOWNERS file is not in a standard location, set its path in the `codeowners` field in `.fallowrc.json`.
-</Tip>
-
-## Incremental caching
-
-Fallow caches parsed file data between runs, so later runs are faster. On the second run, fallow parses only the changed files and loads the rest from the cache.
-
-The cache works in three steps:
-
-1. Fallow hashes each file with [xxh3](https://github.com/Cyan4973/xxHash), a fast non-cryptographic hash.
-2. If the hash matches the cached version, fallow skips the parse.
-3. Fallow builds the module graph from the cached data and the newly parsed data.
-
-<Tip>
-To find the cause of a slow run, use `--performance`. It shows the cache hit rates and the time of each stage.
-</Tip>
-
-```bash
-fallow dead-code --performance
-```
-
-```ansi
- Discovery     12ms   (142 files)
- Parsing       48ms   (23 parsed, 119 cached)
- Resolution    15ms
- Analysis       8ms
- Total         83ms
-```
-
-To parse all files again, use `--no-cache`. This helps after large refactors, or when you debug unexpected results.
-
-```bash
-fallow dead-code --no-cache
-```
-
-To move the persistent cache out of `.fallow/cache.bin`, set `cache.dir` in the project config or `FALLOW_CACHE_DIR` in the environment. When you set both, the env var wins. `cache.dir` must be a directory inside the project. For a directory outside the project, use `FALLOW_CACHE_DIR`.
-
-```bash
-FALLOW_CACHE_DIR=/tmp/fallow-cache fallow dead-code
-```
-
-## See also
-
-<CardGroup cols={2}>
-  <Card title="Environment variables" icon="terminal" href="/configuration/environment">
-    Set defaults for format and quiet mode via environment variables.
-  </Card>
-  <Card title="Configuration" icon="gear" href="/configuration/overview">
-    The config file reference for project-level settings.
-  </Card>
-</CardGroup>
+- [The CLI](/cli): the commands, the output formats and the bare run.
+- [Exit codes](/reference/exit-codes): the meaning of each exit code.
+- [Environment variables](/configuration/environment): the defaults that the environment sets.

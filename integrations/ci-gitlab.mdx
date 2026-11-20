@@ -1,0 +1,248 @@
+---
+title: "Fallow in GitLab CI"
+sidebarTitle: "GitLab CI"
+description: "Include the fallow GitLab CI template to check each merge request, with a comment, a Code Quality report and the variables."
+keywords: ["GitLab CI", "GitLab", "merge request", "CI template", "Code Quality", "MR comment", "GITLAB_TOKEN", "fallow ci-template", "variables"]
+icon: "gitlab"
+---
+
+Your project runs on GitLab, and you want each merge request checked before a reviewer reads it. The fallow CI template runs the [changed-code check](/concepts/changed-code), fails the job on a new problem, and posts the result on the merge request: a comment and a Code Quality report. The reviewer then sees a new unused export, such as `cartTotalCents` in the demo project, without a look into the job log. You include the template in `.gitlab-ci.yml` and add one job.
+
+## Before you start
+
+The template installs fallow and its tools when the job starts. So the job needs network access, a fixed fallow version, and a token for the comment:
+
+- The runner can start the `node:22-alpine` image and reach the npm registry. The template installs fallow with `npm install -g`, and installs `bash`, `jq`, `git` and `curl` with `apk` or `apt-get`.
+- The runner can reach `raw.githubusercontent.com`, or you [vendor the template](#vendor-the-template).
+- Pin an exact fallow version in `package.json`: `npm install --save-dev --save-exact fallow`. `FALLOW_COMMENT`, `FALLOW_REVIEW` and `FALLOW_MUTATION` need helper scripts, and the template downloads them for that exact version. With a version range, such as `^3.45.0`, these variables stop the job with exit code 2. An exact `FALLOW_VERSION` also works.
+- As an alternative to the exact version, `npx fallow ci-template gitlab --vendor` writes the template and its helper scripts into the repository. Then a version range works too (see [Vendor the template](#vendor-the-template)). `npx fallow ci-template gitlab` without `--vendor` prints the template.
+- For the comment, create a project access token with the `api` scope. Save it as the CI/CD variable `GITLAB_TOKEN`, with the "Masked" option. The `CI_JOB_TOKEN` of GitLab cannot write merge request notes.
+
+## Steps
+
+1. Add the template and the job to `.gitlab-ci.yml`.
+2. Open a merge request that changes code.
+
+```yaml
+# .gitlab-ci.yml
+include:
+  - remote: "https://raw.githubusercontent.com/fallow-rs/fallow/v3.45.0/ci/gitlab-ci.yml"
+
+fallow:
+  extends: .fallow
+  variables:
+    FALLOW_COMMAND: "audit"
+    FALLOW_COMMENT: "true"
+  script:
+    - npm ci
+    - bash /tmp/fallow-run.sh
+```
+
+Each line of the job has a reason:
+
+- The URL names a release tag, because GitLab includes the file from a fixed ref.
+- `FALLOW_COMMAND: "audit"` runs the changed-code check. In a merge request pipeline, the template compares the change with `CI_MERGE_REQUEST_DIFF_BASE_SHA`.
+- `FALLOW_COMMENT: "true"` posts a sticky comment on the merge request.
+- The `script` installs the dependencies before the run, because fallow reads the packages in `node_modules`. `bash /tmp/fallow-run.sh` is the script of the template.
+
+The `.fallow` job runs in merge request pipelines and on the default branch. The template sets `GIT_DEPTH: "0"`, so the job has the history of the base branch.
+
+## Check the result
+
+In the demo project, the merge request that adds `cartTotalCents` gets the verdict `fail`, and the job fails (see [Exit codes and gates](/integrations/ci#gates)). The merge request shows the comment and the Code Quality findings. [What fallow posts on a pull request](/integrations/ci-comments) shows each one with its real text.
+
+## Variants
+
+The job above fits most projects. Each variant below changes one part of it, for a team that adopts fallow step by step, for a closed network, or for a monorepo.
+
+### Report only
+
+A project with many findings may not want a failed job on day one. Set `FALLOW_FAIL_ON_ISSUES: "false"`. The job then passes, and the comment and the Code Quality report stay.
+
+### Discussions on lines
+
+The comment lists the findings in one place. To put each finding next to its line instead, set `FALLOW_REVIEW: "true"` to post a discussion on each finding line. A discussion can hold a suggestion that you apply with one click. The discussions need `GITLAB_TOKEN` too. When a later run does not report the finding again, the template resolves its discussion.
+
+### Code Quality report {#code-quality}
+
+The template writes `gl-code-quality-report.json` in the Code Climate format, and declares it as the `codequality` report of the job. GitLab then shows the findings in the merge request. This needs no token. To turn it off, set `FALLOW_CODEQUALITY: "false"`.
+
+### Full analysis on the default branch
+
+The audit compares a change with its base, so it has nothing to check on the default branch. Add a second job with an empty `FALLOW_COMMAND`, which runs all analyses:
+
+```yaml
+fallow-main:
+  extends: .fallow
+  variables:
+    FALLOW_FAIL_ON_ISSUES: "false"
+  script:
+    - npm ci
+    - bash /tmp/fallow-run.sh
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+```
+
+Then give the `fallow` job the rule `if: $CI_MERGE_REQUEST_IID`, so that the audit runs only in merge request pipelines.
+
+### Monorepo
+
+One job at the repository root checks all workspaces in one run. When each team wants its own job, set `FALLOW_WORKSPACE` to scope a job to one [workspace](/concepts/workspaces). When several jobs post discussions on the same merge request, give each job its own `FALLOW_REVIEW_ID`. A job then does not resolve the discussions of the other jobs.
+
+### Mutation testing {#mutation-testing}
+
+The audit does not show that your tests catch a bug in the change. Set `FALLOW_MUTATION: "true"` to run [`fallow mutation`](/cli/mutation) on the lines that the merge request adds, before the analysis. The run executes your tests, so the `npm ci` line of the example is necessary. The default time budget is `10m`. The comment then shows a "Mutation testing" section. The job refuses a merge request from a fork that runs in the target project, because that pipeline has the CI/CD variables of the target project.
+
+### Vendor the template {#vendor-the-template}
+
+When the runner cannot reach `raw.githubusercontent.com`, write the template and its helper scripts into the repository once:
+
+```bash
+npx fallow ci-template gitlab --vendor
+```
+
+The command writes `ci/gitlab-ci.yml` and the scripts under `ci/scripts/`. Commit them, and include the local file:
+
+```yaml
+include:
+  - local: "ci/gitlab-ci.yml"
+```
+
+The vendored template uses the local scripts, so the comment, the discussions and mutation testing also work with a version range in `package.json`. [`fallow ci-template`](/cli/ci-template) has the options.
+
+### Use your own fallow install
+
+By default, the template installs fallow with `npm install -g` in each job. When your project already installs fallow, for example from a pnpm catalog, set `FALLOW_SKIP_INSTALL: "true"` to use the fallow on `PATH`. GitLab does not add `node_modules/.bin` to `PATH`, and a `before_script` in your job replaces the one of the template. Install the dependencies, add the folder to `PATH`, then run the `before_script` of the template:
+
+```yaml
+fallow:
+  extends: .fallow
+  variables:
+    FALLOW_SKIP_INSTALL: "true"
+  before_script:
+    - npm ci
+    - export PATH="$CI_PROJECT_DIR/node_modules/.bin:$PATH"
+    - !reference [.fallow, before_script]
+```
+
+## Read the result in a later job
+
+A later job, for example a deploy step, can act on the result without a second run of fallow. The template writes the gate results to `fallow-gates.env` and declares it as a `dotenv` report. A later job can read `FALLOW_GATES_FAILED`, `FALLOW_GATES_WARNED`, `FALLOW_GATES_SKIPPED`, `FALLOW_GATES_PASSED`, `FALLOW_ANALYSIS_DEGRADED`, `FALLOW_REQUESTS_UNAPPLIED` and `FALLOW_MUTATION_OUTCOME`. The job also keeps `fallow-results.json` and the comment files as artifacts for 30 days.
+
+## If it fails
+
+The template writes the cause of most problems in the job log. Find the message in this list:
+
+- **"FALLOW_COMMENT/FALLOW_REVIEW/FALLOW_MUTATION require vendored ci/ + action/ scripts or a pinned FALLOW_SCRIPTS_REF".** The `package.json` has a version range, for example `^3.45.0`, or no fallow at all. Pin an exact version, set `FALLOW_VERSION` to an exact version, or vendor the template.
+- **"GITLAB_TOKEN is required to create or update MR comments".** The job has no `GITLAB_TOKEN`. The job continues without the comment.
+- **"No supported package manager found".** The image of the job has neither `apk` nor `apt-get`. Use an Alpine or a Debian image.
+- **The audit says that it compared no changed files.** The job ran on the default branch. Restrict the audit job to merge request pipelines.
+
+## Reference
+
+### Variables {#variables}
+
+Each variable is optional. This table gives the first sentence of the comment in the template, or of the matching [GitHub Action input](/integrations/ci-github#inputs). Use `FALLOW_ARGS` to pass a [global option](/cli/global-flags) that has no variable.
+
+| Variable | Default | Description |
+|:--|:--|:--|
+| `GIT_STRATEGY` | `fetch` | Git checkout. Fallow needs a working tree, and changed-file analysis needs enough history to diff against the MR base SHA. |
+| `GIT_DEPTH` | `0` | Git checkout. Fallow needs a working tree, and changed-file analysis needs enough history to diff against the MR base SHA. |
+| `FALLOW_VERSION` | none | Empty reads package.json fallow dependency, then falls back to latest. |
+| `FALLOW_SKIP_INSTALL` | none | "true" skips `npm install -g fallow` and uses the fallow already on PATH (e.g. a pnpm-catalog pin installed by a prior `pnpm install`). |
+| `FALLOW_COMMAND` | none | dead-code, architecture, dupes, health, audit, security, fix, or empty (runs all). |
+| `FALLOW_ROOT` | `.` | Project root directory. |
+| `FALLOW_CONFIG` | none | Path to .fallowrc.json, .fallowrc.jsonc, fallow.toml, or .fallow.toml. |
+| `FALLOW_PRODUCTION` | none | "true"/"false" enables production for every analysis. |
+| `FALLOW_PRODUCTION_DEAD_CODE` | none | For the bare run and `fallow audit`: `true` or `false` replaces `FALLOW_PRODUCTION` for dead code. |
+| `FALLOW_PRODUCTION_HEALTH` | none | For the bare run and `fallow audit`: `true` or `false` replaces `FALLOW_PRODUCTION` for health. |
+| `FALLOW_PRODUCTION_DUPES` | none | For the bare run and `fallow audit`: `true` or `false` replaces `FALLOW_PRODUCTION` for duplication. |
+| `FALLOW_FAIL_ON_ISSUES` | `true` | Fail the pipeline on findings. |
+| `FALLOW_MIN_SEVERITY` | none | health command only: fail when a complexity finding reaches this severity ('moderate'\|'high'\|'critical'). |
+| `FALLOW_MIN_SCORE` | none | health command only: fail when the health score drops below this threshold (0-100). |
+| `FALLOW_FAIL_ON_EMPTY_ANALYSIS` | `false` | Fail the pipeline when the run analyzed no source file at all, so every count it reports is zero because nothing was measured. |
+| `FALLOW_INCLUDE_ENTRY_EXPORTS` | `false` | Report unused exports in entry files instead of auto-marking them as used; mirrors `--include-entry-exports` (not applied to architecture). |
+| `FALLOW_TYPE_AWARE` | none | true/false overrides repository typeAware.enabled; empty defers to config. |
+| `FALLOW_TYPE_AWARE_PROJECTS` | none | Comma-separated tsconfig paths; empty uses automatic project discovery. |
+| `FALLOW_TYPE_AWARE_REQUIRE` | none | best-effort or complete; empty defers to repository typeAware.require. |
+| `FALLOW_ARGS` | none | Extra CLI arguments (space-separated). |
+| `FALLOW_COMMENT` | `false` | Post results as MR summary comment. |
+| `FALLOW_REVIEW` | `false` | Post inline MR discussions with rich comments and suggestions. |
+| `FALLOW_REVIEW_GUIDANCE` | `false` | Add collapsed "What to do" guidance to inline review discussions. |
+| `FALLOW_REVIEW_ID` | none | Stable scope for parallel review jobs targeting the same MR. |
+| `FALLOW_CODEQUALITY` | `true` | Generate GitLab Code Quality report (inline MR annotations). |
+| `FALLOW_MAX_COMMENTS` | `50` | Maximum number of inline review comments + items in the sticky details table. |
+| `FALLOW_COMMENT_ID` | none | Sticky-comment marker id; auto-suffixed with the workspace name when scoped to one workspace and unset. |
+| `FALLOW_PR_COMMENT_LAYOUT` | `default` | Sticky MR comment layout: default, compact, gate-only, or details. |
+| `FALLOW_SUMMARY_SCOPE` | `all` | Sticky MR summary scope: 'all' keeps project-level dependency/catalog/override findings outside the diff; 'diff' applies the diff filter to them too. |
+| `FALLOW_DIFF_FILTER` | `added` | Diff-aware filter: 'added' \| 'diff_context' \| 'file' \| 'nofilter'. |
+| `FALLOW_DIFF_FILE` | none | Path to a unified-diff file. |
+| `FALLOW_API_RETRIES` | `3` | Maximum HTTP retry attempts for the binary's reconcile-review and the curl/gh wrappers. |
+| `FALLOW_API_RETRY_DELAY` | `2` | Floor delay in seconds between rate-limited retries; server-supplied Retry-After overrides. |
+| `FALLOW_GITLAB_BASE_SHA` | none | Override for the MR base SHA in the review-gitlab position object; falls back to CI_MERGE_REQUEST_DIFF_BASE_SHA. |
+| `FALLOW_GITLAB_START_SHA` | none | Override for the MR start SHA; falls back to base. |
+| `FALLOW_GITLAB_HEAD_SHA` | none | Override for the MR head SHA; falls back to CI_COMMIT_SHA. |
+| `FALLOW_CHANGED_SINCE` | none | The Git ref that scopes the run to changed files. A merge request pipeline sets it. |
+| `FALLOW_BASELINE` | none | Path to a baseline file; only findings absent from it are reported. |
+| `FALLOW_SAVE_BASELINE` | none | Save this run's findings as a baseline file for future comparisons. |
+| `FALLOW_HEALTH_BASELINE` | none | Bare run only (empty `FALLOW_COMMAND`): a baseline from `fallow health --save-baseline`. |
+| `FALLOW_DUPES_BASELINE` | none | Bare run only (empty `FALLOW_COMMAND`): a baseline from `fallow dupes --save-baseline`. |
+| `FALLOW_FAIL_ON_STALE_BASELINE` | `false` | Fail the pipeline when FALLOW_BASELINE has entries that match nothing this run. |
+| `FALLOW_WORKSPACE` | none | Scope output to one or more workspaces. |
+| `FALLOW_CHANGED_WORKSPACES` | none | Git-derived monorepo scoping: set to a git ref (e.g. "origin/main") to scope analysis to workspaces containing any changed file. |
+| `FALLOW_ISSUE_TYPES` | none | Comma-separated. dead-code: unused-files,unused-exports,... architecture: cycles,boundaries,policy. |
+| `FALLOW_FAIL_ON_REGRESSION` | `false` | Exit with code 1 if issue counts regressed compared to baseline (dead-code and architecture commands). |
+| `FALLOW_TOLERANCE` | `0` | Allowed regression tolerance before failing (e.g. "2%" or "5") (dead-code and architecture commands). |
+| `FALLOW_REGRESSION_BASELINE` | none | Path to regression baseline file for comparison (dead-code and architecture commands). |
+| `FALLOW_SAVE_REGRESSION_BASELINE` | none | Save current results as a regression baseline file (dead-code and architecture commands). |
+| `FALLOW_DUPES_MODE` | `mild` | strict, mild, weak, semantic. |
+| `FALLOW_MIN_TOKENS` | none | Minimum token count for a clone (dupes command). |
+| `FALLOW_MIN_LINES` | none | Minimum line count for a clone (dupes command). |
+| `FALLOW_THRESHOLD` | none | Fail if duplication exceeds this %. |
+| `FALLOW_SKIP_LOCAL` | `false` | Only report cross-directory duplicates (dupes command). |
+| `FALLOW_CROSS_LANGUAGE` | `false` | Strip TypeScript type annotations for clone matching between TypeScript and JavaScript (dupes command). |
+| `FALLOW_IGNORE_IMPORTS` | `false` | Exclude import declarations from clone detection (dupes command). |
+| `FALLOW_MAX_CYCLOMATIC` | none | Maximum cyclomatic complexity threshold (health command, default: 20). |
+| `FALLOW_MAX_COGNITIVE` | none | Maximum cognitive complexity threshold (health command, default: 15). |
+| `FALLOW_MAX_CRAP` | none | Maximum CRAP score (default 30.0); pair with coverage data for accurate per-function scoring. |
+| `FALLOW_MAX_FILE_LINES` | none | Maximum physical lines per file (default 0, off). |
+| `FALLOW_COVERAGE` | none | Test coverage for measured CRAP scores in health, audit and the bare run: an Istanbul `coverage-final.json`, a V8 coverage directory or one V8 JSON file. The value goes to `--coverage`. |
+| `FALLOW_PRODUCTION_COVERAGE` | none | Path to paid runtime coverage input (V8 dir/file or Istanbul coverage-final.json). |
+| `FALLOW_COVERAGE_ROOT` | none | Rebase Istanbul file paths before matching coverage or runtime coverage input. |
+| `FALLOW_MIN_INVOCATIONS_HOT` | none | Hot-path threshold for runtime coverage findings (default 100). |
+| `FALLOW_MIN_OBSERVATION_VOLUME` | none | Minimum observation volume required for high-confidence runtime coverage verdicts. |
+| `FALLOW_LOW_TRAFFIC_THRESHOLD` | none | Fraction of total trace volume below which an invoked function is classified as low_traffic. |
+| `FALLOW_TOP` | none | Show only the N worst offenders (health and dupes commands). |
+| `FALLOW_SORT` | none | cyclomatic (default), cognitive, lines, or severity. |
+| `FALLOW_SCORE` | `false` | health score (0-100 with letter grade), enables delta header in MR comments. |
+| `FALLOW_FILE_SCORES` | `false` | Compute per-file maintainability index (health command). |
+| `FALLOW_HOTSPOTS` | `false` | Identify files that are both complex and frequently changing (health command). |
+| `FALLOW_TARGETS` | `false` | Show ranked refactoring recommendations (health command). |
+| `FALLOW_COMPLEXITY` | `false` | Show only complexity findings section (health command). |
+| `FALLOW_SINCE` | none | Git history window for hotspot analysis: durations (6m, 90d, 1y) or ISO dates (health command). |
+| `FALLOW_MIN_COMMITS` | none | Minimum commits for a file to appear in hotspot ranking (health command, default: 3). |
+| `FALLOW_SAVE_SNAPSHOT` | none | save snapshot to .fallow/snapshots/ for trend tracking; cache this path across pipelines. |
+| `FALLOW_TREND` | `false` | compare against most recent snapshot; requires FALLOW_SAVE_SNAPSHOT on a prior run. |
+| `FALLOW_AUDIT_GATE` | none | new-only or all. |
+| `FALLOW_AUDIT_WORSENED` | none | warn, error or off: effect of an inherited complexity finding that got worse. |
+| `FALLOW_AUDIT_DEAD_CODE_BASELINE` | none | Baseline from `fallow dead-code --save-baseline`. |
+| `FALLOW_AUDIT_HEALTH_BASELINE` | none | Baseline from `fallow health --save-baseline`. |
+| `FALLOW_AUDIT_DUPES_BASELINE` | none | Baseline from `fallow dupes --save-baseline`. |
+| `FALLOW_SECURITY_GATE` | none | new or newly-reachable. |
+| `FALLOW_DRY_RUN` | `true` | Preview changes without modifying files (fix command, default: true for CI safety). |
+| `FALLOW_NO_CACHE` | `false` | Disable incremental parse cache (force full re-parse of all files). |
+| `FALLOW_THREADS` | none | Number of parser threads (default: available CPU cores). |
+| `FALLOW_ONLY` | none | Bare run and audit. Comma-separated: dead-code,architecture,dupes,health. |
+| `FALLOW_SKIP` | none | Bare run and audit. Same values as FALLOW_ONLY. With audit, a FALLOW_AUDIT_*_BASELINE for a skipped analysis fails the run. |
+| `FALLOW_MUTATION` | `false` | Run fallow mutation before the analysis and add a section to the MR comment. |
+| `FALLOW_MUTATION_SCOPE` | `changed` | changed (the lines that the MR adds), all, or files and directories relative to FALLOW_ROOT, separated by spaces or commas. |
+| `FALLOW_MUTATION_TIME_BUDGET` | `10m` | Time budget, for example 90s, 10m or 1h; a stopped run is partial and the next run continues from the result cache; empty means no budget. |
+| `FALLOW_MUTATION_MAX_MUTANTS` | none | Maximum number of covered mutants that the run executes. |
+| `FALLOW_MUTATION_MIN_SCORE` | none | Minimum mutation score in percent; a lower score fails the job. |
+| `FALLOW_SCRIPTS_REF` | none | Advanced: pin remote MR-integration scripts to a specific tag or commit. |
+
+## Related
+
+- Next: [What fallow posts on a pull request](/integrations/ci-comments). It shows how to read the comment and the Code Quality report.
+- [`fallow ci-template`](/cli/ci-template)
+- [GitHub Actions](/integrations/ci-github)

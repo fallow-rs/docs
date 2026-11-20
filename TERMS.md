@@ -18,8 +18,8 @@ explains the term today.
 |:--|:--|:--|:--|
 | entry point | A file that something outside your source code runs or loads, for example Node.js, a bundler, a test runner or a framework. | `concepts/entry-points` | root file, start file, main file (for the concept) |
 | reachable | A file is reachable when fallow can follow imports to it from an entry point. | `concepts/entry-points` | live, alive, connected, used (for files) |
-| unused file | A file that no entry point reaches. | `rules/unused-files` | dead file, orphan file, unreachable module |
-| unused export | An export of a reachable file that no reachable file uses. | `rules/unused-exports` | dead export, orphan export, unused symbol |
+| unused file | A file that no entry point reaches. | `rules/unused-file` | dead file, orphan file, unreachable module |
+| unused export | An export of a reachable file that no reachable file uses. | `rules/unused-export` | dead export, orphan export, unused symbol |
 | barrel file | A file that exports names from other files again. | `concepts/entry-points` | index file (for the concept), re-export hub, facade |
 | plugin | The part of fallow that knows one framework or tool. Fallow turns it on when the project depends on that package. | `concepts/plugins` | preset, integration, adapter, framework support |
 | finding | One problem that fallow reports at one place: a file, a line, a name or a package. | `concepts/findings` | issue (for one problem), result, error, warning, violation |
@@ -37,6 +37,9 @@ explains the term today.
 | config file | The file that holds the fallow settings, for example `.fallowrc.json`, `.fallowrc.jsonc` or `fallow.toml`. | `configuration/overview` | config, settings file, rc file, fallowrc (in prose) |
 | changed-code check | A run of `fallow audit`: the analyses on the files that a change touches, with one verdict. | `concepts/changed-code` | PR check, diff check, incremental analysis, audit mode |
 | verdict | The result of a changed-code check: `pass`, `warn` or `fail`. | `concepts/changed-code` | status, outcome, result, grade |
+| audit gate | The findings that count for the verdict of a changed-code check, set with `--gate` or `audit.gate`: `new-only` (the default) or `all`. | `concepts/changed-code` | audit scope (the `Audit scope` line of the output names the changed files and the base), gate mode |
+| coding agent | A program that edits the code of a project on request, for example Claude Code, Codex or Cursor. | `start/first-agent` | AI agent, assistant, harness (in prose; `harness` stays as an output value) |
+| commit gate | The hook that runs `fallow audit` before a coding agent commits or pushes, and blocks the command on the verdict `fail`. | `integrations/claude-hooks` | agent gate, pre-commit gate, commit hook |
 | health score | One number from 0 to 100 for the quality of the whole project. Higher is better. | `analysis/health` | quality score, grade, rating |
 | maintainability index | A number from 0 to 100 for one file, from its complexity density, its unused code and its imports. Higher is better. Short form: MI. | `analysis/health` | maintainability score, MI score, health index |
 | cyclomatic complexity | The number of paths through a function. | `analysis/health` | complexity (alone), McCabe score, branch count |

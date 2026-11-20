@@ -1,185 +1,137 @@
 ---
-title: "knip alternative: migrate from knip to fallow"
-sidebarTitle: "Migrating from knip"
-description: "Migrate from knip to fallow. One command converts your knip config to a fallow config. See what the command migrates and what to check after the move."
-keywords: ["knip", "migration", "switch", "config conversion", "knip alternative", "migrate from knip"]
+title: "Migrate from knip"
+sidebarTitle: "From knip"
+description: "Convert a knip config to a fallow config with fallow migrate, check the result, and run both tools for a while."
+keywords: ["knip", "migration", "config conversion", "migrate from knip", "fallow migrate"]
 icon: "right-left"
 ---
 
-The `fallow migrate` command translates your knip configuration to a fallow config. This page shows the steps, the field mapping, and the settings that need a manual check.
+Your project has a knip config with entry patterns, ignore lists and rules that your team tuned over time. You do not want to write those settings again by hand, and you want to know which of them fallow cannot use. `fallow migrate` reads your knip config and writes a fallow [config file](/configuration/overview) with the same settings. It prints a warning for each setting that it cannot convert, so you know what to check by hand.
 
-## Migration workflow
+## Before you start
 
-<Steps>
-  <Step title="Preview the migration">
-    Run `fallow migrate --dry-run` to see the generated config. The command writes no files.
+- A knip config in one of these places: `knip.json`, `knip.jsonc`, `.knip.json`, `.knip.jsonc`, or the `knip` field of `package.json`.
+- No fallow config file in the project. `fallow migrate` does not overwrite one.
 
-    ```bash
-    fallow migrate --dry-run
-    ```
+Fallow finds `knip.ts` and `knip.config.ts`, but it cannot read them. Convert such a file to `knip.json` first.
 
-    fallow looks for `knip.json`, `knip.jsonc`, `.knip.json`, `.knip.jsonc`, `knip.ts`, `knip.config.ts`, and the `knip` field in `package.json`. Fallow detects the TypeScript config files (`knip.ts`, `knip.config.ts`) but cannot parse them. Convert them to `knip.json` first.
+## What maps to what
 
-    ```text title="$ fallow migrate --dry-run"
-    {
-      "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
-      // Migrated from knip.json
-      "entry": [
-        "src/index.ts",
-        "src/cli.ts"
-      ],
-      "ignoreFindings": [
-        "**/*.generated.ts"
-      ],
-      "ignoreDependencies": [
-        "@types/node"
-      ]
-    }
+Most knip keys have a fallow key with the same name or the same purpose. The table shows where each key goes. Read it now, or come back to it when the migration prints a warning.
 
-    Migrated from: knip.json
+| knip | fallow |
+|:--|:--|
+| `entry` | [`entry`](/reference/config-files#entry). When some patterns have the production marker `!`, the marked patterns go to `entry` and the other patterns go to [`supportEntry`](/reference/config-files#supportentry). |
+| `project` | Fallow finds the project files itself. An exclusion with the production marker, such as `!scripts/**!`, becomes a [`production.ignore`](/reference/config-files#production-ignore) pattern. |
+| `ignore` | [`ignoreFindings`](/reference/config-dead-code#ignorefindings). The files stay in the analysis. |
+| `ignoreDependencies`, `ignoreBinaries` | The same keys. A regular expression becomes a glob when a glob matches the same names. |
+| `ignoreExportsUsedInFile`, `includeEntryExports` | The same keys. |
+| `rules`, `include`, `exclude` | [`rules`](/reference/config-rules#rules), with the fallow name of each issue type. `nsExports` and `nsTypes` follow `exports` and `types`. |
+| `ignoreIssues` | An [`overrides`](/reference/config-rules#overrides) entry that turns the issue types off for the file glob. |
+| `cycles.allow` | [`circularDependencies.allow`](/reference/config-architecture#circulardependencies-allow). |
+| A `workspaces.<path>` section | The same fallow keys, with the workspace path in front of each pattern. `ignoreDependencies` and `includeEntryExports` go to [`workspaces.settings`](/reference/config-workspaces#workspaces-settings) for the same path. |
+| A plugin section, such as `vitest` | Nothing. The [built-in plugins](/frameworks/built-in) find the config of the tool. |
+| `paths`, `ignoreFiles`, `ignoreMembers`, `ignoreUnresolved`, `ignoreWorkspaces`, `ignoreGlobalBinaries`, `tags`, `compilers`, `preprocessor` | Nothing. The migration prints a warning, and for most keys it names the fallow alternative. |
 
-    Warning (1):
-      [knip] `project`: Fallow auto-discovers project files
+## Steps
 
-    Note: knip and fallow use different glob engines; verify migrated entry /
-    ignoreFindings with `fallow dead-code` before relying on CI.
-    https://fallow.tools/docs/migration/from-knip/
+The steps use the demo project of these docs, with this `knip.json` in the project root:
 
-    Note: knip's ignore also suppresses dependency and manifest issues by file
-    path; fallow's ignoreFindings never hides manifest-owned findings such as
-    unused dependencies.
-    https://fallow.tools/docs/migration/from-knip/
-    ```
-  </Step>
-
-  <Step title="Generate the config">
-    When the preview looks correct, run the migration:
-
-    ```bash
-    fallow migrate            # Write .fallowrc.json
-    fallow migrate --toml     # Or output as fallow.toml
-    ```
-  </Step>
-
-  <Step title="Review the config">
-    Open the generated config. Check the translated entry points, ignore patterns, and plugin mappings. Fallow shows a warning for each field that it could not migrate automatically.
-  </Step>
-
-  <Step title="Run your first analysis">
-    Run the dead code analysis and examine the findings. Then run the other analyses:
-
-    ```bash
-    fallow dead-code    # Unused code + circular deps + boundaries
-    fallow dupes        # Code duplication
-    fallow health       # Complexity hotspots + maintainability scores
-    fallow              # All of the above in one pass
-    ```
-  </Step>
-</Steps>
-
-## What gets migrated
-
-| knip | Fallow |
-|:-----|:-------|
-| `entry` | `entry`, and `supportEntry` for the patterns without a production marker (see [Production entries](#production-entries)) |
-| `project` | `production.ignore` for each exclusion with the production marker, such as `!scripts/**!` becomes `scripts/**` (see [Production mode](/analysis/production-mode#exclude-more-paths-in-production-mode-only)). Fallow auto-discovers project files, so the migration drops the other patterns and warns |
-| `ignore` | `ignoreFindings` (matching files stay in the analysis graph) |
-| `ignoreDependencies` | `ignoreDependencies` (a regex becomes a glob when a glob matches the same packages, see [Warnings and caveats](#warnings-and-caveats). A name with the production marker, such as `left-pad!`, becomes `left-pad`. Fallow ignores it in every mode, and the migration warns about it) |
-| Workspace `ignoreDependencies`, `includeEntryExports` | [`workspaces.settings`](/configuration/workspaces#per-workspace-settings) keys for the same workspace path |
-| `ignoreExportsUsedInFile` | `ignoreExportsUsedInFile` (boolean and `{ type, interface }` object form both supported) |
-| `rules`, `include`, `exclude` | `rules` (knip issue types map to fallow rule names) |
-| `nsExports`, `nsTypes` (in `rules`, `include`, `exclude`, `ignoreIssues`) | -- (fallow reports these findings as `unused-exports` and `unused-types`. Fallow cannot set them apart, so `exports` and `types` control them too. The migration warns when a namespace type has another setting than its base type) |
-| `namespaceMembers` | [`unused-namespace-members`](/explanations/dead-code#unused-namespace-members) (in `rules`, `include`, `exclude` and `ignoreIssues`) |
-| `ignoreBinaries` | `ignoreBinaries` (a regex becomes a glob when a glob matches the same names. A workspace list merges into the global list. A name with the production marker loses the marker, as for `ignoreDependencies`) |
-| `ignoreGlobalBinaries` | -- (no switch for globally installed binaries. The warning suggests `ignoreBinaries`) |
-| `cycles` | `circularDependencies.allow` for `cycles.allow`. Each entry keeps its file list. Fallow also accepts the same cycle from another start file. `dynamicImports: true` is the fallow default. Another `dynamicImports` value gets a warning that suggests `circularDependencies.ignoreLazyImports` |
-| `preprocessor`, `preprocessorOptions` | -- (not supported. The warning suggests to post-process the `fallow --format json` output) |
-| `compilers`, `asyncCompilers` | -- (fallow parses with Oxc and has no custom compilers) |
-| Plugin configs | -- (fallow's built-in plugins detect the framework; the migration warns you to remove the section. When the section `config` names files that fallow does not find by file name, such as `"playwright": {"config": ["e2e/pw.ts"]}`, the warning names these files instead. It tells you how to keep the files that these configs name, for example with `--config` in a `package.json` script or with entry patterns) |
-
-## Production entries
-
-A trailing `!` marks an entry pattern as a production entry. When the config marks at least one pattern, the migration writes the marked patterns to `entry` and the other patterns to [`supportEntry`](/configuration/overview#supportentry). So `fallow dead-code --production` uses only the marked entries plus the framework production entries, and a normal run uses all of them. When no pattern has the marker, every pattern goes to `entry`.
-
-## Per-workspace settings
-
-A workspace section can set `ignoreDependencies` and `includeEntryExports`. The migration writes them to `workspaces.settings`, keyed by the workspace path, so they keep their workspace scope. The root workspace `.` uses the global keys.
-
-Only the most specific workspace section applies in the source config. Fallow merges the `ignoreDependencies` lists of every matching key. When a glob section such as `packages/*` has a list and a more specific section also matches, the migration warns, because the more specific workspace now also ignores the glob entries. For `includeEntryExports`, the migration writes the root value to a more specific section that does not set it, so the result does not change.
-
-## Warnings and caveats
-
-`fallow migrate` warns about each setting that it cannot translate, so you do not lose a setting without notice.
-
-**Unknown rule names.** Your knip `rules`, `exclude`, or `include` entries can reference a key that fallow does not know. The cause can be a typo, a future knip rule, or an issue type that the migrator does not know yet. The migration then prints a warning like this one:
-
-```text
-Warning (1):
-  [knip] `rules.unsued-files`: unknown knip issue type `unsued-files`; not migrated (suggestion: check for a typo or report the missing mapping at https://fallow.tools/docs/migration/from-knip/)
+```json
+{
+  "entry": ["src/index.ts!", "scripts/seed.js"],
+  "project": ["src/**/*.ts"],
+  "ignore": ["src/**/*.generated.ts"],
+  "ignoreDependencies": ["^@types/", "^(react|vue)$"],
+  "rules": { "types": "warn", "binaries": "off" },
+  "vitest": { "config": ["vitest.config.ts"] }
+}
 ```
 
-The `binaries` issue type maps to the `unlisted-binaries` rule. Some keys are on the documented list of keys that cannot be mapped: `optionalPeerDependencies`, and similar issue types that knip reports and fallow does not. For these keys, the warning reads `issue type \`X\` has no fallow equivalent` and has no suggestion.
+1. Preview the config. The command writes no file:
 
-**Glob-engine drift.** knip and fallow use different glob engines. The migration copies `entry` and `ignoreFindings` verbatim, but they can match a slightly different set of files than in knip. When the migrated config has either field, the migrate command prints:
+   ```bash
+   npx fallow migrate --dry-run
+   ```
+
+   ```text
+   {
+     "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+     // Migrated from knip.json
+     "entry": [
+       "src/index.ts"
+     ],
+     "ignoreFindings": [
+       "src/**/*.generated.ts"
+     ],
+     "ignoreDependencies": [
+       "@types/*"
+     ],
+     "rules": {
+       "unused-types": "warn",
+       "unlisted-binaries": "off"
+     },
+     "supportEntry": [
+       "scripts/seed.js"
+     ]
+   }
+
+   Migrated from: knip.json
+
+   Warnings (3):
+     [knip] `project`: Fallow auto-discovers project files
+     [knip] `ignoreDependencies`: regex pattern `^(react|vue)$` skipped (no glob matches the same names) (suggestion: rewrite it as a glob such as `@scope/*`, or add each name)
+     [knip] `vitest`: plugin config `vitest` is auto-detected by fallow's built-in plugins (suggestion: remove this section; fallow detects framework config automatically)
+   ```
+
+   `src/index.ts!` has the production marker and `scripts/seed.js` has none, so the seed script goes to `supportEntry`. The regular expression `^@types/` becomes the glob `@types/*`, but no glob matches `^(react|vue)$`, so the migration skips it.
+
+2. Write the config file:
+
+   ```bash
+   npx fallow migrate
+   ```
+
+   Fallow writes `.fallowrc.json`, or `.fallowrc.jsonc` for a `knip.jsonc`. Add `--toml` to write `fallow.toml`.
+
+3. Read each warning. Add a skipped setting by hand, for example each package name of a skipped regular expression.
+
+4. Run the analysis:
+
+   ```bash
+   npx fallow dead-code
+   ```
+
+## Check the result
+
+The new config can be valid and still match other files than before, because the two tools use different glob engines. So fallow helps you check it: after the report, it prints a note for each migrated pattern that had no effect. The demo run ends with these lines:
 
 ```text
-Note: knip and fallow use different glob engines; verify migrated entry /
-ignoreFindings with `fallow dead-code` before relying on CI.
-https://fallow.tools/docs/migration/from-knip/
+  3 entry points detected (2 manual entry, 1 plugin)
+✗ 1 file · 3 exports · 1 unused dependency · 1 unlisted dependency (0.02s)
+Note: ignoreFindings pattern matched no finding this run: src/**/*.generated.ts (patterns are project-root-relative globs; check for typos).
+Note: ignoreDependencies glob matched no declared dependency this run: @types/* (globs match package names such as @scope/*; check for typos).
+Note: entry pattern matched only files that are entry points anyway: src/index.ts (remove from the config).
 ```
 
-Common patterns (brace expansion `{ts,tsx}`, double-star `**`, `src/**`) match the same files in both engines. `ignoreFindings` keeps a leading `!` as an exception to the earlier patterns. Run `fallow dead-code` on a representative subset before you use the migrated globs in CI.
+The demo has no generated files and no `@types` packages, so the first two notes are correct, and a typo shows in the same way. Then compare the findings of fallow with the findings of knip on the same commit.
 
-**Dependency regexes.** knip reads an `ignoreDependencies` entry as a regex when it contains one of `* + \ ( | { ^ $`. Fallow reads `ignoreDependencies` entries as exact names or as globs, see [`ignoreDependencies`](/configuration/overview#ignoredependencies). The migration converts a regex to a glob only when the glob matches exactly the same package names:
+## What differs
 
-| knip regex | Migrated glob |
-|:-----------|:--------------|
-| `@acme/.+` or `^@acme/.+$` | `@acme/*` |
-| `^@types/` | `@types/*` |
-| `^eslint-plugin-.*$` | `eslint-plugin-*` |
-| `-loader$` | `*-loader` |
-| `^react$` | `react` |
+A difference in the findings has one of these causes:
 
-A regex that has no exact glob form stays out of the config, for example an alternation such as `^(react|vue)$`, a character class such as `^@acme/[a-z]+$`, or `.+` in the middle of a name. The migration prints a warning for each such entry:
+- knip `ignore` also hides dependency findings by file path. Fallow `ignoreFindings` never hides findings that belong to `package.json`, such as unused dependencies.
+- Fallow has more issue types, such as duplicate exports and [stale suppressions](/rules/stale-suppression). A finding that knip did not report can be correct.
+- A name with the production marker in `ignoreDependencies`, such as `left-pad!`, loses the marker. Fallow ignores the name in each mode.
 
-```text
-Warning (1):
-  [knip] `ignoreDependencies`: regex pattern `^(react|vue)$` skipped (no glob matches the same packages) (suggestion: rewrite it as a glob such as `@scope/*`, or add each dependency name)
-```
+## Run both tools for a while
 
-Add the skipped entries by hand as globs or as exact names. After the migration, `fallow dead-code` names every `ignoreDependencies` glob that matches no declared dependency, so a glob with a typo does not go unnoticed. See [Unmatched config patterns](/configuration/overview#unmatched-config-patterns).
+`fallow migrate` does not change or delete the knip config. Each tool reads its own config, so you can run both in CI. Fallow does not report `knip` as an unused dev dependency. When the results agree, remove knip and its config.
 
-**Ignore scope.** knip's `ignore` also hides dependency and manifest issues by file path. Fallow's `ignoreFindings` never hides manifest-owned findings, such as unused dependencies. The migrate command prints a note about this difference for every knip migration.
+To start on a project with many findings, save a [baseline](/guides/baselines), so that fallow fails only on new findings.
 
-## FAQ
+## Related
 
-<Accordion title="How do I keep my knip config?">
-  `fallow migrate` reads your knip config and writes a new fallow config. It does not change or delete the knip config. After the migration, fallow reads only its own config file, so make new changes in `.fallowrc.json` or `fallow.toml`. You can delete the knip config when you no longer run knip.
-</Accordion>
-
-<Accordion title="Can I run knip and fallow side by side?">
-  Yes. Each tool reads its own config. Fallow knows `knip` as a tooling dependency, so it does not report `knip` in `devDependencies` as unused.
-</Accordion>
-
-<Accordion title="Why does fallow migrate say that a fallow config already exists?">
-  `fallow migrate` does not overwrite a config. When `.fallowrc.json`, `.fallowrc.jsonc`, `fallow.toml`, or `.fallow.toml` exists, the command stops with an error. Remove the file first, or run `fallow migrate --dry-run` and copy the fields that you need.
-</Accordion>
-
-<Accordion title="Can fallow read knip.ts?">
-  No. Fallow detects `knip.ts` and `knip.config.ts`, but it does not run TypeScript config files. Convert the file to `knip.json`, then run `fallow migrate` again.
-</Accordion>
-
-<Accordion title="Will fallow report the same findings as knip?">
-  Not always. The two tools use different glob engines and different framework plugins, and fallow has issue types that knip does not have. Run `fallow dead-code` after the migration and compare the result before you use it in CI. To adopt fallow on a codebase with existing findings, save a baseline. See [Baselines](/cli/baselines).
-</Accordion>
-
-## See also
-
-<CardGroup cols={2}>
-  <Card title="Custom plugins" icon="plug" href="/frameworks/custom-plugins">
-    Build plugins for frameworks that fallow does not cover yet.
-  </Card>
-  <Card title="fallow migrate" icon="terminal" href="/cli/migrate">
-    Read the full CLI reference for `fallow migrate`.
-  </Card>
-</CardGroup>
+- [Adopt fallow](/guides/adopt): read it next to plan the first cleanup and the CI check.
+- [`fallow migrate`](/cli/migrate): each option of the command.
+- [Dead code](/analysis/dead-code): how fallow finds unused code.

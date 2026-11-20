@@ -1,194 +1,104 @@
 ---
-title: "Verify fallow security candidates with an agent"
-sidebarTitle: "Security agent verification"
-description: "Verify fallow security candidates with a coding agent and keep only the survivors that a verifier cannot dismiss. fallow itself makes no model calls."
-keywords: ["fallow security", "security verification", "security_candidates", "attack_surface", "agent workflow"]
+title: "Security verification protocol"
+sidebarTitle: "Security verification"
+description: "Find the files and the steps that join fallow security candidates with the verdicts of a reviewer, and how candidate ids stay stable."
+keywords: ["fallow security", "security verification", "verdict", "fallow-security-verdict/v1", "stable_finding_id", "survivors"]
 icon: "shield-check"
 ---
 
-Use this recipe to turn raw `fallow security` candidates into a shorter list of survivors that you can act on. A coding agent or an external harness checks each candidate and dismisses the ones that the evidence does not support.
+This protocol joins the candidates of [`fallow security`](/cli/security) with the verdicts of a reviewer, a person or an agent. Fallow makes no model calls and decides no verdict.
 
-`fallow security` produces deterministic candidates only. It does not call a model, it does not decide exploitability, and it does not report verified vulnerabilities.
+For the concepts and the workflow, read [Security](/analysis/security).
 
-## Inputs
+## Steps {#steps}
 
-Use the CLI when you want a standalone JSON file:
+1. Save the candidates: `fallow security --format json --surface --quiet > candidates.json`.
+2. For each entry of `security_findings`, the reviewer reads the candidate, its trace and the source code, and writes one verdict.
+3. Save the verdicts in one file, for example `verdicts.json`.
+4. Join the two files: `fallow security survivors --candidates candidates.json --verdicts verdicts.json`.
+5. Optional: run [`fallow security blind-spots`](/cli/security#blind-spots) to see the calls that fallow could not follow.
 
-```bash
-fallow security --format json --surface --quiet > fallow-security.json
-```
+The MCP `security_candidates` tool gives the same candidates. Its `surface` parameter adds `attack_surface`, and its `paths` parameter keeps only the candidates that touch the given files.
 
-Use MCP when an agent is already in an edit loop:
+## Input: the candidate file {#candidate-file}
 
-```json
-{
-  "root": "/path/to/repo",
-  "surface": true,
-  "paths": ["src/routes/login.ts"]
-}
-```
+The candidate file is the unchanged JSON output of `fallow security`. [Candidate fields](/cli/security#agent-actionable-candidate-record) lists the fields of each candidate. Do not write verdicts into this file.
 
-The MCP parameters work as follows:
+With `--surface`, `attack_surface.defensive_boundary.controls` lists the checks that fallow found in the files of the trace. A listed check does not prove that it runs before the call, or that it checks the same value. `attack_surface.defensive_boundary.verification_prompt` is a question for the reviewer, not a verdict.
 
-- `surface: true` forwards `--surface` and adds the top-level `attack_surface[]` entries.
-- `gate` set to `new` returns candidates on changed lines. `gate` set to `newly-reachable` returns candidates that became reachable from entry points. `newly-reachable` requires `changed_since`.
-- `paths` forwards repeated `--file` filters. Fallow returns only candidates whose anchor, trace hops, source-trace hops, or unresolved-callee diagnostics match.
+## Output: the verdict file {#verdict-schema}
 
-Each candidate has a `severity` field with a review-priority tier (`high`, `medium`, or `low`). The tier is not a verified vulnerability verdict. When `reachability.taint_confidence` is present, use it to tell `arg-level` source association apart from the weaker `module-level` reachability.
-
-## Verifier packet
-
-For each `security_findings[]` item, build one packet. The packet holds the deterministic fallow evidence and the source windows that you collect:
+The verdict file is a JSON array of verdicts, or an object with `"schema_version": "fallow-security-verdicts/v1"` and a `verdicts` array.
 
 ```json
+// verdicts.json
 {
-  "schema_version": "fallow-security-verifier-input/v1",
-  "finding_id": "9a705395d3b50465",
-  "severity": "high",
-  "candidate": {
-    "source_kind": "http-request-input",
-    "sink": {},
-    "boundary": {}
-  },
-  "trace": [],
-  "taint_flow": null,
-  "taint_confidence": "arg-level",
-  "reachability_trace": [],
-  "attack_surface": null,
-  "source_windows": [
+  "schema_version": "fallow-security-verdicts/v1",
+  "verdicts": [
     {
-      "path": "src/routes/login.ts",
-      "start_line": 12,
-      "end_line": 52,
-      "text": "..."
+      "schema_version": "fallow-security-verdict/v1",
+      "finding_id": "sec1:3fd021dab48c54fc",
+      "verdict": "survivor",
+      "reason": "process.argv reaches exec without validation",
+      "fix_direction": "avoid-shell"
     }
-  ],
-  "blind_spots": {
-    "unresolved_edge_files": 0,
-    "unresolved_callee_sites": 0,
-    "unresolved_callee_diagnostics": null
-  }
+  ]
 }
 ```
 
-Read the source windows from disk after the scan. Keep them out of the fallow output, so that the fallow output stays deterministic, compact, and independent of any model provider.
+| Field | Required | Content |
+|:--|:--|:--|
+| `schema_version` | yes | `fallow-security-verdict/v1` |
+| `finding_id` | yes | The `stable_finding_id` or the `finding_id` of the candidate. Use the stable id, so that the verdict stays valid when the call moves to another line. |
+| `verdict` | yes | `survivor`: the reviewer could not dismiss the candidate. `dismissed`: the evidence shows no risk. `needs-human-review`: the evidence is not complete. |
+| `reason` | no | A short reason. |
+| `rationale` | no | A longer explanation. |
+| `confidence` | no | The confidence or the priority that the reviewer gives. |
+| `impact` | no | The effect when the candidate is real. |
+| `fix_direction` | no | The direction of the fix, for example `avoid-shell`. |
 
-`blind_spots.unresolved_callee_diagnostics` can hold a copy of the top-level diagnostics from the fallow output. Copy it when the verifier needs sample locations to follow up on dynamic dispatch. It is bounded metadata and is not proof of a vulnerability.
-
-## Prompt contract
-
-Ask the verifier to dismiss candidates unless the supplied evidence supports a real exploit path:
+## Result {#result}
 
 ```text
-You are verifying one fallow security candidate.
+Security survivors: 1 verifier-retained candidate.
+Verdicts: 1/1 candidates covered, 0 dismissed.
+Retained and human-review rows are verifier dispositions, not vulnerabilities proven by fallow.
 
-Fallow is a deterministic candidate producer, not a vulnerability oracle.
-Use only the supplied candidate, trace, attack-surface entry, and source windows.
-Do not assume data flow beyond the provided code.
-
-Check:
-1. Is the input attacker-controlled?
-2. Does the value reach the reported sink?
-3. Is the reported boundary relevant to exploitability?
-4. What concrete impact would remain if the candidate is real?
-5. Is there an existing defensive control that dismisses it?
-
-Return only JSON matching fallow-security-verdict/v1.
+Survivors:
+- src/services/runner.ts:4 (command-injection) [bd283bfd3eec47e6]
+  reason: process.argv reaches exec without validation
+  fix direction: avoid-shell
+  Next: review the original candidate evidence before editing code.
 ```
 
-If `attack_surface.defensive_boundary.verification_prompt` is present, add it to the prompt as an extra question. Do not treat it as a verdict.
+With `--format json`, the output has the `kind` `"security-survivors"`, a `summary` (`candidates`, `verdicts`, `survivors`, `dismissed`, `needs_human_review`, `unverdicted`), a `survivors` array and a `needs_human_review` array. A candidate without a verdict counts in `unverdicted`. With `--require-verdict-for-each-candidate`, such a candidate makes the run exit with code 2.
 
-`attack_surface.defensive_boundary.controls` lists control patterns that fallow found in files on the import trace. A listed control does not prove that the control runs before the reported sink or that it protects the same input. Before you dismiss a candidate because of a control, check the execution order and the value flow in the source windows.
+| Code | Meaning |
+|:--|:--|
+| `0` | The join completed. |
+| `2` | Invalid input: a verdict with another `schema_version`, a verdict for an unknown candidate, two verdicts for one candidate, a duplicate `finding_id` in the candidate file, or a missing verdict with `--require-verdict-for-each-candidate`. |
 
-A control with `callee: "origin-equality-guard"` records a strict `.origin` comparison against a known string, where the mismatch branch returns or throws at once. It does not prove that the object is a built-in `URL`, that the checked value reaches the sink unchanged, or that redirects are safe. Verify these points in the source. Controls do not remove candidates, and they do not lower the taint confidence or the severity.
+## Finding identity {#finding-identity-migration}
 
-## Verdict schema
+A candidate has two ids:
 
-Ask the verifier for a compact JSON verdict:
+- `finding_id` hashes the rule, the path, the line and the column. A line change above the call gives a new id. It is the same value as the SARIF `partialFingerprints["fallowSecurity/v2"]`.
+- `stable_finding_id` (`sec1:<16 hex digits>`) hashes the rule, the path and a name that does not depend on the line.
 
-```json
-{
-  "schema_version": "fallow-security-verdict/v1",
-  "finding_id": "9a705395d3b50465",
-  "verdict": "survivor",
-  "reason": "The request query value reaches execSync without validation.",
-  "impact": "Command injection through the id query parameter.",
-  "evidence_checked": {
-    "source": true,
-    "sink": true,
-    "boundary": true,
-    "trace": true,
-    "source_window": true
-  },
-  "dismissal_reason": null,
-  "fix_direction": "avoid-shell"
-}
-```
+The name of a `stable_finding_id` is one of these:
 
-Allowed verdicts:
+- For a call or an assignment, the exact source text of the full expression. Whitespace, comments, line endings and a trailing comma do not count. The text in string, template and regex literals counts, so a new quote style gives a new id.
+- For a hard-coded secret, the name of the variable or property and the kind of the match, for example the provider. The secret value is not part of the hash.
+- For a client-server leak, the paths of the client file and the server module, and the names of the environment variables that the module reads.
 
-- `survivor`: the verifier could not dismiss the candidate from the supplied evidence.
-- `dismissed`: the candidate is not exploitable from the supplied evidence.
-- `needs-human-review`: the evidence is incomplete, contradictory, or blocked by missing context.
+When two calls in one file have the same text, the first one gets the base id, and the next ones get the suffix `~1`, `~2`. When you remove the first call, the second call gets the base id and its verdict. Review such calls again after you add or remove one of them.
 
-Store the verifier output next to the original fallow JSON. Set the `finding_id` of each verdict to the `stable_finding_id` of the candidate, so the verdict stays valid after edits that move the sink. Do not write verdict fields back into the fallow output.
+A candidate in Vue, Svelte or Angular template markup, or in a file that fallow cannot read, has no `stable_finding_id`. Use its `finding_id`.
 
-## Finding identity migration
+A verdict for an id that the candidate file does not have makes `survivors` exit with code 2. Save the candidates and the verdicts again together after a change of the id form.
 
-A `finding_id` contains the rule, the project-relative path, the line, and the column. Two sinks on the same line therefore get different IDs. An edit above a sink changes its `finding_id`. The JSON output and the visualization use the same ID as `partialFingerprints["fallowSecurity/v2"]` in the security SARIF output. When you select fewer files, the remaining findings keep their IDs.
+## Related
 
-When you upgrade from line-only IDs, every security finding gets a new ID, including findings that did not collide before. To migrate:
-
-1. Regenerate the candidate files and the verdicts together.
-2. Refresh the evaluation labels that you key by `finding_id`.
-3. Keep old candidate and verdict pairs together for replay. Do not match old verdicts to new candidates by path and line alone.
-
-`fallow security survivors` exits 2 when a verdict names an ID that is not in the candidate file. An old verdict file with a new candidate file therefore fails.
-
-The `stable_finding_id` of a finding does not contain the line or the column. It hashes the rule, the project-relative path, and a name of the finding that does not depend on the line:
-
-- For a sink in script code, the name is the exact source text of the full sink expression. For an assignment, that is the full assignment with the assigned value. For a call, that is the full call with all its arguments. Whitespace, comments, line endings, a byte order mark, and a trailing comma before a closing bracket do not count. The text inside string, template, and regex literals counts as it is. For a JSX attribute sink such as `dangerouslySetInnerHTML`, the text is the attribute and not the element. Two such attributes with the same text get the same base ID, also on different elements or next to different other attributes.
-- For a hard-coded secret, the name is the name of the variable or property and the kind of the match: the provider (for example `Stripe key`) or a high-entropy value. The secret value is never part of the hash. A new value with the same kind of match keeps the ID and its verdict: one high-entropy value in place of another, or one key in place of another key of the same provider. Only a new kind of match gives a new ID, for example a known provider key in place of a high-entropy test value.
-- For a client-server leak, the name is the paths of the client file and of the module with the secret or the server-only code, and the names of the env secrets that the module reads (for example `process.env.DATABASE_PASSWORD`). A read of a different secret gives a new ID.
-
-`fallow security survivors` accepts the stable ID in the `finding_id` field of a verdict. A verdict file keyed by `stable_finding_id` stays valid after edits above a sink and after a rebase. It also stays valid after a reformat that changes only whitespace, comments, line breaks, or trailing commas. A change to the sink text or a file rename gives a new ID. A new quote style changes the text of a string literal, so it also gives a new ID. A verdict for the old ID then fails with exit code 2 and does not apply to another candidate.
-
-A finding has no `stable_finding_id` when fallow does not know the exact sink text. This is the case for a sink in Vue, Svelte, or Angular template markup, for a sink whose text does not parse on its own (for example an expression with `yield`), and for a file that fallow cannot read. Key the verdict of such a finding by `finding_id`.
-
-The hash does not include the enclosing function. When two sinks in one file have the same text, the first one in source order gets the base ID, and the next ones get the suffix `~1`, `~2`, and so on. When you delete the first sink, the second sink gets the base ID, and the verdict of the deleted sink applies to it. A new identical sink above an existing one moves the suffixes in the same way. Review such sinks again after an edit that adds or removes one of them. An inline suppression comment does not move the suffixes: the suppressed sink keeps its place in the order, so its verdict does not apply to the next identical sink.
-
-Stored review history does not transfer automatically. SARIF tools can close and reopen each security alert once. Fallow no longer emits the legacy `fallowSecurity/v1` fingerprint, because that fingerprint can merge separate sinks again.
-
-## Render survivors
-
-To show only the candidates that the verifier kept, join the candidates and the verdict file with [`fallow security survivors`](/cli/security#survivors):
-
-```bash
-fallow security --format json --quiet > candidates.json
-# (verifier writes verdicts.json keyed by stable_finding_id)
-fallow security survivors --candidates candidates.json --verdicts verdicts.json
-```
-
-The command reports `summary.unverdicted`, so candidates without a review stay visible. To fail CI when a candidate has no verdict, add `--require-verdict-for-each-candidate`. To see where the structural trace stopped, run [`fallow security blind-spots`](/cli/security#blind-spots). It lists the unresolved callees that the verifier must inspect by hand.
-
-## Caveats
-
-Candidate quality depends on how accurate the source and the trace are. Fallow gates HTTP-input source patterns on the receiver, so a broad `*.query` pattern does not collide with unrelated APIs. Framework-specific request aliases can still need the judgment of the verifier.
-
-`reachability.taint_confidence` tells `arg-level` source association apart from `module-level` source association. Use `severity` and `taint_confidence` to order the triage. Before you report a survivor, use the source windows to verify:
-
-- that an attacker controls the source
-- the value flow
-- the sink behavior
-- the defensive controls
-
-## See also
-
-<CardGroup cols={2}>
-  <Card title="fallow security" icon="shield" href="/cli/security">
-    Find security candidates and render the survivors.
-  </Card>
-  <Card title="MCP integration" icon="plug" href="/integrations/mcp">
-    Set up an agent and see the tool contracts.
-  </Card>
-</CardGroup>
+- [`fallow security`](/cli/security): the options and the candidate fields.
+- [Security](/analysis/security): what fallow looks for.
+- [MCP server](/integrations/mcp): the `security_candidates` tool.

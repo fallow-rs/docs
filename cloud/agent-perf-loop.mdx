@@ -1,12 +1,14 @@
 ---
 title: "Production CPU feedback for coding agents"
-sidebarTitle: "Agent performance loop"
-description: "Give a coding agent the production CPU time per function. The agent makes the slowest function faster and checks the result with verify_deployment."
+sidebarTitle: "CPU feedback for agents"
+description: "Give a coding agent the production CPU time of each function, so that it makes the slowest function faster and checks the result."
 keywords: ["agent performance loop", "Fallow Cloud", "CPU profile", "verify_deployment", "production feedback", "coding agent", "self CPU time", "hosted MCP", "production CPU profiling", "Claude Code hook", "PostToolUse", "file context"]
 icon: "arrows-spin"
 ---
 
-A coding agent sees the code, but it does not see production. Fallow Cloud gives the agent feedback from production. It tells the agent which functions use the most CPU time. After the next deploy, it tells the agent if the change made them faster. This page gives the loop in four steps, with the numbers of one real run on the Fallow Cloud API.
+You ask a coding agent to make a service faster. The agent sees the code, but not production. So it cannot tell which function costs the most, or if its change helped. Fallow Cloud gives the agent that feedback. It tells the agent which functions use the most CPU time, and after the next deploy, it tells the agent if the change made them faster.
+
+The loop has four steps. After the steps, a real run on the Fallow Cloud API shows each step with its numbers.
 
 ## Requirements
 
@@ -64,7 +66,7 @@ A coding agent sees the code, but it does not see production. Fallow Cloud gives
 
 ## How verify_deployment finds slower and faster functions
 
-`slower` and `faster` compare the self CPU time per call, not per hour. The CPU time per hour also grows when the function gets more calls, with no change in the code. A night job that calls a function three times as often triples its CPU time per hour.
+Step 4 depends on the `slower` and `faster` status, so it helps to know how `verify_deployment` sets it. `slower` and `faster` compare the self CPU time per call, not per hour. The CPU time per hour also grows when the function gets more calls, with no change in the code. A night job that calls a function three times as often triples its CPU time per hour.
 
 Self CPU time per call is the self CPU time per profiled hour divided by the production calls per observed hour. A function is `slower` or `faster` when:
 
@@ -88,7 +90,7 @@ The CPU time per call is an estimate. The profile windows stand for the full obs
 
 ## A real run
 
-The Fallow Cloud API runs the beacon and the profiler on itself. This is one pass through the loop.
+The rules above are easier to follow on a real case. The Fallow Cloud API runs the beacon and the profiler on itself. This is one pass through the loop.
 
 1. **Find.** On the base deployment, `toRow` in the database client had the most self CPU time of the project functions. It used 20,535 ms per hour, 6.4% of the process. The function builds one result object per database row, and it ran about 5.5 million times per hour.
 2. **Change.** The change computes the column plan one time per query and keeps one loop per row in a new function, `buildRow`. A local benchmark went from 760 to 520 ns per row.
@@ -107,7 +109,7 @@ In the same run, `verify_deployment` marked the database wrapper `execute` as `f
 
 ## File context after each read (Claude Code hook)
 
-In Claude Code, a `PostToolUse` hook can give the agent the production data of a file each time it reads or edits that file. The agent then sees the CPU time, the error groups and the branches that never ran before it changes the code. The hook calls `GET /v1/coverage/:repo/file-context?format=text`. That is the text form of `get_file_context`.
+In the loop, the agent asks for production data when it decides to. A hook can give the data each time the agent reads or edits a file. In Claude Code, a `PostToolUse` hook can give the agent the production data of a file each time it reads or edits that file. The agent then sees the CPU time, the error groups and the branches that never ran before it changes the code. The hook calls `GET /v1/coverage/:repo/file-context?format=text`. That is the text form of `get_file_context`.
 
 Save this script as `fallow-file-context.mjs`. It needs Node.js 18 or later and has no dependencies.
 
@@ -211,6 +213,8 @@ A text block tells you that the key and the repository are correct. A JSON error
 The verify result is advice for the agent or for a CI comment. It does not prove that a change is correct or safe. A `confirmed` verdict means that the functions ran with no new error group, no CPU regression that the gates can show, and no function that stopped running.
 
 ## See also
+
+To start the loop, connect the agent to the hosted MCP server and turn on the profiler.
 
 <CardGroup cols={2}>
   <Card title="Hosted MCP server" icon="server" href="/cloud/hosted-mcp">

@@ -1,0 +1,154 @@
+---
+title: "fallow audit-cache"
+description: "Find the subcommands, output fields and exit codes of fallow audit-cache, which removes and prunes the caches of the audit base analysis."
+keywords: ["fallow audit-cache", "audit cache", "prune", "base snapshot", "cli reference"]
+icon: "terminal"
+---
+
+`fallow audit-cache` removes the caches that [`fallow audit`](/cli/audit) keeps for the analysis of the base.
+
+For the concepts, read [Changed code](/analysis/changed-code).
+
+## Synopsis
+
+{/* generated:start cli-synopsis audit-cache */}
+
+```bash
+fallow audit-cache [OPTIONS] <COMMAND>
+```
+
+{/* generated:end */}
+
+Under `--gate new-only`, `fallow audit` analyzes the base in a temporary checkout. It keeps two caches:
+
+- one checkout of the base for each project root, in the system temp directory
+- the result of each base analysis, in `.fallow/cache/audit-base-v<N>/` in the project
+
+Each audit run also removes the cache entries that are older than 30 days, and keeps only the newest 32 result files. The `FALLOW_AUDIT_CACHE_MAX_AGE_DAYS` environment variable and the [`audit.cacheMaxAgeDays`](/reference/config-rules#audit-cachemaxagedays) config key set the age. `0` turns off the age rule. The subcommands do the same work when you run them.
+
+## Subcommands
+
+{/* generated:start cli-subcommands audit-cache */}
+
+| Subcommand | Description |
+|:--|:--|
+| [`remove`](#remove) | Remove reusable audit caches owned by an explicit project root |
+| [`prune`](#prune) | Apply the audit cache cleanup policy and report every entry |
+
+{/* generated:end */}
+
+### remove {#remove}
+
+{/* generated:start cli-synopsis audit-cache remove */}
+
+```bash
+fallow audit-cache remove [OPTIONS]
+```
+
+{/* generated:end */}
+
+{/* generated:start cli-options audit-cache remove */}
+
+| Option | Description |
+|:--|:--|
+| `--dry-run` | Print what would be removed without touching the filesystem |
+| `--yes` | Confirm removal in non-interactive environments |
+
+{/* generated:end */}
+
+`remove` needs the global option `--root <PATH>`, and removes each cache of that project. Without a terminal, it needs `--yes`. An entry that a running audit locks stays, and the command exits with code 2.
+
+### prune {#prune}
+
+{/* generated:start cli-synopsis audit-cache prune */}
+
+```bash
+fallow audit-cache prune [OPTIONS]
+```
+
+{/* generated:end */}
+
+{/* generated:start cli-options audit-cache prune */}
+
+| Option | Description |
+|:--|:--|
+| `--dry-run` | Preview decisions without touching the filesystem |
+| `--max-age-days <N>` | Age threshold in days for this invocation. Overrides `FALLOW_AUDIT_CACHE_MAX_AGE_DAYS` and the `audit.cacheMaxAgeDays` config field (default 30). |
+
+{/* generated:end */}
+
+`prune` removes the entries that are too old, the entries whose project root does not exist, and the files that no entry owns. It does not remove an entry of another project that exists. `--root` is optional and defaults to the current directory. The age comes from `--max-age-days`, then `FALLOW_AUDIT_CACHE_MAX_AGE_DAYS`, then `audit.cacheMaxAgeDays`, then the default of 30 days.
+
+## Options
+
+{/* generated:start cli-options audit-cache */}
+
+This command has no options of its own.
+
+The [global options](/cli/global-flags) are in these groups: [Project](/cli/global-flags#options-project), [Output](/cli/global-flags#options-output), [Scope](/cli/global-flags#options-scope), [Baselines](/cli/global-flags#options-baselines), [Gates](/cli/global-flags#options-gates), [Duplication](/cli/global-flags#options-duplication), [Type-aware](/cli/global-flags#options-type-aware), [Performance](/cli/global-flags#options-performance).
+
+{/* generated:end */}
+
+The subcommands accept the [global options](/cli/global-flags) `--root`, `--format` and `--quiet`.
+
+## Output
+
+```text
+audit cache prune (threshold 30d from default) in /tmp/x/t/
+  kept         12f3c4c67ca1fffb.bin  676 B  aged 0d
+  kept         4c87a98449d69531.bin  676 B  aged 0d
+  kept         5cb50815c05eb1c1.bin  676 B  aged 0d
+  kept         6a62088ae02f0515.bin  676 B  aged 0d
+  kept         a73de36fcd19a721.bin  676 B  aged 0d
+would reclaim 0 B across 0 of 5 entries
+```
+
+The first line gives the age threshold, its source and the directory that `prune` scans. Each entry has a line with the decision, the name, the size and the age. The last line gives the bytes that the run removes.
+
+With `--format json`, `prune` gives these top-level fields:
+
+| Field | Content |
+|:--|:--|
+| `kind` | `"audit-cache-prune"`. `remove` gives `"audit-cache-remove"`. |
+| `schema_version`, `command` | The version of this output format and the command. |
+| `root`, `scan_root` | The project root and the directory that `prune` scans. |
+| `dry_run` | `true` with `--dry-run`. |
+| `max_age_days`, `max_age_source` | The age threshold and its source: `flag`, `env`, `config` or `default`. |
+| `entries` | One object for each entry: `path`, `pass` (`owned`, `legacy`, `foreign` or `snapshot`), `disposition` (`removed`, `kept`, `skipped` or `failed`), `reason` (for example `aged-out`, `fresh`, `owner-live` or `over-capacity`), `age_days`, `size_bytes`, `owner_root`. |
+| `found`, `removed`, `kept`, `skipped`, `failed` | The counts. `removed`, `kept`, `skipped` and `failed` together are `found`. |
+| `deregistered` | The checkouts that the run removed from the git worktree list. |
+| `complete` | `true` when no entry was skipped or failed. Use this field in scripts. |
+| `reclaimed_bytes` | The bytes that the run removed, or would remove with `--dry-run`. |
+
+The `remove` output has `root`, `dry_run`, `found`, `would_remove`, `removed`, `skipped` and `complete`. The [JSON output reference](/reference/json-output) has each field.
+
+## Exit codes
+
+| Code | Meaning |
+|:--|:--|
+| `0` | The command ran. `prune` also exits with `0` when it skips an entry: read `complete`. |
+| `2` | Invalid input, for example `remove` without `--root`. `remove` also exits with `2` when a running audit locks an entry. |
+
+[Exit codes](/reference/exit-codes) has the codes that all commands share.
+
+## Examples
+
+```bash
+# Show what prune removes, and change nothing
+fallow audit-cache prune --dry-run
+
+# Remove the entries that are older than 7 days
+fallow audit-cache prune --max-age-days 7
+
+# Show which caches of one project remove takes
+fallow audit-cache remove --root ./my-project --dry-run
+
+# Remove the caches of one project without a prompt
+fallow audit-cache remove --root ./my-project --yes
+```
+
+## Related
+
+- [`fallow audit`](/cli/audit): the changed-code check that fills the cache.
+- [Environment variables](/configuration/environment): `FALLOW_AUDIT_CACHE_MAX_AGE_DAYS`.
+- [Changed code](/analysis/changed-code): how the check uses the base.

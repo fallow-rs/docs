@@ -1,0 +1,183 @@
+---
+title: "Get measured CRAP scores from Vitest"
+sidebarTitle: "CRAP with Vitest"
+description: "Configure Vitest coverage, pass the coverage file to fallow health, read the measured CRAP scores, and gate new risk in CI."
+keywords: ["CRAP", "Vitest", "coverage", "coverage-final.json", "v8", "istanbul", "fallow health", "fallow audit", "untested complexity"]
+icon: "flask-vial"
+---
+
+Your health report says "No coverage file found, so CRAP scores are a static estimate". The [CRAP](/analysis/health) score of each function then depends on that estimate. Without a coverage file, fallow guesses the coverage from the imports of your tests, and the guess can be wrong in both directions. In the demo project, `classifyCustomer` gets a CRAP score of 552 while no test imports it. Add one test that calls it, and the estimate counts it as 85% tested, so it gets no CRAP problem at all. Vitest measures that the test runs 21% of it.
+
+At the end of this guide, fallow computes the CRAP score of each function from the real test coverage of Vitest. CI fails when a change adds a risky function.
+
+## Before you start
+
+- You need a project that runs its tests with Vitest.
+- Install one coverage provider of Vitest. Both providers write a file that fallow reads. The provider must have the same major version as `vitest`. These commands install the latest version:
+
+<CodeGroup>
+```bash v8
+npm install --save-dev @vitest/coverage-v8
+```
+
+```bash istanbul
+npm install --save-dev @vitest/coverage-istanbul
+```
+</CodeGroup>
+
+For an older Vitest, add its major version to the package name, for example `@vitest/coverage-v8@2`.
+
+## Steps
+
+### 1. Configure the coverage
+
+Fallow reads the `json` report of Vitest. Set the provider, the reports and the files to measure in the Vitest config:
+
+```ts
+// vitest.config.ts
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  test: {
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "json"],
+      include: ["src/**/*.ts"],
+    },
+  },
+});
+```
+
+| Option | Why fallow needs it |
+|:--|:--|
+| `reporter` | The `json` reporter writes `coverage/coverage-final.json`, the file that fallow reads. When you set `reporter`, keep `json` in the list. |
+| `include` | Vitest then also writes the source files that no test loads, with 0% coverage. Without it, these functions get the estimate. |
+
+Add `coverage/` to `.gitignore`.
+
+### 2. Run the tests with coverage
+
+The samples on this page come from the demo project with one added test, `src/services/customers.test.ts`, which calls `classifyCustomer` with one customer.
+
+```bash
+npx vitest run --coverage
+```
+
+```text
+File               | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
+-------------------|---------|----------|---------|---------|-------------------
+ src/services      |   19.44 |     7.31 |      25 |   21.87 |
+  catalog.ts       |       0 |        0 |       0 |       0 | 1-3
+  customers.ts     |   24.13 |     7.69 |     100 |      25 | 13,15,19-44
+  orders.ts        |       0 |      100 |       0 |       0 | 11-18
+```
+
+The `text` reporter prints this table. The `json` reporter writes the same data to `coverage/coverage-final.json`.
+
+### 3. Pass the coverage file to fallow
+
+```bash
+npx fallow health --coverage coverage/coverage-final.json
+```
+
+```text
+● High complexity functions (1)
+  CRAP scores use Istanbul coverage where matched (22/25 functions); the rest fall back to the static estimate.
+  src/services/customers.ts
+    :9 classifyCustomer CRITICAL
+          23 ! cyclomatic   32 ! cognitive   39 lines
+         279.6 ! CRAP  (21% tested)
+```
+
+### 4. Read the result
+
+- `279.6 ! CRAP` is the measured score. The `!` marks a score at or above the limit. The default limit is 30.
+- `(21% tested)` is the share of the statements of the function that a test ran. Without this part, the score comes from the estimate.
+- The line `22/25 functions` counts the functions that the coverage file describes. Fallow uses the estimate for the other functions, for example the functions in test files.
+
+The estimate counts an export that a test imports as 85% tested, and an export that no test reaches as 0% tested. That is why it gave 552 before the test existed, and no CRAP problem after. The measured score sits between the two, because the one test runs only a part of the function.
+
+The score tells you that the function is a risk. The finding also tells you what to do about it. In the JSON output (`--format json`), the first action of a finding is one of these:
+
+| Action | Meaning |
+|:--|:--|
+| `increase-coverage` | Tests run a part of the function. More tests bring the score under the limit. |
+| `add-tests` | No test runs the function. Tests bring the score under the limit. |
+| `refactor-function` | Full coverage cannot bring the score under the limit. Split the function. |
+
+To set another limit, pass `--max-crap`, or set [`health.maxCrap`](/reference/config-health#health-maxcrap).
+
+### 5. Gate new risk in CI
+
+`fallow health` fails on each function above the limit, also on old code. A CI job with it fails on `classifyCustomer` until somebody splits it. To fail only on the risk that a change adds, run [`fallow audit`](/analysis/changed-code) with the same coverage file:
+
+```bash
+npx vitest run --coverage
+npx fallow audit --base main --coverage coverage/coverage-final.json
+```
+
+In this example, a pull request adds `src/services/delivery.ts`, calls `deliveryFee` from `src/index.ts`, and adds a test that runs only the first branch:
+
+```ts
+// src/services/delivery.ts
+export const deliveryFee = (weight: number, country: string, express: boolean, insured: boolean): number => {
+  if (weight <= 0) return 0;
+  let fee = weight > 20 ? 1500 : weight > 5 ? 900 : 500;
+  if (country === "BE" || country === "DE") fee += 300;
+  else if (country !== "NL") fee += 900;
+  if (express) fee *= 2;
+  if (insured && fee < 2000) fee += 250;
+  return fee;
+};
+```
+
+```text
+Audit scope: 3 changed files vs main (26d723d..HEAD)
+
+── Complexity ─────────────────────────────────────
+
+● High complexity functions (1)
+  CRAP scores use Istanbul coverage where matched (23/27 functions); the rest fall back to the static estimate.
+  src/services/delivery.ts
+    :1 deliveryFee HIGH
+          10   cyclomatic   10   cognitive    9 lines
+          52.2 ! CRAP  (25% tested)
+
+✗ complexity: 1 finding · 3 changed files (0.41s)
+```
+
+The exit code is 1. The function is below the cyclomatic and the cognitive limits, so only the CRAP score fails it: the tests run a quarter of the statements of a function with 10 paths. A function that was above the limit on `main` already does not fail the audit, also when the pull request changes its file.
+
+Run the tests before the audit in the same job. Then the coverage file describes the code of the pull request.
+
+## Check the result
+
+Add tests for the branches that no test runs, for example one call for each country and option, and run both commands again:
+
+```bash
+npx vitest run --coverage
+npx fallow audit --base main --coverage coverage/coverage-final.json
+```
+
+```text
+Audit scope: 3 changed files vs main (26d723d..HEAD)
+✓ No issues in 3 changed files (0.17s)
+```
+
+## If it fails
+
+| Problem | Cause | Fix |
+|:--|:--|:--|
+| The run stops with `failed to parse coverage data` and exits with code 2. | You passed an LCOV file (`lcov.info`). `--coverage` reads an Istanbul coverage map (`coverage-final.json`) or V8 coverage data, and no LCOV. | Keep `json` in `reporter`, and pass `coverage/coverage-final.json`. |
+| No function shows `% tested`. | The coverage file describes other paths, for example because the tests ran in a container. | Pass the root of that checkout to `--coverage-root`, for example `--coverage-root /home/runner/work/app`. |
+| Fallow prints `using auto-detected coverage`. | You did not pass `--coverage`, and fallow found `coverage/coverage-final.json`. | In CI, always pass `--coverage`. An old file on disk then cannot change the scores. |
+| The line `CRAP scores use` counts few matched functions. | Vitest 2 with the v8 provider writes no function data for a file that no test loads. | Update Vitest and the provider to a current major version. |
+| A file that no test loads has no `% tested`. | The coverage file has no data for the file. | Add the file to `coverage.include` of Vitest. |
+| The scores change after an update of Vitest or of the provider. | Two versions can count statements in another way. | Use one provider and one version of Vitest in CI. |
+| A monorepo has one coverage file for each package. | `--coverage` takes one file. | Run one Vitest config for all packages, or run fallow once for each package with `--workspace`. See [Set up fallow in a monorepo](/guides/monorepo). |
+
+## Related
+
+- Next: [Mutation testing](/analysis/mutation). Coverage shows which lines a test runs; mutation testing shows if the test fails when the code is wrong.
+- [Health](/analysis/health): CRAP, complexity and the other numbers.
+- [`fallow health`](/cli/health): each coverage option.

@@ -1,0 +1,130 @@
+---
+title: "Known limits of fallow"
+sidebarTitle: "Known limits"
+description: "Find the facts that fallow cannot know from your source code, the findings that they cause, and the fix for each."
+keywords: ["limitations", "false positives", "dynamic import", "dependency injection", "reflection", "public API", "generated code", "conditional exports", "syntactic analysis"]
+icon: "triangle-exclamation"
+---
+
+Fallow reported code that your app uses, or it kept code that no build needs, and your entry points and plugins look correct. The cause is then often a pattern of your project that the source text does not show. Find the section that matches what you see. Each section names the fact that fallow cannot know and gives the fix.
+
+Fallow reads your source code and does not run it. It knows each use that is in the source text. A use that exists only when the code runs, or only outside the repository, is not visible. [Entry points and reachability](/concepts/entry-points) explains the walk that these limits affect.
+
+## Code loaded by a computed path
+
+**What you see.** Fallow reports files as unused, and your code loads them with an import path that it builds at run time:
+
+```ts
+const path = "./plugins/" + name;
+const plugin = await import(path);
+```
+
+**Why.** Fallow follows a template literal or a string concatenation inside `import()`. It cannot follow a path that a variable holds, because the value of `path` exists only when the code runs. [What fallow cannot follow](/concepts/entry-points#what-fallow-cannot-follow) shows each case.
+
+**What to do.** Name the files in [`dynamicallyLoaded`](/reference/config-files#dynamicallyloaded):
+
+```jsonc
+// .fallowrc.jsonc
+{
+  "dynamicallyLoaded": ["src/plugins/*.ts"]
+}
+```
+
+## Reflection and dependency injection
+
+A computed path hides a file. Reflection hides a smaller thing: one member of a class.
+
+**What you see.** Fallow reports a member that a framework or a library calls as an unused class member.
+
+**Why.** A framework can call a class member by its name. Fallow skips each class member that has a decorator, because a framework reads decorated members by reflection. An `@Injectable()` service, an `@OnEvent()` handler and an ORM column are therefore never reported. A class that a module registers is reachable through the import of that module. A call by name without a decorator is not visible.
+
+**What to do.** Keep the `unused-class-members` rule on, and tell fallow about the names that it cannot see:
+
+- A library calls methods without a decorator, for example `up()` and `down()` of a migration. Add the names to [`usedClassMembers`](/reference/config-dead-code#usedclassmembers), scoped to the base type:
+
+  ```jsonc
+  // .fallowrc.jsonc
+  {
+    "usedClassMembers": [
+      { "implements": "MigrationInterface", "members": ["up", "down"] }
+    ]
+  }
+  ```
+
+- A decorator does not mean that a framework calls the member, for example a `@log` or `@step` decorator. Add it to [`ignoreDecorators`](/reference/config-dead-code#ignoredecorators). Fallow then checks the members that have only these decorators.
+- A container loads a class file by a string token or a file path, and no file imports it. Add the file to [`entry`](/reference/config-files#entry).
+
+When you turn the rule off for the whole project, fallow hides each unused member, also the real ones.
+
+## Code used only outside the repository
+
+The two sections above are about code that runs inside your project. Some code has its users in other repositories.
+
+**What you see.** Other repositories, a published package or a deploy tool use your code, and fallow reports it.
+
+**Why.** Fallow sees only the code of this repository. It does not report the exports of an [entry point](/concepts/entry-points). The fields of `package.json` such as `main`, `module`, `exports` and `bin` give entry points. An export that the entry file exports again from another file, also with `export *`, is used too. So the public API of a package needs no config. Other uses outside the repository are not visible.
+
+**What to do.** Pick the row of your case:
+
+| Case | Fix |
+|:--|:--|
+| A workspace package that you publish, in a project with `includeEntryExports` | Add the package to [`publicPackages`](/reference/config-files#publicpackages). [Set up fallow in a monorepo](/guides/monorepo) shows it. |
+| One export that outside code imports from a file that is not an entry point | Put `/** @public */` above the export. |
+| A file that a program outside the repository runs | Add it to [`entry`](/reference/config-files#entry). |
+| A package that the runtime supplies, with no import | Add it to [`ignoreDependencies`](/reference/config-dead-code#ignoredependencies). |
+
+Do not use `ignoreExports` with `"exports": ["*"]` for a public API. It hides each unused export of the file, also an export that no consumer can reach.
+
+## Conditional exports and build-time transforms
+
+**What you see.** Fallow keeps code that one build never uses, or reports code that a build step uses.
+
+**Why.** Your build decides some facts when it runs, and fallow reads only the files:
+
+- Each target of the `exports` conditions of your `package.json` is an entry point. Fallow does not choose one condition, so code that only one target uses stays used.
+- A [plugin](/concepts/plugins) reads a config file of a tool as static code. It does not run the file. A value that the config computes, for example a condition on `process.env` or a list that a function builds, does not reach fallow.
+- A build step that creates or replaces a module, for example a macro or a file replacement in the bundler, works on code that fallow does not see.
+
+**What to do.** Add the files that the computed config names to [`entry`](/reference/config-files#entry). For code that only one condition uses, review the target by hand.
+
+## Generated code
+
+**What you see.** A code generator writes files with exports that nothing uses, or with large copied blocks.
+
+**Why.** Fallow cannot tell a generated file from a file that a person wrote, so it analyzes both in the same way.
+
+**What to do.** Add the generated directory to [`ignorePatterns`](/reference/config-files#ignorepatterns). Fallow then does not read the files at all. When the code must stay in the dead code analysis and only the noise of one analysis is the problem, use [`duplicates.ignore`](/reference/config-duplication#duplicates-ignore) or [`health.ignore`](/reference/config-health#health-ignore).
+
+## Files that fallow does not read
+
+The fix for generated code tells fallow to skip a directory. Fallow also skips some files without any config.
+
+**What you see.** A file that only a hidden directory or a Markdown page uses is reported as unused.
+
+**Why.** Fallow skips directories whose name starts with a dot, except a few conventional names such as `.storybook` and `.github`, and the directories that an active plugin owns. It does not read `.md` files. A use in these files is not visible. [File types](/guides/file-types) lists what it reads.
+
+**What to do.** Add the hidden directory to discovery with a `!` exception, for example `"ignorePatterns": ["!.claude/**"]`. For a module that only a Markdown page imports, add it to `entry`.
+
+## Questions that need the types
+
+The sections above are about uses that fallow does not see. The last two sections are about questions that the source text alone cannot answer.
+
+**What you see.** The answer depends on TypeScript types. Examples are the exact declaration behind a chain of aliases and re-exports, or a private type that a public signature exposes.
+
+**Why.** The default analysis reads the syntax. It does not run the TypeScript type checker, so it cannot answer a question that depends on types.
+
+**What to do.** Run the [type-aware analysis](/analysis/type-aware) for these questions. It confirms with the type checker that a symbol is unused before you delete it.
+
+## Facts that only the running app knows
+
+**What you see.** Fallow reports code as used, but no user ever runs it. Or a function looks safe to change, but it runs on each request.
+
+**Why.** Static analysis knows which code can run. It does not know which code runs.
+
+**What to do.** Merge [runtime coverage](/analysis/runtime-coverage) into the health report. [Evidence levels](/concepts/evidence) explains which questions each kind of evidence answers.
+
+## Next
+
+- Next: [Fix a false positive](/guides/false-positives). Use it to walk one finding from the symptom to the fix.
+- [Suppress a finding](/guides/suppress): accept one finding when no config fits.
+- [Find why fallow reports a finding](/guides/trace-a-finding): see where fallow looked.

@@ -1,0 +1,649 @@
+---
+title: "JSON output"
+description: "Find the JSON output of each fallow command for scripts and agents, with the envelope, the stability rules and the fields of each kind."
+keywords: ["json output", "--format json", "schema_version", "kind", "gate_outcomes", "next_steps", "actions", "_meta", "output schema", "machine-readable output"]
+icon: "brackets-curly"
+---
+
+This page lists the JSON output of each fallow command for scripts, CI jobs and agents. [Findings](/concepts/findings) explains findings, rules and gates.
+
+## Get JSON output {#get-json-output}
+
+Add `--format json` to a command. Add `--quiet` to remove the progress lines from stderr:
+
+```bash
+fallow dead-code --format json --quiet
+```
+
+| Option or variable | Effect |
+|:--|:--|
+| `--pretty` | Indents the JSON. Without it, the output is one line. |
+| `--explain` | Adds the definitions of the metrics, the rules and the fields to `_meta`. |
+| `--lean` | Leaves out empty arrays and zero counts. Only `fallow dead-code`, `fallow health` and the bare `fallow` run accept it. Other commands exit with code 2 ([Lean JSON](/cli/global-flags#lean)). |
+| `--output-file <PATH>` | Writes the report to a file. |
+| `FALLOW_FORMAT=json` | Sets JSON as the default format. |
+| `FALLOW_SUGGESTIONS=off` | Leaves out `next_steps`. |
+
+The samples on this page come from a small demo project. They are shortened: whole lines are removed.
+
+## Stability rules {#stability}
+
+- **Paths.** Each path is relative to the project root and uses `/`.
+- **`kind`.** Each envelope has a `kind` field that names its shape. Branch on `kind`, not on the fields that you find.
+- **`schema_version`.** Each envelope has its own `schema_version`, which is independent of the fallow `version` and of the other envelopes. It changes when a field gets a new name or type, or when fallow removes a field. It also changes when a required enum field gets a new value, or a finding gets a new required field.
+- **New fields.** A new optional field does not change `schema_version`. Ignore the fields that you do not know.
+- **Open sets.** The names in `gate_outcomes` and the `kind` of a `workspace_diagnostics` entry are open sets. A new name can appear without a new `schema_version`.
+- **Same input, same output.** Two runs on one commit give the same bytes, except `elapsed_ms`, `head_sha` and `_meta.telemetry.analysis_run_id`.
+
+## The envelope {#envelope}
+
+Most envelopes share these top-level fields:
+
+| Field | Content |
+|:--|:--|
+| `kind` | The name of the envelope, for example `"dead-code"`. |
+| `schema_version` | The version of this envelope. A number or a string, as in the samples. |
+| `version` | The fallow version that wrote the output. |
+| `elapsed_ms` | The time of the analysis in milliseconds. |
+| `gate_outcomes` | One entry for each [gate](/concepts/findings#gates) that the run checked. See [Gate outcomes](#gate-outcomes). |
+| `request_outcomes` | One entry for each request that narrows the run, for example `--changed-since`, with `status`: `applied` or not. |
+| `workspace_diagnostics` | Problems with the project that are not findings. See [Workspace diagnostics](#workspace-diagnostics). |
+| `next_steps` | Read-only commands to run next: `id`, `command`, `reason`. At most 3 entries, the most important first. Absent when it is empty. |
+| `_meta` | `telemetry.analysis_run_id` in each run. With `--explain`, also `docs`, `field_definitions`, `metrics` and `rules`. |
+
+### Findings and actions {#actions}
+
+Each finding is an object in an array of its issue type, for example `unused_exports`. Most findings have these fields:
+
+| Field | Content |
+|:--|:--|
+| `path`, `line`, `col` | The place of the finding. |
+| `finding_id` | A stable id of the finding, for example `dc1:unused-export:b650995c7b5b87c1`. |
+| `effective_severity` | The severity of the rule for this file: `error` or `warn`. |
+| `actions` | The fixes and suppressions for this finding. |
+
+Each entry of `actions` has a `type`, an `auto_fixable` boolean and a `description`. `auto_fixable` applies to this finding only: one `type` can be fixable on one finding and not on another. A suppression action has the comment to add in `comment`. [`fallow fix`](/cli/fix) applies the actions with `auto_fixable: true`.
+
+### Gate outcomes {#gate-outcomes}
+
+`gate_outcomes` holds one entry for each gate, keyed by the gate name, for example `error-severity-findings`:
+
+| Field | Content |
+|:--|:--|
+| `status` | `pass`, `warn`, `fail` or `skipped`. |
+| `enforced` | `true` when a `fail` sets exit code 1. |
+| `observed` | The measured value, when the gate has one. |
+| `threshold`, `threshold_label` | The limit of the gate. |
+
+A gate fails the run when `status` is `fail` and `enforced` is `true`. The bare `fallow` run in a JSON format reports a failed gate with `enforced: false`, unless you pass `--fail-on-issues`.
+
+### Workspace diagnostics {#workspace-diagnostics}
+
+Each `workspace_diagnostics` entry has `path`, `kind` and `message`. `message` ends with a step to take. `degrades_analysis: true` marks a problem that can make the result incomplete, for example a file that fallow cannot parse. A diagnostic never changes the exit code. [Warnings about the config](/configuration/overview#config-warnings) explains the kinds about config entries.
+
+```json
+{
+  "path": ".",
+  "kind": "rule-packs-not-configured",
+  "message": "No rule packs are configured, so the policy detector did not run and its violation counts are zero because nothing was measured. Add `rulePacks` to the config, or set `policy-violation` to off to state that the check is not wanted."
+}
+```
+
+Some kinds have more fields:
+
+| Kind | Fields |
+|:--|:--|
+| `production-excluded-file-imported` | In [production mode](/concepts/production-mode), a built-in production pattern excluded a source file that a production file imports. `pattern` is the built-in pattern, verbatim. `file_count` is the exact number of such files for that pattern. `files` lists the first five files in path order, relative to the project root. `path` is the first file. Fallow writes one entry for each pattern, with `degrades_analysis: true`. |
+| `inert-flag` | A flag has no effect on this run. `flag` names the flag, `analysis` names the analysis, and `reason` gives the cause. When a config key turns the analysis off, `key` names that key, for example `duplicates.enabled` for `--dupes-baseline`. |
+| `env-value-ignored` | An environment variable, such as a `FALLOW_PRODUCTION*` variable, has a value that fallow cannot read, so the run ignores it. `name` names the variable. The entry never holds the value. |
+| `config-file-shadowed` | Two config files exist in one directory. `used` names the file that fallow loaded, and `ignored` names the other file. |
+| `config-load-fell-back` | The editor could not load the config, so the language server analyzed with the default config. `error` gives the cause. |
+| `unknown-security-category` | `security.categories` names a category that fallow does not know. `id` names it. |
+
+The human output prints a flag without effect and an ignored variable as one `Note:` line, and `--quiet` hides that line. `fallow audit --format json` has a root `workspace_diagnostics` array when a notice exists. The MCP tools show these notices in `warnings`, and the language server writes them to its log. To see each setting of a run and its cause, run [`fallow config --resolved`](/cli/config#show-the-settings-of-a-run).
+
+## Errors {#errors}
+
+When a command fails with `--format json`, stdout holds an error document, and the exit code is `2`. The document has no `kind`. This sample comes from `fallow mutation` with uncommitted changes:
+
+```json
+{
+  "error": true,
+  "message": "the git worktree has 1 uncommitted path: package-lock.json",
+  "exit_code": 2,
+  "code": "FALLOW_MUTATION_DIRTY_WORKTREE",
+  "help": "commit or stash the changes, or pass --allow-dirty"
+}
+```
+
+`error`, `message` and `exit_code` are always present. `code`, a stable name of the error, and `help`, the step to take, are optional. [Exit codes](/reference/exit-codes) lists each code.
+
+## Kinds {#kinds}
+
+| `kind` | Command |
+|:--|:--|
+| `dead-code` | `fallow dead-code`. See [Dead code](#dead-code). |
+| `dead-code-grouped` | `fallow dead-code --group-by <mode>` |
+| `dupes` | `fallow dupes`. See [Duplication](#dupes). |
+| `health` | `fallow health`. See [Health](#health). |
+| `combined` | `fallow` without a command. See [Combined run](#combined). |
+| `audit` | `fallow audit`. See [Audit](#audit). |
+| `audit-brief` | `fallow audit --brief` and `fallow review` |
+| `architecture` | `fallow architecture`. See [Architecture](#architecture). |
+| `architecture-grouped` | `fallow architecture --group-by <mode>` |
+| `security` | `fallow security`. See [Security](#security). |
+| `security-survivors`, `security-blind-spots` | `fallow security survivors`, `fallow security blind-spots` |
+| `feature-flags` | `fallow flags`. See [Feature flags](#flags). |
+| `mutation` | `fallow mutation`. See [Mutation testing](#mutation). |
+| `mutation-plan`, `mutation-inspect`, `mutation-tasks` | `fallow mutation --plan`, `fallow mutation inspect`, `fallow mutation tasks` |
+| `similar-code`, `similar-code-inspect`, `similar-code-review`, `similar-code-status`, `similar-code-cache-clear` | `fallow similar-code` and its subcommands |
+| `list-boundaries` | `fallow list --boundaries`. See [List](#list). |
+| `list-workspaces` | `fallow workspaces` |
+| `explain` | `fallow explain <issue-type>`. See [Explain](#explain). |
+| `inspect_target` | `fallow inspect` |
+| `trace` | `fallow dead-code --trace` and the other trace options |
+| `trace-error` | `fallow trace-error` |
+| `impact`, `impact-cross-repo` | `fallow impact`, `fallow impact --all` |
+| `decision-surface` | `fallow decision-surface` |
+| `suppression-inventory` | `fallow suppressions` |
+| `doctor` | `fallow doctor` |
+| `type-aware-status` | `fallow type-aware status` |
+| `coverage-setup`, `coverage-analyze` | `fallow coverage setup`, `fallow coverage analyze` |
+| `review-envelope` | `--format review-github` and `--format review-gitlab` |
+| `review-reconcile` | `fallow ci reconcile-review` |
+| `review-walkthrough-guide`, `review-walkthrough-validation` | `fallow review --walkthrough-guide`, `fallow review --walkthrough-file` |
+
+`--format codeclimate` writes a JSON array, as the Code Climate format requires, without an envelope.
+
+## Dead code {#dead-code}
+
+`fallow dead-code --format json`:
+
+| Field | Content |
+|:--|:--|
+| `total_issues` | The number of findings in all arrays. |
+| `entry_points` | The number of entry points from each source. |
+| `summary` | The number of findings of each issue type. |
+| `unused_files`, `unused_exports`, `unused_dependencies` and the other arrays | One array for each issue type, with one object for each finding. |
+| `stale_suppressions` | Suppressions that hide no finding. `origin` describes the comment or the tag. `origin.kind_known: false` marks a token that is not an issue type. |
+| `cascade_hidden` | The number of findings in unused files that the report leaves out. Absent when it is 0. See [`showCascade`](/reference/config-rules#showcascade). |
+| `baseline`, `baseline_deltas`, `baseline_staleness` | Only in a run with `--baseline`. |
+
+```json
+{
+  "kind": "dead-code",
+  "schema_version": 11,
+  "version": "3.45.0",
+  "elapsed_ms": 186,
+  "total_issues": 6,
+  "unused_exports": [
+    {
+      "path": "src/lib/format.ts",
+      "export_name": "formatPercent",
+      "is_type_only": false,
+      "line": 3,
+      "col": 13,
+      "span_start": 103,
+      "is_re_export": false,
+      "finding_id": "dc1:unused-export:b650995c7b5b87c1",
+      "actions": [
+        {
+          "type": "remove-export",
+          "auto_fixable": true,
+          "description": "Remove the unused export from the public API"
+        },
+        {
+          "type": "suppress-line",
+          "auto_fixable": false,
+          "description": "Suppress with an inline comment above the line",
+          "comment": "// fallow-ignore-next-line unused-export"
+        }
+      ],
+      "effective_severity": "error"
+    },
+  "gate_outcomes": {
+    "error-severity-findings": {
+      "status": "fail",
+      "enforced": true,
+      "observed": 6.0,
+      "threshold_label": "error"
+    }
+  },
+  "next_steps": [
+    {
+      "id": "trace-unused-export",
+      "command": "fallow dead-code --trace src/lib/format.ts:formatPercent",
+      "reason": "verify an export is truly unused before deleting"
+    },
+  ],
+  "_meta": {
+    "telemetry": {
+      "analysis_run_id": "run_d7b2f098153aa420"
+    }
+  }
+}
+```
+
+SARIF has the same number in `runs[].properties.cascadeHidden`. The human and Markdown formats print it in a note.
+
+With `--group-by`, the `kind` is `dead-code-grouped`, and `groups` holds the findings of each group.
+
+## Duplication {#dupes}
+
+`fallow dupes --format json`:
+
+| Field | Content |
+|:--|:--|
+| `clone_groups` | One object for each [clone group](/analysis/duplication): `instances`, `token_count`, `line_count`, `fingerprint`, `spread`, `actions`. |
+| `clone_families` | One object for each set of files that share clone groups: `files`, `groups`, `suggestions`, `actions`. |
+| `stats` | The totals of all compared code, also when `--top` limits the list. |
+| `clone_groups_shown`, `clone_groups_omitted` | The number of groups in `clone_groups`, and the number that `--top` left out. |
+| `clone_families_shown`, `clone_families_omitted` | The same numbers for `clone_families`. |
+| `range_marker_problems` | [Range markers](/configuration/suppression#suppressing-one-clone-with-a-range) with a problem. |
+
+`fingerprint` holds the [handle](/analysis/duplication) of the group, for example `dup:f42424e8`. Each instance has a `fragment` field with the source text. `--no-fragments` leaves it out.
+
+```json
+{
+  "kind": "dupes",
+  "schema_version": 10,
+  "version": "3.45.0",
+  "elapsed_ms": 28,
+  "clone_groups": [
+    {
+      "instances": [
+        {
+          "file": "src/reports/export.ts",
+          "start_line": 3,
+          "end_line": 19,
+          "start_col": 31,
+          "end_col": 1,
+        },
+        {
+          "file": "src/utils/summary.ts",
+          "start_line": 7,
+          "end_line": 23,
+          "start_col": 27,
+          "end_col": 1,
+        }
+      ],
+      "token_count": 210,
+      "line_count": 17,
+      "fingerprint": "dup:f42424e8",
+      "spread": 2,
+  "stats": {
+    "total_files": 8,
+    "files_with_clones": 2,
+    "total_lines": 170,
+    "duplicated_lines": 34,
+    "total_tokens": 1334,
+    "duplicated_tokens": 210,
+    "clone_groups": 1,
+    "clone_families": 1,
+    "clone_instances": 2,
+    "duplication_percentage": 20.0
+  },
+  "clone_groups_shown": 1,
+  "clone_groups_omitted": 0,
+  "clone_families_shown": 1,
+  "clone_families_omitted": 0,
+```
+
+## Health {#health}
+
+`fallow health --format json`:
+
+| Field | Content |
+|:--|:--|
+| `findings` | One object for each function above a complexity limit: `cyclomatic`, `cognitive`, `crap`, `severity` (the band), `effective_severity` (the rule), `actions`. |
+| `summary` | The numbers of files and functions, the limits, and the number of findings in each band. |
+| `health_score` | The [health score](/analysis/health), its grade and its penalties. |
+| `vital_signs` | The metrics of the whole project. |
+| `file_scores` | The [maintainability index](/analysis/health) and other scores of each file. |
+| `hotspot_summary`, `hotspots` | Files that change often and are complex. |
+| `targets` | Ranked refactoring targets. |
+| `sections` | The sections that the run produced, in a fixed order. |
+
+```json
+{
+  "kind": "health",
+  "schema_version": 13,
+  "version": "3.45.0",
+  "elapsed_ms": 56,
+  "findings": [
+    {
+      "path": "src/services/customers.ts",
+      "name": "classifyCustomer",
+      "line": 9,
+      "col": 32,
+      "cyclomatic": 23,
+      "cognitive": 32,
+      "line_count": 39,
+      "param_count": 1,
+      "exceeded": "all",
+      "severity": "critical",
+  "summary": {
+    "files_analyzed": 16,
+    "functions_analyzed": 24,
+    "functions_above_threshold": 1,
+  "health_score": {
+    "formula_version": 3,
+    "score": 60.8,
+    "grade": "C",
+  "gate_outcomes": {
+    "health-findings": {
+      "status": "fail",
+      "enforced": true,
+      "observed": 1.0,
+      "threshold_label": "error"
+    }
+  },
+```
+
+## Combined run {#combined}
+
+`fallow --format json` runs dead code, duplication and health in one envelope:
+
+| Field | Content |
+|:--|:--|
+| `check` | The dead code section, with the fields of [Dead code](#dead-code) and its own `schema_version`. |
+| `dupes` | The duplication section, with the fields of [Duplication](#dupes). |
+| `health` | The health section, with the fields of [Health](#health). |
+| `skipped` | Each analysis that the run left out, with the reason. |
+| `gate_outcomes` | The gates of all sections. |
+
+```json
+{
+  "kind": "combined",
+  "schema_version": 15,
+  "version": "3.45.0",
+  "elapsed_ms": 199,
+  "gate_outcomes": {
+    "error-severity-findings": {
+      "status": "fail",
+      "enforced": false,
+      "observed": 6.0,
+      "threshold_label": "error"
+    },
+    "health-findings": {
+      "status": "fail",
+      "enforced": false,
+      "observed": 1.0,
+      "threshold_label": "error"
+    }
+  },
+  "check": {
+    "schema_version": 11,
+    "version": "3.45.0",
+    "elapsed_ms": 169,
+    "total_issues": 6,
+  "dupes": {
+    "clone_groups": [
+  "health": {
+    "findings": [
+```
+
+## Audit {#audit}
+
+`fallow audit --format json` reports the [changed-code check](/concepts/changed-code):
+
+| Field | Content |
+|:--|:--|
+| `command` | Always `"audit"`. |
+| `verdict` | `pass`, `warn` or `fail`. |
+| `changed_files_count` | The number of changed files in scope. |
+| `base_ref`, `base_description`, `head_sha` | The base of the comparison and the commit of the head. |
+| `summary` | The number of findings in each analysis. |
+| `attribution` | The findings that the change introduced and the findings that it inherited, for each analysis. |
+| `dead_code`, `duplication`, `complexity` | The findings of each analysis in the changed files. |
+| `diff_risk` | Findings about the change itself, for example weakened tests. Absent when there are none. |
+
+```json
+{
+  "kind": "audit",
+  "schema_version": 14,
+  "version": "3.45.0",
+  "command": "audit",
+  "verdict": "warn",
+  "changed_files_count": 2,
+  "base_ref": "main",
+  "base_description": "local main",
+  "head_sha": "87067c4",
+  "elapsed_ms": 224,
+  "attribution": {
+    "gate": "new-only",
+    "worsened": "warn",
+    "dead_code_introduced": 0,
+    "duplication_introduced": 1,
+    "duplication_inherited": 0,
+    "styling_introduced": 0,
+    "styling_inherited": 0,
+    "duplication_demoted": 0,
+    "diff_risk_introduced": 0
+  },
+  "gate_outcomes": {
+    "audit-verdict": {
+      "status": "warn",
+      "enforced": true
+    }
+  },
+  "duplication": {
+    "clone_groups": [
+  "complexity": {
+    "findings": [],
+```
+
+## Architecture {#architecture}
+
+`fallow architecture --format json` has the fields of [Dead code](#dead-code). The architecture arrays hold the findings: `circular_dependencies`, `re_export_cycles`, `package_cycles`, `boundary_violations`, `boundary_coverage_violations`, `boundary_call_violations` and `policy_violations`. With `--shared-state`, `shared_state` holds the shared-state report.
+
+A `boundary_violations` entry has `from_path`, `to_path`, `from_zone`, `to_zone` and `import_specifier`. An import through a barrel file has `via_path`. An import of a file that is not public has `reason: "internal_file"` and `public_files`. See [Boundary configuration](/configuration/boundaries).
+
+```json
+{
+  "kind": "architecture",
+  "schema_version": 2,
+  "version": "3.45.0",
+  "elapsed_ms": 59,
+  "total_issues": 2,
+  "boundary_violations": [
+    {
+      "from_path": "src/reports/invoice.ts",
+      "to_path": "src/services/orders.ts",
+      "from_zone": "reports",
+      "to_zone": "services",
+      "import_specifier": "src/services/orders.ts",
+      "line": 1,
+      "col": 14,
+      "finding_id": "dc1:boundary-violation:48f7879d0efd6aba",
+      "actions": [
+        {
+          "type": "refactor-boundary",
+          "auto_fixable": false,
+          "description": "Move the import through an allowed zone or restructure the dependency",
+          "note": "This import crosses an architecture boundary that is not permitted by the configured rules"
+        },
+        {
+          "type": "suppress-line",
+          "auto_fixable": false,
+          "description": "Suppress with an inline comment above the line",
+          "comment": "// fallow-ignore-next-line boundary-violation"
+        }
+      ],
+      "effective_severity": "error"
+    },
+```
+
+## Security {#security}
+
+`fallow security --format json`:
+
+| Field | Content |
+|:--|:--|
+| `config` | The configured and the effective severity of each security rule, and the selected categories. |
+| `security_findings` | One object for each candidate: `kind`, `category`, `cwe`, `path`, `line`, `evidence`, `severity`, `trace`, `reachability`, `actions`. |
+| `unresolved_edge_files`, `unresolved_callee_sites` | The number of places that fallow could not follow. |
+
+With `--summary`, the output has `summary` and no arrays of findings. Each finding is a candidate that a person must check. See [Security](/analysis/security).
+
+```json
+{
+  "kind": "security",
+  "schema_version": "8",
+  "version": "3.45.0",
+  "elapsed_ms": 73,
+  "security_findings": [
+    {
+      "finding_id": "016ae89b0e96180f",
+      "stable_finding_id": "sec1:f6797a2384c0b3fc",
+      "kind": "tainted-sink",
+      "category": "dangerous-html",
+      "cwe": 79,
+      "path": "src/services/render.ts",
+      "line": 2,
+      "col": 2,
+      "evidence": "Non-literal value assigned to el.innerHTML. Candidate for verification: confirm the value is not attacker-controlled, or is sanitized, before it reaches the DOM.",
+      "severity": "medium",
+  "unresolved_edge_files": 0,
+  "unresolved_callee_sites": 9,
+```
+
+## Feature flags {#flags}
+
+`fallow flags --format json`:
+
+| Field | Content |
+|:--|:--|
+| `feature_flags` | One object for each flag: `path`, `flag_name`, `kind`, `confidence`, `line`, `col`, `actions`. |
+| `total_flags` | The number of entries in `feature_flags`. |
+| `retirement` | The flags that you can remove, with the reasons. |
+
+```json
+{
+  "kind": "feature-flags",
+  "schema_version": 8,
+  "version": "3.45.0",
+  "elapsed_ms": 57,
+  "feature_flags": [
+    {
+      "path": "src/services/checkout.ts",
+      "flag_name": "FEATURE_NEW_CHECKOUT",
+      "kind": "environment_variable",
+      "confidence": "high",
+      "line": 1,
+      "col": 45,
+```
+
+## Mutation testing {#mutation}
+
+`fallow mutation --format json`:
+
+| Field | Content |
+|:--|:--|
+| `completion` | `status` and `reasons`. A `partial` run stopped before it tested each mutant, for example at `--max-mutants`. |
+| `scope` | The code that the run changed. |
+| `runner`, `cache` | The test runner and the result cache. |
+| `summary` | The number of mutants with each status, the `score` and the `coverage`. |
+| `mutants` | One object for each mutant: the place, the `operator`, the `change`, the `status` and the tests. |
+| `functions` | The results of each function. |
+| `files` | The changed files with their SHA-256 digest. |
+| `gate_outcomes` | The `mutation-min-score` gate, when `--min-score` or `mutation.minScore` sets it. |
+
+```json
+{
+  "kind": "mutation",
+  "schema_version": "2",
+  "version": "3.45.0",
+  "elapsed_ms": 371,
+  "completion": {
+    "status": "partial",
+    "reasons": [
+      "mutant-limit"
+    ]
+  },
+  "summary": {
+    "counts": {
+      "total": 222,
+      "killed": 4,
+      "timeout": 0,
+      "survived": 0,
+      "no_coverage": 213,
+      "runtime_error": 0,
+      "flaky": 0,
+      "pruned": 4,
+      "pending": 1,
+      "equivalent": 0,
+      "compile_error": 0,
+      "not_killed_by_target": 0
+    },
+    "score": 1.0,
+    "coverage": 0.022935779816513763,
+    "sampled_out": 0
+  },
+  "mutants": [
+    {
+      "mutant_id": "1c5c16bb5be77fce",
+      "file": "src/lib/parse.ts",
+      "line": 1,
+      "column": 53,
+      "operator": "return-value",
+      "function": "parseAmount",
+      "status": "killed",
+      "killed_by": "src/math.test.ts::parseAmount > parses 1.00",
+```
+
+## List {#list}
+
+`fallow list --boundaries --format json` has the `kind` `list-boundaries`. `boundaries` holds the zones after preset expansion, with `file_count` for each zone, and the rules:
+
+```json
+{
+  "kind": "list-boundaries",
+  "boundaries": {
+    "configured": true,
+    "zone_count": 3,
+    "zones": [
+      {
+        "name": "services",
+        "patterns": [
+          "src/services/**"
+        ],
+        "file_count": 3
+      },
+    "rule_count": 3,
+    "rules": [
+      {
+        "from": "services",
+        "allow": [
+          "shared"
+        ]
+      },
+```
+
+The other `fallow list` options give an object without `kind` and `schema_version`. It has the fields of the requested lists: `plugins`, `files`, `file_count`, `entry_points`, `entry_point_count`, `workspaces`, `workspace_count` and `workspace_diagnostics`. Each entry point has `path` and `source`.
+
+## Explain {#explain}
+
+`fallow explain <issue-type> --format json` describes one issue type. The output has no `schema_version`:
+
+```json
+{
+  "kind": "explain",
+  "id": "fallow/unused-export",
+  "name": "Unused Exports",
+  "summary": "Export is never imported",
+  "rationale": "Named exports that are never imported by any other module in the project. Includes both direct exports and re-exports through barrel files. The export may still be used locally within the same file.",
+  "example": "export const formatPrice = ... exists in src/money.ts, but no module imports formatPrice.",
+  "how_to_fix": "Remove the export or make it file-local. If it is public API, import it from an entry point or add an intentional suppression with context. To treat exported Effect schemas as type contracts, set effect.schemaExportsAsTypes: fallow then reports them as unused types.",
+  "docs": "https://fallow.tools/docs/explanations/dead-code/#unused-exports",
+```
+
+## JSON Schema {#schema}
+
+The JSON Schema of each envelope is [`docs/output-schema.json`](https://github.com/fallow-rs/fallow/blob/main/docs/output-schema.json) in the fallow repository. Validate against the schema of the fallow version that you run: an older copy can reject a new `workspace_diagnostics` kind.
+
+## Related
+
+- [Findings](/concepts/findings): findings, rules and gates.
+- [Exit codes](/reference/exit-codes): the exit code of each command.
+- [Agents](/integrations/agents): use the JSON output in an agent.

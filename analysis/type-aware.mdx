@@ -1,256 +1,168 @@
 ---
-title: "Type-aware unused code checks for TypeScript"
-sidebarTitle: "Type-aware TypeScript analysis"
-description: "Type-aware analysis confirms with the TypeScript checker that a symbol is unused before you delete it, with evidence for symbol usage and affected tests."
-keywords: ["type-aware", "TypeScript", "symbol impact", "private type leaks", "type coupling", "typescript-go", "TypeScript checker unused symbols"]
+title: "Type-aware analysis"
+description: "Add the TypeScript type checker to fallow, so that it confirms a TypeScript finding before you delete code."
+keywords: ["type-aware", "TypeScript", "type checker", "fallow-type-aware", "unused class members", "symbol impact", "private type leaks", "type coupling"]
 icon: "code"
 ---
 
-Type-aware mode lets you delete or refactor TypeScript code with exact TypeScript checker evidence. It follows exact symbol identity across aliases, re-exports, packages, and tests.
+Fallow can report a method as unused when a package calls it through an interface. If you delete that method, the package has nothing to call, and your build or your app fails. Fallow reads your code as syntax and does not run the TypeScript compiler, so it does not see the interface in the package. The **type-aware analysis** is an opt-in analysis that uses the TypeScript type checker to confirm what syntax alone cannot decide. Turn it on with `--type-aware`. It needs one more package and adds time to each run.
 
-The default fallow analysis is Rust-native and syntactic. It does not need Node.js or the TypeScript compiler. Add `--type-aware` when a cleanup or refactor depends on exact TypeScript symbol identity.
+## What fallow finds
 
-The optional companion adds these project-wide capabilities:
+This example adds two things to the demo project: a package `job-queue` that declares a `Job` interface, and a file `src/jobs/cleanup-job.ts`. The package calls `run()`. Your code never calls it:
 
-- Exact symbol-use confirmation for existing dead-code candidates.
-- Symbol traces with namespaces, aliases, and re-export hops.
-- Package API surfaces and private type leaks across files.
-- Exact consumers, affected files, and targeted tests.
-- Public-signature type coupling, as advisory findings.
+```ts
+// src/jobs/cleanup-job.ts
+import type { Job } from "job-queue";
 
-Use this pass when a real cleanup or refactor decision depends on TypeScript identity. For fast everyday feedback, keep the normal syntactic run.
-
-```bash
-fallow type-aware status --format json --quiet
-fallow dead-code --unused-class-members --type-aware --format json --quiet
-fallow fix --type-aware --dry-run --format json --quiet
-fallow dead-code --type-aware --symbol-impact src/api.ts:Client --format json --quiet
-fallow health --type-aware --type-coupling --format json --quiet
-fallow dead-code --constant-parameters --type-aware --format json --quiet
+export class CleanupJob implements Job {
+  async run(): Promise<void> {
+    console.log("remove old orders");
+  }
+}
 ```
 
-## What this does not replace
+```ts
+// src/index.ts (added lines)
+import { schedule } from "job-queue";
+import { CleanupJob } from "./jobs/cleanup-job";
 
-Keep `tsc --noEmit` for compiler correctness and Oxlint for local lint rules. Fallow does not emit TypeScript diagnostics or repeat local typed lint findings.
-
-Type-aware fallow answers project-wide questions that those tools do not:
-
-- Is this exact declaration used through an alias or re-export?
-- Which production files and tests depend on this exported symbol?
-- Does a public signature expose a package-private type?
-- Which public types couple packages or modules together?
-- Does a default value of a parameter ever apply, and which calls does a class method have? The opt-in [constant-parameter](/explanations/dead-code#with-type-evidence) rule reads this evidence when `--type-aware` is on.
-
-## Conservative results
-
-Every semantic result reports `complete`, `partial`, or `unavailable`. Fallow removes a dead-code candidate only when the checker resolves the exact identity of its declaration. When the analysis is partial or unavailable, fallow keeps the original finding and reports a stable omission reason.
-
-`fallow fix --type-aware` offers a class-member removal only when two conditions are true: every owning project returns complete negative evidence, and the declaration guard still matches. Always preview with `--dry-run`.
-
-<Warning>
-  Evidence that the checker can see does not prove that a published API has no external consumers. For library boundaries, package exports, `publicPackages`, visibility tags, and explicitly selected consumer projects stay authoritative.
-</Warning>
-
-To fail the CI job when semantic evidence is incomplete, use `--type-aware-require complete`:
-
-```bash
-fallow dead-code --type-aware --type-aware-require complete \
-  --format json --quiet
+schedule(new CleanupJob());
 ```
 
-When automatic project selection misses a consumer, add a `--type-aware-project` flag for each project. The flag is repeatable:
+Run the same check twice, first without and then with the type checker:
 
 ```bash
-fallow dead-code --type-aware \
-  --type-aware-project tsconfig.json \
-  --type-aware-project packages/web/tsconfig.json \
-  --format json --quiet
+npx fallow dead-code --unused-class-members
+npx fallow dead-code --unused-class-members --type-aware
 ```
 
-## Svelte virtual-module exports {#svelte-virtual-module-exports}
+Without the type checker, fallow does not read the `Job` interface in the package, so it reports `run` as unused:
 
-Svelte language tooling creates virtual TypeScript modules for `.svelte` files. TypeScript-Go does not yet expose the plugin integration that fallow needs to build the same virtual modules. Fallow still supports default component imports, and named exports backed by declarations that the checker can see.
+```text
+  3 entry points detected (2 package.json, 1 plugin)
 
-A selected project can use a named import, named re-export, or wildcard re-export whose `.svelte` target does not resolve. In that case, fallow abstains with `svelte-virtual-module-exports` and reports the project and the affected semantic queries as `unavailable`. In best-effort mode, fallow keeps the syntactic result as advisory evidence. With `--type-aware-require complete`, the run fails.
+── Unused Code ─────────────────────────────────────
 
-For authoritative Svelte and TypeScript diagnostics, run `svelte-check`. Do not rewrite valid component exports only to satisfy fallow. Keep the Svelte project configuration as it is, and rely on the omission reason until TypeScript-Go provides a supported virtual-module host integration.
+● Unused class members (1)
+  src/jobs/cleanup-job.ts
+    :4 CleanupJob.run
+  Class methods or properties never referenced outside their class
 
-## Persistent configuration
+✗ 1 class member (0.05s)
+```
 
-Keep the feature opt-in for each repository:
+With `--type-aware`, the type checker resolves `Job` to its declaration in the package. The interface requires `run`, so fallow removes the finding and says why on the last line:
+
+```text
+  3 entry points detected (2 package.json, 1 plugin)
+
+✓ No issues found (0.24s)
+[W] Type-aware refinement: 1 candidate, 0 confirmed uses, 1 preserved contract, 0 candidates without static references (0 guarded fixes), 0 unresolved findings, 0 abstained findings
+```
+
+The check of a finding is the main result. The type-aware analysis also adds these results:
+
+| Result | Where |
+|:--|:--|
+| A check of each [`unused-export`](/rules/unused-export), [`unused-type`](/rules/unused-type) and [`unused-class-member`](/rules/unused-class-member) finding | `fallow dead-code`, `fallow audit` and bare `fallow` |
+| The exact consumers of one export, the affected files and the tests to run | `fallow dead-code --symbol-impact src/lib/format.ts:formatPrice` |
+| Public signatures that use a type that the package does not export ([`private-type-leak`](/rules/private-type-leak)) | `fallow dead-code --private-type-leaks` |
+| Public types that tie modules or packages together | `fallow health --type-coupling` |
+| A check that a mutant still compiles | `fallow mutation --typecheck` |
+
+## How fallow decides
+
+The `1 candidate` in the refinement line is the method `run`. Fallow first runs its normal analysis. Then it sends only the candidates to the type checker: the exports, types and class members that the normal analysis reports as unused. The type checker answers for the exact declaration. A name that only looks the same is not enough.
+
+Each candidate gets one outcome:
+
+| Outcome | Finding |
+|:--|:--|
+| `confirmed-used` | Removed. The type checker found a reference. |
+| `contract-preserved` | Removed. An interface, an abstract member, an override or a framework contract requires the declaration. `run` gets this outcome. |
+| `confirmed-no-static-references` | Kept. Each project that owns the file has no reference. |
+| `retained-unresolved` | Kept. The type checker could not resolve the declaration or its project. |
+| `retained-abstained` | Kept. Dynamic code, a decorator, an overload or another known gap stops a sure answer. |
+
+Thus, the type-aware analysis removes findings of these three kinds. It never adds one. The rule `private-type-leaks` is an exception: it is `off` by default, and a type-aware run sets it to `warn` when your config does not set it. Each result also has a status: `complete`, `partial` or `unavailable`. [Evidence levels](/concepts/evidence) explains what static evidence can prove.
+
+### Turn it on
+
+The type checker runs in a separate package, `fallow-type-aware`. It brings TypeScript 7, so the `fallow` package does not install it. Install it in your project next to `fallow`, at the same version. Fallow accepts only an exact version match:
+
+```bash
+npm install --save-dev fallow fallow-type-aware@<your fallow version>
+```
+
+A global `fallow` needs a global `fallow-type-aware`. A one-off `npx fallow` that is not in your project does not find the project package: start both packages with `npx -p fallow@<version> -p fallow-type-aware@<version> fallow`.
+
+Check that fallow finds it:
+
+```bash
+npx fallow type-aware status
+```
+
+Then turn the analysis on for one run with `--type-aware`, or for each run in your config file:
 
 ```jsonc
+// .fallowrc.jsonc
 {
   "typeAware": {
     "enabled": true,
-    "projects": ["tsconfig.json"],
     "require": "best-effort"
   }
 }
 ```
 
-Start with `best-effort`. Use `complete` only when partial or unavailable semantic evidence must fail the run.
+Pass `--no-type-aware` to keep one run syntactic. When fallow misses a TypeScript project that uses your code, add it with `--type-aware-project packages/web/tsconfig.json`. The option is repeatable.
 
-### When the type-aware pass cannot run
+#### Homebrew, Cargo and binary installs {#homebrew-cargo-and-binary-installs}
 
-The result depends on `typeAware.require` and on the cause:
+A `fallow` binary from Homebrew, `cargo install` or a release archive does not find an npm package. On macOS and Linux, run `fallow type-aware setup` once. The command downloads the signed package of its own fallow version into your user directory. The package needs Node.js 20 or later on `PATH`. On Windows, install `fallow` and `fallow-type-aware` from npm. The GitHub Action and the GitLab template install the package themselves. [`fallow type-aware`](/cli/type-aware) has the details of `status`, `setup` and `cleanup`.
+
+#### Cost
+
+The type checker builds a TypeScript program for each selected project and scans its symbols. This adds time to the run, and more time on a large project. A CLI or CI run pays this cost each time, while the editor keeps the program in memory between saves. One request to the type checker can take 2 minutes at most. Change the limit with `FALLOW_TYPE_AWARE_TIMEOUT_SECS`.
+
+Fallow starts the type checker only when the run has a candidate for it, so a run with no candidate costs nothing extra.
+
+## Act on a finding
+
+A finding that the type checker keeps with `confirmed-no-static-references` is stronger evidence, but it is still a static result. Before you delete it, check the cases in [What fallow cannot see](#what-fallow-cannot-see): reflection, framework registration and consumers outside your projects.
+
+`fallow fix --type-aware` removes a class member only when each owning project gives a complete negative answer, and the declaration did not change. Run it with `--dry-run` first.
+
+## Fail a run
+
+Without the package, or when the type checker fails, fallow can still report the syntactic findings. `typeAware.require` decides what happens when the type checker cannot give a complete answer:
 
 | Cause | `best-effort` (default) | `complete` |
-|:------|:------------------------|:-----------|
-| No companion found | Syntactic findings. The kinds that the pass can disprove are reported at `warn` | Exit code 2 |
-| The companion failed, timed out, or gave a partial result | Syntactic findings at their configured severity | Exit code 2 |
+|:--|:--|:--|
+| Fallow finds no `fallow-type-aware` package | The syntactic findings. The kinds that the analysis can remove (the three above and `private-type-leak`) get `warn`, so they do not fail the run. | Exit code 2 |
+| The type checker fails, times out, or gives a partial answer | The syntactic findings at their configured severity | Exit code 2 |
 
-"No companion found" means that fallow found no `fallow-type-aware` file. There is no file at the `FALLOW_TYPE_AWARE_BIN` path, no companion next to the active `fallow` executable, and no companion in the `fallow type-aware setup` directory.
+Start with `best-effort`. Use `--type-aware-require complete` in CI only when an incomplete answer must fail the job.
 
-The kinds that the pass can disprove are `unused-export`, `unused-type`, `unused-class-member` and `private-type-leak`. Without a companion, the run lowers each `error` rule of these kinds to `warn`, in the base rules and in `overrides`. A finding that the pass could remove then does not fail the run.
+`fallow audit` compares the base and the head of a change with the same type-aware setting. To keep the audit syntactic, set `audit.typeAware` to `false`. [Changed code and baselines](/concepts/changed-code) explains the audit.
 
-`--fail-on-issues` and `--ci` usually raise each `warn` finding to `error`. Without a companion, these four kinds stay at `warn` and do not fail the run. These flags still raise every other `warn` rule to `error`. This applies to `fallow dead-code`, `fallow audit` and the bare `fallow` run.
+## What fallow cannot see
 
-The JSON output of such a run keeps `_meta.type_aware.executed: false` and the warning in `_meta.type_aware.warnings`. `gate_outcomes` gets a `type-aware-fallback` entry with `status: skipped` and `enforced: false`. A companion that starts and then fails adds no `type-aware-fallback` entry.
+- The type-aware analysis does not replace `tsc --noEmit` or a linter. Fallow does not report compiler errors or typed lint findings.
+- The type checker sees only your projects. A consumer outside them, for example a user of your published package, stays unknown. Package exports and `publicPackages` still decide which exports are public.
+- `confirmed-no-static-references` does not prove that code is unused. Reflection, framework registration and runtime behavior can use it.
+- Dynamic member access, decorators, overloads and a non-literal `import()` make fallow keep the finding.
 
-The editor also shows the syntactic findings when it finds no companion, but at their configured severity.
+### Svelte virtual-module exports {#svelte-virtual-module-exports}
 
-## Performance
+The Svelte tools make a virtual TypeScript module for each `.svelte` file. The type checker that fallow uses cannot make these modules. Fallow supports a default import of a component, and a named export that the type checker can see.
 
-Type-aware analysis builds an additional TypeScript Program and scans checker symbols. On the current public release corpus, the added time is about 92 ms at the median and 2.3 seconds at P95. Large projects can take longer. Editor sessions reuse the loaded Program. One-shot CLI and CI runs pay the cold setup cost each time.
+A project can import or export again a named binding from a `.svelte` file that the type checker cannot resolve. Fallow then marks the project `unavailable` with the reason `svelte-virtual-module-exports`. With `best-effort`, fallow keeps the syntactic findings. With `complete`, the run fails.
 
-## Installation
+Do not move valid component exports to a `.ts` file only for fallow. Use `svelte-check` for Svelte and TypeScript errors.
 
-The `fallow` npm package does not install the companion, because it brings TypeScript 7 (about 30 MB). Install `fallow-type-aware` at the same version as `fallow` when you use `--type-aware`, `mutation --typecheck`, or the `typeAware` config:
+## Reference
 
-```bash
-npm install --save-dev fallow-type-aware@<fallow version>
-```
-
-The `fallow` launcher finds the companion next to the `fallow` package, or in the project root when both packages are in the same `node_modules` tree. So pnpm projects work too. A global `fallow` needs a global companion (`npm install --global fallow-type-aware@<fallow version>`). npx and other package runners do not use the project companion. Start both packages together (`npx -p fallow@<version> -p fallow-type-aware@<version> fallow`), or set `FALLOW_TYPE_AWARE_BIN` to its executable. The GitHub Action and the GitLab template install the companion themselves.
-
-### Homebrew, Cargo, and binary installs
-
-A `fallow` binary from Homebrew, `cargo install`, or a release archive has no npm launcher, so it does not find a global companion. On macOS and Linux, run `fallow type-aware setup` once:
-
-```bash
-fallow type-aware setup
-```
-
-You do not need this step when you install `fallow` from npm. The npm launcher finds the companion package itself.
-
-The command does these steps:
-
-1. It runs `node` from `PATH` to read the platform and the architecture. The companion runs on Node.js 20 or later. An x64 Node on an arm64 Mac gets the x64 bundle.
-2. It shows the bundle, the source URL, and the target directory, and asks for approval. Pass `--yes` when no terminal is available.
-3. It downloads the bundle of its own fallow version from the GitHub release of fallow. The download honors `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`, and `FALLOW_CA_BUNDLE`.
-4. It verifies the signature of the bundle with the release key in the binary, before it unpacks the bundle.
-5. It installs the companion into a user directory that has the fallow version in its name.
-
-| Platform | Directory |
-|:---------|:----------|
-| macOS | `~/Library/Application Support/fallow/fallow-type-aware/<version>/` |
-| Linux | `$XDG_DATA_HOME/fallow/fallow-type-aware/<version>/`, else `~/.local/share/fallow/fallow-type-aware/<version>/` |
-
-The setup bundles are available from the first fallow release that contains the setup command. An older release has no bundle to download.
-
-For a machine with no access to GitHub, copy the bundle and its `.sig` file to the machine. Then install from the file:
-
-```bash
-fallow type-aware setup --from fallow-type-aware-<platform>-<arch>.tar.gz
-```
-
-The signature file must be next to the bundle, as `<file>.sig`.
-
-The companion still needs `node` on `PATH` each time it starts. An editor can start `fallow-lsp` with a shorter `PATH` than your shell. Then the companion reports that Node.js 20 or later must be on `PATH`.
-
-After a fallow upgrade, the installed companion stays in use while it uses the same wire protocol as the new fallow version. When the protocol changes, `fallow type-aware status` tells you to run `fallow type-aware setup` again. A companion of an older protocol stops with `unsupported protocol_version`. Fallow then adds this hint: run `fallow type-aware setup`, or install the companion of the current fallow version from npm.
-
-To remove the companions of other fallow versions, run:
-
-```bash
-fallow type-aware cleanup
-```
-
-The command keeps the companion that fallow uses now. It also removes the temporary directories that an interrupted setup leaves. It asks for approval, or needs `--yes`.
-
-On Windows, `fallow type-aware setup` has no bundle. The npm launcher starts the companion through Node. Install `fallow` and the companion from npm: `npm install --global fallow@<version> fallow-type-aware@<version>`.
-
-On every platform, you can also set `FALLOW_TYPE_AWARE_BIN` to a trusted companion executable. Set it in the environment that starts fallow, for example your shell profile or the environment of your editor.
-
-### How fallow finds the companion
-
-Fallow does not search `node_modules` or `PATH` for the companion. It checks these locations in this order:
-
-1. The path in `FALLOW_TYPE_AWARE_BIN`.
-2. A companion next to the active `fallow` executable.
-3. The `fallow type-aware setup` directory. Fallow prefers the install of its own version. Otherwise it uses the newest install with the same wire protocol.
-
-The npm launcher, the Node bindings, and the VS Code extension find the companion package themselves, and pass it through `FALLOW_TYPE_AWARE_BIN`.
-
-`fallow type-aware status` checks discovery, protocol version, and backend version, and reports where fallow found the companion. It does not analyze the project. See [fallow type-aware](/cli/type-aware).
-
-### Experimental tsrs backend
-
-Set `FALLOW_TYPE_AWARE_BACKEND=tsrs` to run the semantic pass on tsrs, a Rust port of the TypeScript 7 checker, instead of the default TypeScript-Go backend. The environment variable is the only way to select the backend. There is no `typeAware.backend` config key, and the config file rejects it as an unknown field. The backend stays opt-in while tsrs has no stable release.
-
-Fallow accepts any `tsrs` from `0.18.0` up to (not including) `1.0.0`, and any `tsrs` from `7.1.0` up to (not including) `8.0.0`, so you can reuse the `tsrs` that your project already installs. From `7.1.0-beta.tsrs2`, tsrs uses the version of the TypeScript release that it ports. Both version schemes port TypeScript 7.1. Fallow 3.44.0 and earlier accept only the `0.x` releases. The `tsrs` must be where `fallow-type-aware` can resolve it. To install the version that Fallow tests:
-
-```bash
-npm install --save-dev tsrs@7.1.0-beta.tsrs3
-FALLOW_TYPE_AWARE_BACKEND=tsrs npx fallow type-aware status
-```
-
-#### Select the backend on each surface
-
-Fallow reads the variable once per process. Every Fallow process that you start inherits it from its parent.
-
-| Surface | How to select tsrs |
-| --- | --- |
-| CLI, npm scripts, and CI | Set `FALLOW_TYPE_AWARE_BACKEND=tsrs` in the script or in the job `env`. |
-| MCP | Add the variable to the `env` block of the server entry in the MCP client config. |
-| LSP in other editors | Set the variable in the environment of the `fallow-lsp` process. |
-| VS Code | Start the editor with `FALLOW_TYPE_AWARE_BACKEND=tsrs` and with `FALLOW_TYPE_AWARE_BIN` set. See below. |
-
-For MCP, use an `env` block like this:
-
-```json
-{
-  "mcpServers": {
-    "fallow": {
-      "command": "fallow-mcp",
-      "env": { "FALLOW_TYPE_AWARE_BACKEND": "tsrs" }
-    }
-  }
-}
-```
-
-The VS Code extension bundles a companion that holds only the default backend. That companion cannot load tsrs. With only the backend variable set, the type-aware pass is unavailable and Fallow shows conservative syntactic findings. To use tsrs in VS Code, set both variables and start the editor from that shell:
-
-```bash
-export FALLOW_TYPE_AWARE_BACKEND=tsrs
-export FALLOW_TYPE_AWARE_BIN="$PWD/node_modules/.bin/fallow-type-aware"
-code .
-```
-
-An existing `FALLOW_TYPE_AWARE_BIN` takes precedence over the bundled companion. Use an absolute path, because Fallow resolves a relative path from the working directory. The project must have `tsrs` installed where that companion can resolve it. The extension has no setting for the backend.
-
-#### Check the selection
-
-Run `fallow type-aware status` in the same environment as the surface. It names the backend and the version that ran. `_meta.type_aware` in the JSON output names them too. The command does not read the config file. A version outside the supported range makes the type-aware pass unavailable, and `type-aware status` names the range. An unknown backend value also makes the pass unavailable, and `type-aware status` names the known values.
-
-#### Limits
-
-- The tsrs backend refines findings, but its evidence never makes a fix eligible. Guarded fixes need the evidence of the default backend at the version that Fallow tests.
-- tsrs `0.18.0` has no Windows or macOS x64 binaries. Use `0.20.0` or later on those platforms.
-- The default backend also accepts any TypeScript 7 release that a package manager override selects.
-- Fallow will consider a config key when tsrs has a stable release or when the default backend moves to TypeScript 7.1 with corpus evidence for tsrs.
-
-## See also
-
-<CardGroup cols={3}>
-  <Card title="Dead code CLI" icon="terminal" href="/cli/dead-code">
-    Refine cleanup findings and run exact symbol queries.
-  </Card>
-  <Card title="Health CLI" icon="heart-pulse" href="/cli/health">
-    Inspect advisory public-signature type coupling.
-  </Card>
-  <Card title="Known limitations" icon="triangle-exclamation" href="/analysis/limitations">
-    See where the default syntactic analysis stops and the optional semantic analysis starts.
-  </Card>
-</CardGroup>
+- [`fallow type-aware`](/cli/type-aware): `status`, `setup` and `cleanup`.
+- [`typeAware` config](/reference/config-health#typeaware): each key and its default.
+- [Evidence levels](/concepts/evidence): what a static result can prove.

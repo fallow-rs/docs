@@ -1,288 +1,152 @@
 ---
-title: "Set fallow rule severity to error, warn or off"
-sidebarTitle: "Rules & severity"
-description: "Fallow rule severity decides what fails the CI build. Set each issue type to error, warn, or off, and adopt fallow in CI one issue type at a time."
-keywords: ["rules", "severity", "error", "warning", "off", "exit codes", "incremental adoption", "rule severity"]
+title: "Rules and severities"
+sidebarTitle: "Rules and severities"
+description: "Set the severity of each issue type in the rules config, change it for some files with overrides, and see the defaults."
+keywords: ["rules", "severity", "error", "warn", "off", "overrides", "fallow rules", "rule severity", "complexity rules", "fail-on-issues"]
 icon: "scale-balanced"
 ---
 
-Rules let you decide which findings fail CI. You set a severity per issue type, so you can adopt fallow one issue type at a time.
+In the demo project, `fallow dead-code` finds an unused file, three unused exports and two dependency problems, and it exits with code 1. Your team can agree with each finding and still want to remove the exports next month, without a red CI job until then. The `rules` object of the [config file](/configuration/overview) sets the severity of each issue type, so you decide which findings fail a run. [Findings](/concepts/findings#rules-and-severities) defines rules, severities and gates.
 
-<Tip>
-Start with all rules as `warn`. Promote one type at a time to `error` when you have fixed its findings.
-</Tip>
+## The `rules` object
 
-## Severity levels
+Each key is a rule name, and each value is a severity:
 
-| Level | Behavior |
-|:------|:---------|
-| `error` | Report and fail CI (non-zero exit code) |
-| `warn` | Report but exit 0 |
-| `off` | Do not detect or report |
+| Severity | Effect |
+|:--|:--|
+| `error` | Fallow reports the finding, and the run exits with code 1. |
+| `warn` | Fallow reports the finding, and the run exits with code 0. |
+| `off` | Fallow does not look for the issue type. |
 
-When you do not configure a rule, it uses its default severity. The **Default** column in [Available rule names](#available-rule-names) shows the default of each rule. The defaults by group:
-
-- Default `off` (opt-in): `private-type-leaks`, `deprecated-exports-in-use`, `unused-protected-class-members`, `absent-component-props`, `constant-parameters`, `prop-drilling`, `thin-wrapper`, `duplicate-prop-shape`, `coverage-gaps`, `feature-flags`, `require-suppression-reason`, `security-client-server-leak`, `security-sink`, `diverged-clone-sibling`, and `added-dependency`.
-- Default `warn`:
-  - Dependency hygiene: `unused-dev-dependencies`, `unused-optional-dependencies`, `type-only-dependencies`, `test-only-dependencies`, and `dev-dependencies-in-production`.
-  - TypeScript: [`unused-namespace-members`](/explanations/dead-code#unused-namespace-members).
-  - Framework components: `unused-store-members`, `unprovided-injects`, `unrendered-components`, `unused-component-props`, `unused-component-emits`, `unused-component-inputs`, `unused-component-outputs`, `unused-svelte-events`, `unused-server-actions`, and `unused-load-data-keys`.
-  - Effect: `unused-effect-layers`, `unused-tagged-errors`, and `unproduced-catch-tags`.
-  - Audit diff risk: `weakened-tests`, `added-suppression`, and `test-only-branch`.
-  - Audit duplication: `introduced-clone-group`.
-  - Client and server directives: `invalid-client-export`, `mixed-client-server-barrel`, and `misplaced-directive`.
-  - Styling: `css-token-drift`, `css-duplicate-block`, `css-selector-complexity`, `css-dead-surface`, and `css-broken-reference`.
-  - pnpm cleanup: `unused-catalog-entries`, `empty-catalog-groups`, and `unused-dependency-overrides`.
-  - Other: `unlisted-binaries`, `duplicate-export-aliases`, `re-export-cycle`, `package-cycle`, `stale-suppressions`, and `policy-violation`.
-- Default `error`: all other rules.
-
-To print the resolved severity of every rule for your project, run `fallow config`.
-
-In [production mode](/analysis/production-mode), fallow sets `unused-dev-dependencies` and `unused-optional-dependencies` to `off`. Fallow reports `type-only-dependencies` only in production mode, and `test-only-dependencies` only outside production mode.
-
-## Configuration
-
-<CodeGroup>
-```jsonc .fallowrc.json
+```jsonc
+// .fallowrc.json
 {
   "rules": {
     "unused-files": "error",
     "unused-exports": "warn",
     "unused-types": "off",
-    "private-type-leaks": "off",
-    "unused-dependencies": "error",
-    "unused-dev-dependencies": "warn",
-    "unused-optional-dependencies": "warn",
-    "unused-enum-members": "warn",
-    "unused-class-members": "off",
-    "unresolved-imports": "error",
-    "unlisted-dependencies": "error",
-    "duplicate-exports": "warn",
-    "circular-dependencies": "error",
-    "re-export-cycle": "warn",
-    "boundary-violation": "error",
-    "type-only-dependencies": "error",
-    "test-only-dependencies": "warn",
-    "dev-dependencies-in-production": "warn",
-    "coverage-gaps": "off",
-    "stale-suppressions": "warn"
+    "private-type-leaks": "warn"
   }
 }
 ```
 
-```toml fallow.toml
+```toml
+# fallow.toml
 [rules]
 unused-files = "error"
 unused-exports = "warn"
 unused-types = "off"
-private-type-leaks = "off"
-unused-dependencies = "error"
-unused-dev-dependencies = "warn"
-unused-optional-dependencies = "warn"
-unused-enum-members = "warn"
-unused-class-members = "off"
-unresolved-imports = "error"
-unlisted-dependencies = "error"
-duplicate-exports = "warn"
-circular-dependencies = "error"
-re-export-cycle = "warn"
-boundary-violation = "error"
-type-only-dependencies = "error"
-test-only-dependencies = "warn"
-dev-dependencies-in-production = "warn"
-coverage-gaps = "off"
-stale-suppressions = "warn"
+private-type-leaks = "warn"
 ```
-</CodeGroup>
 
-## Available rule names
+A rule that you do not set keeps its default. An unknown rule name gives a warning on stderr, and fallow ignores the entry.
 
-| Rule | Default | Description |
-|:-----|:--------|:------------|
-| `unused-files` | `error` | Files not reachable from any entry point |
-| `unused-exports` | `error` | Exported symbols never imported |
-| `unused-types` | `error` | Type aliases and interfaces never referenced |
-| `private-type-leaks` | `off` | Opt-in API hygiene check. Finds exported signatures that reference a private type from the same file |
-| `deprecated-exports-in-use` | `off` | Opt-in. An export with a `@deprecated` JSDoc tag that a reachable file still uses. See [Deprecated exports in use](/explanations/dead-code#deprecated-exports-in-use) |
-| `unused-dependencies` | `error` | Packages in `dependencies` never used |
-| `unused-dev-dependencies` | `warn` | Packages in `devDependencies` never used |
-| `unused-optional-dependencies` | `warn` | Packages in `optionalDependencies` never used |
-| `unused-enum-members` | `error` | Enum values never referenced |
-| `unused-class-members` | `error` | Class members never referenced |
-| `unused-protected-class-members` | `off` | Opt-in. `protected` class members that the class and its subclasses never read. See [Unused protected class members](/explanations/dead-code#unused-protected-class-members) |
-| `unused-namespace-members` | `warn` | Exported members of an exported TypeScript namespace that no code reads. See [Unused namespace members](/explanations/dead-code#unused-namespace-members) |
-| `unused-store-members` | `warn` | Pinia store members (state, getters, actions) that no code accesses. Runs only when `pinia` or `@pinia/nuxt` is a dependency |
-| `unprovided-injects` | `warn` | `inject()` or `getContext()` reads a key that no `provide()` or `setContext()` supplies |
-| `unrendered-components` | `warn` | A Vue or Svelte component that a barrel exports but that no code renders |
-| `unused-component-props` | `warn` | A Vue, Svelte, or React component prop that its own component never references. See [`unusedComponentProps`](/configuration/overview#unusedcomponentprops) |
-| `absent-component-props` | `off` | An optional prop that its component reads but no inspected reachable caller supplies. Requires known callers and a complete static caller set. Review defaults and API intent before changing it. See [Absent component props](/explanations/dead-code#absent-component-props) |
-| `constant-parameters` | `off` | A function parameter, or an option key of an object-pattern parameter, that each visible call passes in the same way: the same literal or immutable binding, or no value for an optional parameter or key. Requires a complete static caller set. Alias `constant-parameter`. See [Constant parameters](/explanations/dead-code#constant-parameters) |
-| `unused-component-emits` | `warn` | A Vue `<script setup>` `defineEmits` event that its own component never emits |
-| `unused-component-inputs` | `warn` | An Angular `@Input()`, signal `input()`, or `model()` input that its own component never reads |
-| `unused-component-outputs` | `warn` | An Angular `@Output()` or signal `output()` output that its own component never emits |
-| `unused-svelte-events` | `warn` | A Svelte `createEventDispatcher` event that no code in the project listens to |
-| `unused-server-actions` | `warn` | A Next.js Server Action, exported from a `"use server"` file, that no code references |
-| `unused-load-data-keys` | `warn` | A key of a SvelteKit `load()` return object that no consumer reads |
-| `unused-effect-layers` | `warn` | An Effect layer that only unused layers compose. Runs only when `effect` is a dependency. Fallow also accepts `unused-effect-layer`. See [Unused Effect layers](/explanations/dead-code#unused-effect-layers) |
-| `unused-tagged-errors` | `warn` | A `Data.TaggedError` or `Schema.TaggedError` class that no code constructs, fails with, or decodes. Runs only when `effect` is a dependency. See [Unused tagged errors](/explanations/dead-code#unused-tagged-errors) |
-| `unproduced-catch-tags` | `warn` | A `catchTag` handler for a project tag that no code produces. Runs only when `effect` is a dependency. See [Unproduced catch tags](/explanations/dead-code#unproduced-catch-tags) |
-| `prop-drilling` | `off` | A React or Preact prop that passes unchanged through 3 or more components to a distant consumer |
-| `thin-wrapper` | `off` | A React or Preact component whose whole body renders one child with spread props (a candidate for inlining) |
-| `duplicate-prop-shape` | `off` | Three or more React or Preact components, in two or more files, that declare the same set of prop names (a missing shared `Props` type) |
-| `css-token-drift` | `warn` | A hardcoded styling value in CSS or CSS-in-JS that bypasses the design tokens |
-| `css-duplicate-block` | `warn` | A CSS or CSS-in-JS declaration block that repeats across rules |
-| `css-selector-complexity` | `warn` | A structurally complex CSS selector, nesting depth, or `!important` use |
-| `css-dead-surface` | `warn` | CSS or CSS-in-JS surface that no code appears to use |
-| `css-broken-reference` | `warn` | A CSS or CSS-in-JS reference that resolves to no stylesheet definition |
-| `unused-catalog-entries` | `warn` | Entries in the `catalog:` or `catalogs:` maps of `pnpm-workspace.yaml` that no workspace package and no pnpm override references with the `catalog:` protocol |
-| `empty-catalog-groups` | `warn` | Named `catalogs.<name>:` groups in `pnpm-workspace.yaml` that contain no package entries (top-level `catalog:` placeholders are ignored) |
-| `unresolved-catalog-references` | `error` | `package.json` references and pnpm override values with `catalog:` or `catalog:<name>` where the catalog does not declare the package. `pnpm install` would fail |
-| `unused-dependency-overrides` | `warn` | Entries in `pnpm-workspace.yaml#overrides` or `package.json#pnpm.overrides` for a package that no workspace package declares and that is not in `pnpm-lock.yaml`. Without a lockfile, fallow checks the manifests only and sets the `hint` field on these less certain findings. Fallow skips a pnpm source that the declared pnpm version does not read |
-| `misconfigured-dependency-overrides` | `error` | Override entries with a key that fallow cannot parse, or with no value or a value that is not a string, such as a list or a mapping. `pnpm install` would fail. Fallow skips a pnpm source that the declared pnpm version does not read |
-| `unresolved-imports` | `error` | Imports that fallow cannot resolve |
-| `unlisted-dependencies` | `error` | Imported packages not in `package.json` |
-| `unlisted-binaries` | `warn` | Binaries that scripts or process calls run, but that no installed or listed package provides. Common operating-system tools are skipped. See [Unlisted binaries](/explanations/dead-code#unlisted-binaries) |
-| `duplicate-exports` | `error` | Same symbol exported from multiple files |
-| `duplicate-export-aliases` | `warn` | One binding that one file exports under two or more names, such as `export const a` and `export default a`. Fallow also accepts `duplicate-export-alias`. See [Duplicate export aliases](/explanations/dead-code#duplicate-export-aliases) |
-| `circular-dependencies` | `error` | Modules that import each other, directly or transitively |
-| `re-export-cycle` | `warn` | Barrel files that re-export from each other in a loop (`kind: "multi-node"`), or one barrel that re-exports from itself (`kind: "self-loop"`). A re-export cycle does nothing and is almost always a bug. `circular-dependencies` covers runtime import loops instead. The cycle spans multiple files, so a per-file `overrides.rules.re-export-cycle` has no effect. Use the project-wide `rules` block, or `// fallow-ignore-file re-export-cycle` on any file in the cycle. Fallow also accepts the aliases `re-export-cycles`, `reexport-cycle`, and `reexport-cycles`. |
-| `package-cycle` | `warn` | Workspace packages that import each other in a loop, so that they cannot be built in dependency order. Built from resolved imports between packages, not from declared dependencies. Imports from test, spec, story, fixture, and tooling config files do not count. Fallow also accepts the alias `package-cycles`. See [Package cycles](/explanations/dead-code#package-cycles) |
-| `boundary-violation` | `error` | Imports that cross user-defined architecture zone boundaries |
-| `policy-violation` | `warn` | Calls, imports, exports, effects, or gdp-ts proof producers that violate a rule pack (the `rulePacks` config key). A per-rule `severity` in the pack overrides this value for each finding, and the exit code uses that per-finding severity. A rule set to `error` can fail CI even when this setting is `warn`. `off` turns off all rule-pack checks. |
-| `invalid-client-export` | `warn` | A `"use client"` file that exports a server-only or route-config name |
-| `mixed-client-server-barrel` | `warn` | A barrel that re-exports both a `"use client"` module and a server-only module |
-| `misplaced-directive` | `warn` | A `"use client"` or `"use server"` directive that is not in the leading position and therefore has no effect |
-| `complexity-cyclomatic` | `error` | A function above the cyclomatic ceiling (`health.maxCyclomatic` or a `thresholdOverrides` entry). See [Complexity rules](#complexity-rules) |
-| `complexity-cognitive` | `error` | A function above the cognitive ceiling (`health.maxCognitive` or a `thresholdOverrides` entry) |
-| `complexity-crap` | `error` | A function above the CRAP ceiling (`health.maxCrap` or a `thresholdOverrides` entry) |
-| `complexity-file-lines` | `error` | A file above the file-length ceiling (`health.maxFileLines` or a `thresholdOverrides` entry). The ceiling is off by default |
-| `route-collision` | `error` | Two or more Next.js App Router route files that resolve to the same URL |
-| `dynamic-segment-name-conflict` | `error` | Sibling Next.js dynamic route segments that use different slug names at the same position |
-| `type-only-dependencies` | `warn` | Production dependencies that are only imported with `import type`. Fallow checks this rule only in production mode |
-| `test-only-dependencies` | `warn` | Production dependencies that only test files import |
-| `dev-dependencies-in-production` | `warn` | Packages in `devDependencies` that production code imports at runtime. Move them to `dependencies` |
-| `coverage-gaps` | `off` | Runtime files and exports that no test reaches through the import graph |
-| `feature-flags` | `off` | Detected feature flag patterns. See [`fallow flags`](/cli/flags) |
-| `security-client-server-leak` | `off` | Client-bound code that reaches a non-public environment variable read. See [`fallow security`](/cli/security). `overrides[].rules` can set it per path. See [Per-path severity](/cli/security#per-path-severity) |
-| `security-sink` | `off` | Syntactic security sink candidates that need verification. See [`fallow security`](/cli/security). `overrides[].rules` can set it per path. See [Per-path severity](/cli/security#per-path-severity) |
-| `weakened-tests` | `warn` | `fallow audit` only. The change adds a skip or focus marker, removes test cases or assertions, or makes a coverage threshold less strict. See [Weakened tests](/cli/audit#weakened-tests) |
-| `added-suppression` | `warn` | `fallow audit` only. The change adds a lint, type-check, coverage, or Fallow suppression comment. Fallow also accepts `added-suppressions`. See [Added suppressions](/cli/audit#added-suppression) |
-| `test-only-branch` | `warn` | `fallow audit` only. The change adds a test-environment check to a non-test source file. Fallow also accepts `test-only-branches`. See [Test-only branches](/cli/audit#test-only-branch) |
-| `diverged-clone-sibling` | `off` | `fallow audit` only. Opt-in, because copies often differ on purpose. The change edits one copy of a base clone group, and no other copy changed. Fallow also accepts `diverged-clone-siblings`. See [Diverged clone siblings](/cli/audit#diverged-clone-sibling) |
-| `introduced-clone-group` | `warn` | `fallow audit` only. A clone group that the change introduces. With `error`, the group fails the audit. With `off`, the group stays in the report but does not change the verdict. Fallow also accepts `introduced-clone-groups`. See [Clone groups in the verdict](/cli/audit#introduced-clone-group) |
-| `added-dependency` | `off` | `fallow audit` only. The change adds a dependency to a `package.json`. Fallow also accepts `added-dependencies`. See [Added dependencies](/cli/audit#added-dependency) |
-| `stale-suppressions` | `warn` | `fallow-ignore` comments or `@expected-unused` JSDoc tags that no longer match any issue |
-| `require-suppression-reason` | `off` | Opt-in suppression hygiene check. When you enable it, every `fallow-ignore-*` comment and `@expected-unused` tag must end with `-- <reason>`. Fallow reports a suppression without a reason as `missing-suppression-reason` |
+Set each of the four rules of the demo findings to `warn`, and `fallow dead-code` still lists each finding. The summary line starts with `⚠` instead of `✗`, and the command exits with code 0:
 
-<Note>
-  `circular-dependencies` and `circular-dependency` are the same rule. You can use either form in `rules`, `overrides[].rules`, and inline directives.
-</Note>
+```text
+⚠ 1 file · 3 exports · 1 unused dependency · 1 unlisted dependency (0.02s)
+```
 
-<Note>
-  An `overrides[].rules` entry cannot change every rule. Ten rules read only the top-level severity, and most rules do not run when the top-level rule is `off`. Fallow reports each such entry as an `override-rule-ineffective` diagnostic. See [Override rules with no effect](/configuration/overview#override-rules-with-no-effect).
-</Note>
+## Rule names {#available-rule-names}
 
-<Note>
-  A rule at `off` does not run, also when an issue-type flag such as `--unused-deps` asks for it. Fallow then prints a `Note:` line on stderr and adds a `requested-rule-off` diagnostic. The findings and the exit code do not change. See [Requested rules that are off](/configuration/overview#requested-rules-that-are-off).
-</Note>
+To set a rule, you need its name. The rule name is the plural form of the issue type in most cases, for example `unused-exports` for the issue type `unused-export`. Most rules also accept the other form as an alias, for example `circular-dependency` for `circular-dependencies`. The page of each issue type gives its key in the row "Config key in `rules`". [Issue types](/reference/issue-types) lists each issue type with its default severity. The [`rules` reference](/reference/config-rules#rules) lists each key.
 
-## Complexity rules
+## Defaults
 
-The rules `complexity-cyclomatic`, `complexity-cognitive`, `complexity-crap`, and `complexity-file-lines` decide if a complexity finding fails `fallow health` and `fallow audit`. The thresholds still decide which functions and files have a finding. The thresholds are `health.maxCyclomatic`, `health.maxCognitive`, `health.maxCrap`, `health.maxFileLines`, and `health.thresholdOverrides`.
+Before you change a rule, know where it starts. A rule defaults to `error` unless it is in one of these groups:
 
-| Rule value | Result |
-|:-----------|:-------|
-| `error` (default) | The finding fails the run. The exit code and the verdict do not change from earlier releases. |
-| `warn` | The finding stays in every output format. `fallow health` exits 0, and the audit verdict is `warn`. |
-| `off` | Fallow does not report the finding. |
+- `off`: the checks that you turn on yourself. Examples are `private-type-leaks`, `deprecated-exports-in-use`, `unused-protected-class-members`, `absent-component-props`, `constant-parameters`, `prop-drilling`, `thin-wrapper`, `duplicate-prop-shape`, `coverage-gaps`, `feature-flags`, `require-suppression-reason`, `security-sink`, `security-client-server-leak`, `diverged-clone-sibling` and `added-dependency`.
+- `warn`: these groups of rules.
+  - `unused-dev-dependencies`, `unused-optional-dependencies`, `type-only-dependencies`, `test-only-dependencies` and `dev-dependencies-in-production`.
+  - The framework rules, for example `unused-component-props` and `unused-store-members`, and the Effect rules.
+  - The client and server directive rules, and the styling rules (`css-*`).
+  - `unused-catalog-entries`, `empty-catalog-groups` and `unused-dependency-overrides`.
+  - The change checks of `fallow audit` that are not `off`: `weakened-tests`, `added-suppression`, `test-only-branch` and `introduced-clone-group`.
+  - `unlisted-binaries`, `unused-namespace-members`, `duplicate-export-aliases`, `re-export-cycle`, `package-cycle`, `stale-suppressions` and `policy-violation`.
 
-```jsonc .fallowrc.json
+To see the severity of each rule for your project, run `fallow config`. The `rules` object of its output holds the result after `extends` and the defaults.
+
+## Overrides {#overrides}
+
+A severity in `rules` applies to the whole project, but one part of the code can need another one. `overrides` sets other severities for the files that its globs match. The globs follow the [glob rules](/configuration/overview#path-globs).
+
+In this config for the demo project, unused exports only warn. The rule is off in `src/lib`, but `src/lib/format.ts` must stay clean:
+
+```jsonc
+// .fallowrc.json
 {
-  "rules": {
-    "complexity-cyclomatic": "error",
-    "complexity-cognitive": "warn",
-    "complexity-crap": "warn"
-  },
+  "rules": { "unused-exports": "warn" },
   "overrides": [
-    { "files": ["src/legacy/**"], "rules": { "complexity-cyclomatic": "warn" } }
+    { "files": ["src/lib/**"], "rules": { "unused-exports": "off" } },
+    { "files": ["src/lib/format.ts"], "rules": { "unused-exports": "error" } }
   ]
 }
 ```
 
-- A function above more than one threshold gets the most severe rule of those kinds. Fallow drops the finding only when all of these rules are `off`.
-- `overrides[].rules` can set the complexity rules for some files.
-- The rule applies before `fallow health --min-severity`. So a `warn` finding never fails the run, also when its band is at or above the `--min-severity` level.
-- `--fail-on-issues` (and `--ci`, which sets it) raises a `warn` complexity finding to `error` in `fallow health` and in the bare `fallow` run. `fallow audit` ignores `--fail-on-issues` and keeps its own verdict.
-- `health.maxCrap: 0` stays the full off switch for CRAP. It also removes the CRAP signals of the file scores. `complexity-crap: "off"` hides the findings only, and keeps these signals.
-- After you set a kind to `off`, save the health baseline again. Its entries for the hidden findings no longer match, so they count as stale.
-- A `thresholdOverrides` row still lists the dimensions that its function breaches, also when a rule hides the finding.
+```bash
+npx fallow dead-code --unused-exports
+```
 
-Each complexity finding in the JSON output has an optional `effective_severity` field (`error` or `warn`). The `severity` field keeps the band (`moderate`, `high`, or `critical`).
+```text
+● Unused exports (2)
+  src/lib/format.ts
+    :3 formatPercent
+  src/services/orders.ts
+    :18 cancelOrder
+  Exported symbols with no known consumers
+  https://fallow.tools/docs/explanations/dead-code/#unused-exports
 
-<Note>
-A fallow version without these rules warns about an unknown rule name and ignores it. A shared config therefore works with an older binary, but its complexity findings still fail the run there.
-</Note>
+✗ 2 exports (0.03s)
+```
 
-## Levels in CI formats
+The re-export in `src/lib/index.ts` is gone, because the first entry turns the rule off in `src/lib`. `formatPercent` stays, at `error`, so the run fails. `cancelOrder` keeps the top-level `warn`.
 
-The CI formats take the level of each finding from its rule severity. This includes the severity that an `overrides[].rules` entry sets for the file. For a complexity finding, the `complexity-*` rule sets the level, not the band. The band stays in the title and the message.
+- Fallow applies the entries in list order. When two entries match a file and set the same rule, the later entry wins.
+- An override cannot start a check that the top-level `rules` turns off. Set the rule on at the top level, then set it to `off` for the other files.
+- These rules read only the top-level severity: `unused-dependencies`, `unused-dev-dependencies`, `unused-optional-dependencies`, `unlisted-dependencies`, `unlisted-binaries`, `type-only-dependencies`, `test-only-dependencies`, `dev-dependencies-in-production`, `duplicate-exports`, `re-export-cycle` and `unused-catalog-entries`.
+
+Fallow reports an override entry that has no effect as an [override rule with no effect](/configuration/overview#override-rules-with-no-effect). The [`overrides` reference](/reference/config-rules#overrides) has the details.
+
+## Production mode
+
+The same config can give other results in [production mode](/concepts/production-mode), because a development dependency does not ship. Production mode changes some dependency rules:
+
+- `unused-dev-dependencies` and `unused-optional-dependencies` are `off`.
+- Fallow reports `type-only-dependencies` (default `warn`) only in production mode.
+- Fallow reports `test-only-dependencies` only outside production mode.
+
+## Complexity rules {#complexity-rules}
+
+Complexity findings use two settings with different jobs. The health limits, for example `health.maxCyclomatic`, decide if a function has a complexity finding. The rules `complexity-cyclomatic`, `complexity-cognitive`, `complexity-crap` and `complexity-file-lines` decide if that finding fails the run.
+
+- A rule at `warn` keeps the finding in the report. `fallow health` then exits with code 0, and the verdict of `fallow audit` is `warn`.
+- A rule at `off` removes the finding from the report.
+- A function above more than one limit takes the most severe rule of those limits.
+- In JSON output, `effective_severity` holds the rule severity. `severity` holds the band: `moderate`, `high` or `critical`.
+
+After you set a complexity rule to `off`, save the health baseline again. Its entries for the removed findings no longer match.
+
+## Change the result for one run
+
+A CI job or a local check can need a stricter or a narrower run than the config file sets. The config file stays the same for these options:
+
+- `--fail-on-issues` makes a `warn` finding fail the run too. `--ci` includes it. `fallow audit` ignores it and keeps its own verdict.
+- An issue type filter, such as `--unused-deps`, does not turn on a rule that is `off`. Fallow then adds a [requested rule that is off](/configuration/overview#requested-rules-that-are-off) warning.
+- When the config sets their rule to `off`, these filters of `fallow dead-code` turn it on at `warn`: `--private-type-leaks`, `--deprecated-exports-in-use`, `--unused-protected-class-members`, `--absent-component-props` and `--constant-parameters`.
+
+[Exit codes](/reference/exit-codes) lists each code.
+
+## Levels in CI formats {#levels-in-ci-formats}
+
+A severity also decides how a finding looks in a pull request. The CI formats take the level of a finding from its rule severity, also from an `overrides` entry. A complexity finding takes its level from its `complexity-*` rule, not from its band.
 
 | Rule severity | `github-annotations` | SARIF | CodeClimate |
-|:--------------|:---------------------|:------|:------------|
+|:--|:--|:--|:--|
 | `error` | `::error` | `error` | `major` |
 | `warn` | `::warning` | `warning` | `minor` |
 
-With the default rules, a `moderate` complexity finding is an `::error` annotation and a SARIF `error`, because the finding fails the run. Error annotations come before warnings, so the `max-annotations` cap of the GitHub Action keeps the errors.
+## Related
 
-Each dead-code and complexity finding in the JSON output has the optional `effective_severity` field. `fallow report --from` reads it, so a saved report gives the same levels as the direct run. A saved report from an older version has no `effective_severity`. For such a report, `report --from` uses the earlier levels.
-
-`prop-drilling` defaults to `off`. Set it to `error` to fail CI for a finding, or `warn` to keep it advisory even with `--fail-on-issues`. Error findings use the configured error level in CI formats. The editor still shows prop drilling as a hint. Saved JSON reports preserve their effective severity when rendered with `fallow report --from`.
-
-Earlier versions treated `prop-drilling: "error"` as advisory. If you used that setting for non-gating reports, change it to `warn` when upgrading. This affects future analysis runs. An archived JSON report with `effective_severity: "error"` renders as an error even after you change the current config to `warn`.
-
-`thin-wrapper` and `duplicate-prop-shape` findings stay advisory, also when their rules are `error`. Their SARIF level is `warning` at most. The `human`, `json`, `sarif`, `compact`, and `markdown` reports list these findings, and the editor shows them as hints. The pull request formats (`codeclimate`, `github-annotations`, `github-summary`, and the comment and review formats) do not list them.
-
-<Accordion title="Incremental adoption strategy">
-In an existing codebase, adopt fallow in steps:
-
-1. **Start permissive.** Set all rules to `warn` so you see issues without blocking CI.
-2. **Fix high-confidence rules first.** Promote `unresolved-imports` and `unlisted-dependencies` to `error`. These rules almost never give false positives.
-3. **Fix unused files.** Promote `unused-files` to `error`. You can safely remove unreachable files.
-4. **Fix unused exports.** This is usually the largest category. Promote `unused-exports` to `error` when the count is manageable.
-5. **Enable the remaining rules.** Promote `unused-types`, `unused-enum-members`, and `unused-class-members` as you clean up each category. Enable `private-type-leaks` only for packages where the public API or the declaration files matter.
-
-Use [baselines](/analysis/dead-code#baseline-comparison) to enforce rules on new code without failing CI on existing issues.
-</Accordion>
-
-<Info>
-To treat all warnings as errors for one run, pass `--fail-on-issues`. The config file stays the same. Use it for pre-merge gates on critical branches. In `fallow health` and the bare `fallow` run, it also raises `warn` complexity findings to `error`.
-</Info>
-
-```bash
-fallow dead-code --fail-on-issues
-```
-
-## Exit codes
-
-| Code | Meaning |
-|:-----|:--------|
-| `0` | No enforced gate failed |
-| `1` | An enforced gate failed, for example on error-severity issues. This is an analysis result, not a tool failure. |
-| `2` | Fatal error (invalid config, parse failure) |
-
-Exit code 0 does not always mean a clean run. The bare `fallow` run in a machine format, such as `--format json`, exits 0 on error-severity findings unless you pass `--fail-on-issues`. Read `gate_outcomes` to see each gate that failed.
-
-When all findings of a run are `warn`, the run exits 0 and the human summary line shows a yellow `⚠`. A red `✗` shows only when a gate fails the run, for example an `error` finding or `--fail-on-issues`.
-
-A source file that fallow cannot parse does not change the exit code by default. To fail the run on such a file, see [`failOnParseError`](/configuration/overview#failonparseerror).
-
-## See also
-
-<CardGroup cols={2}>
-  <Card title="Configuration" icon="gear" href="/configuration/overview">
-    Reference for every field in the config file.
-  </Card>
-  <Card title="CI Integration" icon="circle-check" href="/integrations/ci">
-    Set up fallow in GitHub Actions, GitLab CI, and more.
-  </Card>
-</CardGroup>
+- Next: [Suppression comments](/configuration/suppression). Use a comment when you keep one finding and want the rule to stay on.
+- [Findings](/concepts/findings): rules, severities and gates.
+- [Issue types](/reference/issue-types): each issue type with its default severity.

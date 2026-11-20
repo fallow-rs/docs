@@ -1,0 +1,99 @@
+---
+title: "Production mode"
+description: "Production mode leaves out tests and development tools, so fallow checks only the code that ships to users."
+keywords: ["production mode", "--production", "test files", "devDependencies", "type-only dependencies", "shipping code", "exclude test files"]
+icon: "industry"
+---
+
+A test keeps code in use, also when the app never runs that code. In the demo project, a helper that only a test imports looks used, and it stays in the code base. Production mode leaves the tests and the development tools out of the analysis. The report then shows the code that your users get and that nothing in the shipped app uses.
+
+## The problem
+
+`src/utils/test-helpers.ts` holds a helper, and only `src/math.test.ts` imports it. The Vitest [plugin](/concepts/plugins) makes the test file an [entry point](/concepts/entry-points), so the helper is reachable and the default run does not report it.
+
+The helper does not ship to users, because its only user is a test. To see this kind of code, fallow must leave the test out.
+
+## Production mode
+
+**Production mode** is a run with `--production`: fallow leaves out test files and development tools, and checks only the code that ships.
+
+```bash
+npx fallow dead-code --production
+```
+
+```text
+  2 entry points detected (2 package.json)
+
+── Unused Code ─────────────────────────────────────
+
+● Unused files (2)
+  src/utils/legacy-currency.ts
+  src/utils/test-helpers.ts
+  Files not reachable from any entry point
+```
+
+The default run finds 3 entry points and 1 unused file. In production mode, the test file is not an entry point, and the helper becomes an unused file.
+
+## What production mode changes
+
+The test file was one of several kinds of files that production mode leaves out. Fallow does not analyze these files in production mode:
+
+- Test files: `*.test.*`, `*.spec.*`, `*.e2e.*`, `*.e2e-spec.*`, `*.bench.*`, and the folders `__tests__/`, `test/`, `tests/`, `test-d/` and `__snapshots__/`.
+- Story files: `*.stories.*` and `*.story.*`.
+- Mocks and fixtures: `__mocks__/`, `__fixtures__/` and `*.fixture.*`.
+- Config files in the project root (`*.config.*`), and hidden script files (`.*.js`, `.*.ts`, `.*.mjs`, `.*.cjs`).
+- Files of a `supportEntry` pattern, and the support entries of a [custom plugin](/guides/custom-plugins). In a default run, these files are entry points.
+
+The [duplication](/analysis/duplication) analysis leaves test files and mocks out in each run, with or without production mode, because its default ignore list holds them. [How fallow decides](/analysis/duplication#how-fallow-decides) shows how to include them.
+
+A file that a `package.json` script runs, for example `node scripts/seed.js`, stays an entry point. To find the packages that the scripts use, fallow reads all scripts in a default run. In production mode, it reads only `start`, `build`, `serve`, `preview`, `prepare`, `prepublishOnly`, the `pre` and `post` forms of `start`, `build`, `serve` and `install`, and forms such as `build:prod`.
+
+The dependency findings change too, because a development dependency does not ship:
+
+| Dependency | Default run | Production mode |
+|:--|:--|:--|
+| Unused in `devDependencies` or `optionalDependencies` | Reported | Not reported |
+| In `dependencies`, and only tests use it | Reported: move it to `devDependencies` | Reported as an unused dependency |
+| Only `import type` uses it | Not reported | Reported: move it to `devDependencies` |
+
+The last row has a reason. The compiler removes each `import type`, so the shipped code does not load the package. Add `date-fns` to `dependencies` of the demo project and `import type { Locale } from "date-fns"` to `src/lib/format.ts`, and production mode adds this group:
+
+```text
+● Type-only dependencies (consider moving to devDependencies) (1)
+  date-fns
+  Dependencies only used for type imports; consider moving to devDependencies
+```
+
+## Production mode for one analysis
+
+By default, `--production` applies to each analysis, but you can also choose one analysis. The bare `fallow` command runs dead code, duplication and health in one run. Use the object form of the `production` key in the config file:
+
+```json
+// .fallowrc.json
+{
+  "production": {
+    "deadCode": true,
+    "health": false,
+    "dupes": false,
+    "ignore": ["scripts/**"]
+  }
+}
+```
+
+- `deadCode`, `health` and `dupes` turn on production mode for that analysis. They apply to the bare run, to `fallow audit`, and to the command of that analysis, for example `fallow dead-code`.
+- `ignore` adds paths that production mode leaves out, for example build scripts and seed data. A run without production mode still analyzes them.
+- `"production": true` turns it on for each analysis.
+
+For one run, use `--production`, or `--production-dead-code`, `--production-health` or `--production-dupes` on the bare run and on `fallow audit`. `--no-production` turns production mode off for each analysis. A flag wins over an environment variable, and an environment variable wins over the config file. [`production`](/reference/config-files#production) in the config reference has each key, and [Environment variables](/configuration/environment) has the `FALLOW_PRODUCTION` variables.
+
+## What production mode does not change
+
+Production mode does not find code that the shipped app never runs. It removes the tests, so it shows code that only tests keep in use. A reachable function in shipped code stays reachable. To see which functions ran for real users, use [runtime coverage](/concepts/evidence#runtime-coverage).
+
+Production mode uses file name patterns, and a pattern can match production source. For example, `src/runner/test/case.ts` matches `**/test/**`, so fallow does not analyze that file. When shipped code imports such a file, fallow prints a warning on stderr that names the pattern and the file. Move the file out of the matched path, or turn production mode off for that analysis.
+
+## Next
+
+- Next: [Workspaces](/concepts/workspaces). Read it when your repository holds more than one package.
+- [`production`](/reference/config-files#production): each key of the config object.
+- [Dead code](/analysis/dead-code): find unused files and exports, with or without production mode.

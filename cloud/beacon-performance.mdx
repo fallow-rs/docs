@@ -1,12 +1,14 @@
 ---
 title: "Runtime coverage overhead of the beacon"
-sidebarTitle: "Beacon performance and overhead"
+sidebarTitle: "Beacon overhead"
 description: "Measured production overhead of the Fallow Cloud beacon per runtime and mode, compared with a baseline without the beacon, and the settings that lower the cost."
 keywords: ["fallow beacon", "beacon overhead", "runtime coverage cost", "v8 coverage overhead", "istanbul overhead", "beacon benchmark", "production coverage overhead"]
 icon: "gauge"
 ---
 
-The beacon measures how often each function runs in production. Optional entry points also record error groups, branch-level usage and CPU time per function. This work has a cost in each process and each page that runs the beacon. This page gives the measured cost per runtime and mode, the source of each cost, and the settings that make it smaller.
+Before you add the beacon to a production service or page, you want to know what it costs in throughput, latency, memory and bundle size. The beacon measures how often each function runs in production. Optional entry points also record error groups, branch-level usage and CPU time per function. This work has a cost in each process and each page that runs the beacon.
+
+The sections below give the measured cost per runtime and mode, then the source of each cost, then the settings that make it smaller. Start with the test conditions, because they decide how far the numbers apply to your service.
 
 ## Test conditions
 
@@ -33,17 +35,27 @@ The server target is a small JSON API with about 0.12 ms CPU per request. On thi
 
 ## Node
 
-The baseline has no beacon and no coverage.
+Node has the most modes, because the beacon can read V8 coverage or Istanbul counters there. The baseline has no beacon and no coverage.
 
-| Mode | Throughput (req/s) | vs baseline | p99 latency (ms) | CPU per request (ms) | Snapshot block (ms) | Payload per snapshot (KB) |
-| :--- | :----------------- | :---------- | :--------------- | :------------------- | :------------------ | :------------------------ |
-| Baseline | 8481 [8159-8646] | | 8.7 [8.4-9.1] | 0.118 [0.12-0.12] | none | none |
-| V8 | 5885 [5721-5929] | -31% | 12.0 [12.0-12.8] | 0.171 [0.17-0.18] | 10.0 [8.6-11.5] | 34.3 |
-| V8 + `captureBlocks` | 5916 [5792-5978] | -30% | 12.0 [11.8-12.3] | 0.171 [0.17-0.17] | 9.7 [8.7-11.8] | 67.0 |
-| V8 + errors entry | 5841 [5654-5930] | -31% | 12.1 [11.9-12.6] | 0.173 [0.17-0.18] | 9.6 [8.3-10.0] | 43.7 |
-| V8 + profiler window | 5853 [5639-5969] | -31% | 12.3 [11.9-12.6] | 0.173 [0.17-0.18] | 9.1 [8.1-9.3] | 39.2 |
-| `oxc-coverage-instrument` (Istanbul) | 7003 [6786-7339] | -17% | 10.3 [9.8-10.8] | 0.144 [0.14-0.15] | 4.8 [4.5-5.2] | 11.6 |
-| Reference: binary V8 coverage, no beacon | 7807 [7674-8121] | -8% | 9.3 [8.8-9.4] | 0.129 [0.12-0.13] | 5.0 [3.6-5.5] | 16.1 |
+| Mode | Throughput (req/s), vs baseline | p99 latency (ms) | CPU per request (ms) |
+| :-- | :-- | :-- | :-- |
+| Baseline | 8481 [8159-8646] | 8.7 [8.4-9.1] | 0.118 [0.12-0.12] |
+| V8 | 5885 [5721-5929], -31% | 12.0 [12.0-12.8] | 0.171 [0.17-0.18] |
+| V8 + `captureBlocks` | 5916 [5792-5978], -30% | 12.0 [11.8-12.3] | 0.171 [0.17-0.17] |
+| V8 + errors entry | 5841 [5654-5930], -31% | 12.1 [11.9-12.6] | 0.173 [0.17-0.18] |
+| V8 + profiler window | 5853 [5639-5969], -31% | 12.3 [11.9-12.6] | 0.173 [0.17-0.18] |
+| `oxc-coverage-instrument` (Istanbul) | 7003 [6786-7339], -17% | 10.3 [9.8-10.8] | 0.144 [0.14-0.15] |
+| Reference: binary V8 coverage, no beacon | 7807 [7674-8121], -8% | 9.3 [8.8-9.4] | 0.129 [0.12-0.13] |
+
+| Mode | Snapshot block (ms) | Payload per snapshot (KB) |
+| :-- | :-- | :-- |
+| Baseline | none | none |
+| V8 | 10.0 [8.6-11.5] | 34.3 |
+| V8 + `captureBlocks` | 9.7 [8.7-11.8] | 67.0 |
+| V8 + errors entry | 9.6 [8.3-10.0] | 43.7 |
+| V8 + profiler window | 9.1 [8.1-9.3] | 39.2 |
+| `oxc-coverage-instrument` (Istanbul) | 4.8 [4.5-5.2] | 11.6 |
+| Reference: binary V8 coverage, no beacon | 5.0 [3.6-5.5] | 16.1 |
 
 The modes:
 
@@ -60,12 +72,19 @@ Inside one snapshot, `v8.takeCoverage()` took 2.1 ms median [2.1-2.3]. The full 
 
 Bun does not implement `v8.takeCoverage()`, so Bun has no V8 mode. The Istanbul modes instrument the code at module load with a Bun preload that runs `oxc-coverage-instrument`.
 
-| Mode | Throughput (req/s) | vs baseline | p99 latency (ms) | CPU per request (ms) | Peak RSS (MB) | Startup (ms) | Snapshot block (ms) |
-| :--- | :----------------- | :---------- | :--------------- | :------------------- | :------------ | :----------- | :------------------ |
-| Baseline | 10581 [9953-10673] | | 6.8 [6.7-7.8] | 0.098 [0.10-0.10] | 122 [117-135] | 15.3 [14.9-15.5] | none |
-| Istanbul | 9616 [8654-9756] | -9% | 7.4 [7.3-9.5] | 0.106 [0.10-0.12] | 148 [146-156] | 26.3 [26.3-35.6] | 0.20 [0.19-0.24] |
-| Istanbul + errors entry | 9530 [9394-9612] | -10% | 7.5 [7.4-7.7] | 0.107 [0.11-0.11] | 158 [152-164] | 29.2 [27.0-39.3] | 0.21 [0.20-0.23] |
-| Istanbul + profiler window | 9279 [9239-9332] | -12% | 7.7 [7.7-7.8] | 0.110 [0.11-0.11] | 232 [222-244] | 29.0 [28.6-42.3] | 0.21 [0.20-0.23] |
+| Mode | Throughput (req/s), vs baseline | p99 latency (ms) | CPU per request (ms) |
+| :-- | :-- | :-- | :-- |
+| Baseline | 10581 [9953-10673] | 6.8 [6.7-7.8] | 0.098 [0.10-0.10] |
+| Istanbul | 9616 [8654-9756], -9% | 7.4 [7.3-9.5] | 0.106 [0.10-0.12] |
+| Istanbul + errors entry | 9530 [9394-9612], -10% | 7.5 [7.4-7.7] | 0.107 [0.11-0.11] |
+| Istanbul + profiler window | 9279 [9239-9332], -12% | 7.7 [7.7-7.8] | 0.110 [0.11-0.11] |
+
+| Mode | Peak RSS (MB) | Startup (ms) | Snapshot block (ms) |
+| :-- | :-- | :-- | :-- |
+| Baseline | 122 [117-135] | 15.3 [14.9-15.5] | none |
+| Istanbul | 148 [146-156] | 26.3 [26.3-35.6] | 0.20 [0.19-0.24] |
+| Istanbul + errors entry | 158 [152-164] | 29.2 [27.0-39.3] | 0.21 [0.20-0.23] |
+| Istanbul + profiler window | 232 [222-244] | 29.0 [28.6-42.3] | 0.21 [0.20-0.23] |
 
 On Bun, the throughput and CPU per request ranges of each beacon mode do not overlap the baseline ranges. The p99 ranges overlap the baseline range. The startup time includes the instrumentation at module load. While a profiler window is open, the peak RSS is 232 MB against 148 MB for Istanbul alone. That is the clearest cost of the profiler on Bun. The payload per snapshot was 16.5 KB for Istanbul.
 
@@ -73,11 +92,17 @@ On Bun, the throughput and CPU per request ranges of each beacon mode do not ove
 
 The browser target is a small shop page: a product grid with filters, sort, search and a cart. Vite built it two times: a plain build, and a build with Istanbul counters from `oxc-coverage-instrument` plus the browser beacon. Each session ran a fixed cycle of clicks and input for 20 s.
 
-| Mode | JS bundle gzip (bytes) | Script at load (ms) | Script in session (ms) | LCP (ms) | INP (ms) | Ingest requests | Ingest bytes |
-| :--- | :--------------------- | :------------------ | :--------------------- | :------- | :------- | :-------------- | :----------- |
-| Plain bundle | 1498 | 17.7 [16.0-19.7] | 786 [783-799] | 56 [52-60] | 16 | 0 | 0 |
-| Instrumented, `sampleRate: 1.0` | 11923 | 18.7 [17.3-20.6] | 846 [843-858] | 60 [56-60] | 16 | 4 | 14093 |
-| Instrumented, `sampleRate: 0.01` | 11923 | 19.2 [16.7-19.2] | 843 [827-849] | 60 [56-60] | 16 | 0 | 0 |
+| Mode | JS bundle gzip (bytes) | Script at load (ms) | Script in session (ms) |
+| :-- | :-- | :-- | :-- |
+| Plain bundle | 1498 | 17.7 [16.0-19.7] | 786 [783-799] |
+| Instrumented, `sampleRate: 1.0` | 11923 | 18.7 [17.3-20.6] | 846 [843-858] |
+| Instrumented, `sampleRate: 0.01` | 11923 | 19.2 [16.7-19.2] | 843 [827-849] |
+
+| Mode | LCP (ms) | INP (ms) | Ingest requests (bytes) |
+| :-- | :-- | :-- | :-- |
+| Plain bundle | 56 [52-60] | 16 | 0 (0) |
+| Instrumented, `sampleRate: 1.0` | 60 [56-60] | 16 | 4 (14093) |
+| Instrumented, `sampleRate: 0.01` | 60 [56-60] | 16 | 0 (0) |
 
 No session had a long task. The LCP median is 4 ms higher with instrumentation, but the ranges overlap, so the difference is inside the noise. INP is 16 ms in every mode. The app is small, so most of the bundle growth is the beacon and the coverage map. In your app, the counter cost grows with the amount of instrumented code that runs.
 
@@ -85,7 +110,7 @@ At `sampleRate: 0.01`, about 99 of 100 page loads do not start the beacon, so th
 
 ## Bundle size
 
-Each beacon entry point has a min+gzip size budget. The beacon build checks it with `bun run size` against `size-budget.json` in the beacon package source. You pay only for the entries that you import. The sizes below are min+gzip, measured on 2026-10-27.
+The browser numbers above include the bytes of the beacon. Each beacon entry point has a min+gzip size budget. The beacon build checks it with `bun run size` against `size-budget.json` in the beacon package source. You pay only for the entries that you import. The sizes below are min+gzip, measured on 2026-10-27.
 
 | Entry | Import | min+gzip (bytes) |
 | :---- | :----- | :--------------- |
@@ -100,6 +125,8 @@ Each beacon entry point has a min+gzip size budget. The beacon build checks it w
 
 ## Where the cost comes from
 
+The tables above show how much each mode costs. This table shows why, so that you know which setting changes which cost:
+
 | Source | Where | What you pay |
 | :----- | :---- | :----------- |
 | V8 precise coverage | Node with `NODE_V8_COVERAGE` | `NODE_V8_COVERAGE` starts precise coverage with call counts and block ranges for the whole process. V8 counts every call, so the cost is on each request, also between snapshots. On the benchmark this is the largest cost. |
@@ -112,6 +139,8 @@ Each beacon entry point has a min+gzip size budget. The beacon build checks it w
 The benchmark took a snapshot every 5 s, so a short run had more than one snapshot. The default schedule takes one snapshot every 60 s. Scale the per-snapshot costs to your own interval: at 60 s, the beacon takes 60 snapshots per hour instead of 720.
 
 ## Lower the cost
+
+Each setting below acts on a source of the table above:
 
 - **Sample browser sessions.** Set `sampleRate` to a value from 0 to 1. A skipped session sends nothing. The bundle bytes and the counters stay.
 - **Take fewer snapshots.** `snapshotSchedule` controls when the beacon takes a snapshot:
@@ -143,6 +172,8 @@ We compared each beacon setup, a mode, with a baseline without the beacon in the
 The hardware and the versions are in the [test conditions](#test-conditions). The tables above list every measured mode.
 
 ## See also
+
+When the cost fits your service, set up the beacon. Then measure the effect on your own traffic.
 
 <CardGroup cols={2}>
   <Card title="Cloud beacon setup" icon="tower-broadcast" href="/cloud/beacon">

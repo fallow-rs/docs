@@ -1,785 +1,230 @@
 ---
-title: "Find unused exports and dead code in TypeScript"
-sidebarTitle: "Dead code analysis"
-description: "Find unused files, exports, and dependencies to delete from a TypeScript or JavaScript project. Fallow also reports circular dependencies and unused members."
-keywords: ["dead code", "unused files", "unused exports", "unused dependencies", "unused types", "unused class members", "class member detection", "circular dependencies", "CSS modules", "SCSS", "module graph", "tree shaking", "find dead code typescript", "find unused exports"]
+title: "Dead code"
+description: "Find unused files, exports, types, class members and enum members with fallow dead-code, and remove them in a safe order."
+keywords: ["dead code", "unused files", "unused exports", "unused types", "unused class members", "unused enum members", "show-cascade", "find unused exports typescript"]
 icon: "skull-crossbones"
 ---
 
-`fallow dead-code` tells you which files, exports, and dependencies you can delete. It builds a module graph from your <Tooltip tip="Files that are the roots of the module graph. Fallow counts anything reachable from them as used.">entry points</Tooltip> and reports everything that the graph does not reach.
-
-The graph build is deterministic, so a developer, a CI pipeline, and a coding assistant get the same result for the same code.
+Code that nothing uses still costs you, because people read it, tests run it, and a search shows it. In the demo project, nothing calls `cancelOrder` in `src/services/orders.ts`. It looks like part of the order API, so the next person who changes `Order` must keep it working too. `fallow dead-code` finds the files and the exports that your project does not use, so that you can delete them.
 
 ```bash
-fallow dead-code
+npx fallow dead-code
 ```
 
-## Issue types
+## What fallow finds
 
-Fallow reports these core issue types:
+The demo project has no type alias, enum or class. To show these findings too, this page adds one file, `src/services/order-book.ts`, and imports `Channel` and `OrderBook` in `src/index.ts`:
 
-| Issue type | Description |
-|:-----------|:------------|
-| **Unused files** | Files not reachable from any entry point |
-| **Unused exports** | Exported symbols never imported elsewhere |
-| **Unused types** | Type aliases and interfaces never referenced |
-| **Unused dependencies** | Packages in `dependencies` never imported or used as script binaries |
-| **Unused devDependencies** | Packages in `devDependencies` never imported or used as script binaries |
-| **Unused optionalDependencies** | Packages in `optionalDependencies` never imported or used as script binaries |
-| **Unused enum members** | Enum values never referenced |
-| **Unused class members** | Class methods and properties never referenced outside their class. Tracks inheritance, skips framework lifecycle methods, and lets you exclude decorators with `ignoreDecorators` |
-| **Unused namespace members** | Members of an exported TypeScript namespace that no code reads |
-| **Unused catalog entries** | Entries in the `catalog:` or `catalogs:` maps of `pnpm-workspace.yaml` that no workspace package references with the `catalog:` protocol |
-| **Unresolved imports** | Import specifiers that cannot be resolved |
-| **Unlisted dependencies** | Imported packages missing from `package.json` |
-| **Unlisted binaries** | Binaries that a `package.json` script or a process call runs, when no installed or listed package provides them |
-| **Duplicate exports** | Same symbol exported from multiple modules |
-| **Duplicate export aliases** | One binding that one module exports under two or more names |
-| **Circular dependencies** | Modules that import each other directly or transitively |
-| **Boundary violations** | Imports that cross user-defined architecture zone boundaries |
-| **Type-only dependencies** | Production dependencies that only `import type` statements use (move them to devDependencies) |
-| **Test-only dependencies** | Production dependencies that only test files import (move them to devDependencies) |
-| **Stale suppressions** | `fallow-ignore` comments or `@expected-unused` JSDoc tags that no longer match any issue |
+```ts
+// src/services/order-book.ts
+import type { Order } from "./orders";
 
-Fallow also has framework-specific rules, such as unused component props and route collisions, rules for [Effect](https://effect.website) projects, such as [unused Effect layers](/explanations/dead-code#unused-effect-layers), and opt-in rules, such as private type leaks. To set the severity of a rule, see [Rules & severity](/configuration/rules). To see the filter flag of each issue type, run `fallow dead-code --help`. For circular dependencies, boundary violations, and the other architecture findings, use [`fallow architecture`](/cli/architecture).
+export type OrderStatus = "open" | "paid" | "cancelled";
 
-Typical output with more than one issue type:
+export enum Channel {
+  Web = "web",
+  Store = "store",
+  Phone = "phone",
+}
 
-```bash title="$ fallow dead-code"
-── Unused Code ─────────────────────────────────────
+export class OrderBook {
+  private orders: Order[] = [];
 
-● Unused files (3)
-  scripts/check-db.ts
-  src/features/forecasting/hooks/useCashFlowForecast.ts
-  src/features/forecasting/hooks/useIncomeForecast.ts
-  Files not reachable from any entry point
-  https://fallow.tools/docs/explanations/dead-code/#unused-files
-  To suppress: // fallow-ignore-file unused-file
+  add(order: Order): void {
+    this.orders.push(order);
+  }
 
-● Unused exports (8)
-  test/component-helpers.tsx (5)
-    :1 act (re-export)
-    :1 waitFor (re-export)
-    :1 within (re-export)
-    :33 ThemeContext
-    :58 ToastContext
-  src/server/jobs/queue.ts (3)
-    :61 enqueueJobDelayed
-    :206 sweepStuckProcessingJobs
-    :276 getDeadLetterJobs
-  Exported symbols with no known consumers
-  https://fallow.tools/docs/explanations/dead-code/#unused-exports
-  To auto-fix: fallow fix --dry-run
-  To suppress: // fallow-ignore-next-line unused-export
-  3 in src, 5 in test files
-
-✗ 3 files · 8 exports (0.16s)
-```
-
-## Filtering by issue type
-
-To report only some issue types, pass their flags:
-
-```bash
-fallow dead-code --unused-files
-fallow dead-code --unused-exports --unused-types
-fallow dead-code --unresolved-imports --unlisted-deps
-```
-
-## Findings in unused files
-
-When fallow reports a file as an unused file, it does not list the unused exports, unused types, unused class members, and unused enum members in that file. When you delete the file, you also remove these findings. Thus they add no information to the report. Other finding kinds in an unused file stay in the report, for example an unresolved import.
-
-Fallow hides findings only in one case: another unreachable file references an export of the unused file. When no other file references the exports of an unused file, fallow does not report these exports at all. Then fallow hides nothing, and `--show-cascade` changes nothing.
-
-The report counts the hidden findings:
-
-| Output | Where the count is |
-|:-------|:-------------------|
-| `json` | The `cascade_hidden` integer at the root of the output. With `--group-by`, the grouped output has it at its root, and no group has it. |
-| `sarif` | `runs[0].properties.cascadeHidden` |
-| `markdown` | One note line that gives the count and names `--show-cascade` |
-
-When the count is 0, all three outputs omit it. An example of the markdown note:
-
-```markdown
-_3 findings in unused files are hidden; use `--show-cascade` to list them._
-```
-
-The `codeclimate`, `compact`, and `github-annotations` formats do not show the count. The markdown output with `--group-by` does not show it either. The `summary` counts and `total_issues` count only the findings in the report.
-
-To add the hidden findings to the report, use one of these options. The JSON output then lists them.
-
-- The `--show-cascade` flag, for one run of `fallow`, `fallow dead-code`, `fallow audit`, or `fallow fix`.
-- The [`showCascade`](/configuration/overview#showcascade) config key, set to `true`.
-- The `show_cascade` parameter of the [MCP tools](/integrations/mcp#notable-tool-parameters) `analyze`, `check_changed`, `audit`, `fix_preview`, and `fix_apply`, and of the `combined` call in Code Mode.
-- The `showCascade` option of the [Node bindings](/integrations/node-bindings#dead-code-options).
-
-```bash
-fallow dead-code --show-cascade
-```
-
-Know these rules:
-
-- The [health](/explanations/health) vital signs and the health score still count the hidden findings. Bare `fallow` and `fallow health` give the same values with and without `--show-cascade`.
-- When an issue-type selection does not include unused files, fallow hides nothing. For example, `fallow dead-code --unused-exports` lists the unused exports of unused files.
-- A `// fallow-ignore-file unused-file` comment removes the file from the report. Fallow also hides the export and member findings of that file.
-- `fallow fix` does not fix a hidden finding. Delete the unused file, or pass `--show-cascade` to fix these findings too.
-- With `--changed-since` or `--workspace`, `cascade_hidden` counts only the findings in the scoped files.
-- A [baseline](#baseline-comparison) that you saved with an older version still matches. A baseline that you save now does not contain the hidden findings.
-- A [regression baseline](/cli/dead-code#regression-detection) that you saved with an older version counts the hidden findings. After the upgrade it allows more new findings than before. Save it again with `--save-regression-baseline`.
-
-## Optional props that callers never supply
-
-[Absent component props](/explanations/dead-code#absent-component-props) are optional props that a component reads but no inspected reachable caller supplies. Enable `rules.absent-component-props` with `warn` or `error`. The rule starts off because a default or a stable API can make an omitted prop intentional.
-
-Fallow reports candidates only when it knows at least one reachable caller and can account for the component's callers statically. Unknown spreads, forwarding, dynamic use, and external package users prevent that conclusion. A finding includes the declaration, inspected callers, and whether a default exists. Review that evidence before changing the component. Fallow does not remove the prop or its conditional UI automatically.
-
-## Parameters that each call passes in one way
-
-[Constant parameters](/explanations/dead-code#constant-parameters) are function parameters that each visible call passes in the same way: the same literal value, or no value for an optional parameter. Enable the rule with `--constant-parameters`, or set `rules.constant-parameters` to `warn` or `error`. The rule starts off because a parameter can be a deliberate option.
-
-Fallow reports a parameter only when it sees each caller of the function. Public API exports, entry-point exports, dynamic imports, a function used as a value, and other open cases prevent a finding. A finding includes the value, the count of calls, the inspected calls, and the count of conditions that test the parameter. Review that evidence before changing the function. Fallow does not change the function automatically.
-
-## Output formats
-
-<Tabs>
-  <Tab title="Human (default)">
-    Colored terminal output for people to read.
-
-    ```bash
-    fallow dead-code --format human
-    ```
-
-    ```ansi
-    ── Unused Code ─────────────────────────────────────
-
-    ● Unused files (1)
-      src/server/jobs/worker.ts
-      Files not reachable from any entry point
-      https://fallow.tools/docs/explanations/dead-code/#unused-files
-
-    ● Unused exports (3)
-      src/server/jobs/queue.ts (2)
-        :61 enqueueJobDelayed
-        :206 sweepStuckProcessingJobs
-      src/components/Card/index.ts
-        :1 CardFooter
-      Exported symbols with no known consumers
-      https://fallow.tools/docs/explanations/dead-code/#unused-exports
-      To auto-fix: fallow fix --dry-run
-      To suppress: // fallow-ignore-next-line unused-export
-
-    ✗ 1 file · 3 exports (0.16s)
-    ```
-  </Tab>
-  <Tab title="JSON">
-    JSON for scripts and tools.
-
-    ```bash
-    fallow dead-code --format json
-    ```
-
-    ```json
-    {
-      "kind": "dead-code",
-      "schema_version": 11,
-      "version": "3.45.0",
-      "elapsed_ms": 160,
-      "total_issues": 401,
-      "unused_files": [
-        {
-          "path": "src/server/jobs/worker.ts",
-          "finding_id": "dc1:unused-file:5d2e8c41a07b93f6"
-        }
-      ],
-      "unused_exports": [
-        {
-          "path": "src/server/jobs/queue.ts",
-          "export_name": "enqueueJobDelayed",
-          "is_type_only": false,
-          "line": 61,
-          "col": 0,
-          "span_start": 1420,
-          "is_re_export": false,
-          "finding_id": "dc1:unused-export:81a349a3b9ea3b15"
-        }
-      ],
-      "unused_dependencies": [
-        {
-          "package_name": "@trpc/react-query",
-          "location": "dependencies",
-          "path": "package.json",
-          "line": 18,
-          "used_in_workspaces": ["apps/web"],
-          "finding_id": "dc1:unused-dependency:3f9a0c7e12b4d865"
-        }
-      ]
-    }
-    ```
-
-    Each finding has a stable `finding_id`. The id does not change when lines move, so you can track one finding across runs. See [`finding_id`](/cli/dead-code#finding-id).
-  </Tab>
-  <Tab title="SARIF">
-    <Tooltip tip="Static Analysis Results Interchange Format, a JSON-based standard for static analysis tool output">SARIF</Tooltip> output for GitHub Code Scanning and other static analysis tools.
-
-    ```bash
-    fallow dead-code --format sarif
-    ```
-
-    ```json
-    {
-      "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-      "version": "2.1.0",
-      "runs": [{
-        "tool": { "driver": { "name": "fallow", "version": "3.45.0" } },
-        "results": [
-          {
-            "ruleId": "fallow/unused-export",
-            "level": "error",
-            "message": { "text": "Export 'enqueueJobDelayed' is never imported by other modules" },
-            "locations": [{
-              "physicalLocation": {
-                "artifactLocation": { "uri": "src/server/jobs/queue.ts" },
-                "region": { "startLine": 61, "startColumn": 1 }
-              }
-            }],
-            "partialFingerprints": {
-              "tools.fallow.fingerprint/v1": "c4e1a9b07f2d3865",
-              "primaryLocationLineHash/v1": "c4e1a9b07f2d3865",
-              "fallowFinding/v1": "dc1:unused-export:81a349a3b9ea3b15"
-            }
-          }
-        ]
-      }]
-    }
-    ```
-
-    A dead-code result has the key `fallowFinding/v1` in `partialFingerprints`. Its value is the [`finding_id`](/cli/dead-code#finding-id) of the finding in JSON output, so you can join a SARIF result to its JSON finding. The keys `tools.fallow.fingerprint/v1` and `primaryLocationLineHash/v1` did not change, so GitHub code scanning keeps each open alert after an upgrade.
-
-    Some findings give one result for each location: an unlisted dependency gives one result for each import site, and a duplicate export gives one result for each location. These results do not have the `fallowFinding/v1` key, because one id would identify more than one result. `fallow report --from` with a saved report from an older version also gives no key. Security results keep their own `fallowSecurity/v2` key.
-  </Tab>
-  <Tab title="Compact">
-    One line per issue, for `grep` and editor integrations.
-
-    ```bash
-    fallow dead-code --format compact
-    ```
-
-    ```text
-    unused-file:src/server/jobs/worker.ts
-    unused-file:src/server/jobs/cron.ts
-    unused-export:src/server/jobs/queue.ts:61:enqueueJobDelayed
-    unused-export:src/components/Card/index.ts:1:CardFooter
-    ```
-  </Tab>
-  <Tab title="Markdown">
-    Markdown for PR comments and documentation.
-
-    ```bash
-    fallow dead-code --format markdown
-    ```
-
-    ```markdown
-    ## Fallow: 4 issues found
-
-    ### Unused files (2)
-
-    - `src/server/jobs/worker.ts`
-    - `src/server/jobs/cron.ts`
-
-    ### Unused exports (2)
-
-    - `src/server/jobs/queue.ts`
-      - :61 `enqueueJobDelayed`
-      - :206 `sweepStuckProcessingJobs`
-    ```
-
-    To post it as a PR comment, pipe it to `gh pr comment`:
-
-    ```bash
-    fallow dead-code --format markdown | gh pr comment --body-file -
-    ```
-  </Tab>
-  <Tab title="CodeClimate">
-    CodeClimate JSON, which GitLab Code Quality shows as inline MR annotations.
-
-    ```bash
-    fallow dead-code --format codeclimate
-    ```
-
-    ```json
-    [
-      {
-        "type": "issue",
-        "check_name": "fallow/unused-file",
-        "description": "File is not reachable from any entry point",
-        "categories": ["Bug Risk"],
-        "severity": "major",
-        "fingerprint": "a1b2c3d4e5f67890",
-        "location": {
-          "path": "src/server/jobs/worker.ts",
-          "lines": { "begin": 1 }
-        }
-      },
-      {
-        "type": "issue",
-        "check_name": "fallow/unused-export",
-        "description": "Export 'enqueueJobDelayed' is never imported by other modules",
-        "categories": ["Bug Risk"],
-        "severity": "major",
-        "fingerprint": "b2c3d4e5f6789012",
-        "location": {
-          "path": "src/server/jobs/queue.ts",
-          "lines": { "begin": 61 }
-        }
-      }
-    ]
-    ```
-
-    The `fingerprint` of a dead-code issue comes from its [`finding_id`](/cli/dead-code#finding-id), so it does not change when lines move. GitLab Code Quality therefore keeps an issue open when you add lines above it. The same package unused in two workspaces gives two issues with two fingerprints. Duplication, health and security fingerprints did not change.
-
-    <Warning>
-    On the first run after the upgrade to this fingerprint form, GitLab Code Quality and other tools that key on the fingerprint show each dead-code finding as resolved and as new one time. After that run, a line shift keeps the issue. A saved report without finding ids, rendered with `fallow report --from`, keeps the old line-based fingerprint.
-    </Warning>
-
-    Add this job to GitLab CI:
-
-    ```yaml
-    fallow:
-      script: npx fallow dead-code --format codeclimate > gl-code-quality-report.json
-      artifacts:
-        reports:
-          codequality: gl-code-quality-report.json
-    ```
-  </Tab>
-</Tabs>
-
-## Incremental analysis
-
-To check only the files that changed since a git ref, pass `--changed-since`:
-
-```bash
-fallow dead-code --changed-since main
-fallow dead-code --changed-since HEAD~5
-```
-
-In CI, this reports only the issues that a pull request adds.
-
-```bash title="$ fallow dead-code --changed-since main"
-── Unused Code ─────────────────────────────────────
-
-● Unused exports (2)
-  src/features/savings/hooks/usePotGroups.ts
-    :8 usePotGroupTotals
-  src/server/jobs/queue.ts
-    :276 getDeadLetterJobs
-  Exported symbols with no known consumers
-  https://fallow.tools/docs/explanations/dead-code/#unused-exports
-
-✗ 2 exports (0.04s)
-```
-
-## Baseline comparison
-
-To adopt fallow on an existing codebase, save the current issues as a baseline. Fallow then fails only on new issues:
-
-```bash
-# Save current issues as baseline
-fallow dead-code --save-baseline fallow-baselines/dead-code.json
-
-# Only fail on new issues (compared to baseline)
-fallow dead-code --baseline fallow-baselines/dead-code.json
-```
-
-A dead-code baseline stores one line-free key for each finding: the rule, the path and the names. When you add lines above a finding, the baseline still hides it. Each saved entry hides one finding, so a second finding with the same key is new. A baseline from an earlier release still loads. Save it again once to get the line-free form. See [Incremental](/cli/dead-code#incremental).
-
-A dead-code baseline also records whether `node_modules` existed when you saved it. Some findings need installed packages, so a run in the other install state can report baseline findings as new. Such a run adds a `baseline-install-state-mismatch` entry to `workspace_diagnostics[]` and prints a warning, also with `--quiet`. The entry has `baseline_node_modules` and `run_node_modules` (`present` or `missing`), and `degrades_analysis: true`. The comparison and the exit code do not change. To fix it, save and compare the baseline in the same install state. A baseline that you saved with an earlier release has no install state and gives no warning. Save it again once to get the check. `dupes` and `health` baselines do not record the install state.
-
-## Debugging
-
-To see why fallow counts an export, a file, or a dependency as used or unused, trace it:
-
-```bash
-fallow dead-code --trace src/utils.ts:formatDate
-fallow dead-code --trace-file src/utils.ts
-fallow dead-code --trace-dependency lodash
-```
-
-## How it works
-
-Fallow parses your code with Oxc and resolves bindings with scope analysis. It does not run the TypeScript compiler and does not use type information, which keeps the analysis fast.
-
-```mermaid
-flowchart TB
-  A["Discovery<br/>Entry points from package.json + plugins"] --> B["Parsing<br/>Parallel with Oxc + oxc_semantic + rayon"]
-  B --> C["Resolution<br/>Import specifiers to file paths"]
-  C --> D["Graph<br/>Module graph with re-export chains"]
-  D --> E["Analysis<br/>Walk from entry points, report unreachable code"]
-```
-
-<Note>
-Fallow works best with `isolatedModules: true`, which esbuild, swc, and Vite require. `oxc_semantic` scope analysis finds import bindings that the file never reads. Older tsc-only projects without `isolatedModules` can still get edge cases with type-only imports.
-</Note>
-
-## Script binary analysis
-
-A package that you only use from a `package.json` script is not an unused dependency. Fallow reads your scripts to find these packages. For `"lint": "oxlint src/"`, fallow sees that the `oxlint` package supplies the `oxlint` binary and marks the package as used.
-
-Fallow reads these parts of a script:
-
-- **Binary names.** Fallow maps commands such as `tsc`, `vitest`, or `next` to their packages (`typescript`, `vitest`, `next`). It does not report these packages as unused, even when no source file imports them. Fallow reads the `bin` fields of the installed packages in `node_modules`. It also reads the `bin` field of each declared workspace package, so a script that calls the binary of a workspace package credits that package without `node_modules`. When both name the same binary, the installed package takes priority. For other binaries, fallow uses a built-in table, for example `napi` to `@napi-rs/cli` and `taplo` to `@taplo/cli`.
-- **`--config` arguments.** When a script names a config file (for example `jest --config jest.e2e.config.ts`), fallow makes that file an entry point, so it does not report the file as unused.
-- **File path arguments.** Files that a script names directly (for example `node scripts/seed.js`) also become entry points.
-- **Vite+ commands.** `vp`, `vpr` and `vpx` credit `vite-plus`, and the subcommand decides how fallow reads the arguments. See [Vite+](/frameworks/built-in#vite-plus).
-- **Env wrappers and package manager runners.** Fallow removes the `cross-env`, `dotenv`, `env`, `npx`, `pnpx`, `yarn dlx`, `pnpm exec`, `npm exec --`, `yarn run`, `bun run`, `varlock run --`, or `dotenvx run --` prefix to find the real binary. The flags of these prefixes are also removed, for example `dotenv -e .env.ci --`, `pnpm --filter web exec`, and `pnpm -r exec`. `yarn <bin>`, `yarn run <bin>`, `pnpm <bin>`, and `bun run <bin>` count as the binary when no script has that name.
-- **Script calls.** A call such as `npm run lint -- src/a.ts`, `npm run lint src/a.ts`, `yarn lint src/a.ts`, or `pnpm lint src/a.ts` runs the `lint` script with the extra arguments. Fallow reads it as the script body plus those arguments, as the package manager does. As in npm 7 and later, npm forwards the positional arguments without `--` and reads the `-`-prefixed arguments before `--` as npm config. npm config flags that take a value, such as `--tag`, `--otp`, or `--node-options`, also consume the next argument, so `npm run lint --tag next src/a.ts` forwards only `src/a.ts`. A declared script with the name of a tool runs instead of the tool: with `"oxlint": "node tools/check.js"`, `yarn oxlint src/a.ts` keeps `src/a.ts` as an entry point.
-- **Other workspace packages and directories.** A command in a workspace package that it selects resolves its file arguments against the directory of that package. With the `web` package in `packages/web`, `yarn workspace web node scripts/a.ts`, `pnpm --filter web exec tsx scripts/a.ts`, `npm exec -w web -- tsx scripts/a.ts`, and a call of a `web` script such as `npm run -w web gen -- scripts/a.ts` make `packages/web/scripts/a.ts` an entry point. A pnpm filter can be a name, a name glob (`'@acme/*'`), a directory (`./packages/*`, `{packages/web}`), or an exclusion (`'!web'`). A selection of several packages resolves the file in each package where the file exists. This includes a command in every package: `pnpm -r exec tsx scripts/a.ts`, `yarn workspaces foreach -A exec tsx scripts/a.ts` (narrowed by `--include` and `--exclude`), `yarn workspaces run gen scripts/a.ts`, and `npm --workspaces run gen -- scripts/a.ts`. `yarn workspaces foreach -A` also runs in the root package, as yarn does, and its `--include` and `--exclude` match a workspace name or directory (`.` is the root). `pnpm -w`, a pnpm filter with the name or directory of the root package, and `yarn workspace` with the name of the root package also select the root package. An npm workspace name or directory does not select it, as in npm. `--include-workspace-root` adds the root package: in pnpm to `-r` and to a filter that only excludes packages (`--filter '!web'`), and in npm to every workspace selection (`-w web`, `--workspaces`), also with the short form `-iwr`. Without it, `pnpm -r`, `yarn workspaces run`, and `npm --workspaces` leave out the root package. From a workspace package, `npm --workspaces` selects only that package. A script call in the directory of a workspace package, such as `pnpm -C packages/web run gen scripts/a.ts`, `npm --prefix packages/web run gen -- scripts/a.ts`, or `yarn --cwd packages/web gen scripts/a.ts`, runs the script of that package with the arguments. The scripts of the root package and of each workspace package resolve these forms in the same way. A `start` script that calls a script in the selected packages, such as `pnpm -r run serve` or `pnpm -C packages/web run serve`, makes the files of that script runtime entry points in each package, as for the files of `start` itself. A linter target in a selected package, such as `yarn workspace web oxlint src/a.ts` or `pnpm -r run lint -- src/a.ts`, still makes no entry point. A pnpm dependency or changed-package filter (`web...`, `[origin/main]`), another `yarn workspaces foreach` selection (`--since`, `--recursive`, `--from`, `--worktree`, `--no-private`), and the task runners `turbo`, `nx`, and `lerna` (`turbo run lint -- src/a.ts`) make no entry points. The binary still counts as a used dependency. A command in another directory (`pnpm -C docs exec tsx scripts/a.ts`, `npm --prefix`, `yarn --cwd`) resolves its file arguments against that directory. `yarn node <file>` runs the file with Node.js, also after `yarn --cwd <dir>` or `yarn workspace <name>`.
-
-```json
-{
-  "scripts": {
-    "build": "tsc && vite build",
-    "test": "vitest --config vitest.config.ts",
-    "lint": "cross-env NODE_ENV=production oxlint src/"
+  clear(): void {
+    this.orders = [];
   }
 }
 ```
 
-In this example, fallow detects `typescript`, `vite`, `vitest`, and `oxlint` as used dependencies, and `vitest.config.ts` as an entry point.
+`src/index.ts` reads `Channel.Web` and `Channel.Store`, and calls `add`. The report:
 
-### Formatter and linter targets
+```text
+  3 entry points detected (2 package.json, 1 plugin)
 
-A formatter or a linter reads its file arguments, but it does not run them. So the file arguments of these tools do not become entry points: `oxlint src/`, `oxfmt --check .`, `eslint src/a.ts`, and `prettier --check "**/*.ts"` keep every file that no import reaches reportable as unused. This applies to all the command forms in the list above: a direct call, a package manager runner, an env wrapper, and a script call. For example, with the script `"lint": "oxlint"`, the call `npm run lint -- src/a.ts` does not make `src/a.ts` an entry point.
+── Unused Code ─────────────────────────────────────
 
-Fallow knows these tools: alex, Biome, CSpell, dependency-cruiser, dprint, EditorConfig checkers, ember-template-lint, ESLint (and `eslint_d`), HTMLHint, jscpd, JSHint, madge, markdownlint, markuplint, Oxfmt, Oxlint, Prettier, remark, Secretlint, Standard, Stylelint, textlint, TSLint, and XO.
+● Unused files (1)
+  src/utils/legacy-currency.ts
+  Files not reachable from any entry point
+  https://fallow.tools/docs/explanations/dead-code/#unused-files
 
-The tool itself is still a used dependency, and its `--config` file is still tracked. A module that the tool loads through a flag also stays reachable:
+● Unused exports (3)
+  src/lib/format.ts
+    :3 formatPercent
+  src/lib/index.ts
+    :1 formatPercent (re-export)
+  src/services/orders.ts
+    :18 cancelOrder
+  Exported symbols with no known consumers
+  https://fallow.tools/docs/explanations/dead-code/#unused-exports
+  To auto-fix: fallow fix --dry-run
+  To suppress: // fallow-ignore-next-line unused-export
 
-- A custom formatter, parser, or reporter: `eslint -f ./tools/formatter.js`, `stylelint --custom-formatter ./fmt.js`.
-- A local plugin: `prettier --plugin=./tools/plugin.mjs`, `remark --use ./plugins/lint.mjs`.
-- A rule directory: `eslint --rulesdir ./rules`, `textlint --rulesdir ./rules`. Fallow keeps the source files directly in that directory reachable.
+● Unused type exports (1)
+  src/services/order-book.ts
+    :3 OrderStatus
 
-### File utilities
+● Unused enum members (1)
+  src/services/order-book.ts
+    :8 Channel.Phone
 
-A shell utility that copies, moves, deletes, searches or changes files runs none of its file arguments. So `cp ./README.md ./lib` makes neither `README.md` nor `lib/index.ts` an entry point, and an unused file in `lib` stays reportable. This applies to `awk`, `cat`, `chmod`, `chown`, `cp`, `echo`, `grep`, `head`, `ln`, `ls`, `mkdir`, `mv`, `rimraf`, `rm`, `rmdir`, `sed`, `sleep`, `sort`, `tail`, `tee`, `touch`, `uniq`, and `wc`. `find`, `xargs`, and the shells can run another program, so their arguments keep the normal rules: `xargs node scripts/run.js` keeps `scripts/run.js` as an entry point.
+● Unused class members (1)
+  src/services/order-book.ts
+    :18 OrderBook.clear
 
-### Turn off entry points for a command
-
-Some other commands also read files as data. For example, a code generator that reads `src/**/*.ts` does not run those files. List such a command in [`ignoreCommandEntries`](/configuration/overview#ignorecommandentries), and its file arguments do not become entry points:
-
-```jsonc
-{
-  "ignoreCommandEntries": ["my-codegen"]
-}
+✗ 1 file · 3 exports · 1 type · 1 enum member · 1 class member · 1 unused dependency · 1 unlisted dependency (0.09s)
 ```
 
-The command is still a used dependency, and its `--config` file is still tracked. The option applies to `package.json` scripts, CI files, and infrastructure files. It also applies when a script call runs the command, such as `npm run gen -- src/input.ts` with the script `"gen": "my-codegen"`. To turn off entry points from all commands, use `["*"]` and declare the real entry points in `entry`. `["*"]` also drops the modules that a linter loads through a flag, such as `eslint -f ./tools/fmt.js`, so list those in `entry` too.
+| Part | Meaning |
+|:--|:--|
+| `3 entry points detected` | The [entry points](/concepts/entry-points) where fallow starts. When fallow finds none, this line starts with `⚠ No entry points detected`, and the findings are not reliable. |
+| `● Unused files (1)` | The issue type and the number of [findings](/concepts/findings) of that type. |
+| `:3 formatPercent` | The line and the name of one finding. |
+| `(re-export)` | No file imports the name through this [barrel file](/concepts/entry-points). Remove this line. When the original export is also in the list, no file uses it: remove it too. When it is not in the list, a direct import uses it: keep it. |
+| The URL | The page that explains the issue type. |
+| `To auto-fix`, `To suppress` | The command that fixes the findings, and the comment that hides one finding. |
+| `✗` | At least one finding has the [severity](/concepts/findings) `error`, so the command exits with code 1. |
 
-## Infrastructure entry points
+The last line also counts two dependency findings, `left-pad` and `uuid`. [Dependencies](/analysis/dependencies) explains them. `fallow dead-code` has more issue types, for example unresolved imports, duplicate exports and framework findings. [Issue types](/reference/issue-types) lists each one.
 
-Worker processes and migration scripts often start from a Dockerfile or a CI job, not from an import. Fallow reads these infrastructure files and makes the source files they name entry points, so it does not report those files as unused.
+## How fallow decides
 
-Fallow reads these files:
+Each finding above is a fact about the module graph: fallow starts at the entry points and follows each import, also through barrel files. [Entry points and reachability](/concepts/entry-points) explains that walk. This section covers the cases that the walk alone does not settle. Fallow decides each case from the source text. The opt-in [type-aware analysis](/analysis/type-aware) adds the TypeScript type checker for the cases that syntax cannot decide.
 
-| File type | What fallow extracts |
-|:----------|:--------------------|
-| **Dockerfiles** (`Dockerfile`, `Dockerfile.*`, `*.Dockerfile`) | `RUN node`, `CMD`, `ENTRYPOINT`, esbuild invocations |
-| **Procfiles** | Process definitions (e.g., `worker: node dist/worker.js`) |
-| **fly.toml** / **fly.*.toml** | `release_command` and process definitions |
-| **CI pipelines** (`.gitlab-ci.yml`, `.github/workflows/*.yml`) | `npx` and binary invocations in CI steps |
-| **Composite actions** (`.github/actions/*/action.yml`, `.github/actions/*/*/action.yml`, the root `action.yml`) | The `run` steps, read like workflow steps |
+### Types and enum members
 
-Fallow looks for these files in the project root and in common subdirectories (`config/`, `docker/`, `deploy/`).
+A type-only import, such as `import type { Order } from "./orders"`, counts as a use of the export, the same as a value import. So [`OrderStatus`](/rules/unused-type) is unused only because no file names it. For an enum that is in use, fallow checks each member. `Channel.Phone` is an [unused enum member](/rules/unused-enum-member), because no code reads it. `Object.values(Channel)` and other uses of the whole enum count for each member.
 
-The rules for [formatter and linter targets](#formatter-and-linter-targets) and for `ignoreCommandEntries` also apply here. A CI step such as `npx oxlint src/` does not make `src/` files entry points.
+### Class members
 
-```dockerfile
-# Fallow detects scripts/migrate.ts and src/worker.ts as entry points
-FROM node:20
-RUN node scripts/migrate.ts
-CMD ["node", "src/worker.ts"]
+`OrderBook.clear` is an [unused class member](/rules/unused-class-member): no code calls it. A use through `this` inside the class counts, so a helper method that only `add` calls through `this` is not reported. Fallow checks public methods, public properties and static methods. It does not report these members:
+
+- `private` members and `#private` members.
+- `protected` members. The opt-in rule [`unused-protected-class-member`](/rules/unused-protected-class-member) checks them.
+- Members with a decorator, such as `@Get()` or `@Input()`. A decorator tells fallow that a framework calls the member. To check the members of a decorator that is only a label, list it in [`ignoreDecorators`](/reference/config-dead-code#ignoredecorators).
+- Lifecycle methods of React, Angular and custom elements, such as `componentDidMount` and `ngOnInit`, and the methods that an active [plugin](/concepts/plugins) knows, such as `ionViewWillEnter` of Ionic. Add other names that a framework calls to [`usedClassMembers`](/reference/config-dead-code#usedclassmembers).
+
+A call through a parent class counts for each override in a child class. When code uses the whole object, for example `Object.keys(book)` or `{ ...book }`, fallow counts each member as used.
+
+### Exports of an entry point
+
+Fallow does not report the exports of an entry point, because code outside your project can use them. When a [plugin](/concepts/plugins) knows the names that a framework reads, fallow checks the other exports of that file. [Entry points and reachability](/concepts/entry-points) explains both cases.
+
+### Imports of a whole module
+
+For `import * as m from "./m"`, fallow counts only the names that the code reads, such as `m.a`. Code that reads each key, such as `Object.keys(m)`, uses each export. [Entry points and reachability](/concepts/entry-points) has the table of import forms.
+
+### Findings in unused files {#findings-in-unused-files}
+
+An unused file can also hold unused exports, types and members. Fallow does not list these findings, because the delete of the file removes them. To see this, add a second old file, `src/utils/legacy-report.ts`, that imports `toGuilders` from `src/utils/legacy-currency.ts`. Both files are unused, and the report ends with a count:
+
+```text
+✗ 2 files · 3 exports (0.06s)
+  2 findings in unused files are hidden · --show-cascade shows them
 ```
 
-### CI working directories
-
-A GitHub Actions step runs in its `working-directory`. Fallow resolves the file arguments of the step in that directory. Fallow reads the value of the step, and the `defaults.run.working-directory` value of the job and of the workflow. The innermost value applies.
-
-```yaml .github/workflows/ci.yml
-jobs:
-  build:
-    defaults:
-      run:
-        working-directory: packages/web
-    steps:
-      # Fallow makes packages/web/scripts/build.ts an entry point
-      - run: tsx scripts/build.ts
-      # Fallow makes scripts/check.ts in the project root an entry point
-      - run: tsx $GITHUB_WORKSPACE/scripts/check.ts
-```
-
-- A path that starts with `$GITHUB_WORKSPACE/`, `${GITHUB_WORKSPACE}/`, `${{ github.workspace }}/` or `${{ env.GITHUB_WORKSPACE }}/` resolves from the project root. A GitLab path that starts with `$CI_PROJECT_DIR/` also resolves from the project root.
-- In a composite action, a path that starts with `${{ github.action_path }}/` resolves from the directory of the action.
-- When the directory is a workspace package, a script call such as `npm run gen` uses the scripts of that package. In another directory, the file arguments of a root script do not become entry points, because those paths are relative to the root.
-- A directory with a value that is known only at run time, such as `ecosystem-ci/${{ matrix.name }}`, or a directory outside the project, such as `${{ runner.temp }}/x`, makes no entry point for a relative path. A path such as `../patch.ts` that leaves the run-time segment still resolves.
-- `working-directory` under `with:` is an input of an action. It does not change the directory of a `run` step.
-
-The working directory changes only the file arguments. A binary in the step credits its package in every directory.
-
-### Scripts outside a `run` value
-
-Fallow also finds the scripts that a workflow names in these places:
-
-- **A matrix value.** When a step is only `run: ${{ matrix.project.command }}`, Fallow reads the `command` values under `project` in the `matrix:` block of the same job, also under `include:`, as the commands of that step. The step `working-directory` applies to them.
-- **An `actions/github-script` step.** In the `script:` input, a path after `${process.env.GITHUB_WORKSPACE}/` or `${{ github.workspace }}/`, and a `require('./path')`, resolve from the project root. A relative `import('./path')` resolves from the action itself, so Fallow does not read it.
-- **A step `env` variable.** When the whole value of a step `env` entry is an anchor such as `${{ github.action_path }}`, a path that starts with that variable resolves like the anchor.
-
-```yaml .github/actions/setup/action.yml
-runs:
-  using: composite
-  steps:
-    # Fallow makes .github/actions/setup/prepare-cache.mjs an entry point
-    - run: node "$SETUP_ACTION_PATH/prepare-cache.mjs"
-      shell: bash
-      env:
-        SETUP_ACTION_PATH: ${{ github.action_path }}
-```
-
-Fallow does not read `env` entries of the job or of the workflow for this.
-
-## Dynamic import resolution
-
-Files that you load with a computed path, such as locale files or icons, are not unused. For `` import(`./locales/${lang}.json`) ``, the target is not known at analysis time. Fallow converts the pattern into a glob and matches it against the project files.
-
-Fallow supports these patterns:
-
-| Pattern | Example | Resolved as |
-|:--------|:--------|:------------|
-| Template literals | `` import(`./icons/${name}.svg`) `` | `./icons/*.svg` |
-| String concatenation | `import("./routes/" + path)` | `./routes/*` |
-| `import.meta.glob` | `import.meta.glob("./modules/*.ts")` | `./modules/*.ts` |
-| `require.context` | `require.context("./themes", true, /\.css$/)` | `./themes/**/*.css` |
-
-Fallow marks the matched files as reachable, so it does not report them as unused. This covers locale files, icon sets, route modules, and other directories that follow a naming convention.
-
-An `import.meta.glob` pattern can use the extglob groups `@(..)`, `?(..)`, `+(..)`, `*(..)` and `!(..)`, as Vite does. A negated group excludes the files that match its alternatives:
-
-```typescript
-// Loads every module in ./modules except the *.spec files
-const modules = import.meta.glob("./modules/**/!(*.spec).{j,t}s");
-```
-
-A negative entry in an `import.meta.glob` array excludes files from every positive entry of the same call. Fallow can then report an excluded file as unused:
-
-```typescript
-// ./pages/skip.js is not loaded, so fallow can report it as unused
-const pages = import.meta.glob(["./pages/*.js", "!./pages/skip.js"]);
-```
-
-- Fallow applies a negative entry that starts with `./`, `../` or `**`. Other negative entries need the alias resolver of Vite, so fallow keeps the files.
-- Like Vite, fallow matches a `**` entry from the common base directory of the positive entries. Next to `./pages/*.js`, the entry `!**/pages/a.js` excludes nothing, because the match starts inside `pages`.
-
-The static text of a template literal, a string concatenation, or a `require.context` directory matches only itself. Glob characters in that text, such as `[`, `]`, `{` or `*`, are not glob syntax. For example, `` import(`./[id]/${name}.js`) `` matches `./[id]/view.js`, and `import("./{group}/" + name)` matches `./{group}/item.js`.
-
-When a dynamic import pattern is not a valid glob, fallow gives a warning, and the pattern matches no files.
-
-A pattern match uses every value export of the matched file, `default` included. A type export (a type alias or an interface) of a matched file is used only by an import that names it.
-
-The options object of an `import.meta.glob` call decides which exports of the matched files are used:
-
-| Options | Used exports of each match |
-|:--------|:---------------------------|
-| No options | Every value export |
-| `query: '?raw'` or `query: '?url'`, also combined (`'?url&inline'`) | None. The file stays reachable. |
-| `as: 'raw'` or `as: 'url'` (legacy form) | None. The file stays reachable. |
-| `import: 'default'` or `import: '<name>'`, with no query | Only that export |
-| `import: '*'` | Every value export |
-| Any other query, such as `'?inline'` on a `.ts` file | Every value export |
-
-```typescript
-// The files are read as text, so fallow can report their exports as unused
-const sources = import.meta.glob("./examples/*.ts", { query: "?raw", import: "default" });
-
-// Only the setup export of each file is used
-const setups = import.meta.glob("./plugins/*.ts", { import: "setup", eager: true });
-```
-
-A raw or url query applies before the `import` option, so the first call above uses no export. Fallow also uses every value export when the options are not an object literal, when they contain a spread, or when an option value is not a string literal. A plugin can turn an unknown query into a module, so fallow keeps the module for any query that it does not know.
-
-A module path in `new URL("./lib/sign.ts", import.meta.url)` is not unused. A build tool or a script runner can load the module by that path and call its default export. So fallow uses the `default` export of the module. The other exports of the module stay reportable. A `new URL()` path that a `Worker` or `SharedWorker` constructor gets uses no export, because a worker runs the module as a script. A directory path, such as `new URL("./services", import.meta.url)`, also uses no export.
-
-<Note>
-Fallow cannot resolve a path that is fully computed at runtime (for example `import(userInput)`). List the files that your code loads this way in [`dynamicallyLoaded`](/configuration/overview#dynamicallyloaded), for example `"dynamicallyLoaded": ["src/plugins/*.ts"]`. Fallow then treats these files as entry points. Use `entry` for files that something outside the project runs.
-</Note>
-
-## Re-export chain resolution
-
-Fallow follows `export *` chains through any number of barrel files, so an export that you import through a barrel counts as used.
-
-```typescript
-// utils/math.ts
-export const add = (a: number, b: number) => a + b;
-
-// utils/index.ts (barrel)
-export * from './math';
-
-// src/index.ts (barrel)
-export * from './utils';
-
-// app.ts
-import { add } from './src';
-```
-
-```mermaid
-flowchart TB
-  A["app.ts<br/>import ﹛ add ﹜ from './src'"] --> B["src/index.ts<br/>export * from './utils'"]
-  B --> C["utils/index.ts<br/>export * from './math'"]
-  C --> D["utils/math.ts<br/>export const add ✓"]
-```
-
-Here, fallow follows the import of `add` in `app.ts` through `src/index.ts` and `utils/index.ts` to `utils/math.ts` and marks `add` as used.
-
-Fallow handles these cases:
-
-- **Multi-level chains.** Fallow follows `export *` re-exports at any depth, up to the original declaration.
-- **Cycles.** Fallow detects circular re-export chains (for example, `a` re-exports from `b` and `b` re-exports from `a`) and stops without an error.
-- **Mixed re-exports.** Fallow tracks named re-exports (`export { foo } from './bar'`) and star re-exports (`export * from './bar'`).
-
-When two `export *` sources supply the same name, ECMAScript treats the name
-as ambiguous, and the barrel does not export it. Until you fix the collision,
-Fallow does not report the declarations, members, components, or injections
-that supply the name. Run [`fallow trace FILE:NAME`](/cli/trace) to see the
-source files and whether the collision is in the type namespace, the value
-namespace, or both.
-
-## Namespace import narrowing
-
-A namespace import does not mark every export as used. For `import * as ns from './module'`, fallow looks for member accesses (`ns.foo`, `ns.bar`) and destructuring (`const { foo, bar } = ns`) in the importing file. Only those exports count as used.
-
-```ts
-import * as utils from './utils';
-
-// Only foo and bar are marked as used. baz remains unused
-const { foo } = utils;
-utils.bar();
-```
-
-This works for static imports, dynamic imports (`const mod = await import('./x')`), and `require` (`const mod = require('./x')`).
-
-Fallow also uses `oxc_semantic` scope analysis to find imports whose binding the file never reads. If a file has `import { foo } from './utils'` and never uses `foo`, that import does not count as a reference to the `foo` export.
-
-<Note>
-Some patterns use the whole object: `Object.values(ns)`, `{ ...ns }`, `for (const k in ns)`, and rest destructuring (`const { a, ...rest } = ns`). Fallow cannot tell which members these patterns use, so it marks all exports as used.
-</Note>
-
-The same narrowing applies to a namespace re-export (`export * as ns from './module'`). An export that no consumer reads through `ns` is an unused export, or an unused type for a type export. When the namespace object leaves the file, for example as a function argument (`register(ns)`), fallow cannot tell which members the receiver reads, so it marks all exports as used.
-
-Fallow checks a TypeScript namespace (`export namespace N { export const a = 1 }`) as one export and reports its unused exported members as [`unused-namespace-members`](/explanations/dead-code#unused-namespace-members).
-
-## Class member detection
-
-Fallow reports public class methods and properties that no code outside the class references. It takes class inheritance, decorators, and framework conventions into account.
-
-```typescript
-class OrderService {
-  // Used: called in checkout.ts
-  async createOrder(items: Item[]) { /* ... */ }
-  
-  // Unused: never called outside this class
-  validateItems(items: Item[]) { /* ... */ }
-  
-  // Excluded: decorator indicates runtime wiring
-  @Post('/orders')
-  handleCreateOrder() { /* ... */ }
-}
-```
-
-Fallow handles these cases without configuration:
-
-- **Inheritance.** When code calls a parent class method through the parent type, fallow marks the child override as used.
-- **Decorators.** By default, fallow skips decorated members. Decorators such as `@Get()`, `@Column()`, and `@Injectable()` mean that a framework calls the member at runtime.
-- **Framework lifecycle methods.** Fallow never reports `componentDidMount`, `ngOnInit`, `connectedCallback`, and other framework lifecycle methods.
-- **Whole-object patterns.** `Object.values(instance)`, `Object.keys()`, spread operators, and `for..in` loops mark all members as used.
-- **Playwright fixtures.** A test made with `test.extend<T>(...)` or `mergeTests(...).extend<T>(...)` credits the members of each fixture class that the test uses. Fallow reads `test` and `mergeTests` from `@playwright/test` and from `playwright/test`.
-
-### Opting decorators out via `ignoreDecorators`
-
-Some decorators do not mean that a framework calls the method, for example Playwright's `@step("label")` or your own `@measure`, `@log`, or `@retry`. List these names in `ignoreDecorators`. Fallow then checks a method that has only these decorators like an undecorated method.
-
-```jsonc
-// .fallowrc.json
-{
-  "ignoreDecorators": ["@step"]
-}
-```
-
-Fallow still skips a method that has any decorator that is not in the list. A method with `@step` and `@Inject` stays framework-managed.
-
-See [`ignoreDecorators`](/configuration/overview#ignoredecorators) for the matching rules and the unmatched-entry warning.
-
-<Note>
-Class member detection uses syntactic analysis and does not run the TypeScript compiler. Fallow tracks member access through the import graph and does not resolve types.
-</Note>
-
-## CSS and SCSS tracking
-
-Fallow tracks CSS and SCSS imports, so stylesheets that your code uses are not unused files. It resolves SCSS `@use`, `@forward`, and partials (`_prefix` files). It treats CSS Module class names as named exports and tracks them through `styles.className` accesses.
-
-For details, see [CSS, SCSS, and Tailwind analysis](/analysis/css-analysis).
-
-## Entry-point partial unused exports
-
-An entry point can also export helpers that nothing uses. A plugin or the `entry` config makes a file an entry point. By default, fallow assumes that external code uses the exports of an entry file. When a plugin declares the used exports for an entry file, fallow checks the other exports of that file. It reports each of these exports that no other module in the project imports. With [`--include-entry-exports`](/cli/dead-code#scoping), fallow checks the exports of every entry file.
-
-This helps most with framework convention files, such as Next.js pages and SvelteKit routes. The framework uses specific named exports (such as `default`, `loader`, or `getStaticProps`), and the file can also export helpers that nothing uses.
-
-<Note>
-Fallow never reports an entry-point file as an unused file. It reports only the exports in that file that have zero references.
-</Note>
-
-## Cross-reference with duplication
-
-Code that is duplicated and unused is a good place to start the cleanup. `fallow dead-code --include-dupes` compares dead code findings with duplication analysis. Fallow reports clone instances in unused files, or that overlap unused exports, as **combined high-priority findings**.
+To list them, add `--show-cascade`:
 
 ```bash
-fallow dead-code --include-dupes
+npx fallow dead-code --show-cascade --unused-files --unused-exports
 ```
 
-When you delete a block that is duplicated *and* unused, you remove dead code and duplication in one change.
+```text
+● Unused exports (5)
+  src/utils/legacy-currency.ts (2)
+    :1 toGuilders
+    :3 fromGuilders
+  src/lib/format.ts
+    :3 formatPercent
+```
 
-The comparison finds:
+The [`showCascade`](/reference/config-rules#showcascade) key in the config file does the same for each run. The health metrics count these findings with and without the option.
 
-- **Clone instances in unused files.** When no entry point reaches a file and the file has duplicated code, fallow raises the priority of the duplication finding.
-- **Clone instances that overlap unused exports.** When an unused export has code that is duplicated elsewhere, fallow reports both findings together.
+## Act on a finding
 
-## Circular dependency performance
+A finding is a strong hint, but you delete the code, so check each finding first. `--trace` shows why fallow reports an export:
 
-`fallow dead-code --circular-deps` runs the full analysis (dead code, dependencies, boundaries, and cycles). All runs are cold, with fallow 2.100.0 on an Apple M5. The flag is now a deprecated alias for `fallow architecture --cycles`, which runs the same analysis.
+```bash
+npx fallow dead-code --trace src/services/orders.ts:cancelOrder
+```
 
-| Project | Files | Time | Cycles |
-|:--------|------:|-----:|-------:|
-| [zod](https://github.com/colinhacks/zod) | 174 | 43ms | 0 |
-| [preact](https://github.com/preactjs/preact) | 244 | 75ms | 5 |
-| [fastify](https://github.com/fastify/fastify) | 286 | 97ms | 20 |
-| [vue/core](https://github.com/vuejs/core) | 522 | 137ms | 58 |
-| [TypeScript](https://github.com/microsoft/TypeScript) | 38,146 | 2.18s | 114 |
-| [next.js](https://github.com/vercel/next.js) | 20,552 | 3.00s | 178 |
-| [astro](https://github.com/withastro/astro) | 2,859 | 3.81s | 42 |
+```text
+  UNUSED cancelOrder in src/services/orders.ts
 
-<Info>
-  Fallow finds cycles in the module graph that dead code analysis already builds, so cycle detection does not build a second graph.
-</Info>
+  File: reachable
+  Namespace: value
+  Reason: No references found, export is unused
+```
 
-## See also
+`Namespace: value` tells you that `cancelOrder` is a value. For `OrderStatus`, the trace says `Namespace: type`. For a file, use `--trace-file`. It shows the exports of the file, its imports and the files that import it, also for an unreachable file:
 
-<CardGroup cols={3}>
-  <Card title="CLI: dead-code" icon="terminal" href="/cli/dead-code">
-    Full reference for the `fallow dead-code` command and its flags.
-  </Card>
-  <Card title="Rules & Severity" icon="scale-balanced" href="/configuration/rules">
-    Control which issue types are errors, warnings, or disabled.
-  </Card>
-  <Card title="Auto-fix" icon="wand-magic-sparkles" href="/analysis/auto-fix">
-    Remove the dead code that fallow finds.
-  </Card>
-</CardGroup>
+```bash
+npx fallow dead-code --trace-file src/utils/legacy-currency.ts
+```
+
+```text
+  UNREACHABLE src/utils/legacy-currency.ts
+
+  Exports (2):
+    export toGuilders [unused]
+    export fromGuilders [unused]
+```
+
+[Find why fallow reports a finding](/guides/trace-a-finding) shows each trace command. When the trace confirms the finding, pick the action that fits:
+
+| Situation | Action |
+|:--|:--|
+| Nothing uses the code. | Delete the file, the export or the member. |
+| Only the file itself uses an export. | Remove the `export` keyword and keep the code. |
+| A tool or a framework loads the code, and fallow does not know it. | Correct the entry points or the plugin. See [Fix a false positive](/guides/false-positives). |
+| You keep the code on purpose. | Add a suppression comment. See [Suppress a finding](/guides/suppress). |
+
+`fallow fix` removes unused exports and unused enum members for you. Run `fallow fix --dry-run` first. [Remove unused code with fallow fix](/guides/auto-fix) explains what it changes.
+
+### Work in this order
+
+1. Delete the unused files.
+2. Run `fallow dead-code` again.
+3. Remove the unused exports, types and members.
+
+The order matters, because an import in an unused file still counts as a use of an export. When you delete the file, the exports that only that file imported become unused, and the second run shows them.
+
+## Fail a run
+
+Each issue type on this page has the severity `error` by default, so one finding makes `fallow dead-code` exit with code 1. The demo run above exits with code 1. A finding at the severity `warn` shows in the report and keeps the exit code at 0, unless you add `--fail-on-issues`:
+
+```bash
+npx fallow dead-code --fail-on-issues
+```
+
+To report an issue type without a failure, set its [rule](/concepts/findings) to `warn` in the config file. For example, a team that cleans the class members later:
+
+```jsonc
+// .fallowrc.jsonc
+{
+  "rules": {
+    "unused-class-members": "warn"
+  }
+}
+```
+
+To fail only on the dead code that a change adds, see [Changed code and baselines](/concepts/changed-code).
+
+## What fallow cannot see
+
+- A path that exists only when the code runs, for example `import(name)` with a variable. Name these files in `dynamicallyLoaded`.
+- A use through reflection, for example a dependency injection container that reads class names.
+- A use outside the project, for example a file that only a deploy script outside the repository runs.
+- A file that only tests import is reachable in a normal run. Use [production mode](/concepts/production-mode) to check the code that ships.
+
+For each known case and its workaround, see [Known limits of fallow](/guides/limits).
+
+## Reference
+
+- [`fallow dead-code`](/cli/dead-code): each option, the JSON output and the exit codes.
+- [Dead code config](/reference/config-dead-code): each key and its default.
+- [Issue types](/reference/issue-types): each issue type with its rule page.

@@ -4,17 +4,20 @@ import test from "node:test";
 import { capabilitiesPath, listedPlugins, missingPlugins, normalize } from "./check-plugins.mjs";
 
 const PAGE = [
-  "<Tabs>",
-  '  <Tab title="Frameworks">',
-  "    | Plugin | Enabler packages |",
-  "    |:-------|:-----------------|",
-  "    | **Next.js** | `next` |",
-  "    | **AdonisJS** | `@adonisjs/core` |",
-  '  <Tab title="Bundlers">',
-  "    | **Vite+** | `vite-plus` |",
-  "</Tabs>",
+  "## Frameworks {#frameworks}",
   "",
-  "  | **Gulp** | Config details after the plugin tabs |",
+  "| Plugin | Activated by | What fallow reads |",
+  "|:--|:--|:--|",
+  "| **Next.js** | `next` | |",
+  "| **AdonisJS** | `@adonisjs/core` | |",
+  "",
+  "## Bundlers {#bundlers}",
+  "",
+  "| **Vite+** | `vite-plus` | |",
+  "",
+  "## Notes for some plugins {#plugin-notes}",
+  "",
+  "| **Gulp** | Config details after the plugin tables |",
 ].join("\n");
 
 test("normalizes plugin names and page names to one form", () => {
@@ -23,7 +26,7 @@ test("normalizes plugin names and page names to one form", () => {
   assert.equal(normalize("solid-start"), normalize("SolidStart"));
 });
 
-test("reads only the plugin rows of the tabs", () => {
+test("reads only the plugin rows above the notes heading", () => {
   assert.deepEqual([...listedPlugins(PAGE)].sort(), ["adonisjs", "nextjs", "viteplus"]);
 });
 

@@ -21,7 +21,6 @@ const PROVENANCE_NAME = "fallow-public-docs.provenance.json";
 const REQUIRED_FILES = ["docs.json", "index.mdx"];
 const USTAR_PATH_LIMIT = 100;
 const PUBLIC_ROOT_FILES = new Set([
-  "adoption.mdx",
   "context7.json",
   "custom.css",
   "docs.json",
@@ -56,6 +55,7 @@ const REPOSITORY_ONLY_DIRECTORIES = new Set([
   ".git",
   ".github",
   ".plans",
+  "contracts",
   "dist",
   "launch-content",
   "node_modules",

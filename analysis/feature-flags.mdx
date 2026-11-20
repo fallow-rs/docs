@@ -1,0 +1,142 @@
+---
+title: "Feature flags"
+description: "Find the feature flags in your code with fallow flags, and decide which flags to retire."
+keywords: ["fallow flags", "feature flags", "flag retirement", "stale flags", "LaunchDarkly", "Statsig", "Unleash", "GrowthBook", "PostHog", "Vercel Flags"]
+icon: "flag"
+---
+
+A feature flag lets you ship code that stays off until you turn it on. The rollout ended two years ago, but the flag read and the old branch are still in the code. Each reader of that file must still follow both branches, and each test must still cover both. `fallow flags` finds each flag in your code, and its retirement report shows which flags you can remove.
+
+```bash
+npx fallow flags
+```
+
+The analysis is opt-in: it runs only with this command, and bare `fallow` does not report flags. It runs no code and calls no flag provider. The retirement report gives each flag an age from `git blame`, so it needs the git history, and the exact mode `--flag-age pickaxe` is slower.
+
+## What fallow finds
+
+This example adds three files to the demo project: `src/services/checkout.ts` reads a GrowthBook flag, `src/services/search.ts` reads an environment variable, and `src/reports/holiday.ts` has a constant that switches off a banner. The first two files are 246 days old in the git history, and the third is new.
+
+```ts
+// src/reports/holiday.ts
+const FEATURE_HOLIDAY_BANNER = false;
+
+export const holidayBanner = (): string => {
+  if (FEATURE_HOLIDAY_BANNER) {
+    return "Happy holidays";
+  }
+  return "";
+};
+```
+
+```bash
+npx fallow flags --retirement
+```
+
+```text
+● Feature flags (2)
+  src/services/checkout.ts
+    :6 new-checkout (SDK: GrowthBook)
+  src/services/search.ts
+    :2 FEATURE_FAST_SEARCH (env)
+
+✓ 2 flags detected (0.22s)
+
+● Retirement candidates (3 of 3 flags)
+  FEATURE_FAST_SEARCH (env) src/services/search.ts:2 · 246 days · 1 read site · single-read-site
+  new-checkout (SDK: GrowthBook) src/services/checkout.ts:6 · 246 days · 1 read site · single-read-site
+  FEATURE_HOLIDAY_BANNER (constant) src/reports/holiday.ts:1 · 0 days · 1 read site · single-read-site, literal-constant
+  Age is a lower bound: it counts from the oldest line that still holds the flag. Use --flag-age pickaxe for the first commit.
+  Fallow does not remove flags. Use --format json for the evidence of each reason.
+```
+
+| Part | Meaning |
+|:--|:--|
+| `:6 new-checkout (SDK: GrowthBook)` | One place that reads a flag: the line, the flag name, and the kind with its provider. Each read is a finding of the issue type [`feature-flag`](/rules/feature-flag). |
+| `Retirement candidates` | One row for each flag, with all its read sites together ([`flag-retirement-candidate`](/rules/flag-retirement-candidate)). |
+| `246 days` | The age of the flag, from the git history. |
+| `1 read site` | The number of places that read the flag. |
+| `single-read-site, literal-constant` | The reasons that the flag can be a candidate to retire. |
+
+The first section lists 2 flags and the retirement report lists 3, because a constant is not a flag read: it shows only in the retirement report. A plain `fallow flags` run shows only the first section.
+
+## How fallow decides
+
+For fallow, a **feature flag** is a value that the code reads to turn a block of code on or off. The demo has one flag of each kind that fallow finds:
+
+| Kind | Example | Default |
+|:--|:--|:--|
+| Environment variable | `process.env.FEATURE_FAST_SEARCH`, `import.meta.env.VITE_ENABLE_CHAT` | On |
+| SDK call | `gb.isOn("new-checkout")`, `useFlag("beta")`, `checkGate("beta")` | On |
+| Constant: a `const` with a flag prefix and a literal value, that a guard tests | `const FEATURE_HOLIDAY_BANNER = false` | On, in the retirement report only |
+| Config object: a property of an object whose name holds `feature`, `flag` or `toggle` | `features.newCheckout` | Off. Turn it on with `flags.configObjectHeuristics`. |
+
+An environment variable or a constant counts when its name starts with a flag prefix: `FEATURE_`, `ENABLE_`, `FF_`, `FLAG_` or `TOGGLE_`. Fallow also knows framework forms of the first two, such as `VITE_ENABLE_` and `NEXT_PUBLIC_FEATURE_`. Fallow knows the SDKs of LaunchDarkly, Statsig, Unleash, GrowthBook, Split, PostHog, Vercel Flags, ConfigCat, Flagsmith, Optimizely and Eppo. Add your own prefixes and SDK functions with `flags.envPrefixes` and `flags.sdkPatterns`. They add to the built-in sets.
+
+Each flag has a confidence. A call to a generic name, such as `isEnabled()` or `getValue()`, gets `medium` when the file imports no flag SDK, because other code uses the same names. A config object gets `low`. Other flags get `high`.
+
+A flag read that controls a block of code is a **guard**, for example the test of an `if`. Fallow uses the guarded lines to find [unused exports](/rules/unused-export) inside them.
+
+### Retirement reasons
+
+Each reason in the report is a fact that fallow found in the code:
+
+| Reason | Meaning |
+|:--|:--|
+| `single-read-site` | One place in the project reads the flag. |
+| `test-only` | Only test, story or mock files read the flag. |
+| `literal-constant` | The flag is a `const` with a literal value, so its guard always takes one branch. |
+| `identical-branches` | Both branches of the guard hold the same code. |
+| `empty-branch` | No branch of the guard holds code. |
+| `guards-dead-code` | The guarded block holds unused exports. |
+| `defined-never-read` | A flag definition that no code reads. |
+
+These reasons come from the code only. The code cannot tell if a flag is on in production. Export the state from your flag provider and pass it with `--flag-state`: fallow then adds reasons such as `fully-rolled-out` and `archived-in-vendor`. Fallow reads that file offline and calls no vendor. See [Vendor flag state](/cli/flags#vendor-flag-state).
+
+## Act on a finding
+
+Start with the oldest flags that have a reason. In the demo, those are `FEATURE_FAST_SEARCH` and `new-checkout`. Then, for each flag:
+
+1. Check the state of the flag in your provider, or pass `--flag-state`.
+2. Keep the branch that production uses. Remove the other branch and the flag read.
+3. Remove the flag in your provider.
+4. Run `fallow dead-code`. The removed branch often leaves unused exports and files.
+
+Fallow does not remove flags. Each action in the JSON output has `auto_fixable: false`.
+
+A short-lived flag with one read site is normal during a rollout, so `FEATURE_HOLIDAY_BANNER`, at 0 days, can stay. The reasons are a list to review, not a list to delete.
+
+## Fail a run
+
+By default, `fallow flags` exits with code 0. The option `--max-flag-age` fails a run on old flags:
+
+```bash
+# fail when a flag is older than 180 days
+npx fallow flags --retirement --max-flag-age 180
+```
+
+```text
+Flag age check failed: 2 flags are older than 180 days: FEATURE_FAST_SEARCH (246 days), new-checkout (246 days)
+```
+
+The run exits with code 1. To fail a pull request that adds a flag, save a regression baseline of the flag counts on `main`, and compare with it:
+
+```bash
+npx fallow flags --retirement --flag-age off --save-regression-baseline .fallow/flags-baseline.json
+npx fallow flags --retirement --flag-age off --fail-on-regression --regression-baseline .fallow/flags-baseline.json
+```
+
+[Changed code and baselines](/concepts/changed-code) explains the other ways to judge only a change.
+
+## What fallow cannot see
+
+- The age comes from `git blame`. A rewrite of a line resets its date, so the age is a lower bound. `--flag-age pickaxe` finds the first commit, and is slower.
+- A shallow clone has no history, so the age is unknown and the age gate skips. Fetch the full history in CI, for example with `fetch-depth: 0`.
+- A flag name that fallow cannot read from the code, for example a name built at run time, is not in the report.
+- An SDK that fallow does not know needs an entry in `flags.sdkPatterns`.
+
+## Reference
+
+- [`fallow flags`](/cli/flags): each option, the retirement report and the JSON output.
+- [Retirement report](/cli/flags#retirement-report): the reasons, the flag age and the output formats.
+- [`flags` config](/reference/config-other#flags): the SDK patterns, the prefixes and their defaults.

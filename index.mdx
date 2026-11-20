@@ -1,101 +1,94 @@
 ---
 title: "Fallow: codebase analysis for TypeScript and JavaScript"
 sidebarTitle: "Introduction"
-description: "Fallow is codebase analysis for TypeScript and JavaScript. It reports unused code, duplication, complexity, and architecture drift from one graph of your repo."
-keywords: ["fallow", "typescript", "javascript", "dead code", "duplication", "complexity", "architecture", "runtime intelligence", "runtime coverage", "MCP", "VS Code", "CI", "codebase analysis", "static analysis"]
+description: "Fallow is codebase analysis for TypeScript and JavaScript that finds unused code, duplication, complexity and architecture problems in one run."
+keywords: ["fallow", "codebase analysis", "typescript", "javascript", "dead code", "unused dependencies", "duplication", "complexity", "architecture", "CI", "coding agents"]
 icon: "house"
-mode: "wide"
 ---
 
-Fallow is **codebase intelligence** for TypeScript and JavaScript. One command reads your whole repository as one graph and shows:
+Fallow finds the code in your TypeScript or JavaScript project that nothing uses, the code that you copied, and the functions that are hard to change. It reads the whole repository and needs no config file. Run it on your machine, on each pull request, and in the loop of a coding agent.
 
-- where the code is hard to change (complexity hotspots and a health score)
-- where the architecture drifts (boundary rules and circular dependencies)
-- what is copied (duplication)
-- where the UI drifts from your design system (styling drift)
-- what nothing uses (unused files, exports, and dependencies)
-- where the feature flags are
+This is the report of `npx fallow` on a small demo project with 16 files:
 
-To learn which code executed in production, add the optional runtime layer.
+```text
+  16 files analyzed
+  3 entry points detected (2 package.json, 1 plugin)
+
+● Unused files (1)
+  src/utils/legacy-currency.ts
+
+● Unused dependencies (1)
+  left-pad
+
+● Duplicates (1 clone group)
+
+     17 lines  2 instances  spread 2  dup:f42424e8
+    src/reports/export.ts:3-19
+    src/utils/summary.ts:7-23
+
+● High complexity functions (1)
+  src/services/customers.ts
+    :9 classifyCustomer CRITICAL
+
+Failed: dead-code (6 issues), dupes (1 clone group), health (1 above threshold): start with src/services/customers.ts
+```
+
+This run found a file that nothing imports, a package that no file uses, a block of 17 lines that exists in two files, and one function to split first. The full report also lists unused exports and a package that the code imports but `package.json` does not list. Each of these findings costs you time later: people read the old file, CI installs the unused package, and a fix in one copy of the block misses the other copy.
+
+## How fallow knows that code is unused {#how-it-works}
+
+The first finding is the result of one walk through the project. A linter checks one file at a time, so it cannot see that no other file imports `legacy-currency.ts`. Fallow builds one graph of all files and their imports. It starts at the [entry points](/concepts/entry-points), the files that something outside your code runs, such as the `main` file of `package.json` or a test file. Then it follows each import. In the graph below, the three entry points of the demo reach each file except `src/utils/legacy-currency.ts`:
+
+```mermaid
+flowchart LR
+  subgraph entry["Entry points"]
+    main["src/index.ts"]
+    seed["scripts/seed.js"]
+    test["src/math.test.ts"]
+  end
+  lib["src/lib/index.ts"]
+  format["src/lib/format.ts"]
+  orders["src/services/orders.ts"]
+  data["scripts/seed-data.js"]
+  helpers["src/utils/test-helpers.ts"]
+  legacy["src/utils/legacy-currency.ts"]
+  main --> lib
+  lib --> format
+  main --> orders
+  seed --> data
+  test --> helpers
+```
+
+No import path leads to `legacy-currency.ts`, so fallow reports it as an unused file. The same walk decides about each export: an export is unused when no reachable file uses it.
 
 ## Start here
 
-<Steps>
-  <Step title="Run fallow without installing">
+The fastest way to learn fallow is to run it on your own project. These three pages take you from the first command to the first removed finding:
 
-  ```bash
-  npx fallow
-  ```
+1. [Install fallow](/installation), or run it with `npx` and install nothing.
+2. [Try it on your project](/quickstart): run one command and read each part of the report.
+3. [Fix your first findings](/start/first-cleanup): check a finding, remove the code, and run fallow again.
 
-  The first run needs no config.
-  </Step>
+After the first cleanup, new dead code can come back with each change. Add fallow where your team changes code, so that it stops new findings:
 
-  <Step title="Read the results">
+- [Check each pull request](/start/first-ci): add one workflow file, and fallow checks the code that each pull request changes.
+- [Use it with a coding agent](/start/first-agent): let Claude Code, Codex or Cursor check their own changes before they commit.
 
-  One pass reports health, duplication, and unused code. For styling drift, run `fallow audit` or `fallow health --css`.
-  </Step>
+Do you use another tool for dead code or duplication? [Fallow and linters](/explanations/fallow-vs-linters) shows which problem needs which tool. The migration pages move your settings from [knip](/migration/from-knip), [ts-prune](/migration/from-ts-prune), [jscpd](/migration/from-jscpd), [madge](/migration/from-madge), [dependency-cruiser](/migration/from-dependency-cruiser) and [Stylelint](/migration/from-stylelint).
 
-  <Step title="Go deeper">
+## What fallow analyzes
 
-  ```bash
-  npx fallow dead-code
-  npx fallow dupes
-  npx fallow health
-  npx fallow fix --dry-run
-  ```
-  </Step>
-</Steps>
+The bare `fallow` command runs these five analyses together. Each one has its own page with real output and the action for each finding:
 
-## What fallow helps you do
+- [Dead code](/analysis/dead-code): unused files, exports, types and class members.
+- [Dependencies](/analysis/dependencies): packages that `package.json` lists and no file uses, and packages that files use and `package.json` does not list.
+- [Duplication](/analysis/duplication): blocks of code that exist in two or more places.
+- [Health](/analysis/health): complexity, a score for each file, and the files to refactor first.
+- [Architecture](/analysis/architecture): circular dependencies and imports that break your boundary rules.
 
-<CardGroup cols={2}>
-  <Card title="Delete cold code" icon="trash" href="/analysis/dead-code">
-    Find unused files, exports, and dependencies, and remove them.
-  </Card>
-  <Card title="Reduce duplication" icon="clone" href="/analysis/duplication">
-    Find repeated logic before it spreads.
-  </Card>
-  <Card title="Prioritize refactors" icon="fire" href="/explanations/health">
-    Rank code by complexity and health, and fix the worst first.
-  </Card>
-  <Card title="Add TypeScript evidence" icon="code" href="/analysis/type-aware">
-    Confirm exact symbol use, class contracts, affected files, and the tests to run.
-  </Card>
-  <Card title="Add runtime evidence" icon="chart-network" href="/analysis/runtime-coverage">
-    See hot paths and cold paths, and back a delete with production data.
-  </Card>
-  <Card title="Test your tests" icon="flask" href="/cli/mutation">
-    Run mutation testing on changed code and find the changes that no test detects.
-  </Card>
-</CardGroup>
+You run these analyses on request: [styling](/analysis/styling), [feature flags](/analysis/feature-flags), [security](/analysis/security), [similar code](/analysis/similar-code), [mutation testing](/analysis/mutation), [type-aware analysis](/analysis/type-aware) and [runtime coverage](/analysis/runtime-coverage). To learn which functions run in production, add [Fallow Cloud](/cloud/beacon): it counts how often each function of your deployed app runs, and fallow shows these counts in the health report.
 
-## Pick your workflow
+## Next
 
-<CardGroup cols={3}>
-  <Card title="CLI" icon="terminal" href="/quickstart">
-    Start here. The CLI runs locally, in CI, and in agent loops.
-  </Card>
-  <Card title="VS Code" icon="window" href="/integrations/vscode">
-    Get real-time diagnostics, Code Lens, and one-click fixes in the editor.
-  </Card>
-  <Card title="MCP and agents" icon="robot" href="/integrations/mcp">
-    Give Claude Code, Cursor, and other agents structured tool calls.
-  </Card>
-</CardGroup>
-
-## Understand the two layers
-
-Static analysis tells you which code is connected to which. Production data from Fallow Cloud tells you which code actually ran. `fallow health` shows both.
-
-<Card title="Static analysis vs production data" icon="book-open" href="/explanations/static-vs-runtime">
-  Learn how the two layers differ before you set up runtime collection.
-</Card>
-
-## See also {#most-used-pages}
-
-<CardGroup cols={2}>
-  <Card title="Quick start" icon="rocket" href="/quickstart" />
-  <Card title="Configuration" icon="gear" href="/configuration/overview" />
-  <Card title="CI integration" icon="shield-check" href="/integrations/ci" />
-  <Card title="CLI reference" icon="terminal" href="/cli/dead-code" />
-</CardGroup>
+- Next: [First run](/quickstart). Run `npx fallow` on your project and read each part of the report.
+- [Entry points and reachability](/concepts/entry-points): read it first when you want to know how fallow decides before you run it.

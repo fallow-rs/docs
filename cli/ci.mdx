@@ -1,176 +1,282 @@
 ---
-title: "fallow ci: post PR and MR feedback from CI"
-sidebarTitle: "fallow ci"
-description: "Reference for fallow ci: post or update the sticky PR comment, post inline reviews, resolve fixed review threads, and post GitHub Check Runs from rendered fallow output."
-keywords: ["fallow ci", "PR comment", "merge request comment", "review comments", "GitHub Check Run", "GitLab", "reconcile review", "CI"]
+title: "fallow ci"
+description: "fallow ci posts a rendered fallow comment, review or check run to a GitHub pull request or a GitLab merge request."
+keywords: ["fallow ci", "pull request comment", "merge request", "review comments", "check run", "cli reference"]
 icon: "terminal"
 ---
 
-`fallow ci` posts fallow feedback to a pull request (GitHub) or a merge request (GitLab). The [GitHub Action and the GitLab CI template](/integrations/ci) call these commands for you. Use them directly when you build your own CI integration.
+Post the comment, the review or the check run that an earlier fallow run rendered to a GitHub pull request or a GitLab merge request. These commands analyze nothing.
 
-Each command reads a file that an earlier fallow run rendered. It does not analyze the project.
+For the CI setup, read [CI comments](/integrations/ci-comments). The GitHub Action and the GitLab template run these commands for you.
 
-| Subcommand | What it does | Providers |
-|:-----------|:-------------|:----------|
-| [`plan-pr-comment`](#ci-plan-pr-comment) | Computes the action for a sticky summary comment. It does not call an API. | Both |
-| [`post-pr-comment`](#ci-post-pr-comment) | Creates, updates, or skips the sticky summary comment. | GitHub, GitLab |
-| [`post-review`](#ci-post-review) | Posts the new findings of a review envelope as inline review comments, and resolves the fallow threads of fixed findings. | GitHub, GitLab |
-| [`reconcile-review`](#ci-reconcile-review) | Resolves the fallow review threads of findings that went away. | GitHub, GitLab |
-| [`post-check-run`](#ci-post-check-run) | Posts a GitHub Check Run from a PR decision file. | GitHub |
+## Synopsis
+
+{/* generated:start cli-synopsis ci */}
 
 ```bash
-fallow dead-code --format pr-comment-github --quiet > fallow-comment.md
-fallow ci post-pr-comment --provider github --pr 42 \
-  --body fallow-comment.md --marker-id fallow-results
+fallow ci [OPTIONS] <COMMAND>
 ```
 
-## Input files
+{/* generated:end */}
 
-| File | How to make it |
-|:-----|:---------------|
-| PR comment body | Run an analysis with `--format pr-comment-github` or `--format pr-comment-gitlab`. The body has a `<!-- fallow-id: <marker> -->` line. The default marker is `fallow-results`. |
-| PR comment envelope | Set `FALLOW_PR_COMMENT_ENVELOPE_FILE` to a path when you render the comment body. Fallow then also writes the typed envelope to that path. |
-| PR decision file | Set `FALLOW_PR_DECISION_FILE` to a path when you render the comment body. Fallow then writes a `fallow-pr-decision/v1` JSON file to that path. |
-| Review envelope | Run an analysis with `--format review-github` or `--format review-gitlab`. |
+## Subcommands
 
-## Authentication
+{/* generated:start cli-subcommands ci */}
 
-| Provider | Token | Repository or project |
-|:---------|:------|:----------------------|
-| GitHub | `GH_TOKEN`, else `GITHUB_TOKEN` | `--repo <owner/name>`, else `GH_REPO`, else `GITHUB_REPOSITORY` |
-| GitLab | `GITLAB_TOKEN`, a project access token or a personal access token with `api` scope | `--project-id`, else `CI_PROJECT_ID` |
+| Subcommand | Description |
+|:--|:--|
+| [`plan-pr-comment`](#plan-pr-comment) | Compute the provider action for a rendered sticky PR summary comment |
+| [`post-pr-comment`](#post-pr-comment) | Post, update, or skip a rendered sticky PR summary comment |
+| [`post-review`](#post-review) | Post a rendered review envelope as a provider review or summary comment |
+| [`post-check-run`](#post-check-run) | Post a GitHub Check Run from a typed PR decision surface |
+| [`reconcile-review`](#reconcile-review) | Validate a rendered review envelope and compute a stable reconcile plan |
 
-The API base URL is `--api-url`. The GitHub default is `github.com`. The GitLab default is `CI_API_V4_URL`, else `https://gitlab.com/api/v4`. The GitLab `CI_JOB_TOKEN` cannot create or update MR notes, so fallow does not use it.
+{/* generated:end */}
 
-These environment variables also change the behavior:
+### plan-pr-comment {#plan-pr-comment}
 
-| Variable | Effect |
-|:---------|:-------|
-| `FALLOW_BOT_LOGIN` | The user name that fallow treats as its own when it finds an existing comment. Set it when you post with a personal access token. |
-| `FALLOW_API_RETRIES` | The maximum number of HTTP attempts (default `3`). |
-| `FALLOW_API_RETRY_DELAY` | The minimum delay in seconds between retries (default `2`). A `Retry-After` header overrides it. |
-| `FALLOW_CONSOLIDATED_STATUS` | With `post-check-run --split-gates`, set it to `1`, `true`, `yes`, or `on` to also post one aggregate check. |
+Compute the action for the summary comment: `create`, `update` or `skip`. The command calls no API.
 
-## `ci plan-pr-comment`
-
-Computes what to do with a sticky summary comment. It does not call a provider API. Use it when your own script posts the comment.
-
-| Flag | Description |
-|:-----|:------------|
-| `--body <BODY>` | Required. The path of the rendered comment body. |
-| `--marker-id <MARKER_ID>` | Required. The sticky marker id in the body. |
-| `--clean` | Treat the body as a clean result with no findings. |
-| `--existing-comment-id <ID>` | The id of the existing sticky comment, when one exists. |
-| `--existing-body <PATH>` | The path of the body of the existing comment. With this flag, the plan can skip an unchanged comment. |
-
-The output is JSON with an `action`: `create`, `update`, or `skip`. A `skip` has a `skip_reason`: `clean_no_existing_comment` (a clean run with no comment to update) or `unchanged` (the body did not change).
-
-```json
-{
-  "action": "create",
-  "marker_id": "fallow-results",
-  "body": "<!-- fallow-id: fallow-results -->\n### Fallow codebase report\n..."
-}
-```
-
-## `ci post-pr-comment`
-
-Finds the existing sticky comment, then creates, updates, or skips it. The rules are the same as in `plan-pr-comment`.
-
-| Flag | Description |
-|:-----|:------------|
-| `--provider <PROVIDER>` | Required. `github` or `gitlab`. |
-| `--pr <PR>` | The pull request number (GitHub). |
-| `--mr <MR>` | The merge request IID (GitLab). |
-| `--body <BODY>` | Required. The path of the rendered comment body. |
-| `--envelope <ENVELOPE>` | The path of the typed PR comment envelope, when you have one. |
-| `--marker-id <MARKER_ID>` | Required. The sticky marker id in the body. |
-| `--clean` | Treat the body as a clean result with no findings. |
-| `--repo <REPO>` | The GitHub repository, in `owner/name` form. |
-| `--project-id <PROJECT_ID>` | The GitLab project id or path. |
-| `--api-url <API_URL>` | The provider API base URL. |
-| `--dry-run` | Compute the plan. Do not create or update the comment. |
-
-The command prints the plan as JSON on stdout.
-
-## `ci post-review`
-
-Posts a review envelope to the pull request or merge request. On GitHub, the comments go into one review. On GitLab, each comment is a discussion on the diff. The command posts only the comments whose fingerprint is not in an open fallow thread. It also resolves the fallow threads of findings that are not in the envelope any more, as `reconcile-review` does.
-
-| Flag | Description |
-|:-----|:------------|
-| `--provider <PROVIDER>` | Required. `github` or `gitlab`. |
-| `--pr <PR>` | The pull request number (GitHub). |
-| `--mr <MR>` | The merge request IID (GitLab). |
-| `--envelope <ENVELOPE>` | Required. The path of a `review-github` or `review-gitlab` JSON envelope. |
-| `--repo <REPO>` | The GitHub repository, in `owner/name` form. |
-| `--project-id <PROJECT_ID>` | The GitLab project id or path. |
-| `--api-url <API_URL>` | The provider API base URL. |
-| `--dry-run` | Compute the plan. Do not create comments. |
-
-The JSON result gives `comments_posted`, `comments_skipped`, `stale_fingerprints`, and `threads_resolved`. A comment that the provider rejects goes into `post_errors`, and the command still exits 0. See [CI integration](/integrations/ci) for the fingerprint markers.
-
-## `ci reconcile-review`
-
-Checks a review envelope and computes a stable plan. Then it resolves the fallow threads of findings that are not in the envelope any more.
-
-| Flag | Description |
-|:-----|:------------|
-| `--provider <PROVIDER>` | Required. `github` or `gitlab`. |
-| `--pr <PR>` | The pull request number (GitHub). |
-| `--mr <MR>` | The merge request IID (GitLab). |
-| `--envelope <ENVELOPE>` | Required. The path of a `review-github` or `review-gitlab` JSON envelope. |
-| `--repo <REPO>` | The GitHub repository, in `owner/name` form. |
-| `--project-id <PROJECT_ID>` | The GitLab project id or path. |
-| `--api-url <API_URL>` | The provider API base URL. |
-| `--dry-run` | Compute the plan. Do not post resolution notes or resolve threads. |
-
-## `ci post-check-run`
-
-Posts a GitHub Check Run from a PR decision file. Only GitHub is supported. `--provider gitlab` exits with code 2.
-
-| Flag | Description |
-|:-----|:------------|
-| `--provider <PROVIDER>` | Required. Use `github`. |
-| `--decision <DECISION>` | Required. The path of a `fallow-pr-decision/v1` JSON file. |
-| `--repo <REPO>` | Required. The GitHub repository, in `owner/name` form. |
-| `--head-sha <HEAD_SHA>` | Required. The commit that the check run attaches to. |
-| `--api-url <API_URL>` | The GitHub API base URL. |
-| `--split-gates` | Post one check run for each gate, named `Fallow / <gate>`, in place of one `Fallow` check. |
-| `--dry-run` | Print the check run payload. Do not post it. |
+{/* generated:start cli-synopsis ci plan-pr-comment */}
 
 ```bash
-FALLOW_PR_DECISION_FILE=fallow-pr-decision.json \
-  fallow dead-code --format pr-comment-github --quiet > fallow-comment.md
-fallow ci post-check-run --provider github --decision fallow-pr-decision.json \
-  --repo acme/app --head-sha "$GITHUB_SHA" --split-gates
+fallow ci plan-pr-comment [OPTIONS] --body <BODY> --marker-id <MARKER_ID>
 ```
 
-Use `--split-gates` to make each gate a separate required check. See [Gates](/integrations/ci#gates).
+{/* generated:end */}
+
+{/* generated:start cli-options ci plan-pr-comment */}
+
+| Option | Description |
+|:--|:--|
+| `--body <BODY>` | Path to the rendered PR comment Markdown body |
+| `--marker-id <MARKER_ID>` | Sticky marker id used in the rendered body |
+| `--clean` | Treat the rendered body as a clean no-findings result |
+| `--existing-comment-id <EXISTING_COMMENT_ID>` | Existing provider comment id, when a matching sticky comment exists |
+| `--existing-body <EXISTING_BODY>` | Path to the existing provider comment body. Enables unchanged-skip planning |
+
+{/* generated:end */}
+
+### post-pr-comment {#post-pr-comment}
+
+Find the summary comment that holds the marker, then create, update or skip it.
+
+{/* generated:start cli-synopsis ci post-pr-comment */}
+
+```bash
+fallow ci post-pr-comment [OPTIONS] --provider <PROVIDER> --body <BODY> --marker-id <MARKER_ID>
+```
+
+{/* generated:end */}
+
+{/* generated:start cli-options ci post-pr-comment */}
+
+#### Provider {#post-pr-comment-options-provider}
+
+| Option | Description |
+|:--|:--|
+| `--provider <PROVIDER>` | Provider whose PR comment is being posted. Values: `github`, `gitlab`. |
+| `--pr <PR>` | Pull request number (GitHub) |
+| `--mr <MR>` | Merge request IID (GitLab) |
+| `--repo <REPO>` | GitHub repository in owner/name form. Defaults to `GH_REPO` or `GITHUB_REPOSITORY` |
+| `--project-id <PROJECT_ID>` | GitLab project id or path. Defaults to `CI_PROJECT_ID` |
+| `--api-url <API_URL>` | Provider API base URL. Defaults to github.com |
+
+#### Input {#post-pr-comment-options-input}
+
+| Option | Description |
+|:--|:--|
+| `--body <BODY>` | Path to the rendered PR comment Markdown body |
+| `--envelope <ENVELOPE>` | Path to the typed PR comment envelope JSON, when available |
+| `--marker-id <MARKER_ID>` | Sticky marker id used in the rendered body |
+| `--clean` | Treat the rendered body as a clean no-findings result |
+
+#### Run {#post-pr-comment-options-run}
+
+| Option | Description |
+|:--|:--|
+| `--dry-run` | Compute the post plan without creating or updating the provider comment |
+
+{/* generated:end */}
+
+### post-review {#post-review}
+
+Post each new finding of a review file as an inline comment, and resolve the fallow threads of the findings that went away. On GitHub, the comments form one review. On GitLab, each comment is a discussion on the diff.
+
+{/* generated:start cli-synopsis ci post-review */}
+
+```bash
+fallow ci post-review [OPTIONS] --provider <PROVIDER> --envelope <ENVELOPE>
+```
+
+{/* generated:end */}
+
+{/* generated:start cli-options ci post-review */}
+
+#### Provider {#post-review-options-provider}
+
+| Option | Description |
+|:--|:--|
+| `--provider <PROVIDER>` | Provider whose review envelope is being posted. Values: `github`, `gitlab`. |
+| `--pr <PR>` | Pull request number (GitHub) |
+| `--mr <MR>` | Merge request IID (GitLab) |
+| `--repo <REPO>` | GitHub repository in owner/name form. Defaults to `GH_REPO` or `GITHUB_REPOSITORY` |
+| `--project-id <PROJECT_ID>` | GitLab project id or path. Defaults to `CI_PROJECT_ID` |
+| `--api-url <API_URL>` | Provider API base URL. Defaults to github.com or `CI_API_V4_URL`/gitlab.com |
+
+#### Input {#post-review-options-input}
+
+| Option | Description |
+|:--|:--|
+| `--envelope <ENVELOPE>` | Path to a review-github or review-gitlab JSON envelope |
+
+#### Run {#post-review-options-run}
+
+| Option | Description |
+|:--|:--|
+| `--dry-run` | Compute the post plan without creating provider comments |
+
+{/* generated:end */}
+
+### post-check-run {#post-check-run}
+
+Post a GitHub check run from a decision file. Only GitHub is supported.
+
+{/* generated:start cli-synopsis ci post-check-run */}
+
+```bash
+fallow ci post-check-run [OPTIONS] --provider <PROVIDER> --decision <DECISION> --repo <REPO> --head-sha <HEAD_SHA>
+```
+
+{/* generated:end */}
+
+{/* generated:start cli-options ci post-check-run */}
+
+#### Provider {#post-check-run-options-provider}
+
+| Option | Description |
+|:--|:--|
+| `--provider <PROVIDER>` | Provider whose check run is being posted. Only GitHub is supported. Values: `github`, `gitlab`. |
+| `--repo <REPO>` | GitHub repository in owner/name form |
+| `--head-sha <HEAD_SHA>` | Head SHA the check run should attach to |
+| `--api-url <API_URL>` | Provider API base URL. Defaults to github.com |
+
+#### Input {#post-check-run-options-input}
+
+| Option | Description |
+|:--|:--|
+| `--decision <DECISION>` | Path to a PR decision JSON file (schema `fallow-pr-decision/v1`) |
+
+#### Output {#post-check-run-options-output}
+
+| Option | Description |
+|:--|:--|
+| `--split-gates` | Post one check run per decision gate instead of one aggregate check |
+
+#### Run {#post-check-run-options-run}
+
+| Option | Description |
+|:--|:--|
+| `--dry-run` | Print the check run payload without posting it |
+
+{/* generated:end */}
+
+### reconcile-review {#reconcile-review}
+
+Check a review file, and resolve the fallow threads of the findings that went away.
+
+{/* generated:start cli-synopsis ci reconcile-review */}
+
+```bash
+fallow ci reconcile-review [OPTIONS] --provider <PROVIDER> --envelope <ENVELOPE>
+```
+
+{/* generated:end */}
+
+{/* generated:start cli-options ci reconcile-review */}
+
+#### Provider {#reconcile-review-options-provider}
+
+| Option | Description |
+|:--|:--|
+| `--provider <PROVIDER>` | Provider whose review envelope is being reconciled. Values: `github`, `gitlab`. |
+| `--pr <PR>` | Pull request number (GitHub) |
+| `--mr <MR>` | Merge request IID (GitLab) |
+| `--repo <REPO>` | GitHub repository in owner/name form. Defaults to `GH_REPO` or `GITHUB_REPOSITORY` |
+| `--project-id <PROJECT_ID>` | GitLab project id or path. Defaults to `CI_PROJECT_ID` |
+| `--api-url <API_URL>` | Provider API base URL. Defaults to github.com or `CI_API_V4_URL`/gitlab.com |
+
+#### Input {#reconcile-review-options-input}
+
+| Option | Description |
+|:--|:--|
+| `--envelope <ENVELOPE>` | Path to a review-github or review-gitlab JSON envelope |
+
+#### Run {#reconcile-review-options-run}
+
+| Option | Description |
+|:--|:--|
+| `--dry-run` | Compute the reconcile plan without posting resolution notes or resolving threads |
+
+The [global options](/cli/global-flags) are in these groups: [Project](/cli/global-flags#options-project), [Output](/cli/global-flags#options-output), [Scope](/cli/global-flags#options-scope), [Baselines](/cli/global-flags#options-baselines), [Gates](/cli/global-flags#options-gates), [Duplication](/cli/global-flags#options-duplication), [Type-aware](/cli/global-flags#options-type-aware), [Performance](/cli/global-flags#options-performance).
+
+{/* generated:end */}
+
+## Options
+
+Each input file comes from an earlier fallow run:
+
+| File | Source |
+|:--|:--|
+| Comment body | An analysis with `--format pr-comment-github` or `pr-comment-gitlab`. The body holds a `<!-- fallow-id: <marker> -->` line. |
+| Comment envelope | The path in `FALLOW_PR_COMMENT_ENVELOPE_FILE` while fallow renders the body. |
+| Decision file | The path in `FALLOW_PR_DECISION_FILE` while fallow renders the body. |
+| Review file | An analysis with `--format review-github` or `review-gitlab`. |
+
+GitHub needs a token in `GH_TOKEN` or `GITHUB_TOKEN`, and the repository from `--repo`, `GH_REPO` or `GITHUB_REPOSITORY`. GitLab needs a token with the `api` scope in `GITLAB_TOKEN`, and the project from `--project-id` or `CI_PROJECT_ID`. The GitLab `CI_JOB_TOKEN` cannot write a merge request note. The posting commands need a token also with `--dry-run`, because they read the existing comments. `FALLOW_BOT_LOGIN`, `FALLOW_API_RETRIES`, `FALLOW_API_RETRY_DELAY` and `FALLOW_CONSOLIDATED_STATUS` change how fallow posts. See [Environment variables](/configuration/environment).
+
+## Output
+
+```bash
+fallow ci plan-pr-comment --body comment.md --marker-id fallow-results --existing-comment-id 1 --existing-body comment.md
+```
+
+```text
+{"action":"skip","marker_id":"fallow-results","skip_reason":"unchanged"}
+```
+
+The output is JSON for each subcommand. A comment plan has `action`, `marker_id`, and `body` for `create` and `update`. A `skip` action has a `skip_reason`: `clean_no_existing_comment` or `unchanged`. A review result has `comments_posted`, `comments_skipped`, `stale_fingerprints` and `threads_resolved`. A comment or a thread that the provider refuses goes into `post_errors` or `apply_errors`, and the exit code stays `0`.
+
+With `--split-gates`, `post-check-run` posts one check for each gate, named `Fallow / <gate>`. Set `FALLOW_CONSOLIDATED_STATUS` to also post one check for all gates.
 
 ## Exit codes
 
 | Code | Meaning |
-|:-----|:--------|
-| `0` | The command ran. A skipped post is a success. Errors for single comments or threads are in the `post_errors` and `apply_errors` arrays of the JSON result. |
-| `2` | Invalid input, for example a file that fallow cannot read, an invalid envelope, or a missing `--repo`. |
-| `7` | A network or provider API failure, for example a missing token or a failed API request. |
+|:--|:--|
+| `0` | The command completed. A skipped post is a success. |
+| `2` | Invalid input, for example a file that fallow cannot read, an invalid review file, or `--provider gitlab` for `post-check-run`. |
+| `7` | A missing token, or a failed request to the provider API. |
 
-With `--format json`, an error is a JSON object with `"error": true` on stdout.
+With `--format json`, an error is a JSON object with `"error": true`. See [Exit codes](/reference/exit-codes).
 
-## See also
+## Examples
 
-<CardGroup cols={2}>
-  <Card title="CI integration" icon="rocket" href="/integrations/ci">
-    Set up the GitHub Action or the GitLab CI template.
-  </Card>
-  <Card title="fallow ci-template" icon="terminal" href="/cli/ci-template">
-    Print or vendor the GitLab CI template.
-  </Card>
-  <Card title="fallow report" icon="terminal" href="/cli/report">
-    Render saved JSON as GitHub or CodeClimate output.
-  </Card>
-  <Card title="fallow audit" icon="shield-check" href="/cli/audit">
-    Gate a pull request on the changed code.
-  </Card>
-</CardGroup>
+```bash
+# Render the comment, then post or update it on pull request 42
+fallow dead-code --format pr-comment-github --quiet > fallow-comment.md
+fallow ci post-pr-comment --provider github --pr 42 --body fallow-comment.md --marker-id fallow-results
+
+# Post the inline review comments on merge request 7
+fallow audit --format review-gitlab --quiet > fallow-review.json
+fallow ci post-review --provider gitlab --mr 7 --envelope fallow-review.json
+
+# Post one GitHub check for each gate
+FALLOW_PR_DECISION_FILE=fallow-pr-decision.json fallow dead-code --format pr-comment-github --quiet > fallow-comment.md
+fallow ci post-check-run --provider github --decision fallow-pr-decision.json --repo acme/app --head-sha "$GITHUB_SHA" --split-gates
+```
+
+## Related
+
+- [CI comments](/integrations/ci-comments): the comment and the review in a pipeline.
+- [`fallow report`](/cli/report): render a saved result as a comment or a review.
+- [`fallow ci-template`](/cli/ci-template): the GitLab CI template.

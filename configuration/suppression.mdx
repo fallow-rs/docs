@@ -1,359 +1,160 @@
 ---
-title: "Suppress fallow findings with inline comments"
-sidebarTitle: "Inline suppression"
-description: "Suppress a fallow false positive with a fallow-ignore comment, a JSDoc tag such as @public or @internal, or @expected-unused. The rule stays on for other code."
-keywords: ["suppress", "ignore", "inline comments", "fallow-ignore", "false positives", "@public", "@internal", "@beta", "@alpha", "@expected-unused", "JSDoc", "library exports", "stale suppressions", "fallow-ignore comment", "fallow-ignore-start", "fallow-ignore-end", "range suppression"]
+title: "Suppression comments and tags"
+sidebarTitle: "Suppression comments"
+description: "Find the fallow-ignore comments, range markers, JSDoc tags and config keys that hide findings, with the rules for each form."
+keywords: ["suppress", "fallow-ignore-next-line", "fallow-ignore-file", "fallow-ignore-start", "fallow-ignore-end", "@public", "@internal", "@beta", "@alpha", "@expected-unused", "JSDoc", "stale suppressions", "suppression reason"]
 icon: "comment-slash"
 ---
 
-Inline suppression removes one finding from the report and keeps the rule on for the rest of the codebase. Use it for a false positive or an intentional exception. You add a comment or a JSDoc tag next to the code.
+The demo project reports `formatPercent` in `src/lib/format.ts` as an unused export, and you keep it for a report page that you add next month. A `warn` [rule](/configuration/rules) would also soften `cancelOrder` and each new unused export. A suppression hides one [finding](/concepts/findings) and keeps the rule on for the rest of the code. [Suppress findings](/guides/suppress) shows the steps and helps you choose a form.
 
-<Tip>
-For broad patterns, use config-level rules. Keep inline suppression for single exceptions. For library exports that other projects use, add [JSDoc visibility tags](#jsdoc-visibility-tags) (`@public`, `@internal`, `@beta`, `@alpha`) instead of suppression comments.
-</Tip>
+## Comment forms
 
-## JSDoc visibility tags
+A comment in the source file is the most direct form, because it sits next to the code that it explains.
 
-Fallow never reports an export with a JSDoc visibility tag as unused. It recognizes `@public`, `@internal`, `@beta`, and `@alpha`. Use these tags for library APIs that external projects use, and for exports that you keep for a specific audience. These exports have no references in your repo, but they are part of your public API.
+| Comment | Hides |
+|:--|:--|
+| `// fallow-ignore-next-line` | Each finding on the next line. |
+| `// fallow-ignore-next-line <token>` | The findings of one issue type on the next line. |
+| `// fallow-ignore-next-line <token>, <token>` | The findings of each listed issue type on the next line. |
+| `// fallow-ignore-file` | Each finding in the file. |
+| `// fallow-ignore-file <token>` | The findings of one issue type in the file. |
+| `// fallow-ignore-start code-duplication` and `// fallow-ignore-end code-duplication` | The clones in the range. See [Ranges](#suppressing-one-clone-with-a-range). |
 
 ```ts
-/** @public */
-export function createClient() {
-  // Not imported anywhere in this repo, but consumed by users of the library
-}
-
-/**
- * Configuration options for the client.
- * @public
- */
-export interface ClientOptions {
-  baseUrl: string;
-  timeout?: number;
-}
-
-/** @internal */
-export function resetState() {
-  // Used by sibling packages in the monorepo, not public API
-}
-
-/** @beta */
-export function experimentalFeature() {
-  // Available to early adopters, not yet stable
-}
-
-/** @alpha */
-export function unstableApi() {
-  // Early-stage API, subject to breaking changes
-}
-
-/** @api public */
-export type UserId = string; // TSDoc @api convention also supported
+// src/lib/format.ts
+// fallow-ignore-next-line unused-export -- kept for the report page
+export const formatPercent = (ratio: number): string => `${Math.round(ratio * 100)}%`;
 ```
 
-The tags work with all export types: named, default, classes, interfaces, enums, type aliases, and multi-specifier exports (`export { foo, bar }`).
+The comment hides the finding on the next line and nothing else. The re-export of the same name in the [barrel file](/concepts/entry-points) `src/lib/index.ts` is a second finding, so `fallow dead-code --unused-exports` still reports it:
 
-The tags also work on a re-export statement: `export { foo, bar } from "./impl"`, `export * as ns from "./impl"`, and `export { foo, bar }` that forwards imported bindings. Fallow does not report a tagged re-export. The re-export counts as a use of its source export, the same as an export of an entry point. `export * from "./impl"` does not take a tag, because it exports no name of its own.
+```text
+● Unused exports (2)
+  src/lib/index.ts
+    :1 formatPercent (re-export)
+  src/services/orders.ts
+    :18 cancelOrder
+  Exported symbols with no known consumers
+  https://fallow.tools/docs/explanations/dead-code/#unused-exports
 
-```ts
-/** @public */
-export { createClient, ClientOptions } from "./client";
+✗ 2 exports (0.04s)
+  2 issues · 1 suppressed
 ```
 
-On a decorated class, put the JSDoc block before the first decorator, as TypeScript does. The block then applies to the export. This is also true for `@deprecated`.
+- Separate two or more tokens with commas or spaces.
+- Fallow reads the markers in `//`, `/* */`, `/** */` and `<!-- -->` comments.
+- Text after ` -- ` is the reason. See [Reasons](#documenting-suppressions-with-a-reason).
 
-```ts
-/** @public */
-@Component({ selector: "app-card" })
-export class CardComponent {}
+## Tokens
+
+The word after the marker decides which findings the comment hides. A token is the id of an issue type, for example `unused-export`. The page of each issue type gives its comment in the row "Suppression comment". [Issue types](/reference/issue-types) lists them all.
+
+Some tokens are different from the issue type id, or work only in one form:
+
+| Token | Note |
+|:--|:--|
+| `complexity` | `// fallow-ignore-next-line complexity` above a function hides each complexity finding of the function: cyclomatic, cognitive and CRAP. `// fallow-ignore-file complexity` at the top of the file hides the complexity findings of each function in the file and the file length finding. No other token hides a complexity finding: `crap` and `cognitive` are not tokens. |
+| `coverage-gaps` | File level only. |
+| `boundary-violation` | Hides each boundary finding: import direction, zone coverage and forbidden calls. |
+| `policy-violation:<pack>/<rule-id>` | Hides one rule of a rule pack. `policy-violation` alone hides each rule. |
+| `unused-file`, `duplicate-export`, `duplicate-export-alias`, `re-export-cycle`, `route-collision`, `dynamic-segment-name-conflict`, `security-client-server-leak` | File level only. For `re-export-cycle`, put the comment in one file of the cycle. |
+| `unused-catalog-entry` | A YAML comment, `# fallow-ignore-next-line unused-catalog-entry`, on the line above the entry in `pnpm-workspace.yaml`. |
+
+A comment in a source file cannot hide a finding that belongs to `package.json`, for example an unused dependency. Use the [config keys](#config-keys) for these findings.
+
+## Unknown tokens and stale suppressions {#stale-suppressions}
+
+A suppression stays in the code after the reason for it is gone, and a typo in a token hides nothing. A suppression that hides no finding is a **stale suppression**. The `stale-suppressions` rule reports it, at `warn` by default. A token that is not an issue type is also stale, and the other tokens of the same comment still apply. Here the demo comment has the typo `unused-exprt`:
+
+```text
+● Stale suppressions (1)
+  src/lib/format.ts:3:0 // fallow-ignore-next-line unused-exprt -- kept for the report page ('unused-exprt' is not a recognized fallow issue kind. Did you mean 'unused-export'? Other tokens on this line still apply.)
 ```
 
-A JSDoc block between a decorator and `export` does not apply to the export. A block before an earlier, unrelated statement does not apply either.
+In JSON output, `origin.kind_known` is `false` on such an entry. [`fallow suppressions`](/cli/suppressions) lists each suppression of the project.
 
-<Note>
-Fallow recognizes only `/** */` JSDoc block comments. Line comments (`// @public`) and regular block comments (`/* @public */`) have no effect.
-</Note>
+## Ranges {#suppressing-one-clone-with-a-range}
 
-## `@expected-unused` JSDoc tag
-
-To mark an export as intentionally unused, add `/** @expected-unused */`. Fallow checks this tag for staleness, which it does not do for visibility tags (`@public`, `@internal`). If another module imports the export later, fallow reports the tag as a stale suppression.
+Duplication needs another form, because a clone covers many lines. A `fallow-ignore-next-line code-duplication` comment hides each clone that touches the next line, also a clone of the code above. A range hides only the clones inside it:
 
 ```ts
-/** @expected-unused */
-export const deprecatedHelper = () => {
-  // Intentionally kept but not used anywhere
-};
-```
-
-The tag also works on a re-export statement, with the same forms as the [visibility tags](#jsdoc-visibility-tags).
-
-Use `@expected-unused` when you want to:
-
-- Suppress an unused export finding.
-- Get a finding when the export is used again (through the `stale-suppressions` rule).
-
-The `stale-suppressions` rule (default: `warn`) sets the severity of stale `@expected-unused` tags. For details, see [dead code explained](/explanations/dead-code#stale-suppressions).
-
-## Comment syntax
-
-```ts
-// Suppress all issues on the next line
-// fallow-ignore-next-line
-export const keepThis = 1;
-
-// Suppress a specific issue type
-// fallow-ignore-next-line unused-export
-export const keepThisToo = 2;
-
-// Suppress all issues in the entire file
-// fallow-ignore-file
-
-// Suppress a specific issue type file-wide
-// fallow-ignore-file unused-export
-```
-
-### Suppressing complexity findings
-
-To remove one function from the complexity report of `fallow health`, suppress `complexity` on it. The comment suppresses the cyclomatic and the cognitive metric together.
-
-```ts
-// fallow-ignore-next-line complexity
-function* parseCsv(text) {
-  // intentionally complex parser, not worth refactoring
-  // ...
-}
-
-function processRow(row) {
-  // this function is NOT suppressed, still appears in health output
-  // ...
-}
-```
-
-A file-level suppression removes all functions in the file from the complexity findings. File health scores do not change:
-
-```ts
-// fallow-ignore-file complexity
-```
-
-### Suppressing one clone with a range
-
-A `fallow-ignore-next-line code-duplication` marker removes each clone instance that touches the next line. A clone of the code above often ends on that line, so the marker can also hide a neighbor clone. To suppress only one clone, put a range around the duplicated block:
-
-```ts
+// src/i18n/fields.ts
 // fallow-ignore-start code-duplication -- one field block per locale
 export const en = { title: "", body: "", footer: "" };
+export const nl = { title: "", body: "", footer: "" };
 // fallow-ignore-end code-duplication
 ```
 
-`fallow dupes` applies the range in this way:
-
 - A clone that is fully inside the range is not reported.
-- A clone that reaches into the range stops at the range border. A cut part below `minTokens` or `minLines` is not reported.
+- A clone that reaches into the range stops at the border. When the part outside is below `minTokens` or `minLines`, fallow does not report it.
+- Ranges take only the `code-duplication` token, on both markers. Put the reason on the start marker.
+- Put each marker on its own line. A marker after code on the same line, or in a string, has no effect.
+- A range changes the [handle](/analysis/duplication) of each clone group that it cuts. Save the duplication [baseline](/concepts/changed-code#baselines) again after you add a range.
 
-Wrap the whole block or function, not the line range that `fallow dupes` reports. The reported ranges of neighbor clones share border lines.
-
-Follow these rules for range markers:
-
-- Ranges support only `code-duplication`. Both markers must name it.
-- Put each marker on its own line. A marker after code on the same line has no effect.
-- Put the reason on the start marker.
-- You can use the `//`, `/* */`, JSDoc, and `<!-- -->` comment forms.
-- A marker inside a string or a template literal does not count.
-
-A range marker with a problem has no effect. `fallow dupes` and `fallow audit` report it in the human output and in the `range_marker_problems` JSON array. `fallow dead-code` does not report it, and a range marker is never a stale suppression. Each entry has `path`, `line`, and `problem`. An `unsupported_kind` entry also has `token`.
+`fallow dupes` and `fallow audit` report a marker with a problem in the `range_marker_problems` array:
 
 | `problem` | Cause |
-|:----------|:------|
-| `unclosed_start` | A `fallow-ignore-start` has no `fallow-ignore-end` after it. |
-| `unmatched_end` | A `fallow-ignore-end` has no open `fallow-ignore-start` before it. |
-| `nested_start` | A `fallow-ignore-start` is inside an open range. The outer range applies. |
-| `missing_kind` | The marker has no issue kind. |
-| `unsupported_kind` | The marker names a kind other than `code-duplication`. In a mixed list such as `code-duplication, unused-export`, the `code-duplication` part still applies. |
+|:--|:--|
+| `unclosed_start` | A start marker has no end marker after it. |
+| `unmatched_end` | An end marker has no open start marker before it. |
+| `nested_start` | A start marker is inside an open range. The outer range applies. |
+| `missing_kind` | The marker has no token. |
+| `unsupported_kind` | The marker names a token other than `code-duplication`. |
 | `not_own_line` | The marker shares its line with code. |
 
-<Warning>
-A range removes an instance from a clone group or cuts a neighbor clone. That group then gets a new fingerprint and a new `ignoredClones` key, so a baseline gate can show it as new. Save the duplication baseline again after you add a range.
-</Warning>
+## Reasons {#documenting-suppressions-with-a-reason}
 
-## Reference
+A suppression without a reason forces the next reader to guess why the code stays. Add ` -- <reason>` at the end of a comment or an `@expected-unused` tag. A reason is optional. To require one, turn on the `require-suppression-reason` rule:
 
-| Comment | Scope |
-|:--------|:------|
-| `// fallow-ignore-next-line` | All issues on the next line |
-| `// fallow-ignore-next-line <type>` | One issue type on the next line |
-| `// fallow-ignore-next-line <type>, <type>` | Multiple issue types on the next line (separated by commas or spaces) |
-| `// fallow-ignore-file` | All issues in the file |
-| `// fallow-ignore-file <type>` | One issue type in the file |
-| `// fallow-ignore-start code-duplication` ... `// fallow-ignore-end code-duplication` | Clones inside the range. See [Suppressing one clone with a range](#suppressing-one-clone-with-a-range). |
-
-### Multi-kind markers and typos
-
-A marker can list more than one token. A token may not match a known issue kind, for example because of a typo or because a newer fallow release renamed the kind. The recognized tokens then still apply, and fallow reports each unknown token as a `stale-suppression` finding.
-
-When a known kind is within edit distance 2, the finding includes a "Did you mean ...?" hint. An upgrade across a rename therefore never breaks the whole marker without a message.
-
-```ts
-// Recognized + unknown on the same marker:
-// fallow-ignore-next-line unused-export, complexity-typo
-export const foo = 1;
-// `unused-export` still suppresses `foo`; `complexity-typo` surfaces as a stale
-// suppression so you can fix the typo or drop the unknown token.
-```
-
-In JSON output, the additive `origin.kind_known` field on `stale_suppressions[].origin` tells an unknown-kind token apart from a known token that is stale. The field is present and `false` only for an unknown kind. It is absent when fallow recognizes the kind.
-
-## Documenting suppressions with a reason
-
-A reason tells the next reader why a suppression exists. Add `-- <reason>` at the end of any suppression comment or `@expected-unused` tag:
-
-```ts
-// fallow-ignore-next-line unused-export -- public compatibility export
-export const legacyHelper = () => {};
-
-// fallow-ignore-file -- generated route map
-
-/** @expected-unused -- kept for the v3 migration */
-export const oldApi = () => {};
-```
-
-By default, the reason is optional. Fallow records it in the suppression hygiene output. To require a reason on every suppression, enable the opt-in `require-suppression-reason` rule (default `off`):
-
-```jsonc .fallowrc.json
+```jsonc
+// .fallowrc.json
 { "rules": { "require-suppression-reason": "warn" } }
 ```
 
-With the rule at `warn` (or `error` to fail CI), fallow reports each `fallow-ignore-*` comment or `@expected-unused` tag without a `-- <reason>` as a `missing-suppression-reason` finding. You can then find the suppressions that have no reason and add one. For the rule reference, see [Rules & Severity](/configuration/rules#available-rule-names).
+Fallow then reports each suppression without a reason as [`missing-suppression-reason`](/rules/missing-suppression-reason). In JSON output, the entry is in `stale_suppressions` with `missing_reason: true`.
 
-In JSON output, a suppression without a reason is a `stale_suppressions` entry with `missing_reason: true`. For a range, fallow reads the reason of the start marker, and the entry `origin` has `is_range: true`.
+## JSDoc tags {#jsdoc-visibility-tags}
 
-The GitHub Action annotates such a comment with the title "Suppression without a reason" and tells you to add the reason after `--`. In the job summary, the row says "missing reason". Do not remove the comment: the suppression is still needed.
+A library exports names that only code outside the project uses, and a comment above each export repeats the same fact many times. A JSDoc tag on an export tells fallow how to treat the export when no code uses it:
 
-## Issue type tokens
+| Tag | Effect |
+|:--|:--|
+| `@public`, `@api public` | Fallow does not report the export. Use it for an API that code outside the project uses. |
+| `@internal`, `@beta`, `@alpha` | Fallow does not report the export. Use it for an API with a limited audience. |
+| `@expected-unused` | Fallow does not report the export. When code uses the export again, the tag is a stale suppression. |
 
-Use these tokens in suppression comments. The **Scope** column shows where each token works: line level (`// fallow-ignore-next-line`), file level (`// fallow-ignore-file`), or both.
+```ts
+// src/client.ts
+/** @public */
+export function createClient() {}
 
-| Token | Issue | Scope |
-|:------|:------|:------|
-| `unused-file` | Unused file | file |
-| `unused-export` | Unused export | both |
-| `unused-type` | Unused type export | both |
-| `private-type-leak` | Exported signature that references a private type | both |
-| `unused-enum-member` | Unused enum member | both |
-| `unused-class-member` | Unused class member | both |
-| `unused-protected-class-member` | [Unused protected class member](/explanations/dead-code#unused-protected-class-members) | both |
-| `unused-namespace-member` | [Unused TypeScript namespace member](/explanations/dead-code#unused-namespace-members) | both |
-| `unused-store-member` | Unused Pinia store member | both |
-| `unresolved-import` | Unresolved import | both |
-| `duplicate-export` | Duplicate export. A line-level marker has no effect, and fallow reports it as a stale suppression | file |
-| `duplicate-export-alias` | One binding exported under two or more names. A line-level marker above any of the names hides the finding | both |
-| `code-duplication` | Code duplication. Also the only kind that a `fallow-ignore-start` range takes | both |
-| `circular-dependency` | Circular dependency | both |
-| `re-export-cycle` | Re-export cycle. Put the marker on any file in the cycle | file |
-| `package-cycle` | One import or re-export statement between workspace packages. Each statement counts on its own, also when two statements in one file import the same module. The package cycle goes away when every import on one hop is suppressed | both |
-| `boundary-violation` | Boundary violation. Covers all boundary findings: import direction, zone coverage, and forbidden calls. Fallow also accepts the aliases `boundary-call-violation`, `boundary-call-violations`, and `boundary-calls` | both |
-| `policy-violation:<pack>/<rule-id>` | One rule-pack policy violation. Bare `policy-violation` covers every rule-pack rule on the line or in the file | both |
-| `invalid-client-export` | Server-only or route-config export from a `"use client"` file | both |
-| `mixed-client-server-barrel` | Barrel that re-exports client and server-only modules | both |
-| `misplaced-directive` | `"use client"` or `"use server"` directive that is not in the leading position | both |
-| `route-collision` | Next.js App Router route files that resolve to the same URL | file |
-| `dynamic-segment-name-conflict` | Sibling Next.js dynamic segments with different slug names | file |
-| `unused-server-action` | Unused Next.js Server Action | both |
-| `unprovided-inject` | `inject()` or `getContext()` key that nothing provides | both |
-| `unrendered-component` | Component that no code renders | both |
-| `unused-component-prop` | Unused component prop | both |
-| `unused-component-emit` | Unused Vue component emit | both |
-| `unused-component-input` | Unused Angular component input | both |
-| `unused-component-output` | Unused Angular component output | both |
-| `unused-svelte-event` | Unused Svelte event | both |
-| `unused-load-data-key` | Unused SvelteKit `load()` data key | both |
-| `prop-drilling` | Prop drilling chain | both |
-| `thin-wrapper` | Thin wrapper component | both |
-| `duplicate-prop-shape` | Duplicate prop shape | both |
-| `complexity` | Function above the complexity threshold | both |
-| `coverage-gaps` | File that no test reaches through the import graph | file |
-| `css-token-drift`, `css-duplicate-block`, `css-selector-complexity`, `css-dead-surface`, `css-broken-reference` | Styling findings | both |
-| `feature-flag` | Detected feature flag pattern | both |
-| `security-sink` | Security sink candidate | both |
-| `security-client-server-leak` | Client-server secret leak candidate | file |
-| `unused-catalog-entry` | Unused pnpm catalog entry. Works only as a `# fallow-ignore-next-line unused-catalog-entry` YAML comment on the line directly above the entry in `pnpm-workspace.yaml` | line |
-
-<Note>
-  Dependency findings (`unused-dependencies`, `unused-dev-dependencies`, `unused-optional-dependencies`, `unlisted-dependencies`, `type-only-dependencies`, `test-only-dependencies`, `dev-dependencies-in-production`) belong to `package.json`. A comment in a source file does not suppress them. Use [`ignoreDependencies`](/configuration/overview#ignoredependencies) for a package, or set the rule severity. For catalog and override findings, use [`ignoreCatalogReferences`](/configuration/overview#ignorecatalogreferences) and [`ignoreDependencyOverrides`](/configuration/overview#ignoredependencyoverrides).
-</Note>
-
-<Accordion title="Tokens grouped by command">
-  **`fallow dead-code`** (dead code, dependency hygiene, and framework findings):
-  `unused-file`, `unused-export`, `unused-type`, `private-type-leak`, `unused-enum-member`, `unused-class-member`, `unused-protected-class-member`, `unused-namespace-member`, `unused-store-member`, `unresolved-import`, `duplicate-export`, `circular-dependency`, `re-export-cycle`, `package-cycle`, `boundary-violation`, `policy-violation`, `policy-violation:<pack>/<rule-id>`, the client and server directive tokens, the Next.js route tokens, the component tokens, `prop-drilling`, `thin-wrapper`, `duplicate-prop-shape`, `unused-catalog-entry`
-
-  **`fallow health`** (complexity, coverage, and styling with `--css`):
-  `complexity`, `coverage-gaps`, the `css-*` tokens
-
-  **`fallow dupes`** (code duplication):
-  `code-duplication`
-
-  **`fallow flags`** (feature flag detection):
-  `feature-flag`
-
-  **`fallow security`** (security candidates):
-  `security-sink`, `security-client-server-leak`
-</Accordion>
-
-<Note>
-  You can use `circular-dependency` and `circular-dependencies` in every place that takes a rule slug: inline directives, config `rules`, and `overrides[].rules`. The singular form is the standard form for inline directives. The plural form is the standard form for the `rules` config. Both forms work in both places.
-</Note>
-
-## When to use suppression
-
-For broad patterns, use the config ([rules](/configuration/rules), [ignoreExports](/configuration/overview#ignoreexports)). Use inline suppression for:
-
-- Individual false positives
-- Temporary suppression during migration
-
-<Warning>
-Do not suppress an issue that repeats across the codebase. If a pattern affects many files, configure it at the project level.
-</Warning>
-
-## Config-level vs inline suppression
-
-<CodeGroup>
-```ts Bad: many inline suppressions
-// src/components/Button.tsx
-// fallow-ignore-next-line unused-export
-export const Button = () => { /* ... */ };
-
-// src/components/Input.tsx
-// fallow-ignore-next-line unused-export
-export const Input = () => { /* ... */ };
-
-// src/components/Modal.tsx
-// fallow-ignore-next-line unused-export
-export const Modal = () => { /* ... */ };
-
-// Repeated across dozens of component files...
+/** @expected-unused -- kept for the next major version */
+export const legacyClient = () => {};
 ```
 
-```jsonc Good: config-level ignoreExports
-// .fallowrc.json
-{
-  "ignoreExports": [
-    {
-      "file": "src/components/**/*.tsx",
-      "exports": ["*"]
-    }
-  ]
-}
-```
-</CodeGroup>
+- Fallow reads only `/** */` blocks. `// @public` and `/* @public */` have no effect.
+- A tag works on each export form, and on a re-export such as `export { a } from "./a"`. `export * from "./a"` takes no tag.
+- On a decorated class, put the block before the first decorator.
 
-## See also
+## Config keys {#config-keys}
 
-<CardGroup cols={2}>
-  <Card title="Rules & Severity" icon="scale-balanced" href="/configuration/rules">
-    Control issue severity at the project level.
-  </Card>
-  <Card title="Configuration" icon="gear" href="/configuration/overview">
-    Reference for every config field, including ignoreExports and ignorePatterns.
-  </Card>
-  <Card title="fallow suppressions" icon="terminal" href="/cli/suppressions">
-    List every suppression in the project.
-  </Card>
-</CardGroup>
+A comment or a tag works for one place in the code. For a package in `package.json`, or for many files at once, use a config key. The table lists each need with the smallest form that covers it:
+
+| Need | Use |
+|:--|:--|
+| One finding in code that you keep | A `fallow-ignore-next-line` comment |
+| All findings of one issue type in one file | A `fallow-ignore-file <token>` comment |
+| An export that code outside the project uses | `@public`, or [`ignoreExports`](/reference/config-dead-code#ignoreexports) for many files |
+| An unused export that you keep on purpose | `@expected-unused` |
+| A package in `package.json` | [`ignoreDependencies`](/reference/config-dead-code#ignoredependencies) |
+| A `catalog:` reference or a package manager override | [`ignoreCatalogReferences`](/reference/config-dead-code#ignorecatalogreferences), [`ignoreDependencyOverrides`](/reference/config-dead-code#ignoredependencyoverrides) |
+| All dead code findings in some files, with the files still analyzed | [`ignoreFindings`](/reference/config-dead-code#ignorefindings) |
+| Files that fallow must not read | [`ignorePatterns`](/reference/config-files#ignorepatterns) |
+| An issue type in some directories | [`overrides`](/configuration/rules#overrides) |
+
+## Related
+
+- Next: [Suppress findings](/guides/suppress). Follow it to pick a form for a finding in your project.
+- [`fallow suppressions`](/cli/suppressions): list each suppression.
+- [Rules and severities](/configuration/rules): turn an issue type off.

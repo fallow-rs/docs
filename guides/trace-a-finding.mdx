@@ -1,0 +1,196 @@
+---
+title: "Find why fallow reports a finding"
+sidebarTitle: "Trace a finding"
+description: "Use the trace commands of fallow to see why it reports an export, a file, a dependency or a clone, or why it does not."
+keywords: ["trace", "debugging", "why unused", "trace-file", "trace-dependency", "trace path", "entry points", "false positive"]
+icon: "bug"
+---
+
+Fallow reports `cancelOrder` as unused, and before you delete it, you want to see why. Or fallow reports nothing for a file that you think nothing uses. At the end of this guide, you know why fallow reports one [finding](/concepts/findings), or why it does not report one.
+
+Each trace command shows the facts that fallow used for one decision: the entry points, the imports, the files that use a name. Each numbered step below answers one question. Do step 1, then go to the step of your question.
+
+## Before you start
+
+- Read [Entry points and reachability](/concepts/entry-points). Each trace shows a part of that walk.
+- Install the dependencies of the project. Without `node_modules`, fallow cannot read the exports of packages, and a trace can differ from the real run.
+- Run each command from the project root. Each path is relative to the root.
+
+## 1. Where does fallow start?
+
+Start here when many findings look wrong, because one missing entry point makes each file behind it unused.
+
+```bash
+npx fallow list --entry-points
+```
+
+```text
+Found 3 entry points
+scripts/seed.js (package.json script `seed`)
+src/index.ts (package.json main)
+src/math.test.ts (vitest)
+```
+
+Each line gives a file and the source that made it an entry point. A framework adds its entry points through a [plugin](/concepts/plugins), so check the active plugins too:
+
+```bash
+npx fallow list --plugins
+```
+
+```text
+Active plugins:
+  - vitest
+  - typescript
+```
+
+A framework that you use and that is not in this list adds no entry points. The plugins page explains when fallow turns a plugin on.
+
+## 2. Why is this export unused?
+
+When the entry points are right, look at the finding itself. Give the file and the export name to `--trace`:
+
+```bash
+npx fallow dead-code --trace src/services/orders.ts:cancelOrder
+```
+
+```text
+  UNUSED cancelOrder in src/services/orders.ts
+
+  File: reachable
+  Namespace: value
+  Reason: No references found, export is unused
+```
+
+`File: reachable` tells you that an entry point reaches the file, so only the export is unused. `Namespace: value` tells you that `cancelOrder` is a value. For a type, the trace says `Namespace: type`. For an export that a [barrel file](/concepts/entry-points#barrel-files) exports again, the trace also lists the barrel:
+
+```bash
+npx fallow dead-code --trace src/lib/format.ts:formatPercent
+```
+
+```text
+  UNUSED formatPercent in src/lib/format.ts
+
+  File: reachable
+  Namespace: value
+  Reason: Re-exported through 1 barrel(s) but no consumer imports it through the barrel
+
+  Re-exported through:
+    -> src/lib/index.ts as 'formatPercent' (0 ref(s))
+```
+
+For a used export, the status is `USED`, and the trace lists each file that imports the name.
+
+## 3. Why is this file unused?
+
+A file-level finding needs a trace of the whole file:
+
+```bash
+npx fallow dead-code --trace-file src/utils/legacy-currency.ts
+```
+
+```text
+  UNREACHABLE src/utils/legacy-currency.ts
+
+  Exports (2):
+    export toGuilders [unused]
+    export fromGuilders [unused]
+```
+
+`UNREACHABLE` means that no path of imports goes from an entry point to the file. The trace does not name the missing link. Use step 4 to look for it.
+
+For each file, reachable or not, the trace lists its exports, its imports (`Imports from`) and the files that import it (`Imported by`). A list that is empty does not show. For an entry point, the first line ends with `(entry point)`. `fallow list --entry-points` names the source of each entry point.
+
+## 4. Which import path connects two files?
+
+The file trace tells you that no path exists, but not where the path breaks. `fallow trace --path` shows the chain of imports from one file to another. For a reachable file, it lists each hop:
+
+```bash
+npx fallow trace --path src/index.ts src/services/catalog.ts
+```
+
+```text
+Shortest import path (syntactic; OFF the ranked path)
+
+  from:      src/index.ts
+  to:        src/services/catalog.ts
+  reachable: yes
+  hops:      2
+
+  [1] src/index.ts:3 -> src/services/orders.ts
+  [2] src/services/orders.ts:2 -> src/services/catalog.ts
+
+src/index.ts reaches src/services/catalog.ts in 2 hops
+```
+
+Each hop gives the file and the line of the import. For the unused file, `npx fallow trace --path src/index.ts src/utils/legacy-currency.ts` prints `reachable: no` and `hops: 0`. Then find the file that you expect to import it, and check that import. Often the import has a wrong path, or the code builds the path at run time.
+
+## 5. Where does the code use this package?
+
+Dependency findings are about `package.json`, so their trace starts from the package name:
+
+```bash
+npx fallow dead-code --trace-dependency zod
+```
+
+```text
+  USED zod (1 import(s))
+
+  Imported by:
+    -> src/index.ts
+```
+
+For an unused dependency, the trace names the `package.json` that lists it:
+
+```bash
+npx fallow dead-code --trace-dependency left-pad
+```
+
+```text
+  UNUSED left-pad (0 import(s))
+
+  Reported unused in:
+    -> package.json
+  Each manifest is checked on its own. An import credits the nearest manifest that installs the package.
+```
+
+The trace also reports a binary of the package that a `package.json` script or a CI file runs. To see which names of a package the code uses, run [`fallow trace --dependency`](/cli/trace).
+
+## 6. Why is this block a clone?
+
+The last kind of finding is a copied block. Give the [handle](/analysis/duplication) that the report prints, or a `FILE:LINE` inside the block, to `fallow dupes --trace`:
+
+```bash
+npx fallow dupes --trace dup:f42424e8
+```
+
+```text
+  FOUND clone at src/reports/export.ts:3-19
+  1 clone group(s) containing this location
+
+  Clone group 1  dup:f42424e8 (17 lines, 210 tokens, 2 instances, spread 2)
+    >> src/reports/export.ts:3-19
+    -> src/utils/summary.ts:7-23
+```
+
+The output continues with a proposed refactor and the code of the block. [Duplication](/analysis/duplication) explains when a copy is worth a merge.
+
+## Check the result
+
+You have the cause when the trace shows the missing link: an entry point that is not in the list, an import that is not in the file, or a plugin that is not active. Fix that link, and run the trace again. The status changes, for example from `UNREACHABLE` to `REACHABLE`.
+
+## If it fails
+
+Most findings that surprise you have one of two causes, and each cause leaves a sign in the trace:
+
+| Cause | What you see | Fix |
+|:--|:--|:--|
+| A missing entry point. Something outside your source code runs the file: a framework, a script, a worker. | The file is `UNREACHABLE`, and `list --entry-points` does not show the file that starts it. | Turn on the plugin, or add the file to [`entry`](/reference/config-files#entry). |
+| A dynamic load. The code builds the path of an import at run time. | The files of one directory are unused, and a variable in the code names them. | Add the files to [`dynamicallyLoaded`](/reference/config-files#dynamicallyloaded). |
+
+When the trace says that fallow is wrong, follow [Fix a false positive](/guides/false-positives).
+
+## Related
+
+- [Fix a false positive](/guides/false-positives): match the cause to the fix.
+- [`fallow trace`](/cli/trace): the call chain of a symbol and the path between two files.
+- [`fallow dead-code`](/cli/dead-code): each trace option.

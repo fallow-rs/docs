@@ -1,596 +1,465 @@
 ---
-title: "fallow coverage: find unused code with runtime coverage"
-sidebarTitle: "fallow coverage"
-description: "Runtime coverage shows which code runs in production and which code you can delete. fallow coverage analyzes it and uploads source maps and the inventory."
-keywords: ["fallow coverage", "coverage setup", "upload-inventory", "upload-source-maps", "source maps", "fallow-cov", "runtime coverage", "CLI", "production coverage", "review-packet", "deployment-changes"]
+title: "fallow coverage"
+description: "Find the subcommands, options, output and exit codes of fallow coverage, which sets up, analyzes and uploads runtime coverage."
+keywords: ["fallow coverage", "runtime coverage", "coverage setup", "upload-inventory", "upload-source-maps", "review-packet", "deployment-changes", "cli reference"]
 icon: "wand-magic-sparkles"
 ---
 
-Static analysis tells you what code can run. Runtime coverage tells you what code did run in production, so you can delete cold code with more confidence and review hot paths with more care. `fallow coverage` groups the commands for runtime coverage, which is part of Fallow Cloud, the paid product. A single local capture is free. Continuous or multi-capture monitoring needs a license. The cloud commands need a Fallow Cloud API key:
+Set up [runtime coverage](/analysis/runtime-coverage), analyze it, and upload the data that Fallow Cloud joins with it.
+
+For what runtime coverage reports and how to collect it, read [Runtime coverage](/analysis/runtime-coverage). One local capture is free. Continuous capture needs a [license](/cli/license). The commands that read from or upload to Fallow Cloud need an API key.
+
+## Synopsis
+
+{/* generated:start cli-synopsis coverage */}
 
 ```bash
-fallow coverage setup              # resumable first-run flow
-fallow coverage setup --cloud      # Fallow Cloud plan: beacon, CI steps, one commit SHA
-fallow coverage analyze --cloud --repo owner/repo
-fallow coverage upload-inventory   # push a static function inventory
-fallow coverage upload-source-maps           # upload build source maps for bundled code
-fallow coverage upload-static-findings       # push static dead-code findings for the source view
-fallow coverage review-packet      # production facts of the changed functions
-fallow coverage deployment-changes # what changed in production between two deployments
+fallow coverage [OPTIONS] <COMMAND>
 ```
 
-## `setup`
+{/* generated:end */}
 
-You can stop and resume the setup flow. Run it once to start, follow the generated recipe, and then run it again after you capture traffic. It does four steps:
+## Subcommands
 
-1. check license state
-2. locate or install `fallow-cov`
-3. write a framework-specific collection recipe to `docs/collect-coverage.md`
-4. if coverage already exists, run `fallow health --runtime-coverage <path>` directly
+{/* generated:start cli-subcommands coverage */}
+
+| Subcommand | Description |
+|:--|:--|
+| [`setup`](#setup) | Resumable first-run setup: license, runtime coverage add-on, recipe, analysis |
+| [`analyze`](#analyze) | Analyze runtime coverage from a local artifact or explicit cloud source |
+| [`upload-inventory`](#upload-inventory) | Upload a static function inventory to Fallow Cloud. |
+| [`upload-source-maps`](#upload-source-maps) | Upload JavaScript source maps to Fallow Cloud for bundled runtime coverage |
+| [`upload-static-findings`](#upload-static-findings) | Upload static dead-code findings to Fallow Cloud for the source-evidence viewer |
+| [`review-packet`](#review-packet) | Read the production facts of changed code from Fallow Cloud |
+| [`deployment-changes`](#deployment-changes) | Read how production behavior changed between two deployments |
+
+{/* generated:end */}
+
+### setup {#setup}
+
+Check the license, find or install `fallow-cov` (the separate program that reads coverage data), write a collection recipe to `docs/collect-coverage.md`, and run the analysis when coverage data exists. A second run continues where the first run stopped.
+
+{/* generated:start cli-synopsis coverage setup */}
 
 ```bash
-fallow coverage setup
-fallow coverage setup --non-interactive
-fallow coverage setup --yes
-fallow coverage setup --yes --json
-fallow coverage setup --yes --json --explain
-fallow coverage setup --cloud --json
-fallow coverage setup --cloud --wait --git-sha "$DEPLOYED_SHA"
+fallow coverage setup [OPTIONS]
 ```
 
-### Flags
+{/* generated:end */}
 
-| Flag | Description |
-|:-----|:------------|
-| `-y, --yes` | Accept prompts automatically. Use it for local setup when you want fallow to continue without confirmation prompts. |
-| `--non-interactive` | Print instructions and do not prompt. Use it in CI, remote shells, or agent workflows. |
-| `--json` | Print deterministic setup instructions as JSON that an agent can read. Implies `--non-interactive`. It does not prompt, write files, install packages, activate a license, or make network calls. See [Agent-readable JSON](#agent-readable-json). |
-| `--explain` | With `--json`, include a `_meta` block with field definitions, enum values, warning semantics, and this docs URL. |
-| `--cloud` | Plan a Fallow Cloud setup instead of a local capture. It writes nothing. See [Fallow Cloud plan](#fallow-cloud-plan). |
-| `--wait` | With `--cloud`, read the Fallow Cloud setup state until every step is done. Reads `$FALLOW_API_KEY`. |
-| `--wait-timeout <SECS>` | With `--wait`, the longest wait. Default: `600`. |
-| `--project-id <ID>` | With `--cloud`, the Fallow Cloud project (`owner/repo`). Default: `$GITHUB_REPOSITORY`, then `$CI_PROJECT_PATH`, then the git remote. |
-| `--git-sha <SHA>` | With `--cloud`, the deployed commit that `--wait` checks. Default: `git rev-parse HEAD`. |
-| `--api-key <KEY>` | With `--wait`, the API key. Default: `$FALLOW_API_KEY`. |
-| `--api-endpoint <URL>` | With `--cloud`, the API base URL. Default: `$FALLOW_API_URL`, then `https://api.fallow.cloud`. |
+{/* generated:start cli-options coverage setup */}
 
-### Fallow Cloud plan
+#### Run {#setup-options-run}
 
-Fallow Cloud joins runtime coverage to your code only when five things name the same commit SHA: the beacon, the static inventory, the source maps, the deployment registration, and the first runtime data. `fallow coverage setup --cloud` writes a plan that gives each step that SHA:
+| Option | Description |
+|:--|:--|
+| `-y, --yes` | Accept all prompts automatically |
+| `--non-interactive` | Print instructions instead of prompting |
 
-- **Beacon snippets.** The snippets send coverage over HTTP with `coverageOrigin: "production"`. A server reads `commitSha` from `FALLOW_COMMIT_SHA`, `VERCEL_GIT_COMMIT_SHA`, `RENDER_GIT_COMMIT`, or `RAILWAY_GIT_COMMIT_SHA`. A browser bundle reads `VITE_FALLOW_COMMIT_SHA`, which the build sets. In a workspace, each member gets its own `runtimeSurface` tag.
-- **CI steps.** `cloud.ci.steps` holds GitHub Actions steps for the job that builds and deploys: a checkout with `fetch-depth: 0` (the inventory reads git history), `upload-inventory`, `upload-source-maps` for each bundled member, and the deployment registration. All of them use `$GITHUB_SHA`. `cloud.ci.workflows_detected` names the workflow files that look like a deploy.
-- **Keys.** The plan names the variables (`FALLOW_API_KEY` for CI and the server, `VITE_FALLOW_API_KEY` for an ingest-only browser key). It never holds a key value.
+#### Output {#setup-options-output}
 
-The plan does not prompt, write files, or make network calls. With `--json`, the setup envelope gets a `cloud` object. Without `--cloud`, the envelope does not change.
+| Option | Description |
+|:--|:--|
+| `--json` | Emit deterministic setup instructions as JSON. Implies `--non-interactive` |
 
-```json
-{
-  "cloud": {
-    "project_id": "acme/web",
-    "git_sha": "0123456789abcdef0123456789abcdef01234567",
-    "endpoint": "https://api.fallow.cloud",
-    "api_key_env": "FALLOW_API_KEY",
-    "browser_key_env": "VITE_FALLOW_API_KEY",
-    "commit_sha_env": ["FALLOW_COMMIT_SHA", "VERCEL_GIT_COMMIT_SHA", "RENDER_GIT_COMMIT", "RAILWAY_GIT_COMMIT_SHA"],
-    "ci": {
-      "provider": "github_actions",
-      "workflows_detected": [".github/workflows/deploy.yml"],
-      "steps": "- uses: actions/checkout@v4\n  with:\n    fetch-depth: 0\n...",
-      "instructions": "Add the steps to the GitHub Actions job that builds and deploys..."
-    },
-    "source_maps": { "needed": true, "dirs": ["dist"], "reason": "..." },
-    "activation_url": "https://api.fallow.cloud/v1/repos/acme%2Fweb/activation",
-    "wait_command": "fallow coverage setup --cloud --wait --project-id=acme/web --git-sha=\"$DEPLOYED_SHA\""
-  }
-}
-```
+#### Fallow Cloud {#setup-options-fallow-cloud}
 
-After the deploy, `--wait` reads the setup state of the deployed SHA every 10 seconds and prints each change. It retries a network error, a rate limit, or a server error. It exits `0` when every step is done, `1` when `--wait-timeout` passes first, and `2` on an auth, key scope, or input error. A browser key (`fallow_pub_k1_`) cannot read the setup state: use a full key. With `--json`, `cloud.wait` holds the outcome (`complete`, `timeout`, or `error`) and the last setup state from Fallow Cloud. That state can get new step ids and states, so read it as open data. Its `next` field names the step to do now and, where one exists, a command.
+| Option | Default | Description |
+|:--|:--|:--|
+| `--cloud` |  | Plan the Fallow Cloud setup: beacon snippets with the deployed commit SHA, and CI steps that upload the inventory and source maps and register the deployment for that SHA. Writes nothing |
+| `--wait` |  | With `--cloud`: poll Fallow Cloud until every setup step is done. Reads `$FALLOW_API_KEY`. |
+| `--wait-timeout <SECS>` | `600` | With `--wait`: the longest wait in seconds |
+| `--project-id <PROJECT_ID>` |  | With `--cloud`: project identifier (`owner/repo`). Default: $GITHUB_REPOSITORY, then $CI_PROJECT_PATH, then the git remote |
+| `--git-sha <SHA>` |  | With `--cloud`: the deployed commit SHA that `--wait` checks. Default: `git rev-parse HEAD` |
+| `--api-key <KEY>` |  | With `--wait`: Fallow Cloud API key. Precedence: this flag > $FALLOW_API_KEY |
+| `--api-endpoint <URL>` |  | With `--cloud`: Fallow Cloud API base URL. Precedence: this flag > $FALLOW_API_URL > the default Fallow Cloud URL |
 
-## What setup detects automatically
+{/* generated:end */}
 
-`fallow coverage setup` reads `package.json`, lockfiles, and scripts, and writes instructions for your project:
+`--json` writes no file, installs nothing and uses no network. `--cloud` prints a plan for Fallow Cloud: the beacon snippets, the CI steps and the key variables, all for one commit SHA. The plan never holds a key value. `--wait` reads the setup state of the deployed SHA from Fallow Cloud every 10 seconds, until each step is done or `--wait-timeout` passes.
 
-| Detection | Purpose |
-|:----------|:--------|
-| Framework | Chooses a recipe for Next.js, NestJS, Nuxt, SvelteKit, Astro, Remix, Vite browser apps, plain Node services, or a generic fallback. When one `package.json` has both a Node-server framework (Elysia, Hono, Fastify, Express, Koa, `@trpc/server`) and Vite, the Node-server framework wins. The recipe then targets the API and not the bundled client. |
-| Workspace topology | Reads `workspaces` (npm, pnpm, yarn, bun) and writes one recipe for each member that runs code. Skips library-only workspaces (no `start`, `preview`, or `dev` script and no Node-server dependency). The top-level `runtime_targets` array is the union of all members (`["node"]`, `["browser"]`, or `["node", "browser"]`). |
-| Package manager | Uses `packageManager`, lockfiles, or both to choose install commands for npm, pnpm, yarn, or bun. |
-| Coverage artifact | Detects existing `coverage/coverage-final.json`, `.nyc_output/coverage-final.json`, or JSON-containing V8 directories. |
-| Sidecar binary | Resolves `FALLOW_COV_BIN`, `FALLOW_COV_BINARY_PATH`, project-local shims, package-manager bin lookups, `~/.fallow/bin/fallow-cov`, and `PATH`. |
+Fallow finds `fallow-cov` in this order: `FALLOW_COV_BIN`, `FALLOW_COV_BINARY_PATH`, the project dependencies, `~/.fallow/bin/fallow-cov`, then the `PATH`. Fallow checks the signature of `fallow-cov` each time it starts it. A missing or invalid signature stops the run with code 4.
 
-If the project matches no built-in framework recipe, fallow still writes a fallback `docs/collect-coverage.md`. It links to the public coverage docs, so you can do the setup by hand.
+### analyze {#analyze}
 
-### Agent-readable JSON {#agent-readable-json}
+Merge runtime coverage into the static analysis, from a local capture or from Fallow Cloud.
 
-Agents start with `fallow coverage setup --yes --json`. The payload is deterministic and does not change between runs. `--explain` adds the optional `_meta` keys and does not change `schema_version`.
-
-This example is a workspace monorepo with an Elysia API at the root and two Vite browser apps in `dashboard/` and `site/`:
-
-```json
-{
-  "schema_version": "1",
-  "framework_detected": "plain_node",
-  "package_manager": "bun",
-  "runtime_targets": ["node", "browser"],
-  "members": [
-    {
-      "name": "fallow-cloud",
-      "path": ".",
-      "framework_detected": "plain_node",
-      "runtime_targets": ["node"],
-      "files_to_edit": [{"path": "src/index.ts", "reason": "..."}],
-      "snippets": [{"label": "Node entrypoint", "path": "src/index.ts", "content": "..."}],
-      "dockerfile_snippet": "ENV FALLOW_TRANSPORT=fs\nENV FALLOW_WRITE_TO_DIR=/tmp/fallow-coverage",
-      "warnings": []
-    },
-    {
-      "name": "fallow-dashboard",
-      "path": "dashboard",
-      "framework_detected": "vite",
-      "runtime_targets": ["browser"],
-      "files_to_edit": [{"path": "dashboard/src/main.ts", "reason": "..."}],
-      "snippets": [{"label": "Vite browser entry", "path": "dashboard/src/main.ts", "content": "..."}],
-      "dockerfile_snippet": null,
-      "warnings": []
-    }
-  ],
-  "config_written": null,
-  "commands": ["bun add @fallow-cli/beacon", "bun add -d @fallow-cli/fallow-cov"],
-  "files_to_edit": [{"path": "src/index.ts", "reason": "..."}],
-  "snippets": [{"label": "Node entrypoint", "path": "src/index.ts", "content": "..."}],
-  "dockerfile_snippet": "ENV FALLOW_TRANSPORT=fs\nENV FALLOW_WRITE_TO_DIR=/tmp/fallow-coverage",
-  "next_steps": [...],
-  "warnings": []
-}
-```
-
-- `framework_detected` uses canonical ids (`nextjs`, `nestjs`, `nuxt`, `sveltekit`, `astro`, `remix`, `vite`, `plain_node`, `unknown`).
-- In a workspace project, `members[]` has one entry for each workspace that runs code. Each entry has its own `framework_detected`, `runtime_targets`, `files_to_edit`, `snippets`, and `dockerfile_snippet`.
-- The top-level fields copy the first runtime member. This is the root when the root is a runtime app, and otherwise the first runtime workspace. In a monorepo with a browser app at the root and a Node child, agents must read the `dockerfile_snippet` of each member, not the top-level one.
-- A single-app project has a `members` array of length 1 (path `"."`), so scripts can handle `members[]` the same way for all projects.
-
-Some repos only aggregate other packages. Their only runtime sign is a Turbo- or Nx-style `dev` script that calls the children, plus build-only library packages. Fallow does not treat these repos as runtime code and returns an empty payload: `framework_detected: "unknown"`, `runtime_targets: []`, `members: []`, and a `warnings` entry of `"No runtime workspace members were detected; emitted install commands only."`. To detect this case, agents can check `members.length === 0` (or `framework_detected === "unknown"`) and skip the step that applies snippets.
-
-## Generated recipe
-
-A generated `docs/collect-coverage.md` recipe usually looks like this:
-
-```text
-1. Remove any old dump directory: rm -rf ./coverage
-2. Build the app
-3. Start the app with NODE_V8_COVERAGE=./coverage ...
-4. Exercise the routes or jobs you care about
-5. Stop the app and run: fallow coverage setup
-```
-
-Fallow uses your existing `build`, `start`, or `preview` scripts when they exist. Otherwise, it uses the common commands of your framework.
-
-## Typical flow
+{/* generated:start cli-synopsis coverage analyze */}
 
 ```bash
-fallow license activate --trial --email you@company.com
-fallow coverage setup
-
-# Follow docs/collect-coverage.md, then run setup again.
-# With coverage present it hands off to `fallow health --runtime-coverage ./coverage`.
-fallow coverage setup
+fallow coverage analyze [OPTIONS]
 ```
 
-## `analyze` {#analyze}
+{/* generated:end */}
 
-Use local mode when you have a coverage artifact on disk:
+{/* generated:start cli-options coverage analyze */}
+
+#### Input {#analyze-options-input}
+
+| Option | Description |
+|:--|:--|
+| `--runtime-coverage <PATH>` | File or directory containing local runtime coverage input. A single local capture is free. |
+| `--cloud` (alias `--runtime-coverage-cloud`) | Fetch latest runtime facts from Fallow Cloud for the selected repo |
+
+#### Fallow Cloud {#analyze-options-fallow-cloud}
+
+| Option | Default | Description |
+|:--|:--|:--|
+| `--api-key <KEY>` |  | Fallow Cloud API key. Order: flag > $FALLOW_API_KEY > `fallow cloud login` key |
+| `--api-endpoint <URL>` |  | Override the Fallow Cloud base URL |
+| `--repo <OWNER/REPO>` |  | Repository identifier, for example `owner/repo`. Defaults to $FALLOW_REPO, then the parsed origin URL from `git remote get-url origin`. |
+| `--project-id <ID>` |  | Optional monorepo/project disambiguator |
+| `--coverage-period <DAYS>` | `30` | Runtime observation window to request from cloud (1..=90 days) |
+| `--environment <ENV>` |  | Optional runtime environment filter |
+| `--commit-sha <SHA>` |  | Optional commit SHA filter for cloud runtime facts |
+
+#### Detection {#analyze-options-detection}
+
+| Option | Default | Description |
+|:--|:--|:--|
+| `--production` |  | Analyze production code only |
+| `--min-invocations-hot <MIN_INVOCATIONS_HOT>` | `100` | Threshold for hot-path classification |
+| `--min-observation-volume <N>` |  | Minimum total trace volume before high-confidence verdicts |
+| `--low-traffic-threshold <RATIO>` |  | Fraction of total trace count below which an invoked function is low traffic |
+
+#### Output {#analyze-options-output}
+
+| Option | Description |
+|:--|:--|
+| `--top <TOP>` | Show only the top N runtime findings and hot paths |
+| `--blast-radius` | Show the first-class blast-radius section in human output |
+| `--importance` | Show the first-class importance section in human output |
+| `--debug-unmatched` | List cloud runtime functions with no local counterpart on stderr |
+
+{/* generated:end */}
+
+`--runtime-coverage` takes a V8 directory, a V8 JSON file or an Istanbul coverage map. Cloud mode needs `--cloud`, `--runtime-coverage-cloud` or `FALLOW_RUNTIME_COVERAGE_SOURCE=cloud`. An API key alone does not select it. The key comes from `--api-key`, `FALLOW_API_KEY`, or the key of [`fallow cloud login`](/cli/cloud#key-order). `--top` cuts the lists before fallow renders them, so each format shows the same cut.
+
+### upload-inventory {#upload-inventory}
+
+Upload a list of each function in the project to Fallow Cloud, so the dashboard can show the functions that never ran.
+
+{/* generated:start cli-synopsis coverage upload-inventory */}
 
 ```bash
-fallow coverage analyze --runtime-coverage ./coverage --format json
+fallow coverage upload-inventory [OPTIONS]
 ```
 
-Use cloud mode to get the latest fallow.cloud runtime context for a repo:
+{/* generated:end */}
+
+{/* generated:start cli-options coverage upload-inventory */}
+
+#### Fallow Cloud {#upload-inventory-options-fallow-cloud}
+
+| Option | Description |
+|:--|:--|
+| `--api-key <KEY>` | Fallow Cloud API key (bearer token). Precedence: this flag > $FALLOW_API_KEY. |
+| `--api-endpoint <URL>` | Override the Fallow Cloud base URL. Useful for staging and on-premise deployments. |
+| `--project-id <PROJECT_ID>` | Project identifier, for example `fallow-cloud-api` or `owner/repo`. Defaults to $GITHUB_REPOSITORY, then $CI_PROJECT_PATH, then the parsed origin URL from `git remote get-url origin`. |
+| `--git-sha <SHA>` | Explicit git SHA for this inventory. Default: `git rev-parse HEAD`. |
+| `--vercel-deployment-id <DEPLOYMENT_ID>` | Bind the upload to a Vercel deployment. Defaults to $VERCEL_DEPLOYMENT_ID only when $VERCEL=1. |
+
+#### Input {#upload-inventory-options-input}
+
+| Option | Description |
+|:--|:--|
+| `--exclude-paths <GLOB>` | Additional glob patterns to exclude from the walk. Applied after the existing fallow ignore rules. |
+| `--path-prefix <PREFIX>` | Prefix for inventory paths to match the runtime beacon, for example `/app` for Docker or `/var/task` for Lambda. Defaults to repo-relative paths. |
+| `--with-callers` | Also upload importer edges (which files import each function) and the framework entry routes that can statically reach each function. Opt-in: this builds the import graph by running the full static analysis, whereas the default upload is a fast per-file walk. |
+
+#### Run {#upload-inventory-options-run}
+
+| Option | Description |
+|:--|:--|
+| `--dry-run` | Print what would be uploaded and exit. No network call |
+| `--allow-dirty` | Proceed even when the working tree has uncommitted changes. Warning: the inventory is generated from the working copy, so it may not match the uploaded git SHA. |
+| `--ignore-upload-errors` | Treat transient upload failures as warnings instead of errors (exit 0). Validation and auth errors still fail hard; this only downgrades transport and server errors |
+
+{/* generated:end */}
+
+Without `--allow-dirty`, fallow refuses a working tree with uncommitted changes. `--project-id` defaults to `$GITHUB_REPOSITORY`, then `$CI_PROJECT_PATH`, then the `origin` remote. `--git-sha` defaults to `git rev-parse HEAD`. Use `$FALLOW_API_KEY` on a shared runner, because other processes can see a key on the command line. Fallow skips declaration files (`*.d.ts`) and overload signatures. Fallow Cloud refuses an inventory of more than 200,000 functions.
+
+`--path-prefix` must match the directory of the deployed code, for example `/app` for a Docker image with `WORKDIR /app`, `/workspace` for Cloud Run and `/var/task` for AWS Lambda. With a wrong prefix, the dashboard shows no untracked functions.
+
+### upload-source-maps {#upload-source-maps}
+
+Upload the source maps of a build, so that Fallow Cloud can map coverage of bundled or compiled code back to the source files.
+
+{/* generated:start cli-synopsis coverage upload-source-maps */}
 
 ```bash
-FALLOW_API_KEY=fallow_live_... \
-  fallow coverage analyze --cloud --repo owner/repo --format json
+fallow coverage upload-source-maps [OPTIONS]
 ```
 
-`FALLOW_API_KEY` alone never selects cloud mode. You must pass `--cloud` or `--runtime-coverage-cloud`, or set `FALLOW_RUNTIME_COVERAGE_SOURCE=cloud`.
+{/* generated:end */}
 
-### Analyze flags
+{/* generated:start cli-options coverage upload-source-maps */}
 
-| Flag | Description |
-|:-----|:------------|
-| `--runtime-coverage <PATH>` | Local V8 directory, V8 JSON file, or Istanbul coverage map. Cannot be combined with cloud mode. A single local capture is free. Continuous or multi-capture monitoring needs a license. See [fallow license](/cli/license). |
-| `--cloud`, `--runtime-coverage-cloud` | Explicitly fetch cloud runtime data from `/v1/coverage/:repo/runtime-context`. |
-| `--repo <OWNER/REPO>` | Repository to fetch in cloud mode. Falls back to `$FALLOW_REPO`, then to the parsed `origin`. Fallow URL-encodes the slashes, so the value is one route segment. |
-| `--api-key <KEY>` | Fallow Cloud bearer token. Falls back to `$FALLOW_API_KEY`, then to the key that [`fallow cloud login`](/cli/cloud) stored, but only after you opt in to cloud mode. |
-| `--api-endpoint <URL>` | Override the API base URL. Use it for staging and on-prem deployments. |
-| `--coverage-period <DAYS>` | Cloud observation window, 1 through 90 days. Default: 30. |
-| `--project-id <ID>` | Optional ID that selects a monorepo or project. |
-| `--environment <NAME>` | Optional cloud environment filter. |
-| `--commit-sha <SHA>` | Optional cloud commit filter. |
-| `--top <N>` | Show only the top N runtime findings, hot paths, blast-radius entries, and importance entries. Fallow cuts the lists before it renders them, so JSON, human, and cloud-merge output get the same cut. |
-| `--blast-radius` | Show the blast-radius section in human output. When runtime coverage analysis runs, JSON always includes `runtime_coverage.blast_radius`. |
-| `--importance` | Show the importance section in human output. When runtime coverage analysis runs, JSON always includes `runtime_coverage.importance`. |
-| `--production` | Run analyze in production mode, the same as `fallow health --production`. Removes test files and dev-only code paths before fallow merges the runtime data. |
-| `--min-invocations-hot <N>` | Threshold for hot paths. A function that runs at least N times in the captured window is hot. Default: 100. Works like the same flag on `fallow health --runtime-coverage`. |
-| `--min-observation-volume <N>` | Minimum total trace volume for high-confidence `safe_to_delete` and `review_required` verdicts. Below this volume, the sidecar gives at most `medium` confidence. Default: 5000. |
-| `--low-traffic-threshold <RATIO>` | A function that runs, but below this fraction of the total trace count, is `low_traffic` and not `active`. Decimal form (`0.001` = 0.1%). Default: 0.001. |
-| `--debug-unmatched` | On stderr, list each cloud runtime function that has no local match, highest traffic first. Use it to see what the join dropped, without a debugger. |
-| `--explain` | With `--format json`, add a top-level `_meta` block with field definitions, enum values (`data_source`, `test_coverage`, `v8_tracking`, `action_type`, and others), warning-code documentation, and the docs URL. |
+#### Input {#upload-source-maps-options-input}
 
-Cloud analysis gives the same `runtime_coverage` JSON block as local mode. Its summary includes `data_source: "cloud"`, `last_received_at`, and a `capture_quality` computed from the fetched runtime window. When fallow cannot match a cloud function to the local AST or static index, it leaves the function out of the findings and reports it in a `cloud_functions_unmatched` warning.
+| Option | Default | Description |
+|:--|:--|:--|
+| `--dir <PATH>` | `dist` | Directory to scan recursively for source maps |
+| `--include <GLOB>` | `**/*.map` | Glob pattern, relative to `--dir`, selecting maps to upload |
+| `--exclude <GLOB>` | `**/node_modules/**` | Glob pattern, relative to `--dir`, selecting files to skip. Repeatable. |
+| `--strip-path <BOOL>` | `true` | Send only the basename as fileName by default. Use `--strip-path=false` when your runtime coverage reports bundle paths relative to the build directory, such as `assets/app.js`. Values: `true`, `false`. |
 
-The join works even when the two sides name a function differently. It uses these steps:
+#### Fallow Cloud {#upload-source-maps-options-fallow-cloud}
 
-1. Fallow first matches on stable ids.
-2. For a runtime path such as `/app/src/a.ts` from a containerized service, fallow maps the path onto the local tree. It compares the file name and then the path segments from the end.
-3. Some functions have a runtime name that differs from the static index, for example an anonymous callback reported as `map`, `then`, or `get`, or an accessor that keeps its `get` prefix. Fallow matches these on their position in the resolved file.
+| Option | Description |
+|:--|:--|
+| `--repo <NAME>` | Repo name used in the API path. Defaults to `package.json` repository.url, then `git remote get-url origin`. |
+| `--git-sha <SHA>` | Commit SHA to key uploads under. Defaults to $GITHUB_SHA, $CI_COMMIT_SHA, $COMMIT_SHA, then `git rev-parse HEAD`. |
+| `--vercel-deployment-id <DEPLOYMENT_ID>` | Bind the upload to a Vercel deployment. Defaults to $VERCEL_DEPLOYMENT_ID only when $VERCEL=1. |
+| `--endpoint <URL>` | Override the Fallow Cloud base URL |
 
-Steps 2 and 3 refuse to guess when the answer is ambiguous. In these cases, the function stays unmatched:
+#### Run {#upload-source-maps-options-run}
 
-- two local files match one runtime path equally well
-- two definitions start on the same line, with no end line between them
+| Option | Default | Description |
+|:--|:--|:--|
+| `--dry-run` |  | Print what would be uploaded and exit. No network call |
+| `--concurrency <N>` | `4` | Parallel upload fanout |
+| `--fail-fast` |  | Stop on first upload error |
 
-To list the functions that stay unmatched, pass `--debug-unmatched`.
+{/* generated:end */}
 
-The `actions[].type` of each finding uses canonical kebab-case values: `delete-cold-code` for `verdict=safe_to_delete`, and `review-runtime` for `verdict=review_required`. The sidecar can add other protocol-specific values. Treat an unknown value as a future extension, not as a schema violation.
+Fallow reads the API key only from `FALLOW_API_KEY`. `--repo` must match the project id of the beacon and of `upload-inventory`. `--git-sha` defaults to `$GITHUB_SHA`, `$CI_COMMIT_SHA`, `$COMMIT_SHA`, then `git rev-parse HEAD`. Fallow tries each upload up to three times after a network error or HTTP 429, 502, 503 or 504. `FALLOW_CA_BUNDLE` replaces the default root certificates with a PEM bundle.
 
-The `runtime_coverage` block holds the joined findings. In cloud mode, each finding and each hot path also has a `cloud_context` object. It holds the fields of the cloud runtime-context row that fallow does not read itself, for example `errors`, `performance.cpu`, `performance.browser`, `branches`, `covered_by_test` and `test_hit_count`. A blast-radius entry from the cloud has `production_callers`, `caller_sites` and the caller counts in its `cloud_context`. `runtime_coverage.cloud_context` holds the top-level fields of the response, for example `capabilities` and `page`. These signals are context only and do not change a verdict. A `null` count or an `untracked` state means not measured, never zero. The MCP tool `get_cloud_runtime_context` runs this command, so it returns them too. The [hosted MCP server](/cloud/hosted-mcp#runtime-context-fields) and [`review-packet`](#review-packet) also read these fields.
+For a Node service that `tsc` compiles, run the command from the repository root, and do not set `sourceRoot` in `tsconfig.json`.
 
-### Exit codes of local analysis
+### upload-static-findings {#upload-static-findings}
 
-In local mode (`--runtime-coverage`), `analyze` uses the runtime coverage exit codes of `fallow health`:
+Run the dead-code analysis, and upload the unused files and unused exports for the source view of Fallow Cloud.
 
-| Code | Meaning |
-|:----:|:--------|
-| `3` | A license is present, but it is not valid, it is more than 30 days past expiry, or it does not include runtime coverage. |
-| `4` | The runtime coverage sidecar is missing, its signature is not valid, its protocol is not compatible, or it stopped unexpectedly. |
-| `5` | Fallow cannot prepare or parse the runtime coverage input, or the sidecar rejected that input. |
-| `6` | The runtime coverage sidecar reported an internal error. |
-
-See [health exit codes](/cli/health#exit-codes).
-
-## `review-packet`
-
-`fallow coverage review-packet` reads the production facts of the changed code from Fallow Cloud. It sends a set of files or functions to `POST /v1/coverage/:repo/review-packet` and prints the cloud answer as JSON. It runs no local analysis and does not fetch the runtime context of the full repository, so the answer stays small. Use it in a code review or in a pull request job.
+{/* generated:start cli-synopsis coverage upload-static-findings */}
 
 ```bash
-# The source files changed against the base
-fallow coverage review-packet
-
-# Selected files and functions
-fallow coverage review-packet --file src/checkout.ts --function src/cart.ts:addItem
+fallow coverage upload-static-findings [OPTIONS]
 ```
 
-Without `--file` and `--function`, fallow sends the source files that changed against the base. Fallow finds the base like [`fallow audit`](/cli/audit) does:
+{/* generated:end */}
 
-1. `--base <REF>` (an alias of `--changed-since`)
-2. `$FALLOW_AUDIT_BASE`
-3. The merge-base with the upstream branch or the remote default branch
+{/* generated:start cli-options coverage upload-static-findings */}
 
-When no source file changed, the command stops with exit code 2. Pass `--file`, `--function` or `--base`.
+#### Fallow Cloud {#upload-static-findings-options-fallow-cloud}
 
-### Review-packet flags
+| Option | Description |
+|:--|:--|
+| `--api-key <KEY>` | Fallow Cloud API key (bearer token). Precedence: this flag > $FALLOW_API_KEY. |
+| `--api-endpoint <URL>` | Override the Fallow Cloud base URL. Useful for staging and on-premise deployments. |
+| `--project-id <PROJECT_ID>` | Project identifier, for example `fallow-cloud-api` or `owner/repo`. Defaults to $GITHUB_REPOSITORY, then $CI_PROJECT_PATH, then the parsed origin URL from `git remote get-url origin`. |
+| `--git-sha <SHA>` | Explicit git SHA for these findings. Default: `git rev-parse HEAD`. |
 
-| Flag | Description |
-|:-----|:------------|
-| `--file <PATH>` | A repo-relative file to include. Repeatable. 1000 files at most. |
-| `--function <FILE:NAME[:LINE]>` | A function to include, as `FILE:NAME` or `FILE:NAME:LINE`. Repeatable. 1000 functions at most. |
-| `--base <REF>` | The base for the changed files when you pass no `--file` and no `--function`. |
-| `--repo <OWNER/REPO>` | The repository. Falls back to `$FALLOW_REPO`, then to the parsed `origin`. |
-| `--api-key <KEY>` | Fallow Cloud API key. Falls back to `$FALLOW_API_KEY`, then to the key that [`fallow cloud login`](/cli/cloud) stored. A read-only key works. |
-| `--api-endpoint <URL>` | Override the API base URL. |
-| `--project-id <ID>` | Optional ID that selects a monorepo or project. |
-| `--coverage-period <DAYS>` | Observation window, 1 through 90 days. Default: 30. |
-| `--commit-sha <SHA>` | Optional commit SHA of the deployment to read. |
+#### Run {#upload-static-findings-options-run}
 
-The JSON has one row per function in `functions`. Each row has the `tracking_state`, `period_tracking_state`, `hit_count`, `repo_path`, `covered_by_test`, `errors`, blast radius, complexity and churn of the function. The answer also has an `evidence_window` and a `prod_hot_untested` list: functions that ran in production and that no test called. Files and functions that Fallow Cloud does not know go into `not_found`. See [the runtime-context fields](/cloud/hosted-mcp#runtime-context-fields) for the meaning of each field.
+| Option | Description |
+|:--|:--|
+| `--allow-dirty` | Proceed even when the working tree has uncommitted changes. Warning: findings are generated from the working copy, so they may not match the uploaded git SHA. |
+| `--dry-run` | Print what would be uploaded and exit. No network call |
+| `--ignore-upload-errors` | Treat transient upload failures as warnings instead of errors (exit 0). Validation and auth errors still fail hard; this only downgrades transport and server errors |
 
-## `deployment-changes`
+{/* generated:end */}
 
-`fallow coverage deployment-changes` reads how production behavior changed between two deployments. It reads `GET /v1/coverage/:repo/deployments/:sha/changes` and prints the cloud answer as JSON.
+Each upload replaces the findings of the same SHA. The command runs the full analysis, so it takes more time than `upload-inventory`. It needs a live API key, not an ingest key.
+
+### review-packet {#review-packet}
+
+Read the production facts of the changed functions from Fallow Cloud. The command runs no local analysis.
+
+{/* generated:start cli-synopsis coverage review-packet */}
 
 ```bash
-# The deployment of HEAD against the previous deployment with production runtime
-fallow coverage deployment-changes
-
-# One deployment against a selected base, only the functions that stopped
-fallow coverage deployment-changes --sha <deploy-sha> --base <base-sha> --change stopped
+fallow coverage review-packet [OPTIONS]
 ```
 
-Each function gets one change kind:
+{/* generated:end */}
+
+{/* generated:start cli-options coverage review-packet */}
+
+#### Fallow Cloud {#review-packet-options-fallow-cloud}
+
+| Option | Description |
+|:--|:--|
+| `--api-key <KEY>` | Fallow Cloud API key. Order: flag > $FALLOW_API_KEY > `fallow cloud login` key |
+| `--api-endpoint <URL>` | Override the Fallow Cloud base URL |
+| `--repo <OWNER/REPO>` | Repository identifier, for example `owner/repo`. Defaults to $FALLOW_REPO, then the parsed origin URL from `git remote get-url origin`. |
+| `--project-id <ID>` | Optional monorepo/project disambiguator |
+| `--coverage-period <DAYS>` | Runtime observation window (1..=90 days). The cloud default is 30 |
+| `--commit-sha <SHA>` | Optional commit SHA of the deployment to read |
+
+#### Scope {#review-packet-options-scope}
+
+| Option | Description |
+|:--|:--|
+| `--file <PATH>` | Repo-relative file to include. Repeatable |
+| `--function <FILE:NAME[:LINE]>` | Function to include, as FILE:NAME or FILE:NAME:LINE. Repeatable |
+
+{/* generated:end */}
+
+Without `--file` and `--function`, fallow sends the source files that changed against the base. Fallow finds the base as [`fallow audit`](/cli/audit) does: `--base`, then `$FALLOW_AUDIT_BASE`, then the merge base with the default branch. A read-only key works.
+
+### deployment-changes {#deployment-changes}
+
+Read how production behavior changed between two deployments.
+
+{/* generated:start cli-synopsis coverage deployment-changes */}
+
+```bash
+fallow coverage deployment-changes [OPTIONS]
+```
+
+{/* generated:end */}
+
+{/* generated:start cli-options coverage deployment-changes */}
+
+#### Fallow Cloud {#deployment-changes-options-fallow-cloud}
+
+| Option | Description |
+|:--|:--|
+| `--api-key <KEY>` | Fallow Cloud API key. Order: flag > $FALLOW_API_KEY > `fallow cloud login` key |
+| `--api-endpoint <URL>` | Override the Fallow Cloud base URL |
+| `--repo <OWNER/REPO>` | Repository identifier, for example `owner/repo`. Defaults to $FALLOW_REPO, then the parsed origin URL from `git remote get-url origin`. |
+| `--sha <SHA>` | Commit SHA of the deployment. Default: `git rev-parse HEAD` |
+
+#### Output {#deployment-changes-options-output}
+
+| Option | Description |
+|:--|:--|
+| `--change <KIND>` | Show only one change kind. Values: `stopped`, `new_not_called`, `heated_up`, `cooled_down`, `new_called`, `unchanged`. |
+| `--limit <N>` | Page size (1..=200) |
+| `--cursor <CURSOR>` | Cursor from `meta.cursor` of the previous page |
+
+The [global options](/cli/global-flags) are in these groups: [Project](/cli/global-flags#options-project), [Output](/cli/global-flags#options-output), [Scope](/cli/global-flags#options-scope), [Baselines](/cli/global-flags#options-baselines), [Gates](/cli/global-flags#options-gates), [Duplication](/cli/global-flags#options-duplication), [Type-aware](/cli/global-flags#options-type-aware), [Performance](/cli/global-flags#options-performance).
+
+{/* generated:end */}
+
+Each function has one change kind:
 
 | Kind | Meaning |
-|:-----|:--------|
+|:--|:--|
 | `new_called` | New in this deployment, and it ran. |
 | `new_not_called` | New in this deployment, and it did not run yet. |
-| `heated_up` | It runs at a higher rate than in the base deployment. |
-| `cooled_down` | It runs at a lower rate than in the base deployment. |
-| `stopped` | It ran in the base deployment and does not run now, while the base rate predicts calls. |
+| `heated_up` | It runs more often than in the base deployment. |
+| `cooled_down` | It runs less often than in the base deployment. |
+| `stopped` | It ran in the base deployment, and does not run now. |
 | `unchanged` | No significant change. |
 
-When the two deployments cannot be compared, `comparable` is `false` and `reason` tells why. Examples are a deployment that ran for less than 6 hours, or too little runtime on one side. Then the report lists only new functions that already ran. It never reports a stop or a rate change on that evidence. `newErrorGroups` lists the error groups that the deployment saw first.
+When the two deployments cannot be compared, `comparable` is `false` and `reason` gives the cause, for example a deployment that ran less than 6 hours. The report then lists only the new functions that ran. A read-only key works.
 
-### Deployment-changes flags
+## Options
 
-| Flag | Description |
-|:-----|:------------|
-| `--sha <SHA>` | Commit SHA of the deployment. Default: `git rev-parse HEAD`. |
-| `--base <SHA>` | Commit SHA of the base deployment. Default: the previous deployment with production runtime. |
-| `--change <KIND>` | Show only one change kind: `stopped`, `new_not_called`, `heated_up`, `cooled_down`, `new_called` or `unchanged`. |
-| `--limit <N>` | Page size, 1 through 200. |
-| `--cursor <CURSOR>` | Read the next page. Use the `meta.cursor` value of the previous page while `meta.hasMore` is `true`. |
-| `--repo <OWNER/REPO>` | The repository. Falls back to `$FALLOW_REPO`, then to the parsed `origin`. |
-| `--api-key <KEY>` | Fallow Cloud API key, in the same order as `review-packet`. A read-only key works. |
-| `--api-endpoint <URL>` | Override the API base URL. |
+`fallow coverage` has no options of its own. The section of each subcommand under [Subcommands](#subcommands) lists its options.
 
-### Exit codes of the cloud reads
-
-`review-packet` and `deployment-changes` use the same exit codes. On an error, they print a JSON object with `error`, `message` and `exit_code`.
-
-| Code | Meaning |
-|:----:|:--------|
-| `0` | The cloud answered. The JSON is on stdout. |
-| `2` | Bad input, for example a `--function` value that is not `FILE:NAME`, a `--limit` out of range, or no changed source files. |
-| `3` | No API key, an invalid key, a plan without the feature, or a repository or deployment that Fallow Cloud does not know. |
-| `7` | Network or server error. |
-
-## Sidecar installation
-
-If `fallow-cov` is missing, setup tells you what it checked and gives the install command for your package manager, for example:
+## Output
 
 ```bash
-pnpm add -D @fallow-cli/fallow-cov
+fallow coverage upload-inventory --dry-run --project-id acme/shop
 ```
-
-To skip auto-discovery, set one of the two override env vars to a binary path. Fallow checks `FALLOW_COV_BIN` first, then `FALLOW_COV_BINARY_PATH`, then project-local auto-discovery. If the configured path does not exist, both env vars fail with a clear error. They never go to the next step silently. Use `FALLOW_COV_BINARY_PATH` for air-gapped enterprise installs, Linux distro-packaged sidecars, and Docker multi-user setups where `~/.fallow/bin` is not writable.
-
-### Sidecar signature verification
-
-Each time fallow starts the sidecar, it checks the Ed25519 signature against the public key built into fallow. The sidecar binary must have a `<binary>.sig` file next to it. A missing, wrong-length, or invalid signature fails with exit code 4, and fallow does not run the binary. There is no mode that warns and runs, and no env var to turn the check off. If the check fails, reinstall the signed distribution with the install command above.
-
-## `upload-inventory`
-
-`fallow coverage upload-inventory` lets the dashboard show the functions that never ran in production. It reads each JS and TS source file in the project and POSTs a static function inventory to Fallow Cloud, with one row per declaration, expression, arrow, or method. For the matching git SHA, the server computes `inventory − runtime-seen = untracked`. The result fills the **Untracked** filter in the dashboard.
-
-```bash
-fallow coverage upload-inventory \
-  --api-key $FALLOW_API_KEY \
-  --project-id acme/web
-```
-
-### Defaults and inference
-
-| Flag | Default |
-|:-----|:--------|
-| `--api-key` | `$FALLOW_API_KEY` |
-| `--api-endpoint` | `$FALLOW_API_URL` or `https://api.fallow.cloud` |
-| `--project-id` | `$GITHUB_REPOSITORY`, then `$CI_PROJECT_PATH`, then `git remote get-url origin` parsed to `owner/repo` |
-| `--git-sha` | `git rev-parse HEAD` |
-
-### Flags
-
-| Flag | Description |
-|:-----|:------------|
-| `--api-key <KEY>` | Fallow Cloud bearer token. **Use `$FALLOW_API_KEY` on shared CI runners.** Other processes can see a secret on the command line with `ps`, and it can leak into shell history or process audit logs. |
-| `--api-endpoint <URL>` | Override the base URL. Use it for staging and on-prem deployments. |
-| `--project-id <ID>` | Project identifier, for example `owner/repo` or a bare name such as `my-app`. |
-| `--git-sha <SHA>` | The commit SHA for this inventory. Max 64 chars, `[A-Za-z0-9._-]` only. |
-| `--vercel-deployment-id <DEPLOYMENT_ID>` | Bind the upload to a Vercel deployment. Default: `$VERCEL_DEPLOYMENT_ID`, but only when `$VERCEL=1`. With Vercel OIDC authentication, Fallow Cloud checks the deployment against the git SHA. |
-| `--allow-dirty` | Upload even when the working tree has uncommitted changes. Without this flag, fallow refuses the upload with exit code 10. With it, fallow prints a warning, because the inventory comes from the working copy and can differ from the git SHA. |
-| `--exclude-paths <GLOB>` | More globs to skip. Fallow applies them after the configured fallow ignore rules. Repeatable. |
-| `--path-prefix <PREFIX>` | Prefix that fallow adds in front of each `filePath`, so the static inventory paths have the same shape as the paths from the runtime beacon. Required for containerized deployments. The beacon reports the absolute V8 path inside the container (for example, `/app/src/foo.ts`). By default, the inventory has repo-relative paths (`src/foo.ts`). Must start with `/` and use POSIX separators. See [Path prefix](#path-prefix-containerized-deployments) for common values. |
-| `--with-callers` | Also upload importer edges (the modules that import each declaration) with the inventory. The dashboard then shows the callers of untracked code. The inventory rows also have per-function complexity and per-file churn. The upload also has the entry routes that can reach each function. See [Entry routes](#entry-routes). |
-| `--dry-run` | Print what fallow would upload, and exit. No network call. |
-| `--ignore-upload-errors` | Treat network and server errors as warnings (exit 0). Validation, payload-size, and auth errors still fail. |
-
-### Entry routes
-
-With `--with-callers`, the upload body (version 4) has a top-level `routes` array and a `routeIds` array for each function. Fallow takes each route pattern from the file name or the source code, never from a request path.
-
-- **File-based routes.** The `nextjs`, `remix`, `sveltekit` and `nuxt` plugins find the route files. A route handler gives one route for each exported HTTP method. A TanStack Router route file gives its pattern in the argument of `createFileRoute("/repo/$repo")`. These routes have no HTTP method.
-- **Elysia routes.** Fallow reads calls such as `app.get("/v1/repos/:repo", handler)` in each file that imports `elysia`. It joins the prefixes of the app, of `.group("/v1", ...)` and of each mounted plugin, and it gives the route to the file of its handler. A route with a path or a prefix that is not a string literal stays out of the upload.
-
-Reach follows the runtime imports of the module graph. So a route in `routeIds` means that the route can reach the function, not that a request did reach it.
-
-The upload keeps at most 500 routes and at most 50 route ids for each function. When the total grows too large, fallow lowers the cap for each function. Each cut shows in the `routeLimits` field of the upload body and in a warning.
-
-### Function naming
-
-Inventory entries use the same names as `oxc-coverage-instrument`, byte for byte, so the runtime join works. Fallow picks the name in this order:
-
-1. Parent context (method key, variable binding, property key, `export default`).
-2. The function's own `id` (`function foo() {}`, named function expression).
-3. `(anonymous_N)` where `N` is a file-scoped monotonic counter.
-
-Fallow skips TypeScript declaration files (`*.d.ts`, `*.d.mts`, `*.d.cts`, `*.d.tsx`) and overload signatures with no body. They never run, so they would always show as `untracked` in the dashboard.
-
-### Path prefix (containerized deployments)
-
-The runtime beacon reports the V8 `filePath` as V8 sees it at runtime. In a container, that is the path inside the image (for example, `/app/src/foo.ts` when the Dockerfile sets `WORKDIR /app`). The static inventory runs in CI on the checkout and gives repo-relative paths (`src/foo.ts`) by default. The server joins runtime and inventory on the exact `(filePath, functionName)` pair. If the paths on the two sides have different prefixes, the Untracked filter stays empty and the dashboard shows a `mismatched` state.
-
-To fix this, pass a `--path-prefix` that matches your deployed `WORKDIR`:
-
-```bash
-fallow coverage upload-inventory --path-prefix /app
-```
-
-Common values by deployment target:
-
-| Target | Prefix |
-|:-------|:-------|
-| Docker image with `WORKDIR /app` (most Node services) | `/app` |
-| Cloud Run / Buildpacks | `/workspace` |
-| Older official Node images | `/usr/src/app` |
-| AWS Lambda | `/var/task` |
-| GitHub Actions default checkout | `/home/runner/work/<repo>/<repo>` |
-
-After the upload, the server checks up to 100 recent runtime rows and reports their overlap with the inventory. If the overlap is below 50%, the CLI prints a yellow warning with an example mismatch. Until you correct the prefix, the repo detail page in the dashboard shows a configuration-needed state.
-
-### Exit codes
-
-| Code | Meaning | When it fires |
-|:----:|:--------|:--------------|
-| `0`  | ok | Upload succeeded, or `--dry-run`, or `--ignore-upload-errors` downgraded a transient failure. |
-| `7`  | network | DNS, TLS, connect, or transport failure. |
-| `10` | validation | Missing API key, unresolvable project-id, zero functions in walk, or uncommitted changes without `--allow-dirty`. |
-| `11` | payload too large | Inventory exceeds the server's 200,000-function cap. Scope with `--exclude-paths`. |
-| `12` | auth rejected | 401 / 403 from the server. Rotate the token or widen its scope. |
-| `13` | server error | 5xx or other non-2xx status, or a malformed response body. |
-
-### Example CI job (GitHub Actions)
-
-```yaml
-- name: Upload function inventory to Fallow Cloud
-  run: |
-    npx fallow coverage upload-inventory
-  env:
-    FALLOW_API_KEY: ${{ secrets.FALLOW_API_KEY }}
-```
-
-### Dry-run output
 
 ```text
 fallow coverage upload-inventory (dry run)
-  project-id:    acme/web
-  git-sha:       a1b2c3d4e5f6...
-  functions:     14,280
-  endpoint:      https://api.fallow.cloud/v1/coverage/acme/web/inventory
+  project-id:    acme/shop
+  git-sha:       a4329022be89e04bebfd1e0a56d13ba21b4cb40f
+  functions:     24
+  endpoint:      https://api.fallow.cloud/v1/coverage/acme/shop/inventory
 
-first 5 of 14,280 entries:
-  src/index.ts:1   bootstrap
-  src/index.ts:12  (anonymous_1)
-  src/user.ts:3    createUser
-  src/user.ts:18   default
-  src/user.ts:42   (anonymous_5)
-  ... and 14,275 more
+first 5 of 24 entries:
+  src/lib/format.ts:1  formatPrice
+  src/lib/format.ts:3  formatPercent
+  src/lib/parse.ts:1   parseAmount
+  src/math.test.ts:5   describe
+  src/math.test.ts:6   (anonymous_1)
+  ... and 19 more
 ```
 
-## `upload-static-findings`
-
-`fallow coverage upload-static-findings` runs the static analysis and POSTs the dead-code findings to Fallow Cloud. It sends the unused exports and the unused files under the current project and git SHA. Fallow Cloud shows them on the source view, next to the runtime coverage.
+A dry run gives the project, the commit, the number of functions and the URL, and sends nothing. Each entry gives a file, a line and a function name. A function without a name is `(anonymous_N)`.
 
 ```bash
-FALLOW_API_KEY=fallow_live_... \
-  fallow coverage upload-static-findings --git-sha "$GITHUB_SHA"
+fallow coverage upload-source-maps --dry-run --repo acme/shop
 ```
 
-Each upload replaces the findings that Fallow Cloud has for the same git SHA, so each run sends the complete set. This command runs the full analysis, so it is slower than `upload-inventory`. A config or parse error of the analysis gives exit code 10.
+```text
+fallow coverage upload-source-maps: repo=acme/shop sha=a4329022be89e04bebfd1e0a56d13ba21b4cb40f
+fallow coverage upload-source-maps: would upload 1 maps (92 B) to https://api.fallow.cloud/v1/coverage/acme%2Fshop/source-maps
+  - assets/app.js.map (92 B) -> fileName=app.js.map mapPath=dist/assets/app.js.map
+fallow coverage upload-source-maps: dry run, no uploads performed
+```
 
-### Static-findings flags
+### Agent-readable JSON {#agent-readable-json}
 
-| Flag | Description |
-|:-----|:------------|
-| `--api-key <KEY>` | Fallow Cloud API key. Default: `$FALLOW_API_KEY`. Use a live API key, not a publishable ingest key. **Use `$FALLOW_API_KEY` on shared CI runners.** |
-| `--api-endpoint <URL>` | Override the base URL. Default: `$FALLOW_API_URL`, then `https://api.fallow.cloud`. |
-| `--project-id <ID>` | Project identifier, for example `owner/repo`. Default: `$GITHUB_REPOSITORY`, then `$CI_PROJECT_PATH`, then `git remote get-url origin` parsed to `owner/repo`. |
-| `--git-sha <SHA>` | The commit SHA for these findings. Default: `git rev-parse HEAD`. |
-| `--allow-dirty` | Upload even when the working tree has uncommitted changes. The findings then come from the working copy and can differ from the git SHA. |
-| `--dry-run` | Print what fallow would upload, and exit. No network call. |
-| `--ignore-upload-errors` | Treat network and server errors as warnings (exit 0). Validation, payload-size, and auth errors still fail. |
+`fallow coverage setup --json` prints `kind: "coverage-setup"` with these top-level fields. The same project gives the same output.
 
-The exit codes are the same as the [exit codes of `upload-inventory`](#exit-codes).
+| Field | Content |
+|:--|:--|
+| `schema_version` | The version of this output format. |
+| `framework_detected` | `nextjs`, `nestjs`, `nuxt`, `sveltekit`, `astro`, `remix`, `vite`, `plain_node` or `unknown`. |
+| `package_manager` | `npm`, `pnpm`, `yarn` or `bun`. |
+| `runtime_targets` | `node`, `browser` or both, for all members together. |
+| `members` | One object for each workspace that runs code: `name`, `path`, `framework_detected`, `package_manager`, `runtime_targets`, `files_to_edit`, `snippets`, `dockerfile_snippet`, `warnings`. A project with one app has one member with path `.`. |
+| `commands` | The install commands. |
+| `files_to_edit`, `snippets`, `dockerfile_snippet` | Copies of the first member. In a monorepo, read each member. |
+| `config_written` | The path of a written config file, or `null`. |
+| `next_steps` | Commands to run next. |
+| `warnings` | Problems. A project without runtime code has an empty `members` array and a warning. |
+| `cloud` | With `--cloud`: `project_id`, `git_sha`, `endpoint`, the key variables, `ci` with the steps, `source_maps`, `activation_url`, `wait_command`, and `wait` after `--wait`. |
 
-## `upload-source-maps`
+`--explain` adds a `_meta` object with the meaning of each field. The `analyze` command with `--format json` gives the `runtime_coverage` object of [`fallow health`](/cli/health). In cloud mode, each finding and each hot path also has `cloud_context`. A `null` count in it means "not measured". `review-packet` and `deployment-changes` print the JSON answer of Fallow Cloud. The [JSON output reference](/reference/json-output) has each field.
 
-For bundled or compiled code, source maps let Fallow Cloud show runtime coverage on your original source files. Compiled code includes a Node service that `tsc` builds to `dist/`. The production beacon reports coverage against the deployed JavaScript files. The cloud resolver uses the uploaded source maps to map those bundle positions back to the original source files. `fallow coverage upload-source-maps` finds the source maps in a build output directory and POSTs each map to Fallow Cloud under the current repo and git SHA.
+## Exit codes {#exit-codes}
+
+| Subcommand | Code | Meaning |
+|:--|:--|:--|
+| `setup` | `0` | The step completed, or each step is done. |
+| `setup` | `1` | `--cloud --wait` passed `--wait-timeout` before each step was done. |
+| `setup` | `2` | Invalid input, a rejected key, or a key without the scope. |
+| `setup`, `analyze` | `3` | A license is present, but it is not valid, expired more than 30 days ago, or lacks runtime coverage. |
+| `setup`, `analyze` | `4` | `fallow-cov` is missing, its signature is not valid, its protocol does not match, or it stopped. |
+| `analyze` | `5` | Fallow cannot read the coverage input, or `fallow-cov` refused it. |
+| `analyze` | `6` | `fallow-cov` reported an internal error. |
+| `upload-inventory`, `upload-static-findings` | `7` | A network failure. |
+| `upload-inventory`, `upload-static-findings` | `10` | Validation failed: no API key, no project id, no functions, uncommitted changes without `--allow-dirty`, or an analysis error. |
+| `upload-inventory`, `upload-static-findings` | `11` | The upload is larger than the server allows. |
+| `upload-inventory`, `upload-static-findings` | `12` | The server refused the key. |
+| `upload-inventory`, `upload-static-findings` | `13` | A server error, or an answer that fallow cannot read. |
+| `upload-source-maps` | `1` | One or more maps failed to upload. |
+| `upload-source-maps` | `2` | Invalid input: no `FALLOW_API_KEY`, no repo or SHA, a missing directory, or no maps. |
+| `upload-source-maps` | `7` | Each map failed with a network error, or fallow cannot start the HTTP client. |
+| `review-packet`, `deployment-changes` | `2` | Invalid input, for example a `--function` value that is not `FILE:NAME`, or no changed source file. |
+| `review-packet`, `deployment-changes` | `3` | No key, a key that is not valid, a plan without the feature, or a repository or deployment that Fallow Cloud does not know. |
+| `review-packet`, `deployment-changes` | `7` | A network or server error. |
+
+`--ignore-upload-errors` changes codes 7 and 13 of `upload-inventory` and `upload-static-findings` to 0. On an error, the cloud reads print a JSON object with `error`, `message` and `exit_code`. See [Exit codes](/reference/exit-codes).
+
+## Examples
 
 ```bash
-FALLOW_API_KEY=fallow_live_... \
-  fallow coverage upload-source-maps --dir dist --repo my-app --git-sha "$GITHUB_SHA"
+# Start the setup, and run it again after you capture traffic
+fallow coverage setup
+
+# Print the setup as JSON for an agent
+fallow coverage setup --yes --json
+
+# Analyze a local V8 capture
+fallow coverage analyze --runtime-coverage ./coverage --format json
+
+# Analyze the runtime data of Fallow Cloud
+fallow coverage analyze --cloud --repo acme/web --format json
+
+# Upload the function list from a container build in CI
+fallow coverage upload-inventory --path-prefix /app
+
+# Upload the source maps of the build
+fallow coverage upload-source-maps --dir dist --git-sha "$GITHUB_SHA"
+
+# Read the production facts of one function
+fallow coverage review-packet --function src/cart.ts:addItem
+
+# List the functions that stopped in the current deployment
+fallow coverage deployment-changes --change stopped
 ```
 
-### Source-map defaults
+## Related
 
-| Flag | Default | Description |
-|:-----|:--------|:------------|
-| `--dir <PATH>` | `dist` | Directory that fallow scans recursively. Relative paths resolve from the project root. |
-| `--include <GLOB>` | `**/*.map` | Include glob, matched relative to `--dir`. |
-| `--exclude <GLOB>` | `**/node_modules/**` | Exclude glob, repeatable. |
-| `--repo <NAME>` | `package.json` `repository.url`, then `git remote get-url origin` parsed to `owner/repo` | Repo identifier in `/v1/coverage/:repo/source-maps`. Must match the `projectId` of the beacon (and the `--project-id` that you pass to `upload-inventory`). If your beacon reports a bare name, pass `--repo <bare-name>`. |
-| `--git-sha <SHA>` | `$GITHUB_SHA`, `$CI_COMMIT_SHA`, `$COMMIT_SHA`, then `git rev-parse HEAD` | The commit SHA that the beacon reports for the deployed build. Must be 7-40 hex chars. |
-| `--vercel-deployment-id <DEPLOYMENT_ID>` | `$VERCEL_DEPLOYMENT_ID`, but only when `$VERCEL=1` | Bind the upload to a Vercel deployment. With Vercel OIDC authentication, Fallow Cloud checks the deployment against the git SHA. |
-| `--endpoint <URL>` | `$FALLOW_API_URL` or `https://api.fallow.cloud` | Override for staging or enterprise deployments. |
-| `--strip-path <BOOL>` | `true` | Upload only the basename as `fileName`, for example `dist/assets/app.js.map` -> `app.js.map`. When runtime coverage reports bundle paths with directories (for example, `assets/app.js`), set `--strip-path=false`. When two maps have the same basename, for example two `index.js.map` files in different directories, fallow sends each of them under its path in the build directory, so that no map replaces another. |
-| `--dry-run` | `false` | Print what fallow would upload. Does not read `FALLOW_API_KEY` and makes no network calls. |
-| `--concurrency <N>` | `4` | Number of parallel uploads. |
-| `--fail-fast` | `false` | Stop on the first failed map. Without this flag, fallow uploads the rest and reports a partial-failure summary. |
-
-Fallow reads the API key only from `FALLOW_API_KEY`. There is no `--api-key` flag on purpose, so secrets do not get into shell history or process lists.
-
-When CI needs a custom PEM trust bundle for Fallow Cloud, set `FALLOW_CA_BUNDLE=/path/to/bundle.pem`. The bundle replaces the default WebPKI roots. In private-CA environments, pass a complete bundle with the public roots and the private CA. Relative bundle paths resolve from the working directory of the process.
-
-Fallow tries each upload up to three times on network failures, HTTP 429, and HTTP 502/503/504. On HTTP 429, fallow follows `Retry-After` in delta seconds or as an HTTP date, up to 60 seconds. When fallow cannot set up the HTTP client, or when every map fails with a network error, fallow exits 7. When only some maps fail, or when an upload fails with an HTTP error, fallow exits 1.
-
-### Source-map CI snippets
-
-<Tabs>
-  <Tab title="GitHub Actions">
-
-    ```yaml
-    - name: Build
-      run: npm run build
-
-    - name: Upload source maps to fallow
-      run: npx fallow coverage upload-source-maps --dir dist --git-sha "$GITHUB_SHA"
-      env:
-        FALLOW_API_KEY: ${{ secrets.FALLOW_API_KEY }}
-    ```
-
-  </Tab>
-  <Tab title="GitLab CI">
-
-    ```yaml
-    upload_source_maps:
-      stage: deploy
-      script:
-        - npm run build
-        - npx fallow coverage upload-source-maps --dir dist --git-sha "$CI_COMMIT_SHA"
-      variables:
-        FALLOW_API_KEY: $FALLOW_API_KEY
-    ```
-
-  </Tab>
-  <Tab title="CircleCI">
-
-    ```yaml
-    - run: npm run build
-    - run:
-        name: Upload source maps to fallow
-        command: npx fallow coverage upload-source-maps --dir dist --git-sha "$CIRCLE_SHA1"
-    ```
-
-  </Tab>
-</Tabs>
-
-### Compiled Node services (`tsc`)
-
-A Node service that runs `tsc` output needs no extra flags. Fallow Cloud matches the absolute path that the beacon reports, for example `/usr/app/dist/consumers/base/index.js`, to the map at `dist/consumers/base/index.js.map`.
-
-- Run `upload-source-maps` from the repository root, so that each map gets its path in the repository.
-- Do not set `sourceRoot` in `tsconfig.json`. With `rootDir: "src"`, `sourceRoot: "/"` removes the `src/` segment from each source path, so no runtime function resolves to a file in the repository. `upload-source-maps` warns about this before it uploads.
-
-### Check that coverage resolves
-
-1. Before the first upload, run the command with `--dry-run`. Fix each warning about `sources` that do not resolve to files in the repository.
-2. After the deployed service has had traffic, run `fallow coverage analyze --cloud --repo <repo>`. A `coverage_unresolved` warning means that runtime positions did not map to source for this commit. Make sure that you uploaded the maps for the same `--git-sha` that the beacon reports.
-
-### Source-map failure modes
-
-| Exit | Meaning |
-|:----:|:--------|
-| `0` | All maps uploaded, or dry-run completed. |
-| `1` | Some or all uploads failed, for example because of invalid JSON maps, auth rejection, rate limits, or server errors. |
-| `2` | Bad invocation: missing `FALLOW_API_KEY`, a repo or SHA that fallow cannot resolve, a missing directory, or zero maps found. |
-| `7` | Network failure: fallow could not set up the HTTP client, or every map failed with a network error after its retries. |
-
-## See also
-
-<CardGroup cols={2}>
-  <Card title="License commands" icon="key" href="/cli/license">
-    Start a trial, refresh a token, or inspect feature status.
-  </Card>
-  <Card title="Runtime coverage" icon="chart-network" href="/analysis/runtime-coverage">
-    What runtime coverage adds, and how it differs from static reachability.
-  </Card>
-</CardGroup>
+- [Runtime coverage](/analysis/runtime-coverage): what runtime coverage reports.
+- [`fallow license`](/cli/license): the license for continuous capture.
+- [`fallow cloud`](/cli/cloud): store a read-only key for the cloud reads.

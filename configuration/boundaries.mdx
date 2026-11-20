@@ -1,479 +1,228 @@
 ---
-title: "Configure architecture boundaries and zones"
+title: "Boundary configuration"
 sidebarTitle: "Boundaries"
-description: "Architecture boundaries for TypeScript and JavaScript. Fallow reports each import that crosses a layer. Start from a built-in preset or define your own zones."
-keywords: ["boundaries", "zones", "rules", "presets", "architecture", "import rules", "bulletproof", "layered", "hexagonal", "feature-sliced", "architecture boundaries", "layer rules"]
+description: "Find the boundaries config, with zones, import rules, presets, public entry files, zone coverage, forbidden calls and accepted cycles."
+keywords: ["boundaries", "zones", "boundary rules", "presets", "layered", "hexagonal", "feature-sliced", "bulletproof", "publicFiles", "allowTypeOnly", "forbidden calls", "accepted cycles", "fallow list --boundaries"]
 icon: "layer-group"
 ---
 
-Boundaries stop imports that break your architecture, for example UI code that imports the database layer. You group files into zones with glob patterns. A rule says which zones a zone may import from. Fallow reports each forbidden import as a `boundary-violation` issue in [`fallow architecture`](/cli/architecture) output.
+Your team agreed on an architecture: the report code and the service code use the shared helpers, and they do not use each other. Nothing in the build stops a new import that breaks the agreement, so the layers slowly grow together. The `boundaries` key of the [config file](/configuration/overview) writes the agreement down, and fallow checks each import against it. [Architecture](/analysis/architecture) explains the analysis and how to act on a finding.
 
-Two optional sections add checks beyond import direction:
+In the demo project, this config gives the three parts of `src` a zone each:
 
-- [`coverage`](#boundary-coverage) reports source files that are outside every zone.
-- [`calls`](#forbidden-calls) bans specific callees per zone.
-
-For preset descriptions, output formats, and suppression, see [Architecture boundaries](/analysis/boundaries).
-
-## Presets
-
-Fallow has four built-in presets for common architecture patterns:
-
-| Preset | Zones | Description |
-|:-------|:------|:------------|
-| `layered` | 4 | Classic N-tier: presentation, application, domain, infrastructure |
-| `hexagonal` | 3 | Ports and adapters: adapters, ports, domain |
-| `feature-sliced` | 6 | [Feature-Sliced Design](https://fsd.how/): strict downward-only imports |
-| `bulletproof` | 4 | [Bulletproof React](https://github.com/alan2207/bulletproof-react): app, features, shared, server |
-
-<CodeGroup>
-```jsonc .fallowrc.json
-{
-  "boundaries": {
-    "preset": "bulletproof"
-  }
-}
-```
-
-```toml fallow.toml
-[boundaries]
-preset = "bulletproof"
-```
-</CodeGroup>
-
-## tsconfig rootDir detection
-
-When a preset is active, fallow reads `compilerOptions.rootDir` from `tsconfig.json` to find the source root for zone patterns. Preset zones become `{rootDir}/{zone}/**`.
-
-Fallow finds the root in these steps:
-
-1. Read `tsconfig.json` from the project root. JSONC with comments and trailing commas is supported.
-2. Read `compilerOptions.rootDir`.
-3. Remove a leading `./` prefix and any trailing `/`.
-4. Reject `.`, `..`, and absolute paths for security.
-5. Use `src` if the field is missing, the file does not exist, or the value is rejected.
-
-```jsonc title="tsconfig.json"
-{
-  "compilerOptions": {
-    "rootDir": "./lib"
-  }
-}
-```
-
-With the `hexagonal` preset, this config gives these zones:
-
-```
-lib/adapters/**
-lib/ports/**
-lib/domain/**
-```
-
-<Note>
-rootDir detection applies only to presets. Custom zones use patterns exactly as written.
-</Note>
-
-## Custom zones
-
-When no preset matches your architecture, define zones yourself. Each zone has these fields:
-
-| Field | Type | Description |
-|:------|:-----|:------------|
-| `name` | `string` | Zone identifier used in rules |
-| `patterns` | `string[]` | Glob patterns relative to the project root, or relative to `root` when set. A single `*` matches inside one directory, so use `**` for nested files. See [Path globs](/configuration/overview#path-globs) |
-| `autoDiscover` | `string[]` | Directories where each immediate child directory becomes a separate zone named `parent/child` |
-| `root` | `string?` | Optional subtree. Fallow resolves `patterns` and `autoDiscover` paths relative to this root |
-| `publicFiles` | `string[]` | Globs of the public entry files of the zone. Other zones may import only these files. See [Public entry files](#public-entry-files) (optional) |
-
-<CodeGroup>
-```jsonc .fallowrc.json
+```jsonc
+// .fallowrc.json
 {
   "boundaries": {
     "zones": [
-      { "name": "ui", "patterns": ["src/components/**", "src/pages/**"] },
-      { "name": "data", "patterns": ["src/db/**", "src/api/**"] },
-      { "name": "shared", "patterns": ["src/lib/**", "src/utils/**"] }
-    ]
-  }
-}
-```
-
-```toml fallow.toml
-[[boundaries.zones]]
-name = "ui"
-patterns = ["src/components/**", "src/pages/**"]
-
-[[boundaries.zones]]
-name = "data"
-patterns = ["src/db/**", "src/api/**"]
-
-[[boundaries.zones]]
-name = "shared"
-patterns = ["src/lib/**", "src/utils/**"]
-```
-</CodeGroup>
-
-**Zone classification rules:**
-
-- A file belongs to the **first zone** with a matching pattern (first match wins).
-- Files that match no zone are **unrestricted**. They can import from any zone, and any zone can import them.
-- Zone order is important. Put more specific patterns before broader ones.
-
-<Warning>
-Fallow warns when a zone matches no analyzed file (`boundary zone '<zone>' matched 0 files`). Usually the glob pattern does not match your directory structure. Run `fallow list --boundaries` to see the file count of each zone.
-</Warning>
-
-## Auto-discovered zones
-
-Use `autoDiscover` to make each feature module its own zone, without one zone entry per feature. Every immediate child directory becomes a zone. Rules can still name the parent zone, and fallow expands them to the discovered child zones.
-
-<CodeGroup>
-```jsonc .fallowrc.json
-{
-  "boundaries": {
-    "zones": [
-      { "name": "app", "patterns": ["src/app/**"] },
-      { "name": "features", "patterns": ["src/features/**"], "autoDiscover": ["src/features"] },
-      { "name": "shared", "patterns": ["src/shared/**"] }
-    ],
-    "rules": [
-      { "from": "app", "allow": ["features", "shared"] },
-      { "from": "features", "allow": ["shared"] }
-    ]
-  }
-}
-```
-
-```toml fallow.toml
-[[boundaries.zones]]
-name = "app"
-patterns = ["src/app/**"]
-
-[[boundaries.zones]]
-name = "features"
-patterns = ["src/features/**"]
-autoDiscover = ["src/features"]
-
-[[boundaries.zones]]
-name = "shared"
-patterns = ["src/shared/**"]
-
-[[boundaries.rules]]
-from = "app"
-allow = ["features", "shared"]
-
-[[boundaries.rules]]
-from = "features"
-allow = ["shared"]
-```
-</CodeGroup>
-
-If `src/features/auth` and `src/features/billing` exist, `fallow list --boundaries` shows `features/auth` and `features/billing`. Fallow checks imports between sibling features as cross-zone imports. An explicit child rule, such as `from: "features/auth"`, overrides the generated parent rule, in any rule order.
-
-When the zone also has `patterns`, fallow matches the discovered child zones first. Top-level files in the auto-discover directory then belong to the parent zone.
-
-The parent rule automatically allows its discovered children. A `src/features/index.ts` barrel can therefore re-export feature modules without `features → features/<child>` violations. Other top-level files, such as `src/features/types.ts`, still follow the parent `features` rule. Generated child rules keep the original `allow` list exactly, so sibling features stay isolated.
-
-To classify only the discovered child directories and leave top-level files unrestricted, remove `patterns` from the zone.
-
-## Custom rules
-
-A rule says which zones a zone may import from. Each rule has these fields:
-
-| Field | Type | Description |
-|:------|:-----|:------------|
-| `from` | `string` | The importing zone |
-| `allow` | `string[]` | Zones that `from` may import from |
-| `allowTypeOnly` | `string[]` | Zones that `from` may import types from, also when they are not in `allow` (optional) |
-
-<CodeGroup>
-```jsonc .fallowrc.json
-{
-  "boundaries": {
-    "zones": [
-      { "name": "ui", "patterns": ["src/components/**", "src/pages/**"] },
-      { "name": "data", "patterns": ["src/db/**", "src/api/**"] },
+      { "name": "services", "patterns": ["src/services/**"] },
+      { "name": "reports", "patterns": ["src/reports/**"] },
       { "name": "shared", "patterns": ["src/lib/**", "src/utils/**"] }
     ],
     "rules": [
-      { "from": "ui", "allow": ["shared"] },
-      { "from": "data", "allow": ["shared"] },
+      { "from": "services", "allow": ["shared"] },
+      { "from": "reports", "allow": ["shared"] },
       { "from": "shared", "allow": [] }
     ]
   }
 }
 ```
 
-```toml fallow.toml
-[[boundaries.zones]]
-name = "ui"
-patterns = ["src/components/**", "src/pages/**"]
+`fallow architecture` reports each import that a rule does not allow as a `boundary-violation` finding:
 
-[[boundaries.zones]]
-name = "data"
-patterns = ["src/db/**", "src/api/**"]
-
-[[boundaries.zones]]
-name = "shared"
-patterns = ["src/lib/**", "src/utils/**"]
-
-[[boundaries.rules]]
-from = "ui"
-allow = ["shared"]
-
-[[boundaries.rules]]
-from = "data"
-allow = ["shared"]
-
-[[boundaries.rules]]
-from = "shared"
-allow = []
+```text
+● Boundary violations (2)
+  src/reports/invoice.ts:1 → src/services/orders.ts (reports → services)
+  src/reports/receipt.ts:1 → src/services/orders.ts (reports → services)
 ```
-</CodeGroup>
 
-**Rule semantics:**
+Both invoice and receipt code import from `src/services/orders.ts`, and no rule allows `reports` to import `services`. [Type-only imports](#type-only-imports-across-boundaries) shows how to accept these two imports. The [`boundaries` reference](/reference/config-architecture#boundaries) has the type of each key.
 
-- **Self-imports** are always allowed. Files in the same zone can import each other.
-- **No rule entry** means the zone is unrestricted. It can import from any zone.
-- **Empty `allow` list** means the zone is isolated. It cannot import from other zones.
-- Only zones with an explicit rule entry have restrictions.
-- **Re-export chains**: a named or default import through a barrel file is judged against the zone of the module that declares the symbol. The finding names the barrel in `via_path`. The chain stops at a public entry file, see [Public entry files](#public-entry-files). Namespace and side-effect imports are judged by the direct target. See [re-export chains](/analysis/boundaries#re-export-chains).
-- **Every analyzed file**: rules also apply to a file that no entry point reaches.
+## Zones {#zones}
 
-<Tip>
-Start with rules for your lowest-level zones (the zones that should import from nothing). Then add rules for the zones above them.
-</Tip>
+Each rule names zones, so the zones come first. A zone is a named set of files. Each entry of `zones` has these keys:
 
-## Public entry files
+| Key | Content |
+|:--|:--|
+| `name` | The name that rules use. |
+| `patterns` | Globs of the files in the zone, relative to the project root or to `root`. |
+| `autoDiscover` | Directories. Each child directory becomes its own zone. See [Auto-discovered zones](#auto-discovered-zones). |
+| `root` | A subdirectory. `patterns` and `autoDiscover` are then relative to it. |
+| `publicFiles` | Globs of the files that other zones may import. See [Public entry files](#public-entry-files). |
 
-A module can expose public entry files, and other modules then import only those files. List the entry files of a zone in `publicFiles`:
+- A file belongs to the first zone with a matching pattern. Put a specific zone before a broad zone.
+- A file that matches no zone has no restrictions. It can import each zone, and each zone can import it.
+- The patterns follow the [glob rules](/configuration/overview#path-globs).
+- A zone that matches no file gives the warning `boundary zone '<zone>' matched 0 files`.
 
-<CodeGroup>
-```jsonc .fallowrc.json
+### One zone for each package {#monorepo-zones}
+
+In a [monorepo](/configuration/workspaces), give each package a zone with `root`. The `patterns` and the `publicFiles` of the zone are then relative to the package directory:
+
+```jsonc
+// .fallowrc.json
+{
+  "boundaries": {
+    "zones": [
+      { "name": "ui", "root": "packages/ui", "patterns": ["src/**"], "publicFiles": ["src/index.ts"] },
+      { "name": "web", "root": "apps/web", "patterns": ["src/**"] }
+    ],
+    "rules": [{ "from": "web", "allow": ["ui"] }]
+  }
+}
+```
+
+An import from `apps/web` into `packages/ui/src/internal/x.ts` is then a finding with `reason: "internal_file"`. [Public entry files](#public-entry-files) explains this reason.
+
+## Rules {#rules}
+
+With the zones in place, the rules say which imports between them are allowed. Each entry of `rules` restricts one zone:
+
+| Key | Content |
+|:--|:--|
+| `from` | The zone that imports. |
+| `allow` | The zones that `from` may import. |
+| `allowTypeOnly` | Zones that `from` may import types from. See [Type-only imports](#type-only-imports-across-boundaries). |
+
+- A file can always import a file of its own zone.
+- A zone without a rule has no restrictions.
+- A rule with an empty `allow` list isolates the zone. It can import no other zone.
+- The rules apply to each analyzed file, also to a file that no entry point reaches.
+- A named or default import through a barrel file counts against the zone of the module that declares the name. The finding names the barrel in `via_path`. A namespace import or a side-effect import counts against its direct target.
+
+## Type-only imports {#type-only-imports-across-boundaries}
+
+The two findings at the top of this page come from the same first line in `invoice.ts` and `receipt.ts`: `import type { Order } from "../services/orders"`. The report code needs the shape of an order, and it does not call the services. `allowTypeOnly` allows imports of types from a zone that is not in `allow`. TypeScript removes these imports, so they add no runtime dependency.
+
+```jsonc
+// .fallowrc.json, in "rules"
+{ "from": "reports", "allow": ["shared"], "allowTypeOnly": ["services"] }
+```
+
+With this rule, `fallow architecture` reports no finding in the demo project. An import of a value from `services`, such as a function call, is still a finding:
+
+| Allowed by `allowTypeOnly` | Not allowed |
+|:--|:--|
+| `import type { Foo } from "..."` | `import { type Foo, Bar } from "..."`: `Bar` is a value |
+| `import type * as ns from "..."` | `import { Foo } from "..."` |
+| `import { type Foo } from "..."`, when each name has `type` | `import "..."`: a side-effect import |
+| `export type { Foo } from "..."` | |
+
+A type-only import is allowed when its target zone is in `allow` or in `allowTypeOnly`. No preset sets `allowTypeOnly`.
+
+## Public entry files {#public-entry-files}
+
+A rule allows a zone, but it does not say which files of that zone are the public interface. Without that limit, another zone can import an internal file, and a change to that file breaks code far away. `publicFiles` lists the files of a zone that other zones may import, for example an `index.ts`:
+
+```jsonc
+// .fallowrc.json
 {
   "boundaries": {
     "zones": [
       { "name": "billing", "patterns": ["src/modules/billing/**"], "publicFiles": ["src/modules/billing/index.ts"] },
-      { "name": "payments", "patterns": ["src/modules/payments/**"], "publicFiles": ["src/modules/payments/index.ts"] },
       { "name": "orders", "patterns": ["src/modules/orders/**"] }
     ],
-    "rules": [
-      { "from": "orders", "allow": ["billing"] }
-    ]
+    "rules": [{ "from": "orders", "allow": ["billing"] }]
   }
 }
 ```
 
-```toml fallow.toml
-[[boundaries.zones]]
-name = "billing"
-patterns = ["src/modules/billing/**"]
-publicFiles = ["src/modules/billing/index.ts"]
+- An import from another zone into a file that is not public is a finding with `reason: "internal_file"`. The `public_files` field names the files to import.
+- An import that a rule does not allow is a finding without `reason`, also when the target is public.
+- A re-export chain stops at a public file. Fallow judges the import by the public file.
+- The check applies to imports from each other zone, also from a zone without a rule. Files outside each zone are not checked.
+- When no file of a zone matches its `publicFiles` globs, fallow writes a warning.
+- On an `autoDiscover` zone, each glob is relative to each discovered directory. `["index.ts"]` gives each child zone its own `index.ts`.
 
-[[boundaries.zones]]
-name = "payments"
-patterns = ["src/modules/payments/**"]
-publicFiles = ["src/modules/payments/index.ts"]
+## Auto-discovered zones {#auto-discovered-zones}
 
-[[boundaries.zones]]
-name = "orders"
-patterns = ["src/modules/orders/**"]
+A project with many features needs one zone for each feature, and a new feature must not need a config change. `autoDiscover` makes each child directory its own zone, named `<zone>/<directory>`:
 
-[[boundaries.rules]]
-from = "orders"
-allow = ["billing"]
-```
-</CodeGroup>
-
-With this config:
-
-- `orders` may import `src/modules/billing/index.ts`. The rule allows the zone, and the file is a public entry file.
-- A direct import of `src/modules/billing/invoice.ts` from `orders` is a violation with `reason: "internal_file"`. The `public_files` field names the entry files to import instead.
-- An import of any `payments` file from `orders` is a zone-rule violation, because no rule allows the zone. Fallow reports one finding for that import, and the finding has no `reason` field.
-- `index.ts` re-exports `createInvoice` from `invoice.ts`. Fallow follows the re-export chain only to `index.ts`, and judges the import by `index.ts`.
-
-The check applies to each file of another zone, also to a zone without a rule. Imports inside one zone are always allowed. Files that are in no zone are not checked.
-
-### Public entry files with autoDiscover
-
-On an `autoDiscover` zone, each glob is relative to each discovered folder. Each module then gets its own entry file:
-
-```jsonc .fallowrc.json
+```jsonc
+// .fallowrc.json
 {
   "boundaries": {
     "zones": [
-      { "name": "modules", "autoDiscover": ["src/modules"], "publicFiles": ["index.ts"] }
+      { "name": "features", "patterns": ["src/features/**"], "autoDiscover": ["src/features"] },
+      { "name": "shared", "patterns": ["src/shared/**"] }
     ],
-    "rules": [
-      { "from": "modules/orders", "allow": ["modules/billing"] }
-    ]
+    "rules": [{ "from": "features", "allow": ["shared"] }]
   }
 }
 ```
 
-Here `src/modules/billing/index.ts` is the entry file of `modules/billing`, and `src/modules/payments/index.ts` is the entry file of `modules/payments`. The rule allows `modules/billing` and not `modules/payments`.
+With `src/features/auth` and `src/features/billing`, the zones are `features/auth` and `features/billing`. An import from one feature into another is then a finding.
 
-**Notes:**
+- A rule for the parent zone applies to each child zone. A rule for a child zone, such as `from: "features/auth"`, replaces it for that child.
+- The parent zone may import its child zones, so a barrel file in `src/features` can export each feature.
+- When the zone also has `patterns`, the files directly in `src/features` belong to the parent zone. Without `patterns`, these files are in no zone.
 
-- On a zone with `patterns`, the globs use the same base as `patterns`: the project root, or `root` when the zone sets it.
-- A file is a public entry file only when it is in the zone and matches a glob. When no file of a zone matches its globs, fallow warns, because each import into the zone from another zone is then a violation.
-- A zone can have more than one glob, for example `["index.ts", "*.routes.ts"]` for lazy-loaded routes.
-- When a public entry file re-exports from another zone, fallow checks that re-export on the entry file.
-- When the `autoDiscover` zone also has `patterns`, the files that only those patterns match get no public entry files.
-- `publicFiles` applies only to the boundary check.
+## Presets {#presets}
 
-## Type-only imports across boundaries
+When your project follows a known architecture, you do not need to write each zone. `preset` gives a set of zones and rules for a common architecture:
 
-Some TypeScript modules must share types but must not depend on each other at runtime. For example, a plugin system can declare a contribution interface in one feature. Other features then import only that type:
-
-```ts
-// features/metrics-panel/extension-api.ts
-export interface MetricsPanelContribution { items?: MetricItemProvider[]; }
-
-// features/extra-metrics/index.ts
-import type { MetricsPanelContribution } from '#/features/metrics-panel/extension-api';
+```jsonc
+// .fallowrc.json
+{ "boundaries": { "preset": "bulletproof" } }
 ```
 
-The compiler removes this import, so there is no runtime dependency. To allow it without adding the target zone to `allow`, add `allowTypeOnly`:
+| Preset | Zones | Rules |
+|:--|:--|:--|
+| `layered` | `presentation`, `application`, `domain`, `infrastructure` | `presentation` may import `application`. `application` may import `domain`. `infrastructure` may import `domain` and `application`. `domain` is isolated. |
+| `hexagonal` | `adapters`, `ports`, `domain` | `adapters` may import `ports`. `ports` may import `domain`. `domain` is isolated. |
+| `feature-sliced` | `app`, `pages`, `widgets`, `features`, `entities`, `shared` | Each layer may import each layer below it in this list. |
+| `bulletproof` | `app`, `features` (auto-discovered), `shared`, `server` | `app` may import `features`, `shared` and `server`. `features` may import `shared` and `server`. `server` may import `shared`. `shared` is isolated. |
 
-<CodeGroup>
-```jsonc .fallowrc.json
-{
-  "boundaries": {
-    "rules": [
-      {
-        "from": "features/extra-metrics",
-        "allow": [],
-        "allowTypeOnly": ["features/metrics-panel"]
-      }
-    ]
-  }
-}
-```
+A preset zone has the pattern `<root>/<zone>/**`. The `shared` zone of `bulletproof` covers `components`, `hooks`, `lib`, `utils`, `utilities`, `providers`, `shared`, `types`, `styles` and `i18n`. `<root>` is the `compilerOptions.rootDir` of the `tsconfig.json` in the project root. When that value is missing, `.`, absolute or outside the project, `<root>` is `src`. Custom zones do not use `rootDir`.
 
-```toml fallow.toml
-[[boundaries.rules]]
-from = "features/extra-metrics"
-allow = []
-allowTypeOnly = ["features/metrics-panel"]
-```
-</CodeGroup>
+## Merge a preset with your zones {#merging-presets-with-custom-config}
 
-**What `allowTypeOnly` admits:**
+A preset rarely matches the folders of a real project in each detail. You can set `preset` together with `zones` and `rules`:
 
-- Whole-declaration type imports: `import type { Foo } from '...'`
-- Namespace type imports: `import type * as ns from '...'`
-- Inline-type imports where every named specifier has the `type` qualifier: `import { type Foo } from '...'`
-- Type-only re-exports: `export type { Foo } from '...'`
+- A zone with the name of a preset zone replaces the preset zone. It takes the place of your zone in the list.
+- A rule with the `from` of a preset rule replaces the preset rule.
+- Other zones and rules come after the preset zones and rules.
 
-**What it does NOT admit:**
-
-- Mixed-specifier imports where at least one specifier is a value (`import { type Foo, Bar }`). The runtime dependency on `Bar` still gives a violation.
-- Plain value imports (`import { Foo } from '...'`).
-- Side-effect imports (`import '...'`). These run the target at runtime.
-
-**Semantics:**
-
-- `allowTypeOnly` is independent of `allow`. Fallow allows a type-only import if its target zone is in either list.
-- The default value is an empty list. Without the field, fallow behaves as before the field existed.
-- No preset (Layered, Hexagonal, FeatureSliced, Bulletproof) sets the field. Type-only crossings are opt-in per rule.
-
-## Merging presets with custom config
-
-When you set `preset` together with `zones` or `rules`, fallow merges them:
-
-- **Zones** with the same name as a preset zone **replace** the preset zone fully.
-- **Rules** with the same `from` as a preset rule **replace** the preset rule.
-- Fallow **adds** new zones and rules after the preset zones and rules. A zone that replaces a preset zone also moves to the position of your zone in the list.
-
-### Example: override a preset zone
-
-Use the hexagonal preset, but keep your domain code in `src/core` instead of `src/domain`:
-
-<CodeGroup>
-```jsonc .fallowrc.json
+```jsonc
+// .fallowrc.json
 {
   "boundaries": {
     "preset": "hexagonal",
-    "zones": [
-      { "name": "domain", "patterns": ["src/core/**"] }
-    ]
+    "zones": [{ "name": "domain", "patterns": ["src/core/**"] }]
   }
 }
 ```
 
-```toml fallow.toml
-[boundaries]
-preset = "hexagonal"
+This config keeps `adapters`, `ports` and the three rules, and puts the `domain` zone in `src/core`.
 
-[[boundaries.zones]]
-name = "domain"
-patterns = ["src/core/**"]
-```
-</CodeGroup>
+## Zone coverage {#boundary-coverage}
 
-This config keeps `adapters` and `ports` from the hexagonal preset and replaces the `domain` zone pattern with `src/core/**`. All three rules stay the same.
+A file in no zone has no restrictions (see [Zones](#zones)), so a new folder outside each zone escapes the check. `coverage` reports the files that are in no zone:
 
-## Boundary coverage
+| Key | Content |
+|:--|:--|
+| `requireAllFiles` | When `true`, each analyzed source file outside each zone is a `boundary-coverage` finding. Default `false`. |
+| `allowUnmatched` | Globs of the files that may stay outside each zone, for example generated code. |
 
-Zones restrict only the files they match. A file outside every zone has no restrictions, and fallow does not tell you about it. To find these files, enable coverage:
-
-| Field | Type | Description |
-|:------|:-----|:------------|
-| `requireAllFiles` | `boolean` | Report every analyzed source file that matches no zone as a `boundary_coverage_violations` finding (default `false`) |
-| `allowUnmatched` | `string[]` | Glob patterns for paths that you leave outside all zones on purpose. Fallow rejects invalid globs when it loads the config |
-
-<CodeGroup>
-```jsonc .fallowrc.json
+```jsonc
+// .fallowrc.json
 {
   "boundaries": {
-    "zones": [
-      { "name": "domain", "patterns": ["src/domain/**"] }
-    ],
-    "coverage": {
-      "requireAllFiles": true,
-      "allowUnmatched": ["src/generated/**"]
-    }
+    "zones": [{ "name": "domain", "patterns": ["src/domain/**"] }],
+    "coverage": { "requireAllFiles": true, "allowUnmatched": ["src/generated/**"] }
   }
 }
 ```
 
-```toml fallow.toml
-[[boundaries.zones]]
-name = "domain"
-patterns = ["src/domain/**"]
+## Forbidden calls {#forbidden-calls}
 
-[boundaries.coverage]
-requireAllFiles = true
-allowUnmatched = ["src/generated/**"]
-```
-</CodeGroup>
+An import rule cannot stop a call to a global, such as `process.exit`, because the code imports nothing. `calls.forbidden` bans calls in the files of a zone:
 
-**Semantics:**
-
-- Coverage runs only when `requireAllFiles` is `true`. By default, unmatched files stay unrestricted, as before coverage existed.
-- Coverage checks every analyzed file, also a file that no entry point reaches.
-- Findings use the severity and the suppression token of the `boundary-violation` rule.
-- Combine coverage with [forbidden calls](#forbidden-calls). A file outside all zones then cannot escape a call policy.
-
-For generated code, use `allowUnmatched` instead of file-level suppression comments. The config keeps the exception in one place that reviewers can see.
-
-## Forbidden calls
-
-To ban specific calls in a zone, add a forbidden-call policy. For example, you can keep process execution and logging out of a domain layer:
-
-| Field | Type | Description |
-|:------|:-----|:------------|
-| `from` | `string` | Zone where files may not make matching calls |
-| `callee` | `string \| string[]` | One or more forbidden callee patterns, matched per segment |
-
-<CodeGroup>
-```jsonc .fallowrc.json
+```jsonc
+// .fallowrc.json
 {
   "boundaries": {
-    "zones": [
-      { "name": "domain", "patterns": ["src/domain/**"] }
-    ],
+    "zones": [{ "name": "domain", "patterns": ["src/domain/**"] }],
     "calls": {
       "forbidden": [
         { "from": "domain", "callee": "child_process.*" },
@@ -484,239 +233,61 @@ To ban specific calls in a zone, add a forbidden-call policy. For example, you c
 }
 ```
 
-```toml fallow.toml
-[[boundaries.zones]]
-name = "domain"
-patterns = ["src/domain/**"]
+Each matching call or `new` expression is a `boundary-call-violation` finding. The finding names the callee, the pattern and the zone.
 
-[[boundaries.calls.forbidden]]
-from = "domain"
-callee = "child_process.*"
+- A pattern compares whole name segments. `fetch` matches `fetch` and not `myfetch`.
+- `object.*` matches each member of the object. `*.member` matches the member on each object.
+- A pattern follows imports: `child_process.*` also matches `execSync` from `import { execSync } from "node:child_process"`.
+- Fallow matches direct callee paths, also with `?.`. It does not follow a callee in a variable, a computed member or an injected object.
+- The policy applies only to files in a zone. Use `coverage.requireAllFiles` to put each file in a zone.
+- When two entries match a call, the first entry wins. A bare `*` pattern stops the config load.
 
-[[boundaries.calls.forbidden]]
-from = "domain"
-callee = ["console.*", "process.exit"]
-```
-</CodeGroup>
+## Severity and suppression
 
-Fallow reports each matching call or `new` expression as a `boundary_call_violations` finding. The finding names the callee as written, the matched pattern, and the zone. A `new` expression has the prefix `new ` in `callee`, for example `new Date` for the pattern `Date`.
+The import findings, the coverage findings and the call findings all use the `boundary-violation` rule. Its default is `error`. The `boundary-violation` token in a [suppression comment](/configuration/suppression) hides each of these findings on the line or in the file.
 
-**Matching semantics:**
+## Check the config {#inspect}
 
-- **Per segment**: matching compares whole name segments. It does not match substrings or globs.
-  - `fetch` matches only `fetch`, never `myfetch`.
-  - A trailing `object.*` matches any member: `child_process.*` matches `child_process.exec`.
-  - A leading `*.member` matches any object: `*.innerHTML` matches `el.innerHTML`.
-- **Import provenance**: patterns match through imports. `child_process.*` covers `import { execSync } from "node:child_process"`, the bare `child_process` specifier, namespace imports, and default imports.
-- **Direct callee paths only**, including optional chaining (`cp?.exec()` matches like `cp.exec()`). Fallow does not follow aliased or re-bound callees (`const run = cp.exec; run()`), computed members, or injected dependencies (`this.client.exec()`).
-- **Zoned files only**: rules apply only to files in a zone, also a file that no entry point reaches. Files outside all zones are unrestricted. To make sure every file is in a zone, combine with `coverage.requireAllFiles`.
-- **One finding per call site**: each call and each `new` expression gets its own finding, so `Date()` and `new Date()` on two lines give two findings. When several rules match, the first matching rule in config order wins. A `fallow-ignore-next-line` comment covers only the call site on its next line.
-- Fallow rejects patterns that match nothing useful, such as a bare `*`, when it loads the config. A rule for a zone that matches no files gives a warning during analysis.
+A zone with a wrong pattern holds the wrong files, and its rules then check the wrong imports. Before you trust the findings, check the zones. `fallow list --boundaries` prints the zones after preset expansion and merge, with the number of files in each zone. For the demo config at the top of this page:
 
-**Severity and suppression:** forbidden-call findings use the `boundary-violation` rule (default `error`) and its suppression token. Fallow also accepts the aliases `boundary-call-violation` and `boundary-call-violations`. Each of these tokens suppresses all boundary findings on that line or in that file.
-
-<Tip>
-For a staged rollout, set `"rules": { "boundary-violation": "warn" }` while you triage existing forbidden calls. Then set it back to `"error"` to enforce them. This also makes import-direction violations warnings, because all boundary findings share one rule.
-</Tip>
-
-## Inspecting boundaries
-
-Run `fallow list --boundaries` to see the final configuration after preset expansion and merging. This is the fastest way to check your config.
-
-```bash title="$ fallow list --boundaries"
-Boundaries: 4 zones, 4 rules
+```text
+Boundaries: 3 zones, 3 rules
 
 Zones:
-  app                  3 files  src/app/**
-  features             12 files src/features/**
-  shared               8 files  src/components/**, src/hooks/**, src/lib/**, ...
-  server               4 files  src/server/**
+  services             3 files  src/services/**
+  reports              3 files  src/reports/**
+  shared               6 files  src/lib/**, src/utils/**
 
 Rules:
-  app                  → features, shared, server
-  features             → shared, server
-  server               → shared
+  services             → shared
+  reports              → shared
   shared               (isolated, no imports allowed)
 ```
 
-For scripts or MCP tools, use JSON output:
+Add `--format json` for the same data as JSON. See [JSON output](/reference/json-output#list).
 
-```bash
-fallow list --boundaries --format json --quiet
-```
+## Accepted cycles {#accepted-cycles}
 
-<Tip>
-When you debug boundary violations, run `fallow list --boundaries` first. It shows the real zone patterns, file counts, and resolved rules. You see a wrong glob before you run the analysis.
-</Tip>
-
-## Common patterns
-
-<Accordion title="Monorepo with per-package boundaries">
-Preset zone patterns are flat (`src/<zone>/**`). They do not work when packages have separate source directories. Define zones for each package:
-
-<CodeGroup>
-```jsonc .fallowrc.json
-{
-  "boundaries": {
-    "zones": [
-      { "name": "web-ui", "patterns": ["apps/web/src/components/**", "apps/web/src/pages/**"] },
-      { "name": "web-data", "patterns": ["apps/web/src/api/**", "apps/web/src/hooks/**"] },
-      { "name": "shared-ui", "patterns": ["packages/ui/src/**"] },
-      { "name": "shared-utils", "patterns": ["packages/utils/src/**"] }
-    ],
-    "rules": [
-      { "from": "web-ui", "allow": ["web-data", "shared-ui", "shared-utils"] },
-      { "from": "web-data", "allow": ["shared-utils"] },
-      { "from": "shared-ui", "allow": ["shared-utils"] },
-      { "from": "shared-utils", "allow": [] }
-    ]
-  }
-}
-```
-
-```toml fallow.toml
-[[boundaries.zones]]
-name = "web-ui"
-patterns = ["apps/web/src/components/**", "apps/web/src/pages/**"]
-
-[[boundaries.zones]]
-name = "web-data"
-patterns = ["apps/web/src/api/**", "apps/web/src/hooks/**"]
-
-[[boundaries.zones]]
-name = "shared-ui"
-patterns = ["packages/ui/src/**"]
-
-[[boundaries.zones]]
-name = "shared-utils"
-patterns = ["packages/utils/src/**"]
-
-[[boundaries.rules]]
-from = "web-ui"
-allow = ["web-data", "shared-ui", "shared-utils"]
-
-[[boundaries.rules]]
-from = "web-data"
-allow = ["shared-utils"]
-
-[[boundaries.rules]]
-from = "shared-ui"
-allow = ["shared-utils"]
-
-[[boundaries.rules]]
-from = "shared-utils"
-allow = []
-```
-</CodeGroup>
-</Accordion>
-
-<Accordion title="tRPC apps with server-to-features imports">
-In tRPC apps, the server router usually imports sub-routers from feature modules. With the bulletproof preset, this gives `server -> features` violations.
-
-The cleanest fix is to suppress the file that combines the routers:
-
-```typescript title="src/server/_app.ts"
-// fallow-ignore-file boundary-violation
-import { authRouter } from '../features/auth/router'
-import { billingRouter } from '../features/billing/router'
-
-export const appRouter = router({
-  auth: authRouter,
-  billing: billingRouter,
-})
-```
-
-You can also add `features` to the server rule:
+The last two keys are not part of `boundaries`, but they also accept a structure that you keep on purpose. `circularDependencies.allow` lists [circular dependencies](/rules/circular-dependency) that you accept. Each entry is the list of files of one cycle, in import order, relative to the project root:
 
 ```jsonc
-{
-  "boundaries": {
-    "preset": "bulletproof",
-    "rules": [
-      { "from": "server", "allow": ["shared", "features"] }
-    ]
-  }
-}
+// .fallowrc.json
+{ "circularDependencies": { "allow": [["src/a.ts", "src/b.ts", "src/c.ts"]] } }
 ```
 
-<Warning>
-A wider server rule lets all server files import from features, not only the router. For one exception, use inline suppression.
-</Warning>
-</Accordion>
+The entry accepts only the cycle with these files in this order. The cycle can start at any of its files. An entry that matches no cycle gives a `circular-dependencies-allow-unmatched` warning. [`circularDependencies.allow`](/reference/config-architecture#circulardependencies-allow) has the limits.
 
-<Accordion title="Adding a test zone alongside a preset">
-Test files often import from any zone. Add a `test` zone above the preset layers:
+## Shared-state allowlist {#shared-state-allowlist}
 
-<CodeGroup>
-```jsonc .fallowrc.json
-{
-  "boundaries": {
-    "preset": "bulletproof",
-    "zones": [
-      { "name": "test", "patterns": ["src/**/*.test.ts", "src/**/*.spec.ts", "src/__tests__/**"] }
-    ],
-    "rules": [
-      { "from": "test", "allow": ["app", "features", "shared", "server"] }
-    ]
-  }
-}
-```
-
-```toml fallow.toml
-[boundaries]
-preset = "bulletproof"
-
-[[boundaries.zones]]
-name = "test"
-patterns = ["src/**/*.test.ts", "src/**/*.spec.ts", "src/__tests__/**"]
-
-[[boundaries.rules]]
-from = "test"
-allow = ["app", "features", "shared", "server"]
-```
-</CodeGroup>
-
-The first matching zone wins. With a preset, fallow puts the preset zones first and adds your custom zones after them. This example therefore works only for test files outside the preset zone directories, such as `src/__tests__/**`. For a test file inside a zone directory (for example `src/features/auth/auth.test.ts`), the `features` zone of the preset matches first.
-
-To put the `test` zone first, redeclare every preset zone after it. A zone with the same name as a preset zone replaces it, and fallow keeps the order of your list. The preset rules stay active:
+`sharedStateAllowlist` removes global properties from the shared-state report of `fallow architecture --shared-state`. Each entry is a pair: the global object and its property. Fallow compares each pair exactly, without globs.
 
 ```jsonc
-{
-  "boundaries": {
-    "preset": "bulletproof",
-    "zones": [
-      { "name": "test", "patterns": ["src/**/*.test.ts", "src/**/*.spec.ts", "src/__tests__/**"] },
-      { "name": "app", "patterns": ["src/app/**"] },
-      { "name": "features", "patterns": ["src/features/**"], "autoDiscover": ["src/features"] },
-      {
-        "name": "shared",
-        "patterns": [
-          "src/components/**", "src/hooks/**", "src/lib/**", "src/utils/**", "src/utilities/**",
-          "src/providers/**", "src/shared/**", "src/types/**", "src/styles/**", "src/i18n/**"
-        ]
-      },
-      { "name": "server", "patterns": ["src/server/**"] }
-    ],
-    "rules": [
-      { "from": "test", "allow": ["app", "features", "shared", "server"] }
-    ]
-  }
-}
+// .fallowrc.json
+{ "sharedStateAllowlist": [["window", "analyticsQueue"]] }
 ```
 
-A replacing zone uses only the patterns that you give. Copy all the preset patterns, as in this example. Run `fallow list --boundaries` to check the zone order. You can also use `ignorePatterns` to exclude test files from the analysis fully.
-</Accordion>
+## Related
 
-## See also
-
-<CardGroup cols={3}>
-  <Card title="Architecture boundaries" icon="layer-group" href="/analysis/boundaries">
-    Presets, output formats, and inline suppression for boundary violations.
-  </Card>
-  <Card title="Rules & Severity" icon="scale-balanced" href="/configuration/rules">
-    Set `boundary-violation` to error, warn, or off.
-  </Card>
-  <Card title="Inline Suppression" icon="comment-slash" href="/configuration/suppression">
-    Suppress single findings in source code.
-  </Card>
-</CardGroup>
+- Next: [Architecture](/analysis/architecture). Read it to decide what to do with each boundary finding.
+- [`fallow architecture`](/cli/architecture): the options and output of the command.
+- [Boundaries reference](/reference/config-architecture#boundaries): the type of each key.

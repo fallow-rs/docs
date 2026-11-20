@@ -1,248 +1,115 @@
 ---
-title: "fallow decision-surface: find the decisions to review"
-sidebarTitle: "fallow decision-surface"
-description: "Find the structural decisions in a code change that need a human judgment call. fallow decision-surface prints each one as a question with the expert to ask."
-keywords: ["fallow decision-surface", "decision surface", "structural decisions", "code review", "AI code review", "judgment call", "tradeoff", "coupling boundary", "public API", "dependency", "CLI"]
+title: "fallow decision-surface"
+description: "fallow decision-surface lists the structural decisions of a change as questions for a reviewer."
+keywords: ["fallow decision-surface", "structural decisions", "code review", "public API", "dependency", "cli reference"]
 icon: "scale-balanced"
 ---
 
-A large diff often contains only one or two choices that are expensive to undo. `fallow decision-surface` finds those structural **decisions** and gives you each one as a question for the right reviewer.
+List the few structural decisions of a change as questions, each with the person to ask and the cost of the choice.
 
-Each decision has:
+For the review of changed code, read [Changed-code analysis](/analysis/changed-code).
 
-- a judgment question
-- a `signal_id`, a deterministic anchor from the module graph
-- the routed expert to ask
-- the named trade-off
+## Synopsis
 
-`decision-surface` prints the top layer of the [review brief](/cli/audit#review-brief-and-decision-surface) without the rest of the brief.
+{/* generated:start cli-synopsis decision-surface */}
 
 ```bash
-fallow decision-surface --base main
-fallow decision-surface --base main --format json --quiet
-fallow decision-surface --base main --max-decisions 5
+fallow decision-surface [OPTIONS]
 ```
 
-<Note>
-  `fallow decision-surface` **always exits 0** when the analysis runs. It never blocks CI, and its output has no verdict. A runtime error, such as a base ref that does not exist, exits 2. [`fallow audit`](/cli/audit) is the command that exits non-zero on a fail verdict. Use `decision-surface` to find the one or two things that need a human judgment call. Use `audit` to find out if CI blocks the change.
-</Note>
-
-## When to reach for it
-
-Three commands inspect changed code. Each one answers a different question.
-
-| You want to know | Command | Gates? |
-|:-----------------|:--------|:-------|
-| Will CI block this PR? | [`fallow audit`](/cli/audit) | Yes (exits non-zero on a fail verdict) |
-| Where do I look, across the whole change? | [`fallow review`](/cli/audit#review-brief-and-decision-surface) (the full brief: subtract, focus, structure, direct) | No (always exits 0) |
-| Which few decisions deserve a human judgment call? | `fallow decision-surface` (only the structure job) | No (always exits 0) |
-
-`fallow decision-surface` runs the **same changed-code analysis** as `fallow review`, but prints **only** the decisions. It drops the rest of the brief: the subtract list, the weighted focus map, and the walkthrough contract. Use it when you want only the few structural choices in the diff.
-
-## What a decision is
-
-A change can touch hundreds of lines and still contain only one or two choices that are expensive to undo. The decision surface isolates those choices. Each entry is a **framed judgment question** with the context that a reviewer or coding agent needs to answer it. It is not a recommendation. Fallow never tells you which option to choose.
-
-The decision surface has exactly three categories:
-
-| Category | Meaning |
-|:---------|:--------|
-| `coupling-boundary` | A new dependency edge that crosses zones. |
-| `public-api-contract` | A new export in the public API, or a changed contract that modules outside this diff use. |
-| `dependency` | A new third-party dependency, or a declared dependency that moves across a major version (or a `0.x` minor). Fallow makes one batched decision per manifest per kind, weighted by the number of in-repo modules that import the affected packages. |
-
-Fallow never reports these changes as dependency decisions:
-
-- minor and patch bumps
-- non-numeric ranges (workspace, file, git, tags)
-
-The importer count is a union over the batched packages, so a module that imports two bumped packages counts once. For entries outside `dependencies`, the question names the section (`dev`, `optional`, `peer`). When a package is in several sections, the decision uses its `dependencies` range and anchor line.
-
-Fallow **ranks** the decisions by consequence (blast radius x reversibility) and **caps** the list at 3 to 5 decisions. The default is 4. Set the cap with [`--max-decisions`](#options). There is no pagination. The cap is deliberate: a reviewer can keep a few structural questions in mind, but not a long list of findings.
-
-### What each decision carries
-
-| Field | Type | What it is |
-|:------|:-----|:-----------|
-| `question` | string | The judgment, as a question for a human. |
-| `category` | `"coupling-boundary"` \| `"public-api-contract"` \| `"dependency"` | The kind of structural choice. |
-| `expert` | string[] | Who to ask, from ownership routing. Empty when no ownership signal is available for the anchor file. |
-| `bus_factor_one` | boolean | Present and `true` when only one person qualifies as owner of the anchor file. |
-| `signal_id` | string | The deterministic anchor for this decision, taken from the module graph (`sig:` and a hash). It is stable across runs on the same tree. Use it as the key to re-attach review comments. |
-| `signal_key` | string | The raw graph key that `signal_id` hashes, for example `package.json::left-pad`. |
-| `anchor_file`, `anchor_line` | string, integer | The project-relative file and the 1-based line of the anchor. `0` means the head of the file. |
-| `tradeoff` | string | The structural cost, stated as a fact and never as a recommendation. Example: `"Couples app to infra; 4 in-repo modules already depend on this anchor"`. |
-| `internal_consumer_count` | integer | The number of in-repo modules **outside the diff** that already depend on the anchor. This is your reversibility signal: a higher count means the choice is more expensive to undo. Fallow displays this number. The ranking uses `blast` and `consequence`. |
-| `blast`, `consequence` | integer | The ranking inputs: the number of modules beyond the diff that the decision affects, and that number times a weight per category. Fallow sorts on `consequence`, highest first. |
-| `previous_signal_id` | string | Present only when the anchor file was renamed. It holds the `signal_id` from before the rename, so a review tool can re-attach an earlier comment across a `git mv`. |
-| `actions` | array | `ask-expert` when `expert` is not empty, and `suppress` with the comment to paste, except on `dependency` decisions. |
-
-The human output shows the question and the trade-off. Read reversibility from the consumer count. Fallow never labels a decision as a one-way or two-way door.
-
-To suppress a `coupling-boundary` or `public-api-contract` decision, add `// fallow-ignore-next-line decision-surface <category>` above the decision's anchor. The `suppress` action holds the exact comment. A `dependency` decision anchors on `package.json`, which cannot hold a comment. It has no `suppress` action, but `ask-expert` still applies. Suppression removes a decision from the output. It does not change the verdict.
-
-## How an agent consumes it
-
-Fallow builds the decision surface for coding agents. Request JSON output:
-
-```bash
-fallow decision-surface --base main --format json --quiet
-```
-
-A typical agent flow:
-
-1. Read `decisions[]` in order.
-2. For each decision, show the **question** and the `expert` list to the human, not the raw diff.
-3. Use `internal_consumer_count` to choose how strongly to flag the decision. `0` means a cheap choice that is easy to undo. A high count means many modules depend on the anchor, so the choice is expensive to undo.
-4. Quote the `tradeoff` text word for word. It is a fact, so the agent can pass it on without comment.
-5. Attach each comment to `signal_id`. If the run reports a `previous_signal_id`, move the earlier comment across the rename. Do not post a duplicate.
-
-<Tip>
-  fallow builds the decisions from the module graph only. It never adds PR prose to them. The decisions show the actual structural change, not a description of it.
-</Tip>
-
-## Picking the comparison point
-
-`decision-surface` scopes to changed code in the same way as [`fallow audit`](/cli/audit#options). Use `--base` (or its alias `--changed-since`) to set the ref that "changed" compares against.
-
-```bash
-# Against the merge-base with the default branch (auto-detected)
-fallow decision-surface
-
-# Explicit base ref
-fallow decision-surface --base main
-
-# Decisions embedded in the last 5 commits
-fallow decision-surface --base HEAD~5
-```
+{/* generated:end */}
 
 ## Options
 
-| Flag | Description |
-|:-----|:------------|
-| `--base <REF>` | Git ref to compare against (for example `main`, `HEAD~5`, or a commit SHA). Alias for `--changed-since`. Default: the `git merge-base` with the branch's upstream or the remote default (`origin/main`). To pin the base without a flag, set [`FALLOW_AUDIT_BASE`](/configuration/environment#fallow_audit_base). |
-| `--changed-since <REF>` | Alias for `--base`. Compares against changes since this git ref. |
-| `--max-decisions <N>` | Maximum number of decisions in the output. Default 4. Fallow clamps values to the 3 to 5 band and does not reject values outside it. |
-| `-f, --format <FORMAT>` | Output format: `human` (default) or `json`. Other values print the human output. Fallow writes the human output to stderr. |
-| `-r, --root <PATH>` | Project root directory. |
-| `-c, --config <PATH>` | Path to a fallow config file. |
-| `-w, --workspace <NAME>` | Scope output to selected workspace packages. Accepts exact names, globs, and `!`-prefixed negations. |
-| `-q, --quiet` | Suppress progress and status output on stderr. In human format, this also hides the decisions, so use it with `--format json`. |
+{/* generated:start cli-options decision-surface */}
 
-See [global flags](/cli/global-flags) for the full list.
+| Option | Default | Description |
+|:--|:--|:--|
+| `--max-decisions <N>` | `4` | Cap on the number of surfaced decisions (the working-memory limit). Default 4; clamped to the range 3 to 5 |
+
+The [global options](/cli/global-flags) are in these groups: [Project](/cli/global-flags#options-project), [Output](/cli/global-flags#options-output), [Scope](/cli/global-flags#options-scope), [Baselines](/cli/global-flags#options-baselines), [Gates](/cli/global-flags#options-gates), [Duplication](/cli/global-flags#options-duplication), [Type-aware](/cli/global-flags#options-type-aware), [Performance](/cli/global-flags#options-performance).
+
+{/* generated:end */}
+
+Fallow clamps `--max-decisions` to the range 3 to 5. Set the comparison point with the global option `--base` or `--changed-since`, as for [`fallow audit`](/cli/audit). Without it, fallow uses the merge base with the default branch. The human output goes to stderr, so `--quiet` hides it. Use `--quiet` only with `--format json`.
+
+## Output
+
+```bash
+fallow decision-surface --base main
+```
+
+```text
+Decisions to make (1):
+  1. [dependency] `package.json` adds 1 third-party dependency (`uuid`),
+       imported by 1 in-repo module. What does each replace, and who owns the
+       new surface?
+     trade-off: Takes on 1 new maintenance and supply-chain surface; 1 in-repo
+       module outside this diff already imports the added packages.
+```
+
+Each decision has a category in brackets, a question, the structural cost after `trade-off:`, and, when the history names them, the owners to ask after `ask:`. `bus-factor 1` means that one person owns the file. A change without decisions prints `Decisions: none (no consequential structural decision in this change)`.
+
+The categories are `coupling-boundary` (a new import across zones), `public-api-contract` (a new or changed public export) and `dependency` (a new package, or a new major version of a package). Fallow ranks the decisions by the number of modules outside the change that they affect.
+
+With `--format json`, the output has these top-level fields:
+
+| Field | Content |
+|:--|:--|
+| `kind` | `"decision-surface"` |
+| `schema_version` | The version of this output format. |
+| `version` | The fallow version. |
+| `command` | `"decision-surface"` |
+| `decisions` | One object for each decision, ranked. |
+| `signal_count` | The number of decisions that fallow found, also the ones above the cap. |
+| `truncated` | Present when the cap left decisions out. |
+
+Each decision has these fields:
+
+| Field | Content |
+|:--|:--|
+| `signal_id` | A stable id of the decision, for example `sig:efab2fe6cef7b663`. The same tree gives the same id. |
+| `signal_key` | The value that `signal_id` is a hash of, for example `package.json::uuid`. |
+| `previous_signal_id` | The id before a rename of the anchor file. Present only after a rename. |
+| `category` | `coupling-boundary`, `public-api-contract` or `dependency`. |
+| `question` | The decision as a question. |
+| `anchor_file`, `anchor_line` | The file and the line of the decision. Line `0` is the start of the file. |
+| `tradeoff` | The cost of the choice, as a fact. |
+| `expert` | The owners to ask. Empty when fallow has no ownership data for the file. |
+| `bus_factor_one` | `true` when one person owns the file. |
+| `internal_consumer_count` | The number of modules outside the change that depend on the anchor. A higher number makes the choice harder to undo. |
+| `blast`, `consequence` | The rank inputs. Fallow sorts on `consequence`, highest first. |
+| `actions` | `ask-expert` when `expert` is not empty. `suppress` with the comment to add, except for `dependency`. |
+
+To hide a `coupling-boundary` or `public-api-contract` decision, add `// fallow-ignore-next-line decision-surface <category>` above its anchor. See [Suppression](/configuration/suppression). The [JSON output reference](/reference/json-output) has each field.
+
+## Exit codes
+
+| Code | Meaning |
+|:--|:--|
+| `0` | The analysis completed. Decisions never set a gate. |
+| `2` | Invalid input, for example a base ref that does not exist, or `--baseline`. |
+
+See [Exit codes](/reference/exit-codes).
 
 ## Examples
 
-<CodeGroup>
-```bash Basic usage
-# Auto-detect base; render the decisions for a human
-fallow decision-surface
-
-# Explicit base ref
+```bash
+# List the decisions of the current branch against main
 fallow decision-surface --base main
 
-# Raise the cap
+# Show five decisions
 fallow decision-surface --base main --max-decisions 5
-```
 
-```bash Agent / CI
-# JSON for an agent to walk decisions[]
+# Get the decisions as JSON for an agent
 fallow decision-surface --base main --format json --quiet
 
-# Environment variables work too
-FALLOW_FORMAT=json FALLOW_QUIET=1 fallow decision-surface --base main
-
-# Scope to one workspace package
-fallow decision-surface --base main --workspace @app/api --format json
-```
-</CodeGroup>
-
-## Example output
-
-```bash title="$ fallow decision-surface --base main"
-Decisions to make (2):
-  1. [dependency] `package.json` adds 1 third-party dependency (`left-pad`),
-       imported by 1 in-repo module. What does each replace, and who owns the
-       new surface?
-     trade-off: Takes on 1 new maintenance and supply-chain surface; 0 in-repo
-       modules outside this diff already import the added packages.
-     ask: alice (bus-factor 1)
-  2. [public-api-contract] This change adds 2 exports to the public API surface.
-       Intended as maintained contracts, or should they stay internal?
-     trade-off: Adds 2 maintained contracts; 0 in-repo modules already consume
-       this surface, and any external consumers become a contract you cannot
-       remove without a breaking change.
-     ask: alice (bus-factor 1)
+# List the decisions for one workspace package
+fallow decision-surface --base main --workspace @app/api
 ```
 
-When the change has no structural decision, the output is `Decisions: none (no consequential structural decision in this change)`.
+## Related
 
-## JSON output
-
-`fallow decision-surface --format json` returns the `decisions[]` array. Each entry has the fields in [What each decision carries](#what-each-decision-carries). `signal_count` is the number of signal IDs that fallow emitted, including decisions below the cap. `truncated` is present when fallow collapsed decisions below the cap. [`fallow review --format json`](/cli/audit#json-envelope) returns the same decisions in `decisions.decisions[]`, without `actions`.
-
-```json title="$ fallow decision-surface --base main --format json"
-{
-  "kind": "decision-surface",
-  "schema_version": 1,
-  "version": "3.45.0",
-  "command": "decision-surface",
-  "decisions": [
-    {
-      "signal_id": "sig:efab2fe6cef7b663",
-      "category": "public-api-contract",
-      "question": "This change adds 2 exports to the public API surface. Intended as maintained contracts, or should they stay internal?",
-      "anchor_file": "src/index.ts",
-      "anchor_line": 1,
-      "signal_key": "src/index.ts::y|src/index.ts::z",
-      "blast": 0,
-      "consequence": 0,
-      "expert": ["alice"],
-      "bus_factor_one": true,
-      "internal_consumer_count": 0,
-      "tradeoff": "Adds 2 maintained contracts; 0 in-repo modules already consume this surface, and any external consumers become a contract you cannot remove without a breaking change.",
-      "actions": [
-        { "type": "ask-expert", "description": "Ask alice to make this call", "auto_fixable": false },
-        {
-          "type": "suppress",
-          "description": "Suppress this decision if it is settled",
-          "command": "// fallow-ignore-next-line decision-surface public-api-contract",
-          "auto_fixable": false
-        }
-      ]
-    }
-  ],
-  "signal_count": 1
-}
-```
-
-## MCP tool
-
-The [`decision_surface` MCP tool](/integrations/mcp#available-mcp-tools) gives an agent the same decisions through a structured tool call:
-
-```json title="Example request"
-{
-  "tool": "decision_surface",
-  "arguments": {
-    "base": "main",
-    "max_decisions": 4
-  }
-}
-```
-
-`base` and `max_decisions` map to the CLI flags with the same names. The MCP tool also returns dependency decisions, because both routes use the same manifest diff. See [MCP integration](/integrations/mcp) for the full tool list and setup.
-
-## See also
-
-<CardGroup cols={3}>
-  <Card title="Audit and review brief" icon="terminal" href="/cli/audit">
-    The audit that gates CI, and the full review brief that includes these decisions.
-  </Card>
-  <Card title="Trace a call chain" icon="route" href="/cli/trace">
-    Walk the callers and callees of one exported symbol before you change it.
-  </Card>
-  <Card title="MCP integration" icon="robot" href="/integrations/mcp">
-    Use the `decision_surface` tool from AI coding agents.
-  </Card>
-</CardGroup>
-
+- [`fallow audit`](/cli/audit): the verdict for a change, and the full review brief.
+- [Changed-code analysis](/analysis/changed-code): how fallow reviews a change.
+- [MCP server](/integrations/mcp): the `decision_surface` tool returns the same decisions.

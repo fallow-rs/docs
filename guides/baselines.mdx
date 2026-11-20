@@ -1,0 +1,198 @@
+---
+title: "Start with a baseline"
+sidebarTitle: "Baselines"
+description: "Save the current findings in a baseline, commit it, and make CI fail only on new findings while you clean the backlog."
+keywords: ["baseline", "save-baseline", "existing findings", "incremental adoption", "legacy code", "baselines prune", "CI gate"]
+icon: "flag"
+---
+
+You want fallow in CI, but the project has findings today. The demo project has six dead code findings, so `fallow dead-code` exits with code 1 on each run. A CI job that runs it fails from the first day. At the end of this guide, CI fails on each new [finding](/concepts/findings), and the findings that exist today do not fail it.
+
+The tool for this is a [baseline](/concepts/changed-code): a file that holds the current findings. With it, fallow reports only the findings that the file does not hold.
+
+## Before you start
+
+- Fix the setup first. Wrong [entry points](/concepts/entry-points) give wrong findings, and a baseline keeps them. [Adopt fallow in an existing repository](/guides/adopt) gives the order.
+- Decide if you need a baseline. For a check of pull requests only, the [changed-code check](#the-alternative-check-only-changed-code) needs no file.
+
+## Steps
+
+### 1. Save one baseline for each analysis
+
+Each analysis has its own baseline file. Keep the files in a directory that Git tracks, for example `fallow-baselines/`. Do not use `.fallow/`, because fallow keeps its cache there and tells Git to ignore it.
+
+```bash
+npx fallow dead-code --save-baseline fallow-baselines/dead-code.json
+npx fallow health --save-baseline fallow-baselines/health.json
+npx fallow dupes --save-baseline fallow-baselines/dupes.json
+```
+
+```text
+Baseline saved to fallow-baselines/dead-code.json
+Saved health baseline to fallow-baselines/health.json
+Saved duplication baseline to fallow-baselines/dupes.json
+```
+
+Each command also prints its report and exits with its usual exit code. The baseline holds one key for each finding. For the three unused exports of the demo project:
+
+```json
+"unused_exports": [
+  "unused-export:src/lib/format.ts:formatPercent",
+  "unused-export:src/lib/index.ts:formatPercent",
+  "unused-export:src/services/orders.ts:cancelOrder"
+],
+```
+
+A key holds no line number, so a finding that moves inside its file stays in the baseline.
+
+### 2. Commit the files
+
+A baseline on one machine helps nobody. Commit it, so that each pull request compares with the same file:
+
+```bash
+git add fallow-baselines
+git commit -m "chore: save fallow baselines"
+```
+
+### 3. Compare in CI
+
+For one analysis, pass `--baseline`:
+
+```bash
+npx fallow dead-code --baseline fallow-baselines/dead-code.json
+```
+
+```text
+Comparing against baseline: fallow-baselines/dead-code.json
+  3 entry points detected (2 package.json, 1 plugin)
+
+✓ No issues found (0.02s)
+```
+
+The six findings are still in the code, but each one is in the baseline, so the run passes.
+
+For the bare `fallow` run, pass the three files. On the bare run, `--baseline` holds only the dead code baseline:
+
+```bash
+npx fallow \
+  --baseline fallow-baselines/dead-code.json \
+  --health-baseline fallow-baselines/health.json \
+  --dupes-baseline fallow-baselines/dupes.json
+```
+
+For `fallow audit`, the options are `--dead-code-baseline`, `--health-baseline` and `--dupes-baseline`. You can also set them once in the config file:
+
+```jsonc
+// .fallowrc.jsonc
+{
+  "audit": {
+    "deadCodeBaseline": "fallow-baselines/dead-code.json",
+    "healthBaseline": "fallow-baselines/health.json",
+    "dupesBaseline": "fallow-baselines/dupes.json"
+  }
+}
+```
+
+### 4. See a new finding fail
+
+A passing run proves only half of the setup. Make sure that a new finding still fails. Add `src/services/cart-report.ts`, the file that a pull request of the demo project adds, and import its `reportCart` and `discountFor` in `src/index.ts`. The file also exports `cartTotalCents`, which no file imports. Run the comparison again:
+
+```bash
+npx fallow dead-code --baseline fallow-baselines/dead-code.json
+```
+
+```text
+Comparing against baseline: fallow-baselines/dead-code.json
+  3 entry points detected (2 package.json, 1 plugin)
+
+── Unused Code ─────────────────────────────────────
+
+● Unused exports (1)
+  src/services/cart-report.ts
+    :25 cartTotalCents
+
+── Structure ─────────────────────────────────────
+
+● Duplicate exports (1)
+  src/services/cart-report.ts
+    ↔ utils/summary.ts (1 export)
+    Item
+
+✗ 1 export · 1 duplicate pair (0.04s)
+```
+
+The exit code is 1. The report holds only the two new findings: the unused export, and the interface `Item`, which `src/utils/summary.ts` also exports. The three old unused exports do not appear.
+
+### 5. Remove the fixed findings from the baseline
+
+The baseline does not shrink when you fix an old finding: its key stays in the file. For example, remove the unused `left-pad` dependency from `package.json`. Then list the keys that match no finding:
+
+```bash
+npx fallow baselines prune --check --dead-code-baseline fallow-baselines/dead-code.json
+```
+
+```text
+Would prune 1 entry from the dead-code baseline fallow-baselines/dead-code.json (6 -> 5)
+  unused_dependencies: unused-dependency:package.json:left-pad
+Run `fallow baselines prune` to remove these entries.
+```
+
+With `--check`, the command writes nothing and exits with code 1 when it finds such keys. Run the command without `--check` to write the file. A prune never adds a key. Without the options, it reads the paths of the `audit` keys in the config file.
+
+The prune matters because a stale key hides a finding. If somebody adds `left-pad` again and nobody uses it, the old key matches the new finding, and the report does not show it.
+
+### 6. Save the baseline again on a schedule
+
+A prune only removes keys. When the team accepts new debt on purpose, save a new baseline on a fixed schedule, for example each quarter or each release. A team member reviews the diff of the file before the commit.
+
+Do not save it after each merge. Then each new finding goes into the baseline in the same CI run, and nobody sees it. A baseline that only grows records debt that nobody pays.
+
+To catch a baseline that grew in a pull request, add `--fail-on-baseline-growth` with `--baseline-base main`.
+
+## The alternative: check only changed code
+
+A baseline is one way to separate old findings from new ones. The [changed-code check](/analysis/changed-code) (`fallow audit`) is the other way, and it needs no file. It analyzes the files that a change touches, and by default only the findings that the change adds fail it. On the demo branch that adds `cart-report.ts`:
+
+```bash
+npx fallow audit --base main
+```
+
+```text
+✗ dead code: 1 issue · complexity: 2 findings · duplication: 1 clone group · 3 changed files (0.33s)
+  audit gate excluded 1 inherited finding (run with --gate all to enforce)
+```
+
+The old finding in a changed file does not count. Pick by the question that you ask:
+
+| Use | When |
+|:--|:--|
+| `fallow audit` alone | You check pull requests, and old findings in a changed file may stay. |
+| A baseline | You check the whole project on each run, for example on the main branch, or you want a list of the debt in the repository. |
+| Both | `audit` checks pull requests, and the baselines hide the old findings in its report too. |
+
+## Check the result
+
+On a branch without new findings, the comparison passes:
+
+```bash
+npx fallow dead-code --baseline fallow-baselines/dead-code.json
+```
+
+```text
+✓ No issues found (0.02s)
+```
+
+## If it fails
+
+| Problem | Cause | Fix |
+|:--|:--|:--|
+| `--save-baseline` stops with `outside the project root`. | The path is outside the project, the CI workspace and the temp directory. | Save the file inside the project. |
+| A finding in the baseline still fails the run. | You compare with the wrong file, for example the health file on `--baseline` of the bare run. | Pass each file to its own option. |
+| Old dependency findings fail the run, and a warning names `node_modules`. | You saved the baseline with installed packages and compare without them, or the reverse. | Install the dependencies before each save and each comparison. |
+| The baseline has keys for fixed findings. | A normal run does not update a baseline. | Run `fallow baselines prune`. Add `--fail-on-stale-baseline` to make CI fail on such keys. |
+
+## Related
+
+- Next: [Check each pull request](/start/first-ci). It shows the CI job that runs the comparison.
+- [Changed code and baselines](/concepts/changed-code): how fallow separates new findings from old ones.
+- [`fallow baselines`](/cli/baselines): the prune command.
