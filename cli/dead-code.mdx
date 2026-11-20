@@ -446,6 +446,46 @@ An entry of `constant_parameters` has these fields:
     Callers: src/index.ts:22, src/index.ts:22
 ```
 
+### Option keys {#option-keys}
+
+Most functions with many settings take one options object. When the parameter is an object pattern, the `constant-parameter` rule reads each key of the pattern as its own subject:
+
+```ts src/request.ts
+export const request = (url: string, { retries = 3, signal }: Options = {}) => {
+  /* ... */
+};
+
+// each call in the project:
+request(path, { signal });
+```
+
+No call sets `retries`, so fallow reports `retries` with `never-passed`: the default `3` always applies. When each call sets a key to the same value, the reason is `identical-argument`. A finding about a key has `option_key`, the property key. `parameter_name` is the local binding of the key: `abort` for `{ signal: abort }`.
+
+Fallow reads the keys only when it can see each of them:
+
+- The argument is an object literal with no spread, no computed key, no numeric key and no `__proto__` key. Each other argument, for example a variable, gives no key finding.
+- The parameter has no default, or the default `{}`. A default with keys can set a key that no caller passes.
+- The key is static, its value is a plain binding with or without a default, and the function does not write the binding. A key that each object inherits, such as `toString`, is skipped.
+
+A parameter typed as an object, such as `options: Options` followed by `options.retries`, gives no key finding.
+
+### Namespace members {#namespace-members}
+
+An `unused-namespace-member` finding is a member of `export namespace N { ... }` or `export declare namespace N { ... }` in a `.ts` file that no code reads. A nested member has a dotted name, for example `Outer.Inner.x`. When a nested namespace is unused, fallow reports the namespace and not each member in it. Fallow also checks a namespace that merges with a class, a function or an enum of the same name.
+
+Fallow counts these uses of a member:
+
+- a qualified read as a value or as a type: `N.a`, `N.Inner.T`, `typeof N.a`;
+- destructuring: `const { a } = N`;
+- an import alias: `import x = N.a`;
+- a read through a namespace import: `ns.N.a`;
+- a reference inside the namespace body: `export const b = a`;
+- a read through a `const` alias: for `const M = N` or `const I = N.Inner`, fallow reads `M.a` as `N.a`.
+
+A re-export of `N` carries the reads of its consumers. When the namespace value leaves its chain, each member below it counts as used. Examples are an argument (`register(N)`), a spread, `Object.keys(N)`, a value in an array or an object, and an exported alias. The same rule applies to a nested namespace (`register(N.Inner)`).
+
+Fallow does not check declaration files (`.d.ts`), `declare global`, module augmentations (`declare module "x"`), namespaces without `export`, or a namespace that an entry point exports.
+
 ### Config warnings in each format {#config-warnings}
 
 Fallow compares some config entries with the result of the run. [Warnings about the config](/configuration/overview#config-warnings) explains them. In the JSON output, each warning is an entry of `workspace_diagnostics`:
