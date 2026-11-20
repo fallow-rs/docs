@@ -912,6 +912,29 @@ const CATEGORY_ICONS = new Map([
   ["Tests", "flask"],
 ]);
 
+const NAVIGATION_FILE = "docs.json";
+const RULE_GROUP_PREFIX = "Rules: ";
+
+/**
+ * The groups of the rule pages in the navigation, in reading order: one
+ * group for each teaching page, so that a reader finds a rule next to the
+ * rules of the same analysis.
+ */
+export const RULE_GROUPS = [
+  { page: "/analysis/dead-code", title: "Dead code", icon: "skull-crossbones" },
+  { page: "/analysis/dependencies", title: "Dependencies", icon: "box" },
+  { page: "/analysis/architecture", title: "Architecture", icon: "layer-group" },
+  { page: "/analysis/health", title: "Health", icon: "chart-line" },
+  { page: "/analysis/styling", title: "Styling", icon: "paintbrush" },
+  { page: "/analysis/runtime-coverage", title: "Runtime coverage", icon: "chart-network" },
+  { page: "/analysis/duplication", title: "Duplication", icon: "clone" },
+  { page: "/analysis/feature-flags", title: "Feature flags", icon: "flag" },
+  { page: "/analysis/security", title: "Security", icon: "shield" },
+  { page: "/analysis/changed-code", title: "Changed code", icon: "code-pull-request" },
+  { page: "/analysis/mutation", title: "Mutation testing", icon: "flask" },
+  { page: "/guides/suppress", title: "Suppressions", icon: "comment-slash" },
+];
+
 /** The teaching page of an issue type. Throws when no entry of {@link TEACHING_PAGES} matches. */
 export const teachingPage = (issue) => {
   const match = TEACHING_PAGES.find((entry) =>
@@ -921,6 +944,49 @@ export const teachingPage = (issue) => {
     throw new Error(`The issue type "${issue.id}" (category "${issue.category}") has no teaching page. Add an entry to TEACHING_PAGES in ${SCRIPT}.`);
   }
   return match;
+};
+
+/**
+ * The navigation groups of the rule pages: the groups of {@link RULE_GROUPS}
+ * that have a rule, each with its pages in the order of their titles.
+ */
+export const ruleNavigationGroups = (contract) => {
+  const pages = new Map(RULE_GROUPS.map((group) => [group.page, []]));
+  for (const issue of contract.issue_types) {
+    const teaching = teachingPage(issue);
+    const list = pages.get(teaching.page);
+    if (list === undefined) {
+      throw new Error(`The teaching page "${teaching.page}" of the issue type "${issue.id}" has no rule group. Add it to RULE_GROUPS in ${SCRIPT}.`);
+    }
+    list.push({ slug: `rules/${issue.id}`, title: ruleTitle(issue) });
+  }
+  return RULE_GROUPS.filter((group) => pages.get(group.page).length > 0).map((group) => ({
+    group: `${RULE_GROUP_PREFIX}${group.title}`,
+    icon: group.icon,
+    pages: pages
+      .get(group.page)
+      .sort((left, right) => left.title.localeCompare(right.title, "en") || left.slug.localeCompare(right.slug, "en"))
+      .map((page) => page.slug),
+  }));
+};
+
+const isRuleGroup = (group) => Array.isArray(group.pages) && group.pages.length > 0 && group.pages.every((page) => typeof page === "string" && page.startsWith("rules/"));
+
+/**
+ * The text of `docs.json` with the rule groups of the contract in place of
+ * the groups that hold only rule pages. The other groups stay as they are.
+ */
+export const updateNavigation = (text, contract) => {
+  const navigation = JSON.parse(text);
+  const tab = (navigation.navigation?.tabs ?? []).find((entry) => (entry.groups ?? []).some(isRuleGroup));
+  if (tab === undefined) {
+    throw new Error(`${NAVIGATION_FILE} has no group of rule pages.`);
+  }
+  const first = tab.groups.findIndex(isRuleGroup);
+  const others = tab.groups.filter((group) => !isRuleGroup(group));
+  const before = tab.groups.slice(0, first).filter((group) => !isRuleGroup(group)).length;
+  tab.groups = [...others.slice(0, before), ...ruleNavigationGroups(contract), ...others.slice(before)];
+  return `${JSON.stringify(navigation, null, 2)}\n`;
 };
 
 const categoryIcon = (issue) => {
@@ -1867,6 +1933,10 @@ export const buildGeneratedFiles = ({ contract, schema, inbound, existing = () =
     files.set(path, updateRulePage(contract, issue, existing(path), path, config.link));
   }
   files.set(ANCHOR_FILE, `${JSON.stringify(buildRuleAnchors(contract, inbound), null, 2)}\n`);
+  const navigation = existing(NAVIGATION_FILE);
+  if (navigation !== undefined) {
+    files.set(NAVIGATION_FILE, updateNavigation(navigation, contract));
+  }
   files.set(CONTRACT_README, renderContractReadme(contract, { mainBuild: isMainBuild(existing(CONTRACT_README)) }));
   return { files, config };
 };
@@ -1933,7 +2003,7 @@ const plan = async () => {
   const schema = await readJson(CONFIG_CONTRACT);
   const inbound = await readJson(INBOUND_FILE);
   const rulePages = (await listDirectory("rules")).filter((name) => name.endsWith(".mdx")).map((name) => `rules/${name}`);
-  const current = new Map(await Promise.all([...rulePages, CONTRACT_README].map(async (path) => [path, await readIfExists(path)])));
+  const current = new Map(await Promise.all([...rulePages, CONTRACT_README, NAVIGATION_FILE].map(async (path) => [path, await readIfExists(path)])));
   const { files, config } = buildGeneratedFiles({ contract, schema, inbound, existing: (path) => current.get(path) });
   const entries = [];
   for (const [path, expected] of files) {

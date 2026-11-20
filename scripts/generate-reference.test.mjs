@@ -50,6 +50,8 @@ import {
   parseCodeList,
   readableBlocks,
   renderContractReadme,
+  ruleNavigationGroups,
+  updateNavigation,
   renderPageBlocks,
   renderRule,
   replaceBlocks,
@@ -793,6 +795,49 @@ test("a long text with a list keeps the lead with its paragraph and the items as
   assert.ok(blocks[list - 1].endsWith("The `kind` field tells the cause:"));
   assert.equal(blocks[list], "- `a-kind`: first reason.\n- `b-kind`: second reason.\n- `c-kind`: third reason.");
   assert.equal(blocks.at(-1), "The end.");
+});
+
+test("the navigation has one rule group for each analysis, with the pages in title order", () => {
+  const contract = {
+    issue_types: [
+      { id: "unused-file", category: "Dead code", label: "Unused Files" },
+      { id: "css-token-drift", category: "Health", label: "Token Drift" },
+      { id: "unused-export", category: "Dead code", label: "Unused Exports" },
+      { id: "sql-injection", category: "Security", label: "SQL Injection" },
+    ],
+  };
+  assert.deepEqual(ruleNavigationGroups(contract), [
+    { group: "Rules: Dead code", icon: "skull-crossbones", pages: ["rules/unused-export", "rules/unused-file"] },
+    { group: "Rules: Styling", icon: "paintbrush", pages: ["rules/css-token-drift"] },
+    { group: "Rules: Security", icon: "shield", pages: ["rules/sql-injection"] },
+  ]);
+});
+
+test("the navigation update replaces only the groups of rule pages", () => {
+  const contract = { issue_types: [{ id: "unused-file", category: "Dead code", label: "Unused Files" }] };
+  const before = {
+    navigation: {
+      tabs: [
+        { tab: "Documentation", groups: [{ group: "Guides", pages: ["guides/adopt"] }] },
+        {
+          tab: "Reference",
+          groups: [
+            { group: "CLI", pages: ["cli/index"] },
+            { group: "Rules", icon: "list-check", pages: ["rules/old-rule", "rules/unused-file"] },
+            { group: "Last", pages: ["reference/config"] },
+          ],
+        },
+      ],
+    },
+  };
+  const after = JSON.parse(updateNavigation(JSON.stringify(before), contract));
+  assert.deepEqual(after.navigation.tabs[0], before.navigation.tabs[0]);
+  assert.deepEqual(
+    after.navigation.tabs[1].groups.map((group) => group.group),
+    ["CLI", "Rules: Dead code", "Last"],
+  );
+  assert.deepEqual(after.navigation.tabs[1].groups[1].pages, ["rules/unused-file"]);
+  assert.throws(() => updateNavigation(JSON.stringify({ navigation: { tabs: [] } }), contract), /no group of rule pages/u);
 });
 
 // ---------------------------------------------------------------------------
