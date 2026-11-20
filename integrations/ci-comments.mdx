@@ -108,7 +108,18 @@ const cartTotalCents = (items: Item[]): number =>
 <!-- fallow-fingerprint:v3: 26de96971de49534 -->
 ````
 
-`introduced` marks a finding that the change adds. The suggestion removes only the word `export`, so the author can accept it with one click and keep the function. The fingerprint identifies the finding. When a later run does not report the finding again, fallow resolves the comment. `max-comments` (`FALLOW_MAX_COMMENTS`) limits the number of comments, with a default of 50.
+`introduced` marks a finding that the change adds. In an audit, each comment has one of these labels after the severity:
+
+| Label | Meaning |
+|:--|:--|
+| `(introduced)` | The change adds the finding. It counts for the verdict. |
+| `(inherited, not gated: --gate new-only)` | The finding existed before the change. With the audit gate `new-only`, it does not count. |
+| `(worsened)` | An old complexity finding got worse, and `--worsened error` makes it count. |
+| `(worsened, not gated: --worsened warn)` or `(worsened, not gated: --worsened off)` | An old complexity finding got worse, but it does not fail the verdict. |
+| `(introduced, not gated: test file)` | The change adds the finding in a test file, and the audit does not gate it there. |
+| `(inherited)` | The finding existed before the change, and the gate `all` counts it. |
+
+The suggestion removes only the word `export`, The suggestion removes only the word `export`, so the author can accept it with one click and keep the function. The fingerprint identifies the finding. When a later run does not report the finding again, fallow resolves the comment. `max-comments` (`FALLOW_MAX_COMMENTS`) limits the number of comments, with a default of 50.
 
 ## Annotations {#annotations}
 
@@ -171,6 +182,36 @@ On GitLab, the Code Quality report takes the place of the annotations, and it ne
 ]
 ```
 
+## Warnings in the job log {#warnings}
+
+A clean comment does not always mean a clean project. The run can cover less than you asked for, or nothing at all. Both integrations read the JSON result and write one warning line for each of these cases:
+
+| Warning starts with | Cause |
+|:--|:--|
+| `Fallow ran with degraded inputs:` | A workspace diagnostic with `degrades_analysis: true`. The line names each kind and its count. The findings cover less than the whole project, or an input did not load. |
+| `Fallow did not run these requested checks because their rules are off in config:` | A run asked for a check, for example with `--unused-deps` in `args`, but its rule is `off`. The line names each rule and its flag. |
+| `Fallow could not apply:` | A request that narrows the report did not apply, for example `changed-since (git-failed)`. The report covers more of the project than you asked for. |
+| `Fallow applied <request> over an empty scope` | The request applied, but the scope that was left had no files, for example a `--changed-since` run where only a README changed. |
+| `Fallow config entries matched nothing in this run` | An `ignoreFindings` pattern or an `ignoreDependencies` glob matched nothing, so it has no effect. |
+| `Fallow analyzed no source file at all` | The run analyzed no source file, so each count is zero. The run passes, except with `fail-on-empty-analysis` (`FALLOW_FAIL_ON_EMPTY_ANALYSIS`). |
+| `Fallow produced no SARIF document` | GitHub only. The action uploads nothing, and code scanning keeps the alerts of the last upload. |
+
+The warnings about requests read only the entries of `request_outcomes` with `affects: "scope"`. A request that writes a file next to the report, such as `sarif-file`, thus never shows there. The job summary also shows the degraded inputs and the requests that did not apply. The GitHub outputs `analysis-degraded` and `requests-unapplied` hold the same facts for a later step. For the request names, statuses and reasons, see the [JSON output reference](/reference/json-output).
+
+### Baseline warnings {#baseline-warnings}
+
+A run that loads a baseline reports how much of the baseline still matches, and warns when entries are stale. A run that the change scopes cannot judge a baseline of the whole project. So for such a run, the integrations first read the baseline again over the whole project. `baseline_staleness.scope_reasons` in the result names each channel that narrowed the run:
+
+- For `diff`, `changed-since`, `package-baselines`, `changed-files`, `scope`, `file` and `issue-type-filter`, the integrations added the channel themselves. They read the baseline again without it.
+- For `workspace` and `changed-workspaces`, and for a scope that comes from `args` (`FALLOW_ARGS`), the integrations do not judge the baseline and name the channel. These inputs define what you call the project.
+- For `production` and `include-entry-exports`, fallow names the channel only when the run and a dead-code baseline differ on that mode. Fallow does not judge such a baseline.
+
+A pull request comment comes from the run that the change scopes, so it shows no stale-baseline notice. The job log and the job summary show the result of the second read. When the baseline input and the save-baseline input name the same file, the integrations warn, because the run saves before it compares.
+
+A file that the command cannot read as its own baseline (`baseline_staleness.unrecognised_format`) hides no finding. It is often a baseline of another command. The integrations write this in the log, the job summary and the comment, and name the command that saved the file when the file says so (GitHub output `baseline-saved-by`). Such a file trips the baseline gate, so `fail-on-stale-baseline` fails the job.
+
+`command: audit` does not judge the baselines that it loads, because it analyzes only the changed files. For each baseline, it prints one notice with the entry count and the command that can judge it. It rejects `--fail-on-stale-baseline` in `args` with exit code 2.
+
 ## Render a surface yourself
 
 On another CI system, or with your own bot, you can post the same surfaces. Each surface is an output format of fallow. To build your own integration, render the format and post it with your own code:
@@ -180,6 +221,91 @@ npx fallow audit --base origin/main --format pr-comment-github
 ```
 
 The formats are `pr-comment-github`, `pr-comment-gitlab`, `review-github`, `review-gitlab`, `github-annotations`, `github-summary`, `sarif` and `codeclimate`. [`fallow report`](/cli/report) renders each one from a saved JSON result. [`fallow ci`](/cli/ci) posts a comment or a review with the same rules as the two integrations.
+
+### Review envelope {#review-envelope}
+
+Use the envelope when your runner cannot use the integrations, for example without remote includes or `jq`, or when you do not give a token to fallow. Fallow renders the comments, the fingerprints and the GitLab positions. Your job only posts each comment. This is a `review-gitlab` envelope from the demo project, for a change that adds one unused export:
+
+```bash
+fallow audit --diff-file change.diff --format review-gitlab --quiet
+```
+
+```json
+{
+  "kind": "review-envelope",
+  "body": "### Fallow audit report\n\n> Gates: failed audit-verdict.\n\n1 inline comment on the changed lines. Open the Changes tab to review.\n\n<!-- fallow-review -->\n\n<!-- fallow-fingerprint:v3: b5d48ac686bd6a2e -->",
+  "summary": {
+    "body": "### Fallow audit report\n\n> Gates: failed audit-verdict.\n\n1 inline comment on the changed lines. Open the Changes tab to review.\n\n<!-- fallow-review -->\n\n<!-- fallow-fingerprint:v3: b5d48ac686bd6a2e -->",
+    "fingerprint": "b5d48ac686bd6a2e"
+  },
+  "comments": [
+    {
+      "body": "**error** (introduced) [`fallow/unused-export`](https://fallow.tools/docs/explanations/dead-code/#unused-exports): Export `cartTotalCents` is never imported by other modules\n\n**Fix:** Remove the export, or keep it when it is public API.\n\n```suggestion:-0+0\nconst cartTotalCents = (n: number): number => n * 100;\n```\n\n<!-- fallow-fingerprint:v3: 8032e6f645c70b61 -->",
+      "position": {
+        "position_type": "text",
+        "old_path": "src/services/orders.ts",
+        "new_path": "src/services/orders.ts",
+        "new_line": 20
+      },
+      "fingerprint": "8032e6f645c70b61",
+      "legacy_fingerprint": "53ab591b97c6f659"
+    }
+  ],
+  "marker_regex": "^<!-- fallow-fingerprint:v[23]: ((?:[a-z]+:)?[0-9a-f]{16}) -->\\s*$",
+  "marker_regex_flags": "m",
+  "meta": {
+    "schema": "fallow-review-envelope/v3",
+    "provider": "gitlab"
+  }
+}
+```
+
+| Field | Content |
+|:--|:--|
+| `summary.body`, `summary.fingerprint` | The sticky summary comment, and its fingerprint. Find a comment with this fingerprint to update it in place. `body` holds the same text. |
+| `comments[].body` | The Markdown of one comment. Post it as it is. |
+| `comments[].path`, `line`, `side` | GitHub only. The place of the comment. `side` is `RIGHT`, the state of the file after the change. |
+| `comments[].position` | GitLab only. The fields of the GitLab discussions API: `position_type`, `old_path`, `new_path`, `new_line`, and `base_sha`, `start_sha` and `head_sha` when fallow knows them. |
+| `comments[].fingerprint` | The stable id of the comment. |
+| `comments[].legacy_fingerprint` | The older id from the line of the finding, when it differs. |
+| `comments[].truncated` | `true` when fallow cut the body to fit 65,536 bytes. |
+| `marker_regex`, `marker_regex_flags` | The pattern that finds the fingerprint in a posted comment, and its flags. |
+| `meta.schema`, `meta.provider` | The version of the envelope, and `github` or `gitlab`. A GitHub envelope also has `meta.check_conclusion` and `event`. |
+
+Rules for a script that posts the envelope:
+
+- Each comment body ends with `<!-- fallow-fingerprint:v3: <fingerprint> -->`. Run `marker_regex` with its one capture group on a posted comment to get the fingerprint. The pattern also matches the older `v2` marker. Compare the value with `fingerprint` and with `legacy_fingerprint`, and post only a comment that matches neither.
+- Pass `marker_regex_flags` to your regex engine, for example `new RegExp(env.marker_regex, env.marker_regex_flags)`. Fallow does not put the flag in the pattern as `(?m)`, because JavaScript does not accept that form.
+- Several findings on one `path:line` become one comment with one paragraph for each finding. Its fingerprint is `merged:<hash>`, and it changes when the set of findings changes.
+- A truncated body has `truncated: true`, the marker `<!-- fallow-truncated -->` and the line `> Body truncated by fallow.`. It keeps the fingerprint marker.
+- For a dead-code finding, the fingerprint comes from its `finding_id`, so it stays the same when lines move.
+- Check `meta.schema` against `^fallow-review-envelope/v[0-9]+$`, and ignore the fields that you do not know.
+
+The GitLab SHAs come from these environment variables:
+
+| Field | Variable, in order |
+|:--|:--|
+| `base_sha` | `FALLOW_GITLAB_BASE_SHA`, then `CI_MERGE_REQUEST_DIFF_BASE_SHA` |
+| `start_sha` | `FALLOW_GITLAB_START_SHA`, then the `base_sha` |
+| `head_sha` | `FALLOW_GITLAB_HEAD_SHA`, then `CI_COMMIT_SHA` |
+
+When fallow finds no base or no head, the `position` block has no SHA fields, as in the sample. Then add them from the `diff_refs` of the merge request before you post. With `--diff-file` or `--diff-stdin`, `old_path` of a renamed file is the name from the `rename from` line of the diff.
+
+`FALLOW_MAX_COMMENTS`, `FALLOW_REVIEW_GUIDANCE`, `FALLOW_SUMMARY_SCOPE` and `FALLOW_PR_COMMENT_LAYOUT` also change the envelope. A minimal GitLab consumer:
+
+```bash
+fallow audit --diff-stdin --format review-gitlab < diff.patch > plan.json
+
+jq -c '.comments[]' plan.json | while read -r comment; do
+  curl --silent --request POST \
+    --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+    --header "Content-Type: application/json" \
+    --data "$comment" \
+    "$CI_API_V4_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID/discussions"
+done
+```
+
+To resolve the threads of fixed findings, run [`fallow ci reconcile-review`](/cli/ci#reconcile-review), or compare the fingerprints in your own script. The reconciler reads the `v1`, `v2` and `v3` markers. It stops at the first failed change, and its JSON output then has `apply_errors`, and can have `apply_hint`, `failed_fingerprints` and `unapplied_fingerprints`. Do not run an older fallow after a run that wrote `v3` markers on an open pull request: an older fallow does not read them and posts duplicate threads.
 
 ## Related
 

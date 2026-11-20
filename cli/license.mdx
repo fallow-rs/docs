@@ -131,6 +131,31 @@ Fallow checks a token offline with a public key in the binary. Only `activate --
 
 Fallow refuses a token that was issued more than 24 hours in the future of the local clock. `FALLOW_LICENSE_SKEW_TOLERANCE_SECONDS` changes that window.
 
+## Option details
+
+### License file {#storage}
+
+On Unix, only the owner can read and write `~/.fallow/license.jwt` (mode 0600), so other users of the host cannot read the token. On Windows, the access rules of the parent folder apply. On a shared CI runner where you do not want to write to a home folder, use `FALLOW_LICENSE`.
+
+### Clock skew {#clock-skew}
+
+Fallow refuses a token when its `iat` (issued-at) claim is more than 24 hours after the local clock. The same check finds a token signed with a clock that is ahead, and a machine with a clock that is behind. Fallow then prints `license appears to be issued <duration> in the future` and does not run the licensed feature.
+
+Usual causes are a CI container that started without NTP, a machine with a dead BIOS battery, and a laptop clock that drifts after a long sleep. Correct the system clock first. For a known drift, set `FALLOW_LICENSE_SKEW_TOLERANCE_SECONDS=<seconds>`. An unset, empty, invalid or negative value gives the default of 24 hours, so a typo in the variable cannot make the check fail.
+
+### Error messages of the license server {#server-errors}
+
+When the license server returns a known error code, fallow prints a hint, not the raw HTTP body:
+
+| Command and code | Message |
+|:--|:--|
+| `refresh`, `token_stale` | ``your stored license is too stale to refresh: set FALLOW_API_KEY to a full-access key and run `fallow license refresh` again (generate one at https://fallow.cloud/settings#api-keys)`` |
+| `refresh`, `invalid_token` | `your stored license token is missing required claims. Reactivate with: fallow license activate --trial --email <addr>` |
+| `refresh` or `activate --trial`, `unauthorized` | `authentication failed. Reactivate with: fallow license activate --trial --email <addr>` |
+| `activate --trial`, `rate_limit_exceeded` | `trial creation is rate-limited to 5 per hour per IP. Wait an hour or retry from a different network (in CI, start the trial locally and set FALLOW_LICENSE on the runner).` |
+
+For an unknown code, fallow prints the `message` field of the response, or the raw body when that field is absent.
+
 ## Output
 
 ```bash

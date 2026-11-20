@@ -103,10 +103,59 @@ The [global options](/cli/global-flags) are in these groups: [Project](/cli/glob
 
 {/* generated:end */}
 
+## Option details
+
 - A filter option such as `--unused-exports` reports only its [issue type](/reference/issue-types). You can give more than one filter. When a filter asks for a rule that the config sets to `off`, fallow does not run that check. It prints a note on stderr, and the JSON output gets a `requested-rule-off` entry in `workspace_diagnostics`.
 - Without a filter option, `fallow dead-code` also reports the findings of [`fallow architecture`](/cli/architecture): cycles, boundary violations and policy violations.
 - `--file` leaves out the findings that belong to no file, for example an unused dependency. It prints a warning for a path that does not exist.
 - `--symbol-impact` needs `--type-aware`. Without it, fallow prints `Error: --symbol-impact requires --type-aware`.
+
+### Gate on dependency findings {#gate-on-dependency-findings}
+
+`--unused-deps` selects six issue types. Three are unused packages: `unused-dependencies`, `unused-dev-dependencies` and `unused-optional-dependencies`. Three are used packages in the wrong section of `package.json`: `type-only-dependencies`, `test-only-dependencies` and `dev-dependencies-in-production`. Only the unused packages are candidates for removal.
+
+To fail only when a package is unused, run the filter without `--ci`. The exit code then counts only the rules at `error`:
+
+```bash
+fallow dead-code --unused-deps --quiet
+```
+
+- A project with only used packages exits with code 0, also when a used package is in the wrong section.
+- A project with an unused package in `dependencies` exits with code 1.
+- `unused-dev-dependencies` and `unused-optional-dependencies` are at `warn` by default. They do not fail the run until you set them to `error` in `rules`.
+
+`--ci` sets `--fail-on-issues`, so a rule at `warn` also fails the run, and a used package in the wrong section exits with code 1. To keep these findings out of the gate, give a second config file with `-c`. This file extends the main config file and sets the placement rules to `off`:
+
+```json .fallowrc.ci.json
+{
+  "extends": [".fallowrc.json"],
+  "rules": {
+    "dev-dependencies-in-production": "off",
+    "type-only-dependencies": "off",
+    "test-only-dependencies": "off"
+  }
+}
+```
+
+```bash
+fallow dead-code --unused-deps --ci -c .fallowrc.ci.json
+```
+
+This command exits with code 0 on a project with only used packages, and with code 1 on a project with an unused package. It gives no `requested-rule-off` note: for `--unused-deps`, fallow gives the note only for the three rules of unused packages.
+
+### Cross-reference with duplication {#include-dupes}
+
+`--include-dupes` also runs the [duplication](/analysis/duplication) analysis, and compares its clone groups with the dead code findings. It lists each clone instance that is in an unused file, or that overlaps an unused export or an unused type. When you delete such code, you remove dead code and duplication in one change.
+
+```text
+● Duplicated + Unused (safe to delete)
+
+  src/utils/old-invoice.ts:4-20 (entire file is unused)
+
+  1 combined finding: 1 in unused file, 0 overlapping unused exports
+```
+
+Fallow prints this section only in the human format, and not with `--quiet`. The JSON output and the other formats do not change, and the section does not change the exit code.
 
 ## Output
 
@@ -191,9 +240,23 @@ Each action in the `actions` array of a finding has these fields:
 | `config_key`, `value`, `value_schema` | The config key to change, the value to write, and the URL of the JSON Schema of the value. Optional. |
 | `scope` | `"per-location"` on a suppress action that applies to one location of a finding. Optional. |
 
+The guards of `fallow fix` decide `auto_fixable` for each finding. So filter on the value of each action, not on `type`. These actions can have another value on another finding:
+
+| Action | `auto_fixable` |
+|:--|:--|
+| `remove-catalog-entry` | `true` only when the `hardcoded_consumers` array of the finding is empty. Else a workspace package still pins a version of the package, and `fallow fix` skips the entry. |
+| `remove-dependency`, `move-dependency` | When `used_in_workspaces` is not empty, the first action is `move-dependency` with `false`. Else it is `remove-dependency` with `true`. See [Unused dependencies in a monorepo](#used-in-workspaces). |
+| `add-to-config` for `ignoreExports` (duplicate exports) | `true` when a config file exists, or when no config file exists and the directory is not in a monorepo package. `false` in a monorepo package without a config file at the workspace root. |
+| `update-catalog-reference` | Always `false`. `fallow fix` cannot switch a catalog reference. |
+| `suppress-line`, `suppress-file` | Always `false`. |
+
+A dependency finding has an `add-to-config` action with `config_key: "ignoreDependencies"` and the package name in `value`, not a suppression comment.
+
 ### Finding ids {#finding-id}
 
 Each finding has a `finding_id` of the form `dc1:<rule>:<16 hex digits>`, for example `dc1:unused-export:b650995c7b5b87c1`. Fallow computes it from the rule, the root-relative path and the name. A line change, a new format or a new order of declarations keeps the id. A new file name or a new symbol name gives a new id. When two findings have the same subject, the second id gets the suffix `~1`.
+
+In SARIF output, the `partialFingerprints` of a dead code result have the key `fallowFinding/v1` with the `finding_id`. Use it to join a SARIF result to its JSON finding. A finding with one result for each location, for example an unlisted dependency with one result for each import, has no such key, because one id then names more than one result.
 
 ### Finding id query {#finding-id-query}
 
@@ -224,7 +287,194 @@ A missing id means that the finding is gone only when `conclusive` is `true` and
 
 The trace object also has `is_used`, `reason`, `re_export_chains` (each barrel file that exports the name again) and `plugin_credits` (the plugin and the file pattern that mark the export as used, for example a Next.js page).
 
+- `pass-through` marks a consumer that only exports the name again, for example a barrel file or `import { foo } from "./x"; export { foo }`. Such a consumer is `found`: a change of the export needs no edit there, and the trace lists the files that import through it. A `.vue`, `.svelte`, `.astro` or `.mdx` file that imports the export is never `pass-through`, because a template can use the binding.
+- A match in a comment or a string counts as `found`, because a text search finds it too. The fields are absent when fallow cannot read the source of the consumer.
+- When code uses the export as a type and as a value, `direct_references_by_namespace` gives the references of each namespace. `namespace` and `direct_references` describe only the namespace that wins. The field is absent when only one namespace has references.
+- For a class member, `--trace FILE:MEMBER` gives `owner_direct_references`: the references of the class. The search fields there check the name of the class, not the name of the member.
+
+```json
+{
+  "export_name": "default",
+  "is_used": true,
+  "plugin_credits": [
+    { "plugin": "nextjs", "pattern": "app/**/page.{ts,tsx,js,jsx}" }
+  ],
+  "reason": "Used by the framework: the nextjs plugin marks this export as used"
+}
+```
+
+`--trace-file` gives `plugin_credits` on each entry of `exports`. A credit for an export that a tool reads from its config file, such as a Serverless handler, counts only with `--include-entry-exports`, as in the analysis. For an entry point that a `package.json` script runs, `--trace-file` gives the script name in `entry_script`, and the human output names it too:
+
+```text
+  REACHABLE scripts/seed.js (entry point, package.json script `seed`)
+```
+
 The `coordination_gap` entries of `--impact-closure` have the same `search_visibility`, `reason` and `search_as` fields, and a `search_symbol` field.
+
+### Unused dependencies in a monorepo {#used-in-workspaces}
+
+A workspace can declare a package that only another workspace imports. The finding then has `used_in_workspaces`, the roots of the workspaces that import the package:
+
+```json
+{
+  "package_name": "lodash-es",
+  "location": "dependencies",
+  "path": "packages/shared/package.json",
+  "line": 1,
+  "used_in_workspaces": ["packages/consumer"],
+  "actions": [
+    {
+      "type": "move-dependency",
+      "auto_fixable": false,
+      "description": "Move this dependency to the workspace package.json that imports it",
+      "note": "fallow fix will not remove dependencies that are imported by another workspace"
+    }
+  ]
+}
+```
+
+The human output shows the workspaces after the package name:
+
+```text
+  lodash-es (packages/shared/package.json; imported in packages/consumer)
+```
+
+The package is in the wrong workspace. Move it to the workspace that imports it. `fallow fix` does not remove it. A finding of the root `package.json` can have `declared_and_imported_in` instead: the workspaces that import the package and declare it in their own `package.json`, so the root declaration stays unused. Both fields are absent when they are empty.
+
+### Stale suppressions {#stale-suppression-detection}
+
+`--stale-suppressions` reports only the [stale suppressions](/configuration/suppression#stale-suppressions). Fallow checks two origins:
+
+| Origin | Stale when |
+|:--|:--|
+| `// fallow-ignore-next-line`, `// fallow-ignore-file` | The comment matches no finding on the next line or in the file. |
+| `/** @expected-unused */` | Code imports the tagged export. |
+
+```text
+● Stale suppressions (2)
+  src/lib/parse.ts:1:0 // fallow-ignore-next-line unused-export (no unused-export issue found on the next line)
+  src/lib/parse.ts:5:13 @expected-unused on parseCents (parseCents is now used)
+```
+
+In the JSON output, each entry of `stale_suppressions` has an `origin` object. A comment has `type: "comment"`, `issue_kind` (absent for a comment without a token), `is_file_level`, and `reason` when the comment has one. A range marker also has `is_range: true`. A tag has `type: "jsdoc_tag"` and `export_name`:
+
+```json
+{
+  "path": "src/lib/parse.ts",
+  "line": 5,
+  "col": 13,
+  "origin": {
+    "type": "jsdoc_tag",
+    "export_name": "parseCents"
+  },
+  "finding_id": "dc1:stale-suppression:282c6c9ce1c55017",
+  "effective_severity": "warn"
+}
+```
+
+### Re-export cycles {#re-export-cycles}
+
+The `re_export_cycles` array has one entry for each loop of barrel files. `files` lists the files of the loop in sorted order, and `kind` gives the shape of the loop:
+
+| `kind` | Shape |
+|:--|:--|
+| `multi-node` | Two or more files that export from each other. |
+| `self-loop` | One file that exports from itself, for example `export * from "./index"` in `index.ts`. |
+
+```text
+● Re-Export Cycles (2)
+  src/api/index.ts
+    Cycle (2 files):
+      - src/api/index.ts
+      - src/api/internal/index.ts
+    To fix: remove one `export * from` statement on any member file.
+
+  src/utils2/index.ts
+    Self-loop (1 file):
+      - src/utils2/index.ts
+    To fix: remove the `export * from './'` (or equivalent) inside this file.
+```
+
+The compact format writes one line for each loop, for example `re-export-cycle:src/utils2/index.ts:src/utils2/index.ts (self-loop)`. A file-level suppression comment in one file of the loop hides the finding. [Re-export cycles](/explanations/dead-code#re-export-cycles) explains the finding.
+
+### Opt-in issue types {#opt-in-issue-types}
+
+The JSON output always has the arrays `private_type_leaks` and `deprecated_exports_in_use`, and their counts in `summary`. Fallow fills them only when the rule is on. The arrays `absent_component_props` and `constant_parameters` are present only when they have a finding. [The explanations of each issue type](/explanations/dead-code#deprecated-exports-in-use) give the rules that decide a finding.
+
+An entry of `deprecated_exports_in_use` has these fields, next to `path`, `export_name`, `line` and `col`:
+
+| Field | Content |
+|:--|:--|
+| `deprecated_reason` | The text of the `@deprecated` tag, at most 200 characters. Absent for a tag without text. |
+| `consumer_count` | The exact number of uses in reachable files. |
+| `consumers` | The first 10 uses, sorted by path and line, each with `path`, `line`, `col` and `kind`. |
+| `public_api` | `true` when the export is in an entry point, or a re-export chain takes it to an entry point. Fallow then makes no claim that you can remove it. |
+
+The `next_steps` array names `fallow dead-code --trace <file>:<export>` for the deprecated export with the most uses (id `trace-deprecated-export`). The trace lists each use. An `unused_exports` entry of a deprecated export has `deprecated: true`, and `deprecated_reason` when the tag has text. The human output adds `(marked @deprecated)`.
+
+An entry of `absent_component_props` has these fields:
+
+| Field | Content |
+|:--|:--|
+| `component_name`, `prop_name`, `framework` | The component and the prop. `framework` is, for example, `react`, `vue` or `angular`. |
+| `path`, `line`, `col` | The declaration of the prop. |
+| `has_default` | `true` when the declaration gives a default value. |
+| `inspected_call_sites` | Each reachable caller that fallow read, with `path`, `line` and `col`. |
+| `explanation` | What the finding means and what static analysis does not prove. |
+
+An entry of `constant_parameters` has these fields:
+
+| Field | Content |
+|:--|:--|
+| `function_name`, `parameter_name`, `parameter_index` | The function and the parameter. For a method of an exported class, `function_name` is `Class.method`. |
+| `option_key` | The property key, when the finding is about one key of an object pattern. `parameter_name` is then the local name of the key, for example `abort` for `{ signal: abort }`. |
+| `path`, `line`, `col` | The parameter, or the binding of the key. |
+| `reason` | `identical-argument`, `never-passed`, or `unused-default` (only with `--type-aware`). |
+| `value` | For `identical-argument`: `kind` (`boolean`, `null`, `undefined`, `number`, `string` or `binding`) and `text`. A `binding` is a `const` with a literal value or an enum member, for example `DEFAULT_LIMIT` or `Mode.Grid`. |
+| `evidence` | `"type-aware"` when the finding needs the TypeScript checker. The human output then adds `(type evidence)`. |
+| `optional`, `has_default` | The `?` marker and the default value of the parameter. |
+| `condition_reads` | The number of `if`, `?:`, `while`, `do` and `for` tests whose test is the parameter, `!parameter` or `!!parameter`. |
+| `call_site_count`, `inspected_call_sites` | The number of calls, and the first 20 calls with `path`, `line` and `col`. |
+| `explanation` | What the finding means and what static analysis does not prove. |
+
+```text
+● Constant parameters (2)
+  src/lib/amount.ts (2)
+    :1 formatAmount(compact): every call passes true (2 calls, 1 condition read)
+    Callers: src/index.ts:22, src/index.ts:22
+    :1 formatAmount(locale): no call passes it, so it is always undefined (2 calls)
+    Callers: src/index.ts:22, src/index.ts:22
+```
+
+### Config warnings in each format {#config-warnings}
+
+Fallow compares some config entries with the result of the run. [Warnings about the config](/configuration/overview#config-warnings) explains them. In the JSON output, each warning is an entry of `workspace_diagnostics`:
+
+| `kind` | Cause |
+|:--|:--|
+| `ignore-dependencies-glob-unmatched` | An `ignoreDependencies` glob matches no declared dependency. |
+| `ignore-findings-pattern-unmatched` | An `ignoreFindings` pattern matches no finding. |
+| `entry-pattern-redundant` | An `entry` pattern names files that are entry points without it. |
+| `ignore-dependencies-entry-redundant` | An `ignoreDependencies` entry hides no finding. |
+| `ignore-patterns-entry-redundant` | An `ignorePatterns` glob removes no file that fallow analyzes. |
+| `requested-rule-off` | A filter option asks for a rule that the config sets to `off`. |
+
+```json
+{
+  "path": ".",
+  "kind": "ignore-findings-pattern-unmatched",
+  "pattern": "src/legcy/**",
+  "message": "ignoreFindings pattern 'src/legcy/**' matched no finding in this run, so it has no effect. A pattern is a glob relative to the project root. Fix the pattern, or remove it from the config."
+}
+```
+
+The other formats show the same warnings in these places:
+
+| Format | Place |
+|:--|:--|
+| `sarif` | `runs[0].invocations[0].toolConfigurationNotifications`, at the level `note`, with the same `kind` as `descriptor.id`. |
+| `markdown`, `github-summary`, the comment formats and the review formats | A section, for example `## Unmatched config patterns`. |
+| `human`, `compact` and the other formats | A `Note:` line on stderr. `--quiet` hides it. |
 
 ### Baseline file {#baseline-file}
 

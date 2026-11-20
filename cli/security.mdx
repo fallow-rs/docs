@@ -96,6 +96,8 @@ The [global options](/cli/global-flags) are in these groups: [Project](/cli/glob
 
 `fallow security` accepts the `human`, `json`, `sarif`, `github-annotations` and `github-summary` formats. Another format exits with code 2.
 
+## Option details {#option-details}
+
 ### Regression gate {#regression-gate}
 
 | `--gate` value | Exits with code 8 when | Needs |
@@ -105,62 +107,226 @@ The [global options](/cli/global-flags) are in these groups: [Project](/cli/glob
 
 A gate run that cannot compute the diff exits with code 2, for example with a ref that a shallow clone does not have. The human output marks a gated candidate `REVIEW REQUIRED`. SARIF keeps each result at level `note` and puts the verdict in `run.properties.fallowGate`. The JSON output adds a `gate` object with `mode`, `verdict` and `new_count`.
 
+`--gate new` keeps a candidate only when the change added it. A candidate counts as new when one of these lines is an added line:
+
+- the location of the candidate (`path`, `line`);
+- a trace hop with the role `untrusted-source`, `module-source` or `sink`;
+- a secret read of a `secret-source` hop (each entry of `secret_reads`).
+
+Thus a change that adds a secret read to a module that already has one fails the gate. A change to an unrelated line of a file on the trace does not fail it. A candidate in a file outside the project root counts as new, because the gate cannot prove that it is old.
+
+`--gate newly-reachable` ignores candidates that are unreachable in both trees. It needs `--changed-since`, because it analyzes the base tree. With only `--diff-file` or `--diff-stdin`, it exits with code 2.
+
+On a shallow clone, the base commit can be missing. In GitHub Actions, set `fetch-depth: 0` on `actions/checkout`. In GitLab CI, set `GIT_DEPTH: 0`.
+
+### Diff scope without a gate {#diff-scope}
+
+Without `--gate`, the diff options only narrow the report:
+
+- With `--diff-file` or `--diff-stdin`, a candidate stays when its location, a hop of `trace` or a hop of `reachability.untrusted_source_trace` is on an added line. It also stays when the diff touches the file of its `secret-source` hop.
+- With `--changed-since`, a candidate stays only when its location or a hop of its trace is in a changed file.
+- `--file` keeps a candidate when its location or a hop of its trace is in a selected file.
+
 ### Severity for each path {#per-path-severity}
 
 `fallow security` raises the rules `security-sink` and `security-client-server-leak` from `off` to `warn`, so that the command always reports. An `overrides[].rules` entry sets another severity for the files that it matches. `off` removes the candidates in those files. `error` makes the run exit with code 1 when a candidate in those files stays.
+
+```jsonc
+// .fallowrc.json
+{
+  "rules": {
+    "security-sink": "warn"
+  },
+  "overrides": [
+    { "files": ["scripts/**"], "rules": { "security-sink": "off" } },
+    { "files": ["src/api/**"], "rules": { "security-client-server-leak": "error" } }
+  ]
+}
+```
+
+- An override matches the file that holds the candidate: the call for `security-sink`, and the client file for `security-client-server-leak`.
+- `off` also removes the candidates when `fallow security` raises the top-level `off` to `warn`.
+- A candidate fails the run only when its own rule is `error`. An `error` on one security rule does not fail the candidates of the other rule.
+- `config.rules` in the JSON output shows only the top-level severities. An override can drop or fail a candidate also when `effective` is `warn`.
+- The editor and [`fallow viz`](/cli/viz) show the same result. Bare `fallow` and `fallow audit` report no security candidates, so the overrides do not change them.
+
+### Client-server leak {#client-server-leak}
+
+[`client-server-leak`](/rules/client-server-leak) starts at each **client root** and follows the static and dynamic imports. A client root is a file with a top-level `"use client"` directive, or a file that the [React Router mode](#react-router-framework-mode) adds. The files that the client roots reach are the client code. Fallow reports a candidate when the client code reads a non-public env var. Fallow does not follow these imports:
+
+- An import of a Server Action module: a `"use server"` module whose value exports are all async functions. The bundler replaces the import with an action reference, so the module and its imports stay on the server. A `"use server"` module with another value export, such as a top-level `const`, stays in the client code, because that export ships to the client.
+- An import that names only type exports, for example `import { Props } from "./x"` where `x` exports `interface Props`. The build removes it, the same as `import type`.
+- An import that reaches a module only through `next/dynamic(() => import("./x"), { ssr: false })`, the client-only form of Next.js. The same module in a normal import stays in the client code.
+- An import that does not run its target: `require.resolve("./x")` gives only a path, and an asset loader request such as `raw-loader!./x.js` gives the text of the file.
+
+Fallow counts an env read in these forms:
+
+| Form | Example |
+|:--|:--|
+| Member | `process.env.API_SECRET_KEY`, `import.meta.env.API_TOKEN` |
+| Computed member with a static key | `process.env["API_SECRET_KEY"]` |
+| Destructuring, also with a rename or a default value | `const { API_SECRET_KEY } = process.env` |
+
+A computed key without a static name (`process.env[key]`), a rest element (`const { ...rest } = process.env`) and the whole object (`const env = process.env`) name no variable, so they are not reads. The import trace ends at the module that reads the secret.
+
+An empty candidate list does not always mean safe code. `unresolved_edge_files` counts the files with a dynamic `import()` that fallow cannot follow. When no file is a client root, the rule checks nothing, for example in a Vite single-page app. Fallow then adds a `client-server-leak-no-client-roots` entry to `workspace_diagnostics`, and the human output prints a blind spot line. `fallow security` always adds the entry in such a project. Other commands add it only when the config sets the rule to `warn` or `error`.
+
+### Public env names {#public-env-prefixes}
+
+A variable with one of these names is public by convention, because the framework puts it into the client bundle. It is never a secret for `client-server-leak` or `secret-to-network`, and it is not an untrusted input.
+
+| Name | Example |
+|:--|:--|
+| `NODE_ENV` | `process.env.NODE_ENV` |
+| `NEXT_PUBLIC_*` | `process.env.NEXT_PUBLIC_API_URL` |
+| `VITE_*` | `import.meta.env.VITE_API_URL` |
+| `NUXT_PUBLIC_*` | `process.env.NUXT_PUBLIC_SITE_URL` |
+| `REACT_APP_*` | `process.env.REACT_APP_API_URL` |
+| `PUBLIC_*` | `process.env.PUBLIC_SITE_URL` |
+| `GATSBY_*` | `process.env.GATSBY_SITE_URL` |
+| `EXPO_PUBLIC_*` | `process.env.EXPO_PUBLIC_API_URL` |
+| `STORYBOOK_*` | `process.env.STORYBOOK_THEME` |
+
+A name with a build metadata word (`BRANCH`, `ENVIRONMENT`, `MODE`, `REF`, `SHA` or `TAG`) is also public, for example `GIT_SHA`. A secret word (`AUTH`, `CREDENTIAL`, `CREDENTIALS`, `KEY`, `PASS`, `PASSWORD`, `PRIVATE`, `SECRET` or `TOKEN`) makes the name non-public again, for example `DEPLOY_TAG_TOKEN`. Fallow splits the name into words at each character that is not a letter or a digit.
+
+### Server-only modules {#server-only-import}
+
+Fallow also checks whether the client code reaches a server-only module. It reports such a candidate with the category `server-only-import`, and SARIF uses the rule id `security/server-only-import`. A module is server-only when it imports one of these:
+
+- the `server-only` package, `next/server`, `fs`, `fs/promises`, `child_process`, or the `node:` form of the last three;
+- `cookies`, `headers` or `draftMode` from `next/headers`, or a namespace import of `next/headers`;
+- in the [React Router mode](#react-router-framework-mode): any `.server` module.
+
+A `"use server"` directive alone does not make a module server-only. The set is narrow, to keep false positives low. The secret check and the server-only check are independent. Client code that reads a secret and also reaches server-only code gives one candidate for each check.
+
+### React Router Framework Mode {#react-router-framework-mode}
+
+React Router code has no `"use client"` directive. When the React Router plugin is active, fallow takes the client roots from the file conventions of React Router:
+
+- **Route modules are client roots.** A route module is a file that `app/routes.ts` names, `app/root.tsx`, or a route file of the route directory. A helper file next to a `route.tsx` file is not a root. It is client code only when client code imports it. Test files are not roots.
+- **Only client code counts.** React Router removes the `loader`, `action`, `middleware` and `headers` exports from the client build. Fallow does the same. It ignores an import, a re-export or an env read that only these exports use, in each of the [three forms](#client-server-leak). This is also true when another module imports the route module.
+- **`.client` modules are client roots.** A `*.client.*` file or a file under a `.client/` directory runs only in the browser.
+- **`.server` modules are server-only.** Client code that reaches a `*.server.*` file or a file under a `.server/` directory gets a `server-only-import` candidate. React Router fails the build for such an import. Fallow shows it earlier, in the editor and with `--gate new`, with the import trace.
+
+The `.client` and `.server` rules apply only in the packages where the React Router plugin is active. When fallow cannot parse a route module, it keeps each import and each env read of that module.
+
+Example: `app/routes/home.tsx` renders a component that imports `app/lib/billing.ts`, and `billing.ts` reads `process.env.STRIPE_SECRET_KEY`. Fallow reports `home.tsx` with the trace `home.tsx -> billing.ts`. When only the `loader` of `home.tsx` uses `billing.ts`, fallow reports nothing. When the `loader` reads the secret itself, in any of the three forms, fallow also reports nothing.
+
+### Sanitizer-aware suppression {#sanitizer-aware-suppression}
+
+Fallow does not report a `tainted-sink` value that goes through a sanitizer that the syntax proves. It recognizes these:
+
+| Sanitizer | Covers |
+|:--|:--|
+| A local helper with one parameter that replaces `&`, `<` and `>` with `&amp;`, `&lt;` and `&gt;` | HTML |
+| `sanitize()` of a `dompurify` or `isomorphic-dompurify` import | HTML |
+| An HTML template in which each dynamic part is text and goes through an HTML sanitizer, also in `{ __html: ... }` | HTML |
+| A local helper with one parameter that wraps the value in `"` and doubles each `"` in it, in an identifier position of a SQL template | SQL identifiers |
+| `if (!allowed.has(url)) return` (or `includes`, or `throw`) with a literal allowlist | URLs |
+| `if (rel.startsWith("..") \|\| path.isAbsolute(rel)) return` (or `throw`) on a `path.relative()` result | Paths |
+
+A template with one unsanitized dynamic part stays a candidate. SQL identifier quoting does not make a value safe: it is not parameterization.
+
+### Project functions with a shallow-safe body {#shallow-safe-callees}
+
+Some catalogue rows match a callee by its name only, for example `request(url)` for `ssrf` and `merge(a, b)` for `prototype-pollution`. A project function with the same name then matches too. Fallow reads the body of the function, and a call of a shallow-safe function is not a candidate.
+
+A function body is shallow-safe when it does only these things:
+
+- It calls shallow builtins of the global `Object`: `assign`, `create`, `entries`, `freeze`, `fromEntries`, `getOwnPropertyNames`, `hasOwn`, `isFrozen`, `keys` and `values`. `Object.assign` must write into a new object, as in `Object.assign({}, ...)`.
+- It writes a member only one level deep, on an object that the function creates and never reassigns. The function creates the object with an object literal, `Object.assign({}, ...)` or `Object.create(null)`.
+
+```ts
+// src/utils/merge.ts: shallow-safe
+export function merge<T extends object>(obj: T, subset: Partial<T>): T {
+  const copy = Object.assign({}, obj);
+  for (const k in subset) {
+    copy[k] = subset[k];
+  }
+  return copy;
+}
+```
+
+Fallow applies the check when the function is in the same file as the call, or when the file imports it directly from another project file with a named, aliased or default `import`. These calls stay candidates:
+
+- A call of a function that calls another function, also itself (a recursive merge), or `fetch`.
+- A call of a function with `new`, a tagged template, `import()` or `delete`.
+- A call of a function that writes to a parameter, or writes two levels deep.
+- A call of a function that the module replaces, for example with `request = got` or `utils.merge = _.merge`.
+- A call of a function from an external package.
+- A call through a re-export chain, a namespace import (`utils.merge()`) or `require()`.
+- A call through a parameter or a local binding with the same name as the import.
+
+### Opt-in categories {#opt-in-categories}
+
+`hardcoded-secret` and `secret-to-network` run only when `security.categories.include` lists them. When both lists are empty, the other categories run. When `include` has entries, only those categories run.
+
+```json
+{
+  "security": {
+    "categories": {
+      "include": ["dangerous-html", "command-injection", "hardcoded-secret"],
+      "exclude": []
+    }
+  }
+}
+```
+
+- `hardcoded-secret` reports a string literal with the shape of a provider credential, or a literal with high entropy that a secret-shaped name holds.
+- `secret-to-network` reports a non-public `process.env` or `import.meta.env` value that goes into the body or the options of a network call, such as `fetch`, `got` or `axios.post`. It is opt-in because normal authentication also sends a secret, for example a bearer token to its own provider. `candidate.network.destination` holds the URL when the URL is a literal. A dynamic URL leaves it absent, which is the stronger sign of a leak.
 
 ### Categories {#categories}
 
 The ids of `security.categories.include` and `security.categories.exclude`. A category with "Opt-in: yes" runs only when `include` lists it. `fallow schema` prints the same list in `security_categories`.
 
-| Category | Title | CWE | Opt-in |
-|:--|:--|:--|:--|
-| `angular-trusted-html` | Angular bypassSecurityTrust sink | 79 | no |
-| `cleartext-transport` | Cleartext transport URL | 319 | no |
-| `code-injection` | Code injection sink | 94 | no |
-| `command-injection` | OS command injection sink | 78 | no |
-| `dangerous-html` | Dangerous HTML sink | 79 | no |
-| `deprecated-cipher` | Deprecated cipher constructor | 327 | no |
-| `dom-document-write` | DOM document.write sink | 79 | no |
-| `dynamic-module-load` | Dynamic module load sink | 95 | no |
-| `dynamic-regex` | Dynamic regular expression sink | 1333 | no |
-| `electron-unsafe-webpreferences` | Unsafe Electron BrowserWindow preferences | 1188 | no |
-| `hardcoded-secret` | Hardcoded secret candidate |  | yes |
-| `header-injection` | HTTP response header injection sink | 113 | no |
-| `insecure-cookie` | Insecure cookie options | 614 | no |
-| `insecure-randomness` | Insecure randomness sink | 338 | no |
-| `insecure-temp-file` | Predictable temporary file path | 377 | no |
-| `jquery-html` | jQuery .html() sink | 79 | no |
-| `jwt-alg-none` | JWT alg none | 347 | no |
-| `jwt-verify-missing-algorithms` | JWT verify missing algorithms allowlist | 347 | no |
-| `llm-call-injection` | Untrusted input reaches an LLM call | 1427 | no |
-| `mass-assignment` | Mass assignment sink | 915 | no |
-| `mysql-multiple-statements` | MySQL multiple statements enabled | 89 | no |
-| `nextjs-open-redirect` | Next.js open redirect sink | 601 | no |
-| `nosql-injection` | NoSQL injection sink | 943 | no |
-| `open-redirect` | Open redirect sink | 601 | no |
-| `path-traversal` | Path traversal sink | 22 | no |
-| `permissive-cors` | Permissive CORS policy | 942 | no |
-| `postmessage-wildcard-origin` | Wildcard postMessage target origin | 346 | no |
-| `prototype-pollution` | Prototype pollution sink | 1321 | no |
-| `redos-regex` | ReDoS regex sink | 1333 | no |
-| `resource-amplification` | Resource amplification sink | 400 | no |
-| `route-send-file` | Route file-send path traversal sink | 22 | no |
-| `secret-pii-log` | Secret or PII logged | 532 | no |
-| `secret-to-network` | Secret reaches a network request | 201 | yes |
-| `sql-injection` | SQL injection sink | 89 | no |
-| `ssrf` | Server-side request forgery sink | 918 | no |
-| `ssti` | Server-side template injection sink | 1336 | no |
-| `template-escape-bypass` | Template escape bypass sink | 79 | no |
-| `tls-validation-disabled` | TLS validation disabled | 295 | no |
-| `unsafe-buffer-alloc` | Unsafe Buffer allocation sink | 1188 | no |
-| `unsafe-deserialization` | Unsafe deserialization sink | 502 | no |
-| `weak-crypto` | Runtime-selectable crypto algorithm | 327 | no |
-| `webview-injection` | WebView injected-script sink | 94 | no |
-| `world-writable-permission` | World-writable chmod mode | 732 | no |
-| `xpath-injection` | XPath injection sink | 643 | no |
-| `xxe` | XML external entity (XXE) sink | 611 | no |
-| `zip-slip` | Archive path-traversal (zip-slip) sink | 22 | no |
+| Category | Title | CWE | Opt-in | What fallow matches |
+|:--|:--|:--|:--|:--|
+| `angular-trusted-html` | Angular bypassSecurityTrust sink | 79 | no | Angular `bypassSecurityTrustHtml`, `Script`, `Style`, `Url` and `ResourceUrl`, with `@angular/platform-browser` |
+| `cleartext-transport` | Cleartext transport URL | 319 | no | An `http://` URL in `fetch`-like calls, or a `ws://` URL in `new WebSocket()` |
+| `code-injection` | Code injection sink | 94 | no | `eval`, `Function` and `new Function`, a string `setTimeout` or `setInterval`, the `node:vm` run and compile calls, `new vm.Script`, and the code of a `document.createElement("script")` element |
+| `command-injection` | OS command injection sink | 78 | no | `child_process` `exec`, `execSync`, `spawn`, `spawnSync`, `execFile` and `execFileSync` from the Node.js module, and `shelljs` `shell.exec`. `execFile` runs no shell, so it reports only when the argument or the module reads untrusted input |
+| `dangerous-html` | Dangerous HTML sink | 79 | no | `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `dangerouslySetInnerHTML`, `createContextualFragment`, and the iframe `srcdoc` (property, attribute or template binding) |
+| `deprecated-cipher` | Deprecated cipher constructor | 327 | no | `crypto.createCipher` and `createDecipher`: no IV, and a key from MD5 |
+| `dom-document-write` | DOM document.write sink | 79 | no | `document.write` and `document.writeln` |
+| `dynamic-module-load` | Dynamic module load sink | 95 | no | `require()` with a non-literal argument |
+| `dynamic-regex` | Dynamic regular expression sink | 1333 | no | `RegExp()` and `new RegExp()` with a non-literal pattern |
+| `electron-unsafe-webpreferences` | Unsafe Electron BrowserWindow preferences | 1188 | no | An Electron `BrowserWindow` with `nodeIntegration` on, or `webSecurity` or `contextIsolation` off |
+| `hardcoded-secret` | Hardcoded secret candidate | 798 | yes | A provider credential, or a literal with high entropy in a secret-shaped name. See [Opt-in categories](#opt-in-categories) |
+| `header-injection` | HTTP response header injection sink | 113 | no | `setHeader` and `writeHead` on a response. A `writeHead` object with only literal names and values is not a candidate |
+| `insecure-cookie` | Insecure cookie options | 614 | no | Express cookie options without `httpOnly` or `secure`, or with them off |
+| `insecure-randomness` | Insecure randomness sink | 338 | no | `crypto.pseudoRandomBytes()`, and `Math.random()` that goes into a name such as `token`, `secret`, `session` or `password` |
+| `insecure-temp-file` | Predictable temporary file path | 377 | no | A predictable temporary file path in an `fs` write |
+| `jquery-html` | jQuery .html() sink | 79 | no | jQuery `.html(value)`, `$.parseHTML` and `jQuery.parseHTML`, with `jquery` |
+| `jwt-alg-none` | JWT alg none | 347 | no | `jsonwebtoken` `sign` with the algorithm `none` |
+| `jwt-verify-missing-algorithms` | JWT verify missing algorithms allowlist | 347 | no | `jsonwebtoken` `verify` without an `algorithms` list |
+| `llm-call-injection` | Untrusted input reaches an LLM call | 1427 | no | Untrusted input in the prompt or the messages of a known LLM SDK call, such as `chat.completions.create`, `messages.create` or `generateText` |
+| `mass-assignment` | Mass assignment sink | 915 | no | `Object.assign(target, source)` with a source from untrusted input |
+| `mysql-multiple-statements` | MySQL multiple statements enabled | 89 | no | MySQL connection options with `multipleStatements: true` |
+| `nextjs-open-redirect` | Next.js open redirect sink | 601 | no | `redirect` and `permanentRedirect` from `next/navigation` |
+| `nosql-injection` | NoSQL injection sink | 943 | no | A whole query object in a MongoDB or Mongoose `findOne`, `updateOne`, `deleteMany` and similar calls |
+| `open-redirect` | Open redirect sink | 601 | no | `res.redirect`, `location.href`, `location.assign`, `location.replace` and `window.open` |
+| `path-traversal` | Path traversal sink | 22 | no | `path.join`, `path.resolve`, and the path methods of `node:fs` and `node:fs/promises`, also as named imports and destructured `require()` bindings. The `fs` write, append, delete and copy calls report only when the argument or the module reads untrusted input |
+| `permissive-cors` | Permissive CORS policy | 942 | no | `cors` with a wildcard origin and credentials |
+| `postmessage-wildcard-origin` | Wildcard postMessage target origin | 346 | no | `postMessage(..., "*")` |
+| `prototype-pollution` | Prototype pollution sink | 1321 | no | A `__proto__` write, and a recursive merge such as `merge`, `mergeWith`, `defaultsDeep` or `setWith` |
+| `redos-regex` | ReDoS regex sink | 1333 | no | A vulnerable regex literal that tests input from an untrusted source |
+| `resource-amplification` | Resource amplification sink | 400 | no | A size from untrusted input in `Array()`, `new Array()`, `Buffer.alloc*`, `repeat`, `padStart` or `padEnd`. A size in `Math.min()` is not a candidate |
+| `route-send-file` | Route file-send path traversal sink | 22 | no | `sendFile` in Express, Fastify or Hono routes, and Express `res.download` |
+| `secret-pii-log` | Secret or PII logged | 532 | no | A secret or personal data from a request in `console` or logger calls |
+| `secret-to-network` | Secret reaches a network request | 201 | yes | A non-public env secret in the body or the options of a network call. See [Opt-in categories](#opt-in-categories) |
+| `sql-injection` | SQL injection sink | 89 | no | `query` and `execute` with concatenation or a template, and raw forms: `sql.raw`, Prisma `$queryRawUnsafe` and `$executeRawUnsafe`, Knex `raw`, `whereRaw`, `havingRaw` and `orderByRaw`, and `sequelize.literal` |
+| `ssrf` | Server-side request forgery sink | 918 | no | `fetch`, `got`, `ky`, `needle`, `request`, `axios` and its methods, `superagent`, `undici`, and `http.request`, `http.get` and `https.get` from the Node.js modules. A bare `axios()` call reports only with a template, a concatenation or a call result as its URL |
+| `ssti` | Server-side template injection sink | 1336 | no | Template compile and render calls, for example `Handlebars.compile`, `pug.render`, `ejs.render`, `nunjucks.renderString` and `_.template` |
+| `template-escape-bypass` | Template escape bypass sink | 79 | no | A template engine `SafeString()` with a non-literal value |
+| `tls-validation-disabled` | TLS validation disabled | 295 | no | HTTPS or TLS options with `rejectUnauthorized: false`, and `NODE_TLS_REJECT_UNAUTHORIZED = "0"` |
+| `unsafe-buffer-alloc` | Unsafe Buffer allocation sink | 1188 | no | `Buffer.allocUnsafe` and `allocUnsafeSlow`: memory that is not cleared |
+| `unsafe-deserialization` | Unsafe deserialization sink | 502 | no | `js-yaml` `load` and `loadAll`, and `node-serialize` `unserialize` |
+| `weak-crypto` | Runtime-selectable crypto algorithm | 327 | no | A hash or cipher algorithm that the code selects at run time, a weak literal algorithm, or an ECB-mode cipher |
+| `webview-injection` | WebView injected-script sink | 94 | no | `injectJavaScript()` and `injectedJavaScript` of `react-native-webview` |
+| `world-writable-permission` | World-writable chmod mode | 732 | no | `chmod` and `chmodSync` with a mode that each user can write |
+| `xpath-injection` | XPath injection sink | 643 | no | `xpath.select` and `select1` with a non-literal expression |
+| `xxe` | XML external entity (XXE) sink | 611 | no | XML parse calls, for example `libxmljs.parseXml` and `parseStringPromise` |
+| `zip-slip` | Archive path-traversal (zip-slip) sink | 22 | no | The destination path of an archive extraction, for example `tar.x` or `extractAllTo` |
 
 ### Suppression {#suppression}
 
@@ -209,18 +375,87 @@ With `--format json`, the output has these top-level fields:
 
 With `--summary`, `summary` replaces the candidate arrays: the counts by severity, by category, by reachability and by runtime state. The [JSON output reference](/reference/json-output) has each field.
 
+### Summary output {#summary-output}
+
+`fallow security --summary --format json --quiet` keeps `kind`, `schema_version`, `version`, `elapsed_ms`, `config`, `gate_outcomes` and `workspace_diagnostics`. It replaces the candidate arrays with `summary`. This is the `summary` of the demo project:
+
+```json
+{
+  "security_findings": 0,
+  "by_severity": { "high": 0, "medium": 0, "low": 0 },
+  "by_category": {},
+  "by_reachability": {
+    "entry_reachable": 0,
+    "untrusted_source_reachable": 0,
+    "arg_level": 0,
+    "module_level": 0,
+    "crosses_boundary": 0,
+    "source_backed": 0
+  },
+  "by_runtime_state": {
+    "runtime_hot": 0,
+    "runtime_cold": 0,
+    "never_executed": 0,
+    "low_traffic": 0,
+    "coverage_unavailable": 0,
+    "runtime_unknown": 0,
+    "not_collected": 0
+  },
+  "unresolved_edge_files": 0,
+  "unresolved_callee_sites": 9,
+  "attack_surface_entries": 0
+}
+```
+
+### Unresolved callee diagnostics {#unresolved-callee-diagnostics}
+
+`unresolved_callee_sites` counts the calls with the shape of a sink whose callee fallow cannot resolve to a static path, for example dynamic dispatch, a computed member or an aliased binding. An empty candidate list with a count above zero does not mean safe code. `unresolved_callee_diagnostics` is `null` when the count is zero. Otherwise it has these fields:
+
+| Field | Content |
+|:--|:--|
+| `sampled` | Sample calls, each with `path`, `line`, `col`, `reason` and `expression_kind`. |
+| `top_files` | The files with the most unresolved calls, with their counts. |
+| `by_reason` | The count for each reason. |
+| `sample_limit`, `top_files_limit` | The limits that fallow applied to `sampled` and `top_files`. |
+
+These diagnostics are not candidates. They follow the same `--file`, `--workspace`, `--changed-since` and `--gate new` scope as the candidates.
+
+### Client-server leak location and trace {#client-server-leak-trace}
+
+A `client-server-leak` candidate is in the client root. Its `path`, `line`, `col` and `candidate.sink` point at one of these places:
+
+- the first secret read, or the first server-only import, when the client root has it itself;
+- else the import in the client root that starts the trace.
+
+Each hop of `trace` has `path`, `line`, `col` and `role`. A hop on the path points at the import of the next file. The last hop points at the first secret read (role `secret-source`) or at the first server-only import (role `sink`). A React Router `.server` module has no such import, so its hop points at line 1.
+
+A `secret-source` hop also has `secret_reads`: each non-public env read of that module, in source order. Each entry has `name` (for example `process.env.API_SECRET_KEY`), `line` and `col`. The `line` and `col` of the hop are those of the first entry. Other hops have no `secret_reads` field. `--gate new` checks each line of `secret_reads`.
+
+### Sink callee and URL shape {#sink-callee}
+
+`candidate.sink.callee` is the callee that the catalogue matched, for example `el.innerHTML`. For a named import or a destructured `require()` of `node:child_process`, `node:fs`, `node:fs/promises` or `node:vm`, the callee names the module: `const { execSync } = require("child_process"); execSync(cmd)` gives `node:child_process.execSync`. A default or a namespace import keeps the callee as the code writes it, for example `fs.readFile`.
+
+An `ssrf` or an `open-redirect` candidate can have `candidate.sink.url_shape` when fallow can read the start of the URL:
+
+| Value | Meaning |
+|:--|:--|
+| `fixed-origin-dynamic-path` | The origin is fixed, and only the path or the query is dynamic. This is the less dangerous shape. |
+| `dynamic-origin` | The origin is dynamic or unknown. |
+
+The static start must complete the origin. An absolute URL counts as fixed only with `http://` or `https://`, and with a `/`, `?` or `#` after the host. A dynamic value after the host, in the port or after the user info gives `dynamic-origin`. A relative URL counts as fixed only when a path segment comes before the dynamic value: `` `/path/${id}` `` is fixed, and `` `/${id}` `` is `dynamic-origin`. A string literal URL gets no `url_shape`.
+
 ### Candidate fields {#agent-actionable-candidate-record}
 
 | Field | Content |
 |:--|:--|
 | `finding_id` | A hash of the rule, the path, the line and the column. It is the same as the SARIF `partialFingerprints["fallowSecurity/v2"]`. A line change gives a new id. |
 | `stable_finding_id` | `sec1:<16 hex digits>`: a hash without the line. A line change keeps it. Absent when fallow does not know the exact text of the call, for example in template markup. |
-| `kind`, `category`, `cwe` | `client-server-leak` or `tainted-sink`, the category (for example `command-injection`), and the CWE number of a `tainted-sink` category. |
+| `kind`, `category`, `cwe` | `client-server-leak` or `tainted-sink`, the category (for example `command-injection`), and the CWE number of a `tainted-sink` category. A `client-server-leak` candidate has the category `client-server-leak` (a secret read) or `server-only-import`, and no `cwe`. |
 | `path`, `line`, `col` | The location of the candidate. |
 | `severity` | The review priority: `high`, `medium` or `low`. It is not a verdict, and it does not change the exit code. |
-| `evidence`, `trace` | The reason in words, and the files from the input to the call. Do not parse `evidence`. |
+| `evidence`, `trace` | The reason in words, and the files from the input to the call. Do not parse `evidence`. See [Client-server leak location and trace](#client-server-leak-trace). |
 | `reachability` | Whether an entry point or an untrusted input reaches the call. `taint_confidence` is `arg-level` (the argument comes from the input in the same module) or `module-level` (only the module is reachable from the input). |
-| `candidate` | `source_kind` (for example `http-request-input` or `process-argv`; an open set), `sink` (`path`, `line`, `col`, `category`, `cwe`, `callee`) and `boundary` (`client_server`, `cross_module`). `secret-to-network` candidates also have `network.destination`. |
+| `candidate` | `source_kind` (for example `http-request-input` or `process-argv`; an open set), `sink` (`path`, `line`, `col`, `category`, `cwe`, `callee`, and `url_shape` for URL sinks; see [Sink callee and URL shape](#sink-callee)) and `boundary` (`client_server`, `cross_module`, and `architecture_zone` with `from` and `to` when the candidate is part of an architecture boundary violation). `secret-to-network` candidates also have `network.destination`. Treat an unknown `source_kind` as untrusted input of an unknown kind. |
 | `taint_flow` | `source`, `sink` and `path` (`intra_module`, `cross_module_hops`), when an untrusted input reaches the call. |
 | `source_backed` | `true` when fallow traced the argument of the call to a known untrusted input in the same module, for example `req.query` or `process.argv`. It raises the rank, and `false` does not hide the candidate. Absent when `false`. |
 | `actions` | The suppression actions. |

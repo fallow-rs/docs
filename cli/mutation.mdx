@@ -33,6 +33,8 @@ The command is opt-in. Bare `fallow`, `fallow audit` and `fallow health` do not 
 
 {/* generated:end */}
 
+Without `--report`, each subcommand reads the [saved report](#saved-report) of the last run. Pass the same `--root` and `--config` as the run, because the config can move the cache directory. A `--plan` document has no test results, so `tasks` and `export` refuse it with exit code 2.
+
 ### inspect {#inspect}
 
 {/* generated:start cli-synopsis mutation inspect */}
@@ -59,7 +61,41 @@ fallow mutation inspect [OPTIONS] <MUTANT_ID>
 
 {/* generated:end */}
 
-`inspect` shows the change of one mutant against the current file, and its covering tests. Without `--replay`, it runs no code. A mutant whose file changed since the report shows `stale`.
+`inspect` shows the change of one mutant against the current file, and its covering tests. Without `--replay`, it runs no code. The report holds no source text, so inspect reads the current file and finds the mutant again by its id and span.
+
+- `fresh`: the file has the SHA-256 digest of the report. The output shows the original line, the changed line, the covering tests and the killing test.
+- `stale`: the file changed, is missing, or has no digest in the report. The output shows no code. A `--plan` document has digests only for the files that it instruments.
+- No saved report exits with code 2 and `FALLOW_MUTATION_NO_REPORT`. An id that is not in the report exits with code 2 and `FALLOW_MUTATION_UNKNOWN_MUTANT`.
+
+#### Replay {#replay-a-mutant}
+
+`--replay` calls the export that holds the mutated function, with one input, on the current code and on the mutant. It runs the module of the file and its imports, but no test.
+
+```text
+$ fallow mutation inspect f73493d4d103bf6f --replay --args '[1000, -10]'
+...
+Replay  applyDiscount(1000, -10)
+  call  original  mutant
+  1     1000      1100
+  2     1000      1100
+  3     1000      1100
+Witness: each side gave the same result on each call, and the sides differ. A test with this input can kill the mutant.
+Replay contract 1: the clock starts at 1767225600000 ms and moves 1 ms at each read, Math.random seed 1, a new worker for each call, 5000 ms call limit.
+```
+
+- Each side runs three times, in turns, each call in a new worker with new modules. The clock and `Math.random` are fixed, so a value from the clock is the same on each call.
+- Without `--args`, the replay uses up to 3 inputs of a `--record-args values` run, and stops at the first witness. A mutant in a method or in top-level code needs `--export`.
+- Only Vitest and `node:test` replay. Other errors: `FALLOW_MUTATION_REPLAY_STALE`, `FALLOW_MUTATION_REPLAY_UNSUPPORTED` (`bun test`) and `FALLOW_MUTATION_REPLAY_FAILED`, each with exit code 2.
+
+| `replay.verdict` | Meaning |
+|:--|:--|
+| `witness` | Each side repeats its result, and the sides differ. A test with this input can kill the mutant. |
+| `no_witness_found` | The inputs show no difference. Another input can still show one. It never means that the mutant is equivalent. |
+| `unstable` | The calls of one side differ, for example from `crypto.randomUUID()`. |
+| `timeout` | A call did not end in time. |
+| `not_callable`, `not_replayable` | The export is not a function, or the replay cannot run: `reason` says why. |
+
+In JSON, the `replay` object lists each call with `side`, `index`, `outcome`, `value` and `text`. A value that JSON cannot hold is an object with a `$replay` tag, for example `{"$replay": "undefined"}`.
 
 ### tasks {#tasks}
 
@@ -79,7 +115,20 @@ fallow mutation tasks [OPTIONS]
 
 {/* generated:end */}
 
-`tasks` lists each `survived` and `no_coverage` mutant of a saved report, with the line before and after the change and the test files. It accepts `--format markdown`. It exits with code 0, also when tasks are open.
+`tasks` lists each `survived` and `no_coverage` mutant of a saved report, with the line before and after the change and the test files. It runs no code, and exits with code 0, also when tasks are open.
+
+```text
+Mutation tasks: 6 open (5 survived, 1 without coverage)
+...
+1. src/lib/pricing.ts:2, function applyDiscount (survived) [f73493d4d103bf6f]
+   current: if (percent <= 0) return total;
+   changed: if (false) return total;
+   tests: src/lib/pricing.test.ts
+```
+
+- The lines come from the current file. A task whose file changed after the run is `stale` and shows no code.
+- `--format markdown` puts the lines in a fenced block. `--format json` gives the `mutation-tasks` output: `mutant_id`, `file`, `line`, `column`, `operator`, `function`, `status`, `original_lines`, `mutated_lines`, `covering_test_files`, and `equivalence_hint` when a survivor has one.
+- After a `--record-args values` run, a task can have `witness`: a recorded input (`args`), the results of the current code (`original`) and of the changed code (`mutant`), and `replay_command`. A test that asserts `original` for these arguments should kill the mutant. The Markdown output shows no values.
 
 ### export {#export}
 
@@ -99,7 +148,17 @@ fallow mutation export [OPTIONS]
 
 {/* generated:end */}
 
-`export` writes the report in the open `mutation-testing-report-schema` format, version 2, for mutation dashboards. It maps `flaky`, `pruned`, `equivalent` and `not_killed_by_target` to `Ignored`. When a mutated file changed since the run, it exits with code 2.
+`export` writes the report in the open `mutation-testing-report-schema` format, version 2, for mutation dashboards. It runs no code, and writes JSON for each `--format`.
+
+- The format holds the full source of each mutated file. When a mutated file changed since the run, the command exits with code 2 and names the file.
+- Lines and columns are 1-based. A column counts UTF-16 code units. `thresholds` is `high: 80`, `low: 60`, and `config.completion` holds the completion of the report.
+
+| fallow status | Schema status |
+|:--|:--|
+| `killed`, `timeout`, `survived`, `no_coverage`, `runtime_error`, `compile_error`, `pending` | `Killed`, `Timeout`, `Survived`, `NoCoverage`, `RuntimeError`, `CompileError`, `Pending` |
+| `flaky`, `pruned`, `equivalent`, `not_killed_by_target` | `Ignored`, with the cause in `statusReason` |
+
+In a partial run, each `Survived` and `NoCoverage` mutant gets a `statusReason` that says that the result is not conclusive. A dashboard counts `NoCoverage` in its score, and fallow does not, so the dashboard score can be lower.
 
 ## Options
 
@@ -172,9 +231,17 @@ The [global options](/cli/global-flags) are in these groups: [Project](/cli/glob
 
 Without `--all` or a path, the run mutates the lines that changed since the base ref. Fallow finds the base in the same way as [`fallow audit`](/cli/audit#base-ref). The changed-code scope, `--all` and a path cannot go together.
 
+- `--diff-file`, `--diff-stdin` and `--diff-file -` supply the patch. An empty patch selects no mutants. When fallow cannot resolve the paths of the patch, it exits with code 2 and `FALLOW_MUTATION_DIFF_NOT_APPLIED` before a test runs.
+- A diff that fallow makes uses Git copy and rename detection (`-M -C`), so the unchanged lines of a copied file get no mutants. A supplied patch is used as written: make it with `git diff -M -C` to keep this detection.
+
+The run mutates JavaScript and TypeScript files, Svelte module files (`.svelte.js`, `.svelte.ts`), and the script blocks of Vue, Svelte and Astro components. A Vue compiler macro call (`defineProps` and the others), an expression that holds a Svelte rune call, and an exported declaration in Astro frontmatter give no mutant.
+
 ### Function scope {#function-scope}
 
-`--function-scope`, or `mutation.functionScope: true`, widens each changed line to the function that holds it. A changed parameter or signature line then selects the mutants of the function. `--all`, a path and `--recheck` do not accept it.
+`--function-scope`, or `mutation.functionScope: true`, widens each added line to all mutants of the innermost function that holds it. A changed parameter or signature line then selects the mutants of the function.
+
+- When no function holds the line, the largest function that starts on the line counts. A line outside each function selects only its own mutants. A nested function is part of the outer function.
+- `--all`, a path and `--recheck` do not accept the flag. No flag turns the config key off.
 
 ### Runners {#runners}
 
@@ -184,43 +251,211 @@ Without `--all` or a path, the run mutates the lines that changed since the base
 | `node:test` | `node-test` | Node.js 22.18.0 and later, before 27.0.0 |
 | `bun test` | `bun-test` | Bun 1.4.0 and later, before 2.0.0 |
 
-The default value `auto` selects the runner from the project. An unsupported version stops the run before the first mutant. `--plan` shows the runner and its version.
+An unsupported version stops the run with `FALLOW_MUTATION_RUNNER_UNSUPPORTED` before the first mutant. Vitest 4.0 ignores the test-id filter, so each mutant would look killed. Bun 1.3 gives no test results for a run that stops at the first failure.
+
+The default value `auto` selects the runner in this order:
+
+1. A `vitest` dependency in the root `package.json` selects Vitest.
+2. Otherwise, the test module that most test files import: `vitest`, `bun:test` or `node:test`.
+3. Otherwise, a `bunfig.toml`, `bun.lock` or `bun.lockb` file at the root selects `bun test`.
+4. Otherwise, a `node --test` or `borp` command in a `package.json` script selects `node:test`.
+5. Otherwise, Vitest.
+
+Runner rules:
+
+- Vitest: a test that loads a source file with a native `require` gets the mutated file only on Node.js 22.15 or later. Otherwise the report lists the file in `unloaded_paths`. When `typecheck.enabled` is set, the run does not execute the type-check pass, and `runner.notes` has `typecheck-not-run`.
+- `node:test` and `bun test` run each test file in its own process, and find the test files with the default patterns of the runner. A test file that the plan maps and no pattern matches makes the run `partial` with `test-files-not-discovered`.
+- Node.js and Bun cannot load a Vue, Svelte or Astro component, so the plan lists each component in `skipped_files` with the reason `runner-cannot-load`.
+- `node:test` gives each test process the module loading flags of the first `node --test` script (`--experimental-transform-types`, `--experimental-strip-types`, `--import`, `--require`, `--experimental-loader` and `--conditions`). `NODE_OPTIONS` also reaches each test process.
+- With Vitest and `node:test`, a Node.js child process of a test loads the mutated files, and its code counts as coverage of that test.
+- A type test file (`*.test-d.ts`, `*.spec-d.ts`) is not a test file of the plan.
+
+`--runtime` takes a name, which is a `PATH` lookup, or a path with a separator, which is a file relative to the current directory. A runtime of the wrong kind for the runner exits with code 2 and `FALLOW_MUTATION_RUNTIME_NOT_FOUND`.
 
 ### Runner config {#runner-config}
 
-`--runner-config <PATH>`, or `mutation.runnerConfig`, selects the config file of the test runner, for example `vitest.integration.config.mjs`. The file must be inside the project root. Only Vitest accepts it.
+`--runner-config <PATH>`, or `mutation.runnerConfig`, selects the config file of the test runner, for example `vitest.integration.config.mjs`. The flag wins over the config key.
+
+- The file must exist inside the project root. Otherwise the run exits with code 2, `FALLOW_INVALID_MUTATION_OPTIONS` and the context `mutation.runnerConfig`. Only Vitest accepts it.
+- A relative flag path resolves against the project root, then against the current directory.
+- The selected config sets the test files that Vitest lists. When it leaves out a test file of the plan, the run is `partial` with `test-files-not-discovered`.
 
 ### Runner projects {#runner-projects}
 
-`--runner-project <NAME>`, or `mutation.runnerProjects`, uses only the named Vitest projects, as the Vitest `--project` option does. Only Vitest accepts it.
+`--runner-project <NAME>`, or `mutation.runnerProjects`, uses only the named Vitest projects, as the Vitest `--project` option does. A name can hold a `*` wildcard. Only Vitest accepts it.
+
+Fallow cannot instrument a project that comes from a separate config file, so a run that uses one fails at setup. Leave such projects out of the selection. A name that matches no project also fails the run at setup.
 
 ### Operators {#operators}
 
-Without `--operators`, the run uses the default set. A list replaces the default set.
+A run that names no operator uses the default set. A list in `--operators` or `mutation.operators` replaces the default set. To add an opt-in operator, name each default operator and the opt-in operator.
 
-| Set | Operators |
-|:--|:--|
-| Default | `arithmetic-operator`, `relational-operator`, `logical-operator`, `negate-condition`, `unary-operator`, `update-operator`, `removed-call`, `return-value`, `boolean-literal`, `string-literal`, `optional-chaining`, `regex-literal`, `removed-chain-link` |
-| Opt-in | `block-statement`, `array-literal`, `object-literal`, `method-expression`, `switch-case`, `call-expression`, `throw-statement`, `regex-constructor`, `regex-assertion`, `nullish-fallback` |
+| Operator | Set | Change |
+|:--|:--|:--|
+| `arithmetic-operator` | default | `a + b` to `a - b`, and the other pairs. `%` becomes `*`. Compound assignments swap the same way. |
+| `relational-operator` | default | `a < b` to `a <= b`, and the other pairs. An equality also becomes its negation, `false` and `true`. |
+| `logical-operator` | default | `&&` and `\|\|` swap. `??` becomes `&&`. |
+| `negate-condition` | default | The test of an `if`, a `? :` or a loop to `true` and `false`. An operand of `&&` to `true`, of `\|\|` to `false`. |
+| `unary-operator` | default | `!x`, `-x` and `~x` to `x`. `-x` and `+x` swap. |
+| `update-operator` | default | `i++` to `i--`, and the reverse. |
+| `removed-call` | default | A call statement removed. |
+| `return-value` | default | `return expr` and the body of `x => expr` to `undefined`. |
+| `boolean-literal` | default | `true` to `false`, and the reverse. |
+| `string-literal` | default | A string or template literal emptied, or an empty one filled with `"fallow"`. |
+| `optional-chaining` | default | `a?.b` to `a.b`. |
+| `regex-literal` | default | One token of a regex literal: an anchor or a quantifier removed, `{n,m}` to `{n}`, a class negated, or `\d` to `\D` and similar. |
+| `removed-chain-link` | default | One link of a call chain in a module-level `const` removed, for example `z.number().int()` to `z.number()`. |
+| `block-statement` | opt-in | The statements of a block or function body removed. |
+| `array-literal`, `object-literal` | opt-in | `[x]` to `[]`, `[]` to `["fallow"]`, and an object literal to `{}`. |
+| `method-expression` | opt-in | A method to its pair (`startsWith` and `endsWith`, `every` and `some`, `min` and `max` and others), or `s.trim()` to `s`. |
+| `switch-case` | opt-in | The statements of a `case` clause removed, so it falls through. |
+| `call-expression` | opt-in | A call in an expression position to `(void 0)`. |
+| `throw-statement` | opt-in | `throw new X(...)` removed. |
+| `regex-constructor`, `regex-assertion` | opt-in | The regex changes of a `new RegExp("...")` pattern. A lookaround negated, or `\b` and `\B` swapped. |
+| `nullish-fallback` | opt-in | `a ?? b` to `a`. |
+
+These rules stop a mutant that only gives an endless loop, a syntax error or the same result:
+
+- A loop test that is a comparison gets no `true` mutant. Only a comparison or a `!x` operand of `&&` or `\|\|` gets a `negate-condition` mutant.
+- An expression with a string or template operand gets no `arithmetic-operator` mutant. A tagged template gets no `string-literal` mutant.
+- A `console.*` or `debug(...)` call gives no mutant, also in its arguments.
+- `block-statement` and `switch-case` give no mutant for a range that declares a binding. `call-expression` gives no mutant where `removed-call` or `return-value` gives the same result.
+- Fallow skips equivalent mutants that it can prove: a `case` label with the same body as `default`, the `!=` mutant of a counted `for` loop, a zero comparison on the length of a known array, and a lookup before `.filter(Boolean)`.
+
+Fallow has no absolute-value operator: it would add many mutants to expressions that already get mutants.
 
 ### Mutants per line {#mutants-per-line}
 
-`--mutants-per-line <N>`, or `mutation.mutantsPerLine`, keeps at most `N` mutants on each line. Relational, condition, arithmetic and logical operators come first. A mutant that the limit leaves out is `pending` with `pending_reason: "sampled-out"`.
+`--mutants-per-line <N>`, or `mutation.mutantsPerLine`, keeps at most `N` planned mutants on each source line. The plan chooses before the dry run and before `--max-mutants`.
+
+- A line keeps its mutants in operator order: relational, condition, arithmetic and logical operators first, the opt-in operators last. A stable hash of the mutant id orders the mutants of one operator.
+- A left-out mutant is `pending` with `pending_reason: "sampled-out"`, or `no_coverage` when no test covers it. `summary.sampled_out` counts these mutants, and the completion is `partial` with `sampled-out`.
+- `--recheck` does not accept the flag.
+
+### Mutant limit and time budget {#mutant-limit}
+
+Before the mutants run, fallow runs your tests once with no active mutant (the dry run). The dry run finds the covering tests of each planned mutant, with three times the test timeout of your project.
+
+- `--max-mutants <N>` counts only covered mutants. A cached result uses a place in the limit. A run can execute a mutant that `--plan` shows as `pending`, because the plan comes before the dry run.
+- `--time-budget` starts the mutants with the lowest estimated test time first. It stops new mutants early, to keep time for the [retries](#retries). A mutant that started continues until its timeout.
+- `--setup-timeout` limits the start, the dry run and each reload of a runner process. A first process past the limit stops the run with `FALLOW_MUTATION_RUNNER_FAILED`. A restarted process past the limit gives `runtime_error`.
+
+### Retries {#retries}
+
+A `survived` or `timeout` mutant runs a second time in a new runner process, because host load can make a test time out. The second run of a timeout gets twice the time. A `killed` result gets no retry.
+
+| First run | Second run | Final status |
+|:--|:--|:--|
+| any | `runtime_error` | `runtime_error` |
+| `survived` | `survived` or `timeout` | `survived` |
+| `survived` | `killed` by a test of the first run | `flaky` |
+| `survived` | `killed` by a test that the first run did not execute | `killed` |
+| `timeout` | `timeout` | `timeout` |
+| `timeout` | `killed` | `killed` |
+| `timeout` | `survived` | `flaky` |
+
+- The second run of a survivor runs each test of its covering test files. A kill by a test outside `covering_tests` counts only when those tests pass with no active mutant.
+- `"retried": true` marks a mutant with both runs. Its `attempts` array has the `status`, the `duration_ms`, and `killed_by` and `failure_kind` for a kill, of each run.
+- With Vitest, an endless loop through your source code stops when the test uses more CPU time than 1.5 times its dry-run time, plus 500 ms. Such a timeout gets no second run when the covering tests take 200 ms or less.
+
+### Redundant test candidates {#redundant-test-candidates}
+
+`--kill-matrix` runs all covering tests of each mutant with bail disabled, and records each test that kills each mutant. It can take much longer.
+
+| `kill_matrix` field | Content |
+|:--|:--|
+| `status` | `complete`, `incomplete` or `unavailable`. Without the option, `unavailable` with the reason `kill-matrix-disabled`. |
+| `reasons` | The limits of the evidence, such as `incomplete-mutant-results`, `baseline-failure` or `partial-mutation-run`. |
+| `tests` | For each test: `test_id`, `file`, `kills`, `unique_kills`, `subsuming_tests` and `notes`. |
+| `candidates` | The tests whose kills other tests also make. Incomplete evidence gives no candidates. |
+| `coverage_without_kills` | The tests that ran mutated code and killed nothing. |
+
+Review each candidate alone. Two candidates with the same kills protect each other, so do not remove both. A candidate does not prove that you can remove the test. Each mutant records `killing_tests` and `kill_matrix_complete`, and `killed_by` keeps the first killing test.
+
+### Check named tests {#check-named-tests}
+
+`--kill-matrix-for <TARGET>` checks whether the named tests are redundant, without a full kill matrix. A target is a test file or a test id (`file::name`). Repeat the flag for each target. It cannot go together with `--kill-matrix`.
+
+- Only the mutants that a target test covers run. The others are `pruned` with `no-target-coverage`.
+- `kill_matrix.targets` lists each target with its `test_ids`, `status` and `reasons`. A target that selects no test is `incomplete` with `unmatched-target`, and `not-a-test-file` or `no-planned-code` when fallow knows why.
+- `target_only_kills` of a test lists the kills that only other targets share. The test stays redundant only while one of those targets stays.
+- When no target selects a test, the run exits with code 2 and `FALLOW_MUTATION_TARGET_UNMATCHED`. A test id target with a duplicate name exits with `FALLOW_MUTATION_TARGET_DUPLICATE_TEST_ID`.
+
+#### Target modes {#target-modes}
+
+| `target_mode` | When no target kills the mutant | Score |
+|:--|:--|:--|
+| `target-first` (default) | The mutant is `not_killed_by_target`. No other test runs. | None. `--min-score` exits with code 2. A `mutation.minScore` gate is `skipped`. |
+| `full` (`--kill-matrix-full`) | The other covering tests run, and each survivor gets a second run. | As in a normal run. |
+
+In both modes, the other covering tests run after a target kill, up to the first failure. For deterministic tests, both modes give the same `kills`, `unique_kills` and `target_only_kills`.
 
 ### Type check of survivors {#type-check-of-survivors}
 
-`--typecheck`, or `mutation.typecheck: true`, type-checks each survivor with the program of [type-aware analysis](/cli/type-aware). A survivor that adds a type error to its file becomes `compile_error` and leaves the score. Without the program, the run exits with code 2 before the tests start.
+`--typecheck`, or `mutation.typecheck: true`, type-checks each survivor after the tests, with the program of [type-aware analysis](/cli/type-aware). It compares the type errors of the mutated file with those of the original file.
+
+- A survivor that adds a type error becomes `compile_error`, with at most 8 codes in `type_error_codes`. It leaves the score and counts as covered. The check reads only the mutated file.
+- A survivor that the check cannot check stays `survived`. The reasons are `no-project`, `not-type-checked`, `source-changed`, `file-missing` and `unsupported-file` (a component).
+- Without the program, the run exits with code 2 and `FALLOW_MUTATION_TYPECHECK_UNAVAILABLE` before the tests. A check that fails after the tests makes the run `partial` with `typecheck-failed`.
+- The `typecheck` object has `completed`, `survivors`, `checked`, `compile_errors`, `hinted` and `skipped`.
+
+A survivor can get an advisory `equivalence_hint`. The status stays `survived`, and the score does not change. The hint can be wrong: read the code, then record a [verdict](#verdicts-for-equivalent-mutants).
+
+- `type-non-nullish`: the mutant removes `?.` or `?? b`, and the declared type of the value excludes `null` and `undefined`. It needs `strictNullChecks` and `noUncheckedIndexedAccess` in a TypeScript file.
+- `constant-parameter`: a `negate-condition` survivor on a parameter test, when each visible call passes the same literal. It uses the call evidence of the [`constant-parameter`](/rules/constant-parameter) rule and needs no option.
 
 ### Result cache {#result-cache}
 
-A run stores the result of each `killed` mutant and of each `survived` mutant that a second run confirmed, in `.fallow/mutation/results.json`. A later run reuses a result when the mutant, its source file, its tests, the runner config and the versions are the same. The key does not cover files that the tests read or import dynamically. `--no-cache` runs each mutant again.
+A run stores the result of each `killed`, `not_killed_by_target` and confirmed `survived` mutant in `.fallow/mutation/results.json`, at most 20,000 entries. A later run reuses a result when its key is the same. The dry run always runs.
+
+- The key covers the mutant, its source file, the covering tests and the files that they import, the runner setup and config files at the root, the selected runner config and projects, the lockfile, the root `tsconfig.json` chain, and the runner, runtime and fallow versions.
+- The key does not cover dynamic imports that fallow cannot resolve, files that tests read, or config files below the root. Pass `--no-cache` when such a file changes.
+- A reused result has `"cached": true`. The `cache` object has `hits`, `stored` and `not_keyed`.
+
+### Resume a run {#resume-a-run}
+
+Each run writes its final results to `.fallow/mutation/journal.jsonl`, also with `--no-cache`. `--resume` reuses them and runs only the other mutants.
+
+- The journal must come from a run with the same fallow version, runner, runtime, planned files, runner config, scope, operators and `--allow-side-effects`. Otherwise the run exits with code 2 and `FALLOW_MUTATION_RESUME_MISMATCH`.
+- The limits (`--max-mutants`, `--mutants-per-line`, `--time-budget`, `--concurrency`) are not inputs, so you can continue with other limits.
+- A reused result has `"resumed": true`. The `resume` object has `journal`, `reused`, `rejected` and `note`.
+- A `complete` run removes the journal. A partial or interrupted run keeps it. `--plan --resume` exits with code 2.
+
+### Recheck after new tests {#recheck-after-new-tests}
+
+`--recheck` reruns the `survived` and `no_coverage` mutants of a saved report against the current tests. `--mutant <ID>` selects mutants by id.
+
+- A source file that changed after the report exits with code 2 and `FALLOW_MUTATION_SOURCE_CHANGED`. An uncommitted change outside the test files exits with `FALLOW_MUTATION_NON_TEST_CHANGE`.
+- The other mutants keep their earlier status, with `carried: true`. A carried kill stays, also when you made a test weaker. After such a change, run without `--recheck`.
+- A recheck without `--mutant` replaces the saved report. The `recheck` object gives, for each mutant, the earlier status, the new status and an `outcome`: `killed`, `survived`, `no_coverage`, `tests_fail_on_original` or `unsettled`.
+- `--recheck` cannot go together with a scope option, `--plan`, `--resume`, `--allow-dirty`, `--max-mutants` or `--min-score`.
+
+### Compare with a saved report {#compare-with-a-saved-report}
+
+`--compare <PATH>` shows when a change of the tests weakens them: a mutant that a test killed before survives now.
+
+```text
+$ fallow mutation src/lib/pricing.ts --compare .fallow/before.json
+...
+Compare with the saved report
+    16  mutants in both runs
+     2  regressed: detected before, not detected now
+  src/lib/pricing.ts:6  c0a33aa7f9d164d9  killed -> survived, killed before by src/lib/pricing.test.ts::shipping
+```
+
+- Save the earlier report with `-o` in the cache directory, because each run replaces the saved report. The compare matches mutants by `mutant_id`.
+- Both reports must be `complete`. Otherwise the run exits with code 2 and `FALLOW_MUTATION_COMPARE_INCOMPLETE`.
+- A regression does not change the exit code. Read `compare.regressed` to fail a CI job. Each entry of `compare.mutants` has a `change`: `regressed`, `inconclusive` (a `flaky` mutant), `added` or `removed`.
 
 ### Safety rules {#safety-rules}
 
-- A run refuses a git worktree with uncommitted changes, and exits with code 2. `--allow-dirty` turns off this check. After the run, the report lists each path that the tests changed.
-- Fallow does not write to project files. The changed copies live in the fallow cache directory.
-- A mutant in a function that calls a file system, process, network or database API is `pruned` with the reason `side-effect-sink`. `--allow-side-effects` keeps these mutants.
+- A run refuses a git worktree with uncommitted changes, and exits with code 2. `--allow-dirty` turns off this check. After the run, the report lists each path that the tests changed, also an ignored file such as `.env`.
+- Fallow does not write to project files. The changed copies live in the fallow cache directory. A cache directory that holds the project or a planned file exits with code 2 and `FALLOW_MUTATION_UNSAFE_CACHE_DIR`.
+- Each test runner gets its own temp directory, and fallow ends each test process when the run ends, also on a signal.
+- A mutant in a function that calls a file system, process, network or database API is `pruned` with `side-effect-sink`. A database write counts in a module that imports a database client package. `--allow-side-effects` keeps these mutants. No config key can do this.
 - Do not redirect the report with `>`: the shell creates the file first, and the worktree check refuses the run. Use `-o .fallow/mutation.json`.
+
+`--record-args values` records up to 8 inputs of each changed exported function in a separate test pass, for the replay and the tasks. The inputs stay for 7 days in a file that only you can read, without values under secret key names. Do not record in a project whose tests pass real credentials.
 
 ### Verdict document {#verdicts-for-equivalent-mutants}
 
@@ -231,60 +466,114 @@ A run stores the result of each `killed` mutant and of each `survived` mutant th
 {
   "schema_version": "1",
   "verdicts": [
-    { "review_key": "92b796688261e748", "verdict": "equivalent", "note": "percent is never negative here" }
+    { "review_key": "cc6df8e855ee87fa", "verdict": "equivalent", "note": "percent 0 gives the same total" }
   ]
 }
 ```
 
-The `review_key` is the `mutant_id`. A `survived`, `no_coverage` or `flaky` mutant becomes `equivalent` and leaves the score. A verdict for a `killed`, `timeout` or `compile_error` mutant is `contradicted`. An invalid document exits with code 2 before a test runs.
+The `review_key` is the `mutant_id`. The id stays the same until the enclosing function changes, so one document serves many runs.
+
+| Mutant status | Verdict result |
+|:--|:--|
+| `survived`, `no_coverage`, `flaky` | The status becomes `equivalent`. The mutant leaves the score and the coverage, and loses its hint. |
+| `killed`, `timeout`, `compile_error` | `contradicted`. The status stays. |
+| `pending`, `runtime_error`, `pruned` | `deferred`. |
+| No match | `unmatched`. |
+
+An invalid document exits with code 2 before a test runs. The run executes the marked mutants and applies the verdicts after the run.
 
 ## Output
 
 ```text
+$ fallow mutation src/lib/pricing.ts
 Mutation testing (ran the project tests)
-Scope: all source files
-Score 58.3%  killed 7  survived 5  timeout 0  complete
-Coverage 92.3%  no coverage 1
+Scope: the given paths
+Score 66.7%  killed 10  survived 5  timeout 0  complete
+Coverage 93.8%  no coverage 1
 
 ● Survived (5)
-  src/pricing.js
-    #1 2:7  applyDiscount  negate-condition  if (percent <= 0) { -> if (false) {
-      id 92b796688261e748
-      covered by 1 test: test/pricing.test.js::applies a discount
-    #3 2:15  applyDiscount  relational-operator  if (percent <= 0) { -> if (percent < 0) {
-      id d73be05a845d2f5c
-      covered by 1 test: test/pricing.test.js::applies a discount
+  src/lib/pricing.ts
+    #2 2:7  applyDiscount  negate-condition  if (percent <= 0) return total; -> if (false) return total;
+      id f73493d4d103bf6f
+      covered by 1 test: src/lib/pricing.test.ts::discount
+    ...
 
 ● No coverage (1): no test reaches these mutants
-  src/pricing.js  1 mutant  test reach: 1 direct
+  src/lib/pricing.ts  1 mutant  test reach: 1 direct
+
+Test kill evidence: unavailable
+  kill-matrix-disabled: this run did not collect all killing tests. Use --kill-matrix.
 
 Next
-  Inspect a survivor (runs no code): fallow mutation inspect 92b796688261e748
+  Inspect a survivor (runs no code): fallow mutation inspect f73493d4d103bf6f
 ```
 
-- `Score` is the share of the tested mutants that a test detects. `Coverage` is the share of the planned mutants that a test reaches. The last word of the `Score` line is the completion: `complete` or `partial`.
-- Each survivor gives its line and column, its function, its operator, the line before and after the change, its id and its covering tests.
-- `No coverage` counts the mutants that no test reaches, with the reason from the module graph.
+- `Score` is the share of the tested mutants that a test detects. `Coverage` is the share of the planned mutants that a test reaches. The last word of the `Score` line is the completion.
+- The output shows the 10 best-ranked survivors, grouped by file. Each gives its rank, place, function, operator, change, id and covering tests. The JSON report lists all survivors.
+- `No coverage` gives the [test reach](#test-reach-of-no-coverage-mutants) of each file.
+- On stderr, a run prints progress lines such as `fallow: mutation: 15/15 mutants done (2s)`. `--quiet` and `--format json` print none.
 
-Each run saves its report to `.fallow/mutation/last-report.json`. `inspect`, `tasks`, `export` and `--recheck` read this file by default.
+### Saved report {#saved-report}
+
+Each run saves its full JSON report to `.fallow/mutation/last-report.json`, and replaces the earlier one. The cache directory has its own `.gitignore`, so this file does not make the worktree dirty. A `-o` file outside the cache directory does.
+
+### Plan output {#plan-output}
+
+`--plan` lists each mutant with its place, function, operator and id, and runs no code. The JSON plan has a `runner` object, from the `package.json` of the installed Vitest:
+
+```json
+{ "name": "vitest", "package": "vitest", "installed_version": "4.1.12", "supported_range": ">=4.1.0 <6.0.0", "supported": true, "message": null, "help": null }
+```
+
+`supported` is `false` outside the range, and `null` for `node-test` and `bun-test`. Then `message` and `help` give the problem and the install step. The plan still exits with code 0. [`fallow doctor`](/cli/doctor) gives the same verdict in its `mutation-runner` check.
 
 ### Statuses {#statuses}
 
-| Status | Meaning | In the score |
-|:--|:--|:--|
-| `killed` | A covering test failed. | yes |
-| `timeout` | The run passed its time limit, also in a second run. It counts as detected. | yes |
-| `survived` | Each covering test passed, also in a second run. | yes |
-| `no_coverage` | No test reaches the mutant. | no |
-| `runtime_error` | The runner failed for a reason outside the tests. | no |
-| `flaky` | The second run gave another result. | no |
-| `compile_error` | The mutant survived, but adds a type error. Only `--typecheck` sets it. | no |
-| `not_killed_by_target` | No target test of `--kill-matrix-for` kills the mutant. | no |
-| `pending` | The mutant did not run: a limit or the time budget ended first. | no |
-| `equivalent` | A verdict marks the mutant as equivalent. | no |
-| `pruned` | A static rule removed the mutant, with a reason such as `side-effect-sink` or `dead-code`. | no |
+| Status | Meaning | In the score | In the coverage |
+|:--|:--|:--|:--|
+| `killed` | A covering test failed. | yes | yes |
+| `timeout` | The run passed its time limit, also in a second run. It counts as detected. | yes | yes |
+| `survived` | Each covering test passed, also in a second run. | yes | yes |
+| `no_coverage` | No test reaches the mutant. | no | yes |
+| `runtime_error` | The runner failed for a reason outside the tests. | no | yes |
+| `flaky` | The second run gave another result. | no | yes |
+| `compile_error` | The mutant survived, but adds a type error. Only `--typecheck` sets it. | no | yes |
+| `not_killed_by_target` | No target test of `--kill-matrix-for` kills the mutant. | no | yes |
+| `pending` | The mutant did not run: a limit or the time budget ended first. | no | yes |
+| `equivalent` | A verdict marks the mutant as equivalent. | no | no |
+| `pruned` | A static rule removed the mutant. | no | no |
 
-The score is `(killed + timeout) / (killed + timeout + survived)`. A run without a tested mutant has no score.
+The `prune_reason` of a `pruned` mutant is one of these:
+
+- `side-effect-sink`: the function calls a file system, process, network or database API.
+- `framework-config`: an export that a framework reads as config, such as `export const revalidate = 60`, or the config of a tool config file such as `vite.config.ts`.
+- `build-tool-only`: only tool config files reach the file, for example a Vite plugin module.
+- `dead-code`: no entry point reaches the file. `generated`: the file is generated code.
+- `no-target-coverage`: no target of `--kill-matrix-for` covers the mutant. `not-selected`: a `--recheck` selected other mutants.
+
+The score is `(killed + timeout) / (killed + timeout + survived)`, and the coverage is `covered / (covered + no_coverage)`. Both are fractions from 0 to 1 in JSON. A run without a tested mutant has no score. The dry run decides the coverage of each planned mutant, so a run with `--max-mutants` reports the coverage of the full plan.
+
+### Completion {#completion}
+
+`completion.status` is `complete` or `partial`. Only a `complete` run makes an empty survivor list conclusive. A `partial` run lists its reasons: `mutant-limit`, `time-budget`, `sampled-out`, `runtime-error`, `baseline-failure`, `typecheck-failed` or `test-files-not-discovered`.
+
+- `test-files-not-discovered`: the runner did not list a test file of the plan, so its tests never ran. Select its config with [`--runner-config`](#runner-config).
+- A test that fails in the dry run is in `baseline_failures`, and decides no mutant status.
+- The `errors` entry `duplicate-test-ids` names tests with the same full name. The entry `skipped-tests` names skipped tests in a changed test file. Neither stops the run.
+- When a restarted runner process fails, fallow suggests `--concurrency 1`, because parallel processes can share state.
+
+### Test reach of no-coverage mutants {#test-reach-of-no-coverage-mutants}
+
+Each `no_coverage` mutant has a `test_reach` object with the static reason. It never changes the score or the coverage.
+
+| `reach` | Meaning |
+|:--|:--|
+| `none-file` | No test loads the file. |
+| `mocked-only` | Tests reach the code only through a mock. `tests` and `mocked_targets` name them. |
+| `none` | A test loads the file, but no test reaches this code. |
+| `direct`, `transitive` | A test refers to the export, but no test ran the code of the mutant. |
+
+`export_name` names the export when the mutant is in an exported declaration. Treat the set of classes as open.
 
 ### JSON output {#json-output}
 
@@ -308,7 +597,7 @@ With `--format json`, the output has these top-level fields:
 | `files` | Each mutated file with its SHA-256 digest at plan time. `inspect` compares the digest with the current file. |
 | `skipped_files`, `unloaded_paths`, `unmatched_paths`, `no_test_files` | The selected files without mutants, the files that the runner never loaded, the path arguments that select no file, and `true` when the project has no test files. |
 
-`--min-score` uses a percentage. `summary.score` is a fraction. The [JSON output reference](/reference/json-output) has each field.
+A `change` side that is project code is a placeholder, such as `<condition>`, `<expression>` or `<string>`, so the report holds no source text. `--min-score` uses a percentage. `summary.score` is a fraction. The [JSON output reference](/reference/json-output) has each field.
 
 ## Exit codes
 
@@ -317,8 +606,9 @@ With `--format json`, the output has these top-level fields:
 | `0` | The plan, the run or the subcommand completed. Survivors do not change the exit code. |
 | `1` | `--min-score` or `mutation.minScore` is set, and the score is lower. |
 | `2` | Invalid input or an execution error, for example a dirty worktree without `--allow-dirty`, an unsupported runner version, an invalid verdict document, or a `--resume` journal of other inputs. |
+| `128` + signal | A signal stopped the run (`130` for SIGINT). A stop during the mutant runs prints the report of the finished mutants. |
 
-[Exit codes](/reference/exit-codes) has the meaning of each code.
+A run with no score exits with code 0. A run in which baseline failures leave no mutant with a test result exits with code 2 and `FALLOW_MUTATION_BASELINE_FAILED`. The sections above name the other error codes. [Exit codes](/reference/exit-codes) has the meaning of each code.
 
 ## Examples
 

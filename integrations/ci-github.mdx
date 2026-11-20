@@ -125,6 +125,32 @@ When `workspace` names one workspace, the action adds the workspace name to the 
 
 The audit does not show that your tests catch a bug in the change. Set `mutation: true` to run [`fallow mutation`](/cli/mutation) on the lines that the pull request adds, before the analysis. The step runs your tests, so install the dependencies first. The default time budget is `10m`. The comment and the job summary then show a "Mutation testing" section, and each survived mutant on a changed line becomes a finding. The step runs only on the `pull_request`, `push`, `schedule`, `workflow_dispatch` and `merge_group` events. It refuses `pull_request_target`, because that event gives the job the secrets of the base repository.
 
+### How the action reads the gates {#gate-outcomes}
+
+The action reads `gate_outcomes` in the JSON result, not the exit code of fallow. A gate fails the job only when all three of these are true:
+
+- The input of the gate asked for it.
+- Fallow gave the gate the status `fail`.
+- Fallow marked the gate as `enforced`.
+
+Each gate has its own input:
+
+| Gate | Input |
+|:--|:--|
+| Regression | `fail-on-regression` |
+| Duplication | `threshold` |
+| Health | `min-score` and `min-severity` |
+| Security | `security-gate` |
+| Baseline | `fail-on-stale-baseline` |
+| Semantic completeness | `type-aware-require` |
+| Parse error | None. Set `failOnParseError` in the config, or pass `--fail-on-parse-error` in `args`. The gate exists only when you turn it on, so its failure always fails the job. |
+
+A gate that fails without its input gives a warning. A flag in `args` thus cannot override `fail-on-issues: false`. These gates do not depend on `fail-on-issues`, which gates on the finding count. `command: audit` gates on its verdict through `fail-on-issues`, so an audit job with `fail-on-issues: false` only reports.
+
+The `gates-*` outputs always name the default rule of the command: `error-severity-findings`, `health-findings` or `audit-verdict`. That rule is in `gates-failed` when the run has findings, also when `fail-on-issues: false` keeps the job green. Read the name of the gate that you want to act on. Do not read a non-empty `gates-failed` as a failed job.
+
+The action writes its outputs and artifacts before it exits, so the comment, annotation and summary steps still run on a failed gate. The GitLab template writes the same names to `fallow-gates.env` (see [GitLab CI](/integrations/ci-gitlab)).
+
 ## Permissions and tokens {#permissions}
 
 The workflow and its variants write to several places on GitHub, and each place needs a permission of the job token. A job with a `permissions` block gets only the permissions that the block lists, so add a line for each surface that you turn on.

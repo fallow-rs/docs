@@ -274,7 +274,9 @@ Fallow does not read a mock call with the path in a variable. [Fix a false posit
 
 Fallow reads the `command` and `commands` of each `nx:run-commands` target as a script, also in the `configurations` of the target. For example, `tsx scripts/seed.ts` makes `scripts/seed.ts` an entry point. Fallow replaces `{projectRoot}` and `{workspaceRoot}`.
 
-Fallow reads a target only when it runs in the project directory, for example with `cwd` set to `{projectRoot}`. A target without `cwd` in a nested project runs from the workspace root, so fallow skips it.
+A command that calls another target of the same project, such as `nx ts-node -- src/run.ts`, uses the command of that target.
+
+Fallow reads a target only when it runs in the project directory, for example with `cwd` set to `{projectRoot}`. A target without `cwd` in a nested project runs from the workspace root, so fallow skips it. Fallow also skips a target with a `cwd` that points to another directory, because its relative paths can point to the wrong files.
 
 ### TypeORM {#typeorm-migrations}
 
@@ -289,6 +291,18 @@ Fallow counts each member of a class or an enum as used in these cases:
 - An entity class that you give to `getRepository`, `getCustomRepository`, `getTreeRepository`, `getMongoRepository` or `createQueryBuilder`, also as a type argument.
 - An entity class that you give to `find`, `findBy`, `findOne`, `findOneBy`, `findOneOrFail`, `findOneByOrFail`, `findAndCount` or `findAndCountBy`, in a file that imports `typeorm`, `@nestjs/typeorm` or a `@mikro-orm/` package.
 - An enum that you give to `registerEnumType` of `@nestjs/graphql` or `type-graphql`.
+
+### Angular {#angular}
+
+The Angular plugin reads `styles`, `scripts`, `main` and `polyfills` of the build targets in `angular.json` as entry points. For an ng-packagr library, the `lib.entryFile` of `ng-package.json` or `ng-package.prod.json` is the public API entry point. The default is `src/public_api.ts`, relative to the config directory. Fallow also reads the configs of secondary entry points in the package subtree. The `templateUrl` and `styleUrl` of `@Component` are imports of the template and the style file.
+
+[Health](/analysis/health) scores an Angular template, in an external `.html` file or in an inline `template` string, as a `<template>` finding. Fallow counts these constructs:
+
+- the blocks `@if`, `@for`, `@switch`, `@case`, `@defer (when ...)` and `@let`,
+- the directives `*ngIf` and `*ngFor`,
+- bound attributes (`[x]`, `(x)`, `bind-x`, `on-x`) and `{{ }}` interpolations.
+
+An inline template finding is on the line of the `@Component` decorator. To suppress it, put `// fallow-ignore-next-line complexity` directly above the decorator. To suppress a finding of an external template, put `<!-- fallow-ignore-file complexity -->` at the top of the `.html` file.
 
 ### Ionic page lifecycle methods {#ionic-lifecycle}
 
@@ -335,6 +349,8 @@ The Workers runtime calls the handler methods of a class by name. A class that e
 | `WorkerEntrypoint` | `email`, `fetch`, `connect`, `queue`, `scheduled`, `tail`, `tailStream`, `test`, `trace` |
 | `WorkflowEntrypoint` | `run` |
 
+The base class must come from an import of `cloudflare:workers`: a named import or a namespace import, such as `cf.DurableObject`. A local class or a package class with the same name gives no credit. A `static` method with a handler name also gets credit, although the runtime calls only instance methods. Other methods of the class stay reported.
+
 ### Alchemy stacks {#alchemy-stacks}
 
 No project code imports an Alchemy stack file, so fallow uses these files as entry points:
@@ -349,17 +365,25 @@ A stack runs at deploy time, so a stack file is a support entry. The Worker code
 
 Fallow also reads a webpack config under `config/`, `build/` or `webpack/`, when the file exports a webpack configuration: an object with webpack config keys, an array of configurations, or a `webpack-merge` call. Under `build/`, fallow reads only `webpack.<target>.{ts,js,mjs,cjs}`, because that directory also holds build output. A helper file such as `config/webpack.paths.js` that exports no configuration stays reported as unused when nothing imports it.
 
-An entry value that names a package counts as a use of that package. An entry without an extension matches the source file or the directory index.
+An entry value that names a package counts as a use of that package, also with a resource query: `webpack-hot-middleware/client?reload=true` credits `webpack-hot-middleware`. A glob-shaped entry value stays an entry pattern. An entry without an extension matches the source file or the directory index.
+
+Entries resolve as the bundler resolves them:
+
+- Rspack reads `context`, and rsbuild reads `root`. A relative entry and a Module Federation `exposes` target resolve against that directory.
+- Rspack and rsbuild configs stay at the package root. The `config/`, `build/` and `webpack/` directories apply to webpack only.
+- An `exposes` target and the `remotes` scope of a webpack config under `config/`, `build/` or `webpack/` resolve against the package root, as webpack does without `context`.
 
 #### Inline loader requests {#webpack-inline-loader-requests}
 
 An import can name its loaders inline, for example `require('!raw-loader!./shim.js')`. Fallow reads these requests in each project, also without the webpack plugin:
 
-- The request resolves to its last segment (`./shim.js`). Each loader package counts as a used dependency.
-- A loader import uses each value export of the resource.
-- A text loader (`raw-loader`, `file-loader`, `url-loader` and similar) reads the file as text, bytes or a URL. The resource counts as used, but its own imports do not.
-- A worker loader (`worker-loader`, `comlink-loader` and similar) loads the resource like `new Worker(...)`. [`circularDependencies.ignoreLazyImports`](/reference/config-architecture#circulardependencies-ignorelazyimports) skips a cycle through such an import.
-- A loader in `module.rules` of a webpack config does not change how fallow reads an import. Its package still counts as used.
+- The request resolves to its last segment (`./shim.js`). The `!`, `!!` and `-!` prefixes and the `?options` of a loader do not change the target. Each loader package counts as a used dependency. A loader in `devDependencies` is not a dev dependency that production code uses.
+- A loader import uses each value export of the resource, `default` included. A type export of the resource counts as used only when an import names it.
+- A text loader (`raw-loader`, `file-loader`, `url-loader` and similar) reads the file as text, bytes or a URL. The resource counts as used, but its own imports do not. A loader that runs the file, such as `css-loader` or `babel-loader`, keeps the imports of the resource.
+- A text loader import does not run the resource. It does not cross an [architecture boundary](/analysis/architecture), it does not carry server code into a `"use client"` file for [`client-server-leak`](/rules/client-server-leak), and a re-export through it is not a client or server origin of a [mixed barrel](/rules/mixed-client-server-barrel). A package behind a text loader (`raw-loader!pkg/notes.txt`) is a used dependency, but not a production import. A `require.resolve("./x")` call gives only a path, and it follows the same rules.
+- A worker loader (`worker-loader`, `sharedworker-loader`, `comlink-loader`, `service-worker-loader` and similar) loads the resource like `new Worker(...)`. [`circularDependencies.ignoreLazyImports`](/reference/config-architecture#circulardependencies-ignorelazyimports) skips a cycle through such an import. [`fallow list --entry-weight`](/cli/list) counts the resource as code in another thread, not as startup code.
+- A `!` is also valid in a file name. A request without a prefix, such as `./we!rd.js` or `pkg/a!b.js`, resolves as a plain path first when that file exists. When the file does not exist, for example in a clone without installed packages, fallow splits the request on `!`, as webpack does. Then `pkg/a!b.js` is the loader `pkg/a` for the resource `b.js`.
+- A loader in `module.rules` of a webpack config does not change how fallow reads an import. Its package still counts as used. The rule conditions (`test`, `include`, `exclude`, `issuer`, `resourceQuery`, the `oneOf` order) use regular expressions and computed paths, and many projects build the rules in code. A text loader rule that fallow applies to the wrong files would hide the imports of each file that it matches.
 - When the resource does not resolve, the unresolved import shows the full request. An `ignoreUnresolvedImports` entry must then use the full request.
 
 ### Vite+ {#vite-plus}
@@ -375,49 +399,231 @@ Vite+ keeps the config of each tool that it bundles in `vite.config.*`. Fallow r
 | `staged` | The commands, like a lint-staged config. |
 | `run.tasks` | The commands, like `package.json` scripts. A task with `cwd` gives no command. |
 
-The `vp`, `vpr` and `vpx` commands count as uses of `vite-plus`. `vp pack <file>` makes the file an entry point, and `vp test -c <file>` reads the file as a Vitest config.
+`pack` can be one tsdown config or an array of configs. Fallow reads the `staged` and `run.tasks` blocks from the root `vite.config.*` of the project and of each workspace package. The scripts in `.vite-hooks/` are read like Git hook scripts. A `vi.mock` call through `vite-plus/test` counts as a Vitest mock.
+
+The `vp`, `vpr` and `vpx` commands count as uses of `vite-plus`. The tool that `vp` runs decides how fallow reads the arguments:
+
+| Command | What fallow reads |
+|:--|:--|
+| `vp lint`, `vp fmt`, `vp check` | File targets that are not entry points, as for Oxlint and Oxfmt. |
+| `vp test -c <file>` | The file as a Vitest config. |
+| `vp pack <file>` | The file as an entry point. |
+| `vp build`, `vp dev`, `vp preview` | The arguments, as for `vite`. |
+| `vp run <task>`, `vpr <task>` | A call of a declared script, also with the `-r`, `-w` and `--filter` options of pnpm. |
+| `vp exec`, `vp dlx`, `vpx` | The child command, as for `npx`. A `vp exec` with `-r` or `--filter` makes no entry point. |
+| Other subcommands | No file arguments. |
 
 ### Egg.js and tegg {#eggjs-and-tegg}
 
 The Egg loader loads files by directory convention. Fallow makes these files entry points: `app.js`, `agent.js`, `app/router.js` or `app/router/index.js`, the files in `app/controller`, `app/service`, `app/middleware`, `app/schedule` and `app/extend`, and `config/config.*.js` and `config/plugin.*.js`. The same rules apply to a nested app, such as a test fixture app.
 
-tegg loads each source file of a directory whose `package.json` has an `eggModule` key, or that `config/module.json` lists. Fallow makes these files entry points too. A `package` value in `config/plugin.*` counts as a used dependency of the `package.json` that owns the app.
+Fallow finds a nested app through its `config/config.default.*` or `config/plugin.*` file.
+
+tegg loads each source file of a directory whose `package.json` has an `eggModule` key, or that `config/module.json` lists. Fallow makes these files entry points too. Like tegg, it skips hidden directories, `node_modules`, `test`, `coverage`, declaration files and `vitest.config.*`.
+
+A `package` value in `config/plugin.*`, such as `exports.redis = { enable: true, package: "@eggjs/redis" }`, counts as a used dependency of the `package.json` that owns the app: the nearest manifest with a dependency section outside a `test` or `fixtures` directory. A test fixture app therefore credits the workspace package that runs its tests.
 
 ### Module Federation {#module-federation}
 
 Fallow reads `exposes`, `remotes` and `shared` from `module-federation.config.*`, and from a Federation plugin call in a webpack, rspack, rsbuild, vite or `next.config.*` file. Fallow knows these calls: `ModuleFederationPlugin`, `NextFederationPlugin`, `moduleFederationPlugin`, `pluginModuleFederation` and `federation`.
 
-- `exposes`: each target becomes a runtime entry point, so the exposed module is not an unused file.
-- `remotes`: fallow does not report an import of a remote alias, such as `import("checkout/Button")`, as an unlisted dependency. The alias applies only below the directory of its config.
-- `shared`: each package that the option names counts as used, in the package that owns the config.
+A call counts only when its first argument is an object that declares `exposes`, `remotes` or `shared`.
 
-Fallow also reads remotes from literal calls of the Federation runtime: `registerRemotes`, `loadRemote`, and the `remotes` option of `init` and `createInstance`.
+- `exposes`: each target becomes a runtime entry point, so the exposed module is not an unused file. Its exports follow [`includeEntryExports`](/reference/config-files#includeentryexports), like the exports of each entry point. A target that names a module request instead of a local path (`"./utils": "shared-utils"`) credits that dependency, in the package that owns the config.
+- `remotes`: fallow does not report an import of a remote alias or its subpaths, such as `import("checkout/Button")`, as an unlisted dependency. The alias applies only below the directory of its config.
+- `shared`: each package that the option names counts as used, in the package that owns the config (the nearest `package.json` at or above the config). Fallow reads the object form, the array form, an object element in the array form, and the `import` and `packageName` fields of an entry. A key with a trailing `/` credits the same package. A relative key shares a project module and credits no package.
 
-Fallow reads the config as syntax. It does not fetch a remote container and does not check the remote. When fallow cannot read a declaration, for example a value that is not a static object, it adds a `plugin-config-unreadable` entry to `workspace_diagnostics[]` and prints a warning. Then name the exposed files in [`dynamicallyLoaded`](/reference/config-files#dynamicallyloaded), or the remote aliases in [`ignoreDependencies`](/reference/config-dead-code#ignoredependencies).
+Fallow finds the plugin call in these positions:
+
+- a nested plugin array, or a plugin list in a variable,
+- a tool key such as `tools.rspack.plugins`,
+- a hook body, such as an rsbuild `appendPlugins` hook or a Next.js `webpack(config)` hook,
+- a helper module that the config imports with a relative `import` or `require`, one import deep. The diagnostics and the trace sources then name the helper file.
+
+Fallow follows one step of indirection to the options object: a same-file `const` or `export const` that no code writes to, a non-null assertion (`mfConfig!`), a computed callee (`container['ModuleFederationPlugin']`), a relative `import` or `require` of a sibling file, a spread or `Object.assign({}, base)` over a same-file binding, and the array form of `exposes`. Each config reader of fallow follows `export const config = { ... }; export default config` in the same way.
+
+Fallow does not read the array form of `remotes`, a value that is not a static literal, a `require` of a package, or an array element with glob syntax, a nested array or a value that is not a string.
+
+#### Runtime remotes {#federation-runtime-remotes}
+
+Fallow also reads the remotes of Federation runtime calls, in a file that imports the function from `@module-federation/runtime` or `@module-federation/enhanced/runtime`. A local function with the same name registers nothing.
+
+- `registerRemotes([{ name: "checkout", entry }])` registers `checkout`, and a literal `alias` of the object.
+- `loadRemote("checkout/Button")` registers `checkout`. A scoped name keeps two segments (`@scope/remote`).
+- `init({ remotes })` and `createInstance({ remotes })` register the remotes of the `remotes` option. Fallow also reads the `registerRemotes` and `loadRemote` methods of the instance that they return.
+
+A runtime remote applies only inside the workspace that holds the file. In a `.vue` or `.svelte` file, the `<script>` blocks count as one file. Fallow reads only a static literal argument.
+
+#### Diagnostics {#federation-diagnostics}
+
+Fallow reads the config as syntax. It does not fetch a remote container, and it does not check the exports, the versions or the shared singletons of the remote. When fallow cannot read a declaration, it adds a `plugin-config-unreadable` entry to [`workspace_diagnostics[]`](/reference/json-output#workspace-diagnostics) and prints a warning on stderr. Each unreadable key gives one entry, and each entry has `degrades_analysis`.
+
+| Field | Values |
+|:--|:--|
+| `plugin` | `module-federation` for a `module-federation.config.*` file and for a runtime call, or `webpack`, `rspack`, `rsbuild`, `vite` or `nextjs` for a config of that plugin |
+| `key` | The Federation key, or `registerRemotes`, `loadRemote`, `init` or `createInstance` for a runtime call |
+| `reason` | `not-object-literal`, `array-form`, `spread`, `unreadable-entries` or `dynamic-argument`. The set is open. |
+| `path` | The config file, or the source file of a runtime call |
+
+Name the exposed files that fallow cannot see in [`dynamicallyLoaded`](/reference/config-files#dynamicallyloaded), and a file that is an entry point of its own in [`entry`](/reference/config-files#entry). Put a remote alias in [`ignoreDependencies`](/reference/config-dead-code#ignoredependencies). This key also hides the unused-dependency findings for that name.
 
 #### Trace the Federation source {#trace-the-federation-source}
 
-`--trace-file` on an exposed file lists each config that exposes it. `--trace-dependency` on a remote alias lists each config that declares the alias. The JSON output has a `sources` array for these traces.
+`--trace-file` on an exposed file lists each config that exposes it. `--trace-dependency` on a remote alias lists each config that declares the alias, and says that a remote container supplies the name. The human output adds one `Source:` line for each config. The JSON output has a `sources` array, also in the MCP `trace_file` and `trace_dependency` tools:
+
+```json
+{ "kind": "module-federation", "plugin": "webpack", "config": "packages/cart/webpack.config.js", "key": "exposes" }
+```
+
+For a remote that only a runtime call names, `config` is the source file and `key` is the function name. A trace without Federation has no `sources` array.
 
 ### Nuxt {#nuxt}
 
 #### Convention directories {#nuxt-convention-directories}
 
-Fallow scans `plugins/`, `middleware/` and `modules/` one level deep, as Nuxt does. `plugins/bar.ts` and `plugins/foo/index.ts` are entry points. `plugins/foo/helper.ts` is not, so fallow reports it when nothing imports it. A file in the `plugins` list of `nuxt.config` is an entry point at any depth. The `dir.*` settings of `nuxt.config` change these directories.
+Fallow scans `plugins/`, `middleware/` and `modules/` one level deep, as Nuxt does. `plugins/bar.ts` and `plugins/foo/index.ts` are entry points. `plugins/foo/helper.ts` is not, so fallow reports it when nothing imports it. A file in the `plugins` list of `nuxt.config` is an entry point at any depth. The files in `modules/<name>/runtime/` stay entry points, because a module registers them through `resolver.resolve()` strings that fallow does not follow.
+
+A string value of `dir.pages`, `dir.layouts`, `dir.middleware` or `dir.plugins` in `nuxt.config` sets that directory, relative to `srcDir`. A string value of `dir.modules` is relative to the project root, as in Nuxt. The same rules apply under `app/` and in each local layer.
 
 #### Local layers {#nuxt-local-layers}
 
-A directory is a local layer when it has a `nuxt.config` file, and a `nuxt.config` names it in `extends` by a relative path, or it is under `layers/<name>`. Fallow scans a local layer like the project root: its convention files are entry points, and with [`autoImports`](/reference/config-files#autoimports) on, its components and composables are auto-import sources. Fallow does not scan the files of a remote layer or a package layer. It reads the `modules` of a package layer.
+A directory is a local layer when it has a `nuxt.config` file, and a `nuxt.config` names it in `extends` by a relative path, or it is under `layers/<name>`. Fallow scans a local layer like the project root: its convention files are entry points, and with [`autoImports`](/reference/config-files#autoimports) on, its components and composables are auto-import sources. A layer chain, in which a local layer extends another local layer, resolves too. The root files of a local layer (`app.vue`, `app.config.*`) are always used.
 
-An import of `#layers/<name>/` resolves to the local layer whose `nuxt.config` sets `$meta.name` to `<name>`. A directory `layers/<name>` without `$meta.name` has its directory name as its name. When the root `nuxt.config` sets `$meta.name`, that name resolves to the project root.
+Fallow does not scan the files of a remote layer (a `github:` or `gh:` reference) or a package layer (an npm name). It reads the `modules` of a package layer from the nearest `node_modules/<name>`, and it does not follow the `extends` of that layer. For example, with `extends: ["docus"]`, `@nuxt/content` is active for the app, so the `components/content/` files and the `content.config.*` file of the app stay entry points. `docus` turns `@nuxt/content` on also when it is not installed.
+
+An import of `#layers/<name>/` resolves to the local layer whose `nuxt.config` sets `$meta.name` to `<name>`. A directory `layers/<name>` without `$meta.name` has its directory name as its name. A layer of `extends` without `$meta.name` has no name, so an import through `#layers/<name>/` stays unresolved. When the root `nuxt.config` sets `$meta.name`, that name resolves to the project root.
 
 #### Auto-import scope {#nuxt-auto-import-scope}
 
 With [`autoImports`](/reference/config-files#autoimports) on, an auto-import name marks as used only the files of the app that uses it, and of the layers that this app extends. In a monorepo, a `<Card />` in one app does not keep the unused `Card.vue` of another app. Components in `components/global/`, `*.global.vue` files, and, with `@nuxt/content`, the files in `components/content/` stay entry points.
 
+A layer that an app extends by a relative path outside the app, or by the package name of a workspace, shares its names with that app in both directions. Two apps that extend the same layer do not see the names of each other.
+
+`nuxt-og-image` renders the template that a string names. A `defineOgImage("Docs.takumi")` or `defineOgImageComponent("Docs")` call marks the matching file as used, in an `OgImage/`, `og-image/`, `OgImageCommunity/` or `OgImageTemplate/` components directory. Dot segments join in PascalCase, and the renderer suffix (`.satori`, `.browser`, `.takumi`) and the directory prefix do not count. A template that no call names with a static string stays reported.
+
 ### Storybook {#storybook-stories}
 
-Fallow reads each `stories` pattern of `.storybook/main` relative to the `.storybook/` directory, as Storybook does. A pattern can point into another workspace. Fallow drops a pattern that leaves the project root. Fallow reads the object form `{ directory, files }` and the extglob groups `@(..)`, `?(..)`, `+(..)`, `*(..)` and `!(..)`.
+Fallow reads each `stories` pattern of `.storybook/main` relative to the `.storybook/` directory, as Storybook does. A pattern can point into another workspace. Fallow drops a pattern that leaves the project root. Storybook reads a leading `/` as an absolute file system path, so a pattern such as `/src/**` marks nothing as used. Fallow reads the object form `{ directory, files }`. Without `files`, the Storybook default `**/*.@(mdx|stories.@(js|jsx|mjs|ts|tsx))` applies.
+
+### Extglob groups in tool globs {#extglob-groups-in-tool-globs}
+
+Fallow reads the extglob groups `@(..)`, `?(..)`, `+(..)`, `*(..)` and `!(..)` in the Storybook `stories` patterns, Playwright `testMatch`, Vitest `test.include` and `test.exclude`, Rstest `include` and `exclude`, Jasmine `spec_files` and `helpers`, and `import.meta.glob` patterns. The matcher of fallow cannot repeat a group, so fallow changes each group into a glob that it can match. An include glob never matches fewer files than the tool, and an exclude glob never removes more files:
+
+| Group | In an include glob | In an exclude glob |
+|:--|:--|:--|
+| `@(a\|b)` | `{a,b}` | `{a,b}` |
+| `?(a\|b)` | `{,a,b}` | `{,a,b}` |
+| `+(a\|b)` | `{a,b}*`, so `*.test.+(ts\|js)` also matches `a.test.tsx` | `{a,b}`, one time |
+| `*(a\|b)` | `*` | `{,a,b}`, zero times or one time |
+| `!(a\|b)` | `*`, minus the files that match `a` or `b` | The glob removes no file. |
+
+### Vue and Svelte files {#vue-and-svelte-files}
+
+Fallow reads these blocks of a `.vue` or `.svelte` file without a plugin. [File types](/guides/file-types#vue-and-svelte) gives the common case.
+
+- `<script src="./x.ts">` is an import in a Vue file. In a Svelte file it is HTML that runs in the browser, so it adds no import.
+- Vue templates: a tag `<MyComponent>`, a custom directive `v-focus-trap` (the import `vFocusTrap`), the object forms `v-on="handlers"` and `v-bind="attrs"`, expressions, and `utils.formatDate` on a namespace import count as uses.
+- Svelte markup: a tag `<Button>`, the directives `use:`, `transition:`, `animate:`, `in:` and `out:`, attribute expressions, and `$myStore` (the import `myStore`) count as uses.
+- Vue joins `<script>` and `<script setup>` into one module. `<script setup>` and the template can use an import of the plain `<script>` block, also a type that only the `generic="..."` attribute names. The plain `<script>` cannot use an import of `<script setup>`.
+- Svelte joins the module script (`<script module>` or `<script context="module">`) and the instance script in the same way. The instance script and the markup can use an import of the module script, also as a `$name` store. The module script cannot use an import of the instance script.
+
+### CSS and Sass files {#css-and-sass-files}
+
+- Fallow resolves `@use "components/button"` in this order: `components/_button.scss`, `components/button/_index.scss`, `components/button/index.scss`. A Sass built-in module, such as `sass:math`, is never an unresolved import.
+- When a bare `@use` or `@import` does not resolve next to the file, fallow searches the include paths of the project, for example `stylePreprocessorOptions.includePaths` of Angular, and then `node_modules`.
+- Fallow ignores a remote URL (`https://...`) and a data URI in `@import`.
+- A Tailwind v4 `@plugin "daisyui"` stays a package name, also in a `.scss` file. A local plugin file, such as `@plugin "./plugin.js"`, is reachable, and its `default` export is used. Fallow also reads `@plugin` in a Vue or Svelte `<style>` block.
+- `composes: base from "./shared.module.css"` in a CSS module is an import of the classes `base` from that file. `composes: name from global` and `composes: name` without `from` name no other file.
+
+### HTML in tagged templates {#html-tagged-templates}
+
+Fallow reads `<script src>` and `<link rel="stylesheet|modulepreload" href>` only in a template with the tag `html`, such as `` html`...` `` of Hono. It ignores other tags, such as `css`, `sql` and `gql`. It skips a path that an interpolation splits, such as `` html`<script src="${base}/app.js">` ``. A path that starts with `/` resolves as in an HTML file, but without the `public/` step.
+
+### Pinia stores {#pinia-stores}
+
+The [`unused-store-member`](/rules/unused-store-member) rule runs only when `pinia` or `@pinia/nuxt` is a declared dependency. Besides the reads that the rule page lists, fallow counts these uses:
+
+- `store.member` in the template of a `.vue` or `.svelte` file,
+- `this.member` in a getter or an action of the same store,
+- a read in the setup function of a setup store, for example `count.value` in a `computed`. Pinia needs the returned state for hydration, so a returned ref that only the setup body reads is used.
+
+A use of the whole store, such as `{ ...store }`, `Object.keys(store)` or `store[key]`, marks each member of the store as used. The rule does not cover Vuex or Svelte stores.
+
+### Component rules by framework {#component-rules-by-framework}
+
+The rule [`unrendered-component`](/rules/unrendered-component) also covers two cases outside single-file components:
+
+- **Angular** (with `@angular/core`): an `@Component` whose element selector is in no template. Fallow skips a component of a route, `bootstrapApplication`, a lazy `loadComponent`, and a dynamic render (`ViewContainerRef.createComponent`, `*ngComponentOutlet`).
+- **Lit** (with `lit`, `lit-element` or `@lit/reactive-element`): a custom element (`@customElement("x-foo")` or `customElements.define("x-foo", C)`) whose tag no `html` template and no `.html` file renders, and that no `createElement`, `customElements.get` or `whenDefined` call uses. Fallow skips a published element, and an element under a `docs`, `dev`, `demo` or `demos` directory, because site tooling that fallow cannot read renders it.
+
+The opt-in rule [`absent-component-prop`](/rules/absent-component-prop) reads these declarations and callers. A required typed prop stays required, also when a destructure or `withDefaults` gives it a default.
+
+| Framework | Declarations | Callers | Cases that prevent a finding |
+|:--|:--|:--|:--|
+| React and Preact, also Next.js | JSX function and arrow components with same-file inline types, interfaces or type aliases, untyped destructure defaults, `memo` and `forwardRef` | JSX attributes and children, also through imported aliases, namespace members and proven spreads | Unresolved prop types, other wrappers, a component value that escapes, an unknown spread |
+| Solid | JSX components with Solid bindings and local prop types | JSX attributes, children and proven spreads | Other wrappers, unresolved types, opaque use |
+| Qwik | `component$` wrappers, also with same-file generic prop types | JSX attributes, children and proven spreads | Other wrappers, unresolved types, opaque use |
+| Vue and Nuxt | Typed or runtime `defineProps`, local named types, `withDefaults`, Options API props | Static tags, camel-case and kebab-case bindings, `v-model`, literal or local constant `v-bind` | Dynamic or scoped component use, exposed or forwarded props, `defineModel`, rest props |
+| Svelte and SvelteKit | Typed or destructured Svelte 5 `$props`, untyped defaults, `export let` props | Static tags, shorthand attributes, `bind`, children, proven spreads | Dynamic components, `$bindable`, rest props, forwarding |
+| Astro | Same-file `Props` interfaces or type aliases, `Astro.props` reads and destructure defaults | Static tags, explicit attributes, proven spreads | Dynamic tags, unresolved types, opaque props use |
+| Angular | `Component` or `Directive` classes with `@Input` or signal `input` declarations, also with an alias | Static selectors with attribute, property or two-way bindings in inline or external templates | Inheritance, `hostDirectives` and other metadata, dynamic outlets, imperative use |
+| Lit | Direct `LitElement` or `ReactiveElement` subclasses with property decorators and attribute aliases | Imported `html` templates, static tags, HTML attributes, case-sensitive `.property` bindings | Other inheritance or registration, imperative DOM use, injected HTML |
+| Ember and Glimmer | Component subclasses with optional fields in a same-file typed `Signature.Args` | Static Glimmer tags and named `@arguments` | Registry lookup, other signatures, whole-args forwarding, computed argument access |
+
+A proven spread has a known set of own keys, from a literal or a local binding that no code changes. A `.tsx` file name alone does not tell fallow which framework applies. When a project declares more than one of Preact, Solid and Qwik, fallow gives no JSX finding.
+
+### pnpm catalogs and overrides {#pnpm-catalogs-and-overrides}
+
+The pnpm plugin reads the pnpmfile (`.pnpmfile.mjs` or `.pnpmfile.cjs` next to the lockfile) and each path in the `pnpmfile` setting of `pnpm-workspace.yaml` or `.npmrc`.
+
+The catalog checks also read the `catalog:` values of pnpm overrides:
+
+- A `catalog:` value in an override is a reference to the catalog entry of the target package. So `"parent>child": "catalog:x"` uses the `child` entry of catalog `x`.
+- When the catalog does not declare the target package, `pnpm install` fails. The [`unresolved-catalog-reference`](/rules/unresolved-catalog-reference) finding then points to the line of the override.
+- An override key with a version selector, such as `vite@^5`, does not replace a `catalog:` reference of `package.json`, because pnpm fails the install for it.
+
+Fallow reads the pnpm version from `packageManager` and checks only the override sources that this version reads. [Override sources and the pnpm version](/explanations/dead-code#pnpm-override-sources) has the table. A version without a minor or a patch, such as `pnpm@10`, does not count as a version before 10.5.1. A prerelease comes before its release, so `pnpm@10.0.0-rc.3` is before 10.5.1. When the version names no pnpm, fallow reads the `overrides` of `pnpm-workspace.yaml` and `pnpm.overrides`.
+
+The `pnpm-workspace-overrides-ignored` diagnostic has a `cause` field:
+
+| `cause` | Meaning | Fix |
+|:--|:--|:--|
+| `pnpm-version` | The pnpm version is before 10.5.1. This cause wins when both apply. | Update `packageManager` to pnpm 10.5.1 or later, or move the entries to `pnpm.overrides`. |
+| `package-json-overrides` | The pnpm version is 10 or earlier, and the root `package.json` declares `pnpm.overrides` or `resolutions`. | Move the entries to one source. |
+
+### Tailwind {#tailwind-config}
+
+The Tailwind plugin reads `tailwind.config.{ts,js,cjs,mjs}`, the config file of Tailwind v3:
+
+- The globs of the `content` array are files that are always used.
+- The packages of `plugins`, as a `require()` call or a string, are used dependencies. So are the packages of `presets`.
+- Each import of the config file, for example `tailwindcss/defaultTheme`, is a used dependency.
+
+```js
+// tailwind.config.js
+import defaultTheme from "tailwindcss/defaultTheme";
+
+export default {
+  content: ["./src/**/*.{js,ts,jsx,tsx}"],
+  plugins: [require("@tailwindcss/typography")],
+};
+```
+
+In this example, `tailwindcss` and `@tailwindcss/typography` are used dependencies. For Tailwind v4, fallow reads the `@plugin`, `@apply` and `@tailwind` directives of the CSS files. [File types](/guides/file-types#css) has these rules.
+
+### How a plugin reads a config file {#config-file-reading}
+
+A built-in plugin parses a config file of its tool as code, and it does not run the file. Fallow reads these forms:
+
+- `export default { ... }`, `module.exports = { ... }`, a top-level JSON object, and an object with `satisfies` or `as`.
+- A wrapper call such as `defineConfig({ ... })`, also with a function that returns the object.
+- `const config = { ... }; export default config`, also with a type annotation.
+- A same-file constant that a config value names, such as `setupFiles: SETUP`.
+- The local bindings of a config function that the function returns, such as `return [web]` with `const web = { ...common, entry }`.
+- Each argument of a Vite `mergeConfig(...)` call, and each config of an exported array, for webpack and rspack.
+- Both branches of a condition in an array spread, such as `...(isCi ? ["a"] : ["b"])`.
+
+A computed key and a call of a function of another module give no value. Add the files that such a config names to [`entry`](/reference/config-files#entry).
 
 ## Related
 

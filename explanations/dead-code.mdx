@@ -44,6 +44,13 @@ Full reference: [Private type leaks](/rules/private-type-leak)
 
 An export has a `@deprecated` JSDoc tag, and reachable files still use it. The finding lists these files. Move each one to the replacement API, then remove the export. This check is off by default.
 
+- A use in an unreachable file does not count, because that file has its own `unused-file` finding.
+- A deprecated export without uses is an [unused export](#unused-exports), with the note `(marked @deprecated)`. When the last use is gone, remove the export.
+- With `--changed-since` and in `fallow audit`, the finding counts only when the file that declares the export changed. A change that only adds a use does not bring the finding into scope.
+- The editor shows no diagnostic for this finding, because TypeScript already strikes through deprecated names.
+
+[Opt-in issue types](/cli/dead-code#opt-in-issue-types) has the fields of the finding.
+
 Full reference: [Deprecated exports in use](/rules/deprecated-export-in-use)
 
 ### Duplicate exports {#duplicate-exports}
@@ -294,6 +301,13 @@ Full reference: [Unused component props](/rules/unused-component-prop)
 
 A component reads an optional prop, and no known caller passes it. The default value then always applies. Decide if the prop still has a purpose. This check is off by default.
 
+Fallow reports a prop only when it knows at least one reachable caller and can see each caller of the component. It skips a component that a package exports for users outside the project, because those callers are unknown. A required prop that a caller leaves out is a task for the type checker, and a prop that the component never reads is an [unused component prop](#unused-component-props).
+
+- The check covers React, Preact, Solid, Qwik, Vue, Svelte, Astro, Angular, Lit and Ember components.
+- A caller that passes `compact={false}` or `compact={undefined}` supplies the prop.
+- A spread supplies props only when fallow can see each key of the object: a literal, or a local constant that the code does not change. An unknown spread, a dynamic component, a wrapper that fallow does not know, or a prop that the component passes on stops the check for that component.
+- Fallow does not remove a prop. The finding does not prove that conditional UI never runs.
+
 Full reference: [Absent optional component props](/rules/absent-component-prop)
 
 ### Unused component emits {#unused-component-emits}
@@ -368,11 +382,34 @@ Full reference: [Unproduced catch tags](/rules/unproduced-catch-tag)
 
 Each call of a function passes the same value for a parameter, or no call passes an optional parameter. A branch that tests the parameter can then never run. Remove the parameter or the dead branch, or keep the parameter when it is a deliberate option. This check is off by default.
 
+Fallow reports two reasons. With `identical-argument`, each call passes the same literal, such as `true`, `null`, a number or a string, or the same `const` with a literal value or enum member. With `never-passed`, the parameter is optional or has a default, and no call passes it. When the parameter is an object pattern, such as `{ retries = 3, signal }`, fallow checks each key on its own. It does that only when each call passes an object literal without a spread or a computed key, and the parameter has no default or the default `{}`.
+
+The finding claims that fallow sees each call of the function. So fallow does not report a function when one of these is true:
+
+- The function is in the public API of a package, is an export of an entry point, or a plugin marks the export as used.
+- A dynamic import, a `require`, a CommonJS export or a framework auto-import can reach its module.
+- A module loads code from a path that fallow cannot resolve, such as `import(name)`, and reads a name of the same function on the result.
+- An import with a query, such as `./runtime.ts?raw`, or a webpack loader such as `raw-loader!./runtime.ts`, reads its module as text.
+- Code uses the function as a value: a callback, an object property, an alias, or a call through `call`, `apply` or `bind`.
+- A template, a component file or an inline script can call the function, or its module has a direct `eval` or can be a classic script.
+- A file of the project has a parse error.
+- The function reads `arguments`, has overloads or decorators, is a generator, or code assigns its binding again.
+- The function has fewer than 2 calls.
+
+Fallow also skips a rest parameter, an array pattern and a parameter that the function writes. A recursive call that passes the parameter on unchanged does not count as a call. Without type-aware analysis, the rule checks only module-scope functions: function declarations and `const` bindings with a function. Fallow does not report a function that a test file declares. In the default mode, a call in a test file counts. With `--production`, fallow ignores test files.
+
+[Opt-in issue types](/cli/dead-code#opt-in-issue-types) has the fields of the finding.
+
 Full reference: [Constant parameters](/rules/constant-parameter)
 
 ### With type evidence {#with-type-evidence}
 
 With [type-aware analysis](/analysis/type-aware), the constant parameter check also reports a default value that no call needs, and it checks the methods of exported classes. These findings show `(type evidence)` in the output. A type does not prove a value at run time, so check the calls before you remove a default.
+
+- `unused-default`: the parameter has a default, and each call passes a value whose type excludes `undefined`. The default never applies.
+- A method of an exported class can get `never-passed` or `unused-default`. The checker finds the calls through the type of the receiver, for example `this.store.save(id)`.
+
+Without `--type-aware`, the result of the rule does not change.
 
 Full reference: [Constant parameters](/rules/constant-parameter)
 

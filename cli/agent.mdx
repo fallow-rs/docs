@@ -138,6 +138,46 @@ The [global options](/cli/global-flags) are in these groups: [Project](/cli/glob
 
 `fallow agent` has no options of its own. The section of each subcommand under [Subcommands](#subcommands) lists its options.
 
+## Option details
+
+### Skill source {#skill-source}
+
+The `skill` step writes two skills: `fallow` for analysis, and `fallow-setup` to set up code-quality tooling in a project. The output has one `skill` row for each skill in each skill directory.
+
+- When the project has `node_modules/fallow/skills/<name>`, fallow writes a small pointer skill to that copy. The skill then always matches the fallow version that the project pins.
+- Else fallow writes the copy that the binary holds. That copy matches the version of the binary.
+
+Fallow selects the source of each skill separately. An older npm package without `fallow-setup` thus gets the copy from the binary for that skill. When a skill with the same name exists and fallow did not write it, the step is `refused` with the reason `skill_name_taken`, except with `--force`. Fallow still writes the other skill.
+
+### Ownership and `--force` {#force}
+
+Each file or block that fallow writes has a `<!-- fallow:agent-install v1 ... -->` marker. A second run writes the same bytes and reports each step as `unchanged`.
+
+- Fallow does not overwrite a file that it did not write, except with `--force`.
+- A `fallow` MCP entry belongs to fallow only when its command is one that fallow writes. Fallow keeps a hand-written entry and reports it as `refused` with the reason `mcp_entry_foreign`.
+- With `--force`, fallow first saves a config file that it cannot parse as `<file>.fallow-bak`.
+- `uninstall` removes the managed blocks and entries, and deletes a config file that it emptied.
+
+### `--user` {#user}
+
+With `--user`, fallow writes the skills, the MCP entry and the commit gate under your home folder, not in the project.
+
+- The Codex gate goes to `~/.codex/hooks.json`.
+- Fallow skips the `guide` step (reason `user_scope_unsupported`) and the routing block in `AGENTS.md`.
+- For Claude Code, fallow does not edit `~/.claude.json`. It prints a `claude mcp add --scope user fallow -- ...` command for you to run.
+
+### `--approve` {#approve}
+
+Claude Code asks before it starts an MCP server of the project. `--approve` records that approval for you: fallow lists `fallow` in `.claude/settings.local.json`. When Git tracks that file, fallow refuses the step with the reason `settings_local_tracked`, because the team would then share your approval.
+
+### Codex MCP entry {#codex-mcp}
+
+Codex reads a `.codex/config.toml` of the project only after you trust the project. The output thus starts with a `codex mcp add fallow -- ...` command, which works at once.
+
+### Symlinks {#symlinks}
+
+Fallow does not write, back up or delete a project path when the path, or a directory on the way to it, is a symlink that resolves outside the project root, or a dangling link. The step then has the status `skipped` and the reason `symlinked_path`. A link that stays inside the project, such as `CLAUDE.md -> AGENTS.md`, still works. Targets of `--user` still follow symlinks.
+
 ## Output
 
 ```bash
@@ -174,6 +214,23 @@ With `--format json`, `install` and `uninstall` print `kind: "agent-install"` or
 | `next_actions` | Commands to run next. `mutating: true` marks a command that writes agent config. After a dry run, `agent-install-apply` comes first. |
 
 `status` is `written`, `removed`, `unchanged`, `skipped`, `refused` or `failed`. `fallow agent status --format json` prints `kind: "agent-status"` with `surfaces` (`step`, `path`, `state`, `detail`) and `next_actions`. The [JSON output reference](/reference/json-output) has each field.
+
+The `command` of the `agent-install-apply` action drops `--dry-run` and repeats each flag that changes the plan: `--harness`, `--user`, `--without`, `--force`, `--approve`, `--gitignore-claude` and `--root`. It also names each detected agent with `--harness`, because detection reads the session environment and `$HOME`. A run of the command in another shell thus writes the same plan:
+
+```json
+{
+  "next_actions": [
+    {
+      "id": "agent-install-apply",
+      "command": "fallow agent install --harness claude --harness codex --harness cursor",
+      "reason": "This was a dry run. The command writes the steps marked \"would write\".",
+      "mutating": true
+    }
+  ]
+}
+```
+
+A `foreign` surface exists, but fallow did not write it. `fallow agent install --force` replaces it. `fallow agent status` lists the launchers and package managers of the project, but does not run them. It also does not check project trust or hook approval.
 
 ### Gate readiness {#gate-readiness}
 

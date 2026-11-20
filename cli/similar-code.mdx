@@ -179,6 +179,37 @@ The [global options](/cli/global-flags) are in these groups: [Project](/cli/glob
 
 `--threshold` and `--min-lines` take their default from the [`similarCode` config](/reference/config-duplication#similarcode). The command accepts the `human` and `json` formats, and these [global options](/cli/global-flags): `--root`, `--config`, `--allow-remote-extends`, `--format`, `--pretty`, `--quiet`, `--no-cache`, `--threads`, `--changed-since`, `--diff-file`, `--diff-stdin`, `--workspace`, `--changed-workspaces`, `--max-file-size`, `--explain` and `--output-file`. A scope option compares only the pairs in which at least one function is fully in scope.
 
+## Option details {#option-details}
+
+### Install the program {#install}
+
+The `fallow` npm package does not install `fallow-similar-code`. Fallow accepts it only at the same version as `fallow`, and it searches neither `PATH` nor the executables of the project.
+
+| How you run fallow | What to install |
+|:--|:--|
+| `fallow` is a dependency of the project | `npm install --save-dev fallow-similar-code@<fallow version>`. The `fallow` npm launcher finds the package, checks its signature and gives the program to fallow. |
+| A global `fallow` from npm | `npm install --global fallow-similar-code@<fallow version>` |
+| `npx` | Start both packages together: `npx -p fallow@<version> -p fallow-similar-code@<version> fallow similar-code`. An MCP client that starts `npx fallow-mcp` needs the same pair. |
+| A `fallow` binary from Homebrew, `cargo install` or a release archive | Download the release archive of the same version for your platform from [GitHub Releases](https://github.com/fallow-rs/fallow/releases). Copy `fallow-similar-code` from the archive into the directory of the `fallow` executable. |
+
+Fallow resolves symlinks before it looks for the program. For Homebrew, the directory is the Cellar directory, for example `/opt/homebrew/Cellar/fallow/<version>/bin`, not the directory of the `/opt/homebrew/bin/fallow` link. A Homebrew upgrade installs `fallow` in a new Cellar directory, so copy the program of the new version again. You can also install both packages from npm: `npm install --global fallow@<version> fallow-similar-code@<version>`.
+
+When fallow does not find the program, `fallow similar-code` exits with code 3 and the message names the install step for your setup.
+
+### Inspect a saved candidate {#inspect-a-saved-candidate}
+
+`inspect` reads the candidate from the discovery JSON of `--candidates`, so you do not give the discovery options again. Run it from the same project root. If one of the two functions changed after the discovery, `inspect` does not show the old result. An MCP client gives the `candidate_id` and the candidate snapshot of the `find_similar_code` response to `inspect_similar_code`.
+
+### Verdict matching {#verdict-matching}
+
+`review` matches each verdict to a candidate by its `candidate_id` first. A verdict with an unknown `candidate_id` matches by its `review_key`. The `review_key` comes only from the source of the two functions. When one function is copied without a change into two files, two candidates can have the same `review_key`. These rules apply:
+
+- Verdicts that match by `candidate_id` can share a `review_key`. To pass `--require-verdict-for-each-candidate`, write one verdict for each candidate.
+- A `review_key` must be unique only among the verdicts that match by `review_key`. Otherwise `review` exits with code 2.
+- `review` does not apply a `review_key` verdict that matches more than one candidate. It adds the diagnostic `FALLOW_SIMILAR_CODE_REVIEW_KEY_AMBIGUOUS`.
+- `review` exits with code 2 when two verdicts have the same `candidate_id`, when the `review_key` of a verdict does not match its `candidate_id`, when two verdicts match the same candidate, or when a verdict matches no candidate.
+- Each input file can have 16 MiB at most.
+
 ## Output
 
 The human output starts with the line `Similar-code candidates (unverified)`. Each candidate then has these lines:
@@ -202,12 +233,74 @@ With `--format json`, the output has these top-level fields:
 
 The `status` output has `model_ready`, `integrity_verified`, `model_id`, `model_revision`, `license`, `download_bytes`, `cache_dir`, and `problem` when the model is not ready. The [JSON output reference](/reference/json-output) has each field.
 
+### Candidate fields {#candidate-fields}
+
+Each entry of `candidates` has this shape. The sample shows the fields of the output schema of fallow, with shortened ids and digests:
+
+```json
+{
+  "candidate_id": "similar-code:candidate:v1:...",
+  "review_key": "similar-code:review:v1:...",
+  "left": {
+    "path": "src/orders/normalize.ts",
+    "name": "normalizeOrder",
+    "start_line": 12,
+    "start_column": 1,
+    "end_line": 34,
+    "end_column": 2,
+    "source_sha256": "..."
+  },
+  "right": {
+    "path": "src/imports/clean.ts",
+    "name": "cleanImportedOrder",
+    "start_line": 8,
+    "start_column": 1,
+    "end_line": 31,
+    "end_column": 2,
+    "source_sha256": "..."
+  },
+  "similarity": 0.91,
+  "similarity_band": "high",
+  "verification_status": "unverified",
+  "enrichment": {
+    "graph_relationship": "not-requested",
+    "entry_point_reachability": "not-requested",
+    "callers": "not-requested",
+    "callees": "not-requested",
+    "ownership": "not-requested",
+    "churn": "not-requested",
+    "tests": "not-requested",
+    "deterministic_clone_coverage": "not-requested",
+    "runtime": "not-requested"
+  },
+  "actions": [
+    { "action": "inspect", "description": "...", "read_only": true },
+    { "action": "review", "description": "...", "read_only": true }
+  ]
+}
+```
+
+| Field | Content |
+|:--|:--|
+| `candidate_id` | The id of this pair in this discovery run. It changes when a function moves. |
+| `review_key` | A key from the source of the two functions only. It stays the same when a function moves. |
+| `left`, `right` | The two functions, in a fixed order. Lines and columns are 1-based. `source_sha256` is the SHA-256 digest of the function source. |
+| `similarity` | The cosine similarity, from the pinned model. |
+| `similarity_band` | `very-high` from 0.95, `high` from 0.88, else `moderate`. |
+| `verification_status` | Always `unverified`. |
+| `enrichment` | For each kind of evidence: `available`, `unavailable` or `not-requested`. Discovery requests none, so `inspect` adds the evidence. |
+| `actions` | The read-only next steps, `inspect` and `review`. |
+
+### Review output {#review-output}
+
+`review` gives `kind: "similar-code-review"`. Each entry of its `candidates` has the unchanged `candidate`, the matched `verdict` (absent when no verdict matched), `verdict_match` and `outcome`. `verdict_match` is `candidate-id`, `review-key`, `ambiguous-review-key` or `unverified`. A candidate without a matched verdict gets the outcome `needs-human-review`. The `review` object has the SHA-256 digests of the two input files in `candidates_sha256` and `verdicts_sha256`.
+
 ## Exit codes
 
 | Code | Meaning |
 |:--|:--|
 | `0` | The command ran. Candidates do not change the exit code. |
-| `2` | Invalid input, for example `cache clear` without `--yes`, an invalid verdict document, or a candidate without a verdict under `--require-verdict-for-each-candidate`. |
+| `2` | Invalid input, for example `cache clear` without `--yes`, an invalid verdict document, or a candidate without a verdict under `--require-verdict-for-each-candidate`. Also a failure of the `fallow-similar-code` program after it starts. |
 | `3` | The `fallow-similar-code` program is missing, or the model is not ready. Run `fallow similar-code setup --local`. |
 
 [Exit codes](/reference/exit-codes) has the codes that all commands share.

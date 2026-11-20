@@ -36,7 +36,9 @@ fallow audit --format json --quiet --explain --gate-marker agent
 
 - On the verdict `pass` or `warn`, the command continues.
 - On `fail`, the hook blocks the command and gives the agent a short list of the findings.
-- When the audit cannot run, for example on an invalid config, the hook writes a notice and lets the command continue.
+- When the audit cannot run, for example on an invalid ref, a folder without Git or an invalid config, the hook writes a notice and lets the command continue. A new repository can thus commit before the first audit that works.
+
+The hook runs before the agent runs the shell command, so `git push --no-verify` does not skip it. When local [Impact tracking](/cli/impact) is on, `--gate-marker agent` lets fallow record a block that a later audit clears.
 
 The audit uses the default [`audit.gate`](/reference/config-rules#audit-gate) value `new-only`, so only the findings that the change adds block a commit. An old finding in the same file, such as `cancelOrder`, does not. [Changed code](/concepts/changed-code) explains the verdict. Keep the check in CI too, because the commit gate checks only the commands that the agent runs.
 
@@ -85,9 +87,69 @@ The install writes two parts for each agent: a handler in the settings of the ag
 
 For Codex, the installer also writes a routing block in `AGENTS.md`. The block tells an agent without a hook to run the audit itself.
 
-The handler goes up from the directory of the session to the nearest directory with the gate script, and runs the audit there. It stops at the first `.git` entry, so a nested worktree does not use the gate script of the checkout around it. The installer keeps each other handler in the settings file of the agent.
+The handler goes up from the directory of the session to the nearest directory with the gate script, and runs the audit there. The audit thus covers the full project, also when the session works in a package folder. The walk stops at the first `.git` entry, so a nested worktree does not use the gate script of the checkout around it. When the walk finds no gate script, the Claude Code handler runs the script under `$CLAUDE_PROJECT_DIR`, and the Codex handler exits with code 0 and no output. The installer keeps each other handler in the settings file of the agent.
 
-Each install writes the gate script again, so a change that you make in it does not stay. To change the behavior, use the config file and the environment variables below.
+Each install writes the gate script again, so a change that you make in it does not stay. To change the behavior, use the config file and the environment variables below. The header of the installed script has the line `# Installer version: X.Y.Z`. Compare it with `fallow --version` when the gate does not agree with your fallow.
+
+The gate reads the JSON of the audit with the JSON reader of fallow. A gate from an older fallow uses `jq`. When the gate finds neither, it prints a notice and lets the command continue without an audit.
+
+### Commit or push in another worktree {#other-worktree}
+
+An agent can commit or push in another folder with `git -C <dir>` or `cd <dir> && git ...`. The gate then audits the work tree of that folder.
+
+A linked worktree shares its branches with the checkout of the session, so a push from a linked worktree can send the branch of the session. For such a push, the gate also audits the checkout of the session. It audits only the linked worktree when all of these are true:
+
+- The push options are only `-u`, `-q`, `--set-upstream`, `--force-with-lease` and `--force-if-includes`.
+- Each refspec sends the branch that the linked worktree has checked out, for example `git -C ../feature push -u origin feature` or `HEAD`.
+- A push without a refspec has `push.default` unset or set to `simple`, `current`, `upstream` or `nothing`, and no remote has a `push` or `mirror` setting.
+
+In all other cases, and when a `git` command fails, the gate audits the checkout of the session too. Findings in that checkout, such as untracked build output, then block the push. Run `fallow agent install` again after you update fallow to get this behavior.
+
+### The routing block in `AGENTS.md` {#routing-block}
+
+For Codex, the installer writes a block between `<!-- fallow:setup-hooks:start -->` and `<!-- fallow:setup-hooks:end -->`. The block starts like this:
+
+```md
+## Fallow checks
+
+Use fallow for code-quality, cleanup, and setup tasks in this repository. Fallow checks the changed code before each `git commit` and `git push`. In Claude Code and Codex, a PreToolUse hook from `fallow agent install` runs this check and blocks the command when the verdict is `fail`. Other agents run the check themselves: `fallow audit --format json --quiet --explain --gate-marker agent`. If the verdict is `fail`, fix the reported findings before you try again. A JSON runtime error such as `{ "error": true, ... }` does not block.
+```
+
+The rest of the block explains the default audit gate and holds the task map of [`fallow schema`](/cli/schema). A new install replaces the block in place.
+
+### Manual setup {#manual-setup}
+
+Use `fallow hooks install --target agent` when you can. When you cannot run it, write the files by hand:
+
+1. Write `.claude/settings.json`:
+
+   ```json
+   {
+     "$schema": "https://json.schemastore.org/claude-code-settings.json",
+     "hooks": {
+       "PreToolUse": [
+         {
+           "matcher": "Bash",
+           "hooks": [
+             {
+               "type": "command",
+               "command": "d=\"$(pwd)\"; until [ -f \"$d/.claude/hooks/fallow-gate.sh\" ] || [ -e \"$d/.git\" ] || [ \"$d\" = / ]; do d=\"$(dirname \"$d\")\"; done; if [ -f \"$d/.claude/hooks/fallow-gate.sh\" ]; then cd \"$d\" && exec ./.claude/hooks/fallow-gate.sh; fi; exec \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/fallow-gate.sh"
+             }
+           ]
+         }
+       ]
+     }
+   }
+   ```
+
+2. Copy [`crates/cli/src/setup_hooks/fallow-gate.sh`](https://github.com/fallow-rs/fallow/blob/main/crates/cli/src/setup_hooks/fallow-gate.sh) of the fallow repository to `.claude/hooks/fallow-gate.sh`. Leave out the `# Installer version:` line, because only the installer writes it.
+3. Make the script executable: `chmod +x .claude/hooks/fallow-gate.sh`.
+
+For Codex, the handler in `.codex/hooks.json` uses the matcher `^Bash$` and this command:
+
+```bash
+d="$(pwd)"; until [ -f "$d/.codex/hooks/fallow-gate.sh" ] || [ -e "$d/.git" ] || [ "$d" = / ]; do d="$(dirname "$d")"; done; if [ -f "$d/.codex/hooks/fallow-gate.sh" ]; then cd "$d" && exec ./.codex/hooks/fallow-gate.sh; fi; exit 0
+```
 
 ## The block message
 
@@ -99,7 +161,7 @@ fallow-gate: verdict fail, 1 finding(s) caused the block:
   unused-export src/services/orders.ts:22 describeOrder
 ```
 
-The first line names the version and the path of the fallow that ran. The message lists at most 50 findings. Its last line gives the path of the full JSON report, `.fallow/gate-report.json` in the audited tree. The `.fallow/` folder has a `.gitignore`, so the report does not show in `git status`.
+The first line names the version and the path of the fallow that ran. Each finding line has the form `<kind> <path>:<line> <name>`. With the default gate `new-only`, the list holds only the findings that the change adds. The full report still holds the old findings. With `gate = "all"`, the list holds each finding that is not a warning. The message lists at most 50 findings, and gives the count of the rest. Its last line gives the path of the full JSON report, `.fallow/gate-report.json` in the audited tree. The `.fallow/` folder has a `.gitignore`, so the report does not show in `git status`.
 
 ## Set the policy
 

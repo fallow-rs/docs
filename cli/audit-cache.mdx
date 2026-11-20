@@ -79,6 +79,8 @@ fallow audit-cache prune [OPTIONS]
 
 `prune` removes the entries that are too old, the entries whose project root does not exist, and the files that no entry owns. It does not remove an entry of another project that exists. `--root` is optional and defaults to the current directory. The age comes from `--max-age-days`, then `FALLOW_AUDIT_CACHE_MAX_AGE_DAYS`, then `audit.cacheMaxAgeDays`, then the default of 30 days.
 
+With `--max-age-days 0`, `prune` still removes the entries of a project root that does not exist and the files that no entry owns. In the fallow cache directory, it removes only the files with the name form that an audit writes. `--dry-run` removes nothing, and creates no lock file and no age file. `prune` measures the size of each entry with a full walk, which can take a few seconds on a large cache. On a shared runner, it reports the entries of other users as kept.
+
 ## Options
 
 {/* generated:start cli-options audit-cache */}
@@ -103,7 +105,7 @@ audit cache prune (threshold 30d from default) in /tmp/x/t/
 would reclaim 0 B across 0 of 5 entries
 ```
 
-The first line gives the age threshold, its source and the directory that `prune` scans. Each entry has a line with the decision, the name, the size and the age. The last line gives the bytes that the run removes.
+The first line gives the age threshold, its source and the directory that `prune` scans. Each entry has a line with the decision, the name, the size and the age, sorted by path. When entries stay because other projects own them, a line gives their number and the `fallow audit-cache remove` command to clear them. The last line gives the bytes that the run removes.
 
 With `--format json`, `prune` gives these top-level fields:
 
@@ -121,6 +123,20 @@ With `--format json`, `prune` gives these top-level fields:
 | `reclaimed_bytes` | The bytes that the run removed, or would remove with `--dry-run`. |
 
 The `remove` output has `root`, `dry_run`, `found`, `would_remove`, `removed`, `skipped` and `complete`. The [JSON output reference](/reference/json-output) has each field.
+
+### The base checkout {#base-checkout}
+
+- Fallow links the `node_modules` directories of the project root and of each workspace package into the checkout. So `tsconfig` `extends` chains into installed packages and path aliases resolve as in the working tree.
+- Fallow removes the checkout from the git worktree list right after it creates it. The checkout never shows in `git worktree list`, in the repository view of an editor, or in `.git/worktrees/`, also when the process is killed.
+- Each project root has one checkout. Fallow rebuilds it in place when the base commit changes.
+
+### The result files {#result-files}
+
+The key of a result file holds the base commit, the changed files and `--brief`. A later audit with the same key and the same fallow version reads the file and does not analyze the base again. A read sets the time of the file, so the age counts from the last use. The cap of 32 files applies also when the age is `0`.
+
+### Cleanup during an audit {#cleanup-during-audit}
+
+Each audit removes the old entries of its own project root. The scan of the system temp directory for the entries of other checkouts runs at most once an hour. `prune` always scans. To see each decision of an audit run, set `RUST_LOG=fallow=debug`: fallow then logs one line for each entry, with the decision, the reason, the age and the threshold.
 
 ## Exit codes
 

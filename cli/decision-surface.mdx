@@ -31,7 +31,7 @@ The [global options](/cli/global-flags) are in these groups: [Project](/cli/glob
 
 {/* generated:end */}
 
-Fallow clamps `--max-decisions` to the range 3 to 5. Set the comparison point with the global option `--base` or `--changed-since`, as for [`fallow audit`](/cli/audit). Without it, fallow uses the merge base with the default branch. The human output goes to stderr, so `--quiet` hides it. Use `--quiet` only with `--format json`.
+Fallow clamps `--max-decisions` to the range 3 to 5, and does not refuse a value outside it. Set the comparison point with the global option `--base` or `--changed-since`, as for [`fallow audit`](/cli/audit). Without it, fallow uses the merge base with the default branch. The human output goes to stderr, so `--quiet` hides it. Use `--quiet` only with `--format json`. A `--format` value other than `json` prints the human output. The MCP `decision_surface` tool takes `base` and `max_decisions`, with the same meaning.
 
 ## Output
 
@@ -50,7 +50,16 @@ Decisions to make (1):
 
 Each decision has a category in brackets, a question, the structural cost after `trade-off:`, and, when the history names them, the owners to ask after `ask:`. `bus-factor 1` means that one person owns the file. A change without decisions prints `Decisions: none (no consequential structural decision in this change)`.
 
-The categories are `coupling-boundary` (a new import across zones), `public-api-contract` (a new or changed public export) and `dependency` (a new package, or a new major version of a package). Fallow ranks the decisions by the number of modules outside the change that they affect.
+The categories are `coupling-boundary` (a new import across zones), `public-api-contract` (a new or changed public export) and `dependency` (a new package, or a new major version of a package). Fallow ranks the decisions by the number of modules outside the change that they affect, times a weight for the category. The output has no verdict and no recommendation.
+
+### Dependency decisions {#dependency-decisions}
+
+- Each `package.json` gives at most one decision for its new packages and one for its major version changes. Fallow never makes one decision for each package.
+- A move from `0.x` to another minor version counts as a major version change.
+- A minor or a patch change is never a decision. A range that does not start with a number, for example a `workspace:`, `file:`, git or tag range, is never a decision.
+- The importer count is a union over the packages of the decision, so a module that imports two of them counts once.
+- For a package outside `dependencies`, the question names the section: `dev`, `optional` or `peer`. A package in more than one section uses its `dependencies` range and line.
+- The `deltas` of the [review brief](/cli/audit#review-brief-and-decision-surface) name each package in `dependency_added` (`<manifest>::<name>`) and `dependency_major_bumped` (`<manifest>::<name>@<from>-><to>`), also when the cap leaves the decision out.
 
 With `--format json`, the output has these top-level fields:
 
@@ -62,7 +71,9 @@ With `--format json`, the output has these top-level fields:
 | `command` | `"decision-surface"` |
 | `decisions` | One object for each decision, ranked. |
 | `signal_count` | The number of decisions that fallow found, also the ones above the cap. |
-| `truncated` | Present when the cap left decisions out. |
+| `truncated` | Present when the cap left decisions out: `collapsed` (the number) and `reason`. |
+
+The review brief (`fallow review --format json`) has the same decisions in `decisions.decisions[]`, without `actions`. Next to them, `decisions.emitted_signal_ids` lists each id that fallow gave, also for a decision that the cap or a suppression left out. A [walkthrough judgment](/cli/audit#json-envelope) must cite one of these ids.
 
 Each decision has these fields:
 
@@ -81,7 +92,9 @@ Each decision has these fields:
 | `blast`, `consequence` | The rank inputs. Fallow sorts on `consequence`, highest first. |
 | `actions` | `ask-expert` when `expert` is not empty. `suppress` with the comment to add, except for `dependency`. |
 
-To hide a `coupling-boundary` or `public-api-contract` decision, add `// fallow-ignore-next-line decision-surface <category>` above its anchor. See [Suppression](/configuration/suppression). The [JSON output reference](/reference/json-output) has each field.
+Use `signal_id` as the key of a review comment. After a rename of the anchor file, move the comment from `previous_signal_id` to the new id.
+
+To hide a `coupling-boundary` or `public-api-contract` decision, add `// fallow-ignore-next-line decision-surface <category>` above its anchor. A `dependency` decision has its anchor in `package.json`, which cannot hold a comment, so it has no `suppress` action. A suppression removes the decision from the output. See [Suppression](/configuration/suppression). The [JSON output reference](/reference/json-output) has each field.
 
 ## Exit codes
 

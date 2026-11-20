@@ -64,6 +64,46 @@ Prune runs in one mode. To prune a baseline that you saved with `--production` o
 
 `fallow baselines` has no options of its own. The section of each subcommand under [Subcommands](#subcommands) lists its options.
 
+## Option details {#option-details}
+
+### What prune keeps {#what-prune-keeps}
+
+- Prune keeps exactly the entries that `--baseline` matches, so a pruned file hides the same findings as before.
+- Prune never adds an entry. To record new findings on purpose, run `--save-baseline` on `fallow dead-code`, `fallow health` or `fallow dupes`.
+- Prune keeps the order of the file, and writes a file only when it removes an entry. It writes through a temporary file and a rename. It refuses a path that is a symbolic link.
+- In a health baseline, a slot of a higher severity can cover a finding of a lower severity, as with `--baseline`. An identity entry that follows a moved file keeps its saved key. An identity entry that loses all its slots stays as an empty object while the run reports its function, so the move matching does not change.
+- Prune does not change the runtime-coverage keys and the refactoring target keys of a health baseline.
+
+### Whole-project scope {#whole-project-scope}
+
+A narrowed run would remove the entries of findings that it did not see. So prune exits with code 2 on `--changed-since`, `--workspace`, `--changed-workspaces`, `--diff-file`, `--diff-stdin` and the `FALLOW_DIFF_FILE` environment variable. It ignores `workspaces.changedSince`. It also exits with code 2 on `--baseline`, `--save-baseline`, `--fail-on-baseline-growth` and `--baseline-base`.
+
+The CRAP scores of a health baseline depend on coverage. Prune reads `--coverage`, else `FALLOW_COVERAGE`, else `health.coverage`. Pass the input that you saved the health baseline with.
+
+### Mode of the file {#mode-of-the-file}
+
+`--production` and `--include-entry-exports` change which findings exist. A run in another mode does not see the findings of the file, so it would remove valid entries. Prune skips such a file with the `reason_code` `scope-mismatch`. It also skips a file that has no record of a mode that the run uses, for example a file that an older version saved. So `--check` can exit with code 2 in a project that sets production mode in the config. Review the findings of the file, then save it again in that mode:
+
+```bash
+fallow dead-code --production --save-baseline fallow-baselines/dead-code.json
+```
+
+### Skipped files {#skipped-files}
+
+Prune does not change a file that it cannot match entry by entry. It reports the file as `refused`, prints the command that saves it again, and exits with code 2. The other files are still pruned. A file is skipped when:
+
+- another command saved it;
+- it uses an older key form, for example a dead-code baseline without `identity`;
+- a type-aware run saved it;
+- it has fields that this version does not know, for example from a newer fallow version;
+- it is a duplication baseline with the old clone keys that unrelated groups shared. See [Collision handles](/cli/dupes#migrating-collision-handles).
+
+A file that does not exist or cannot be read gets the status `error`.
+
+### Pre-commit hook {#pre-commit-hook}
+
+`fallow hooks install --target git --prune-baselines` writes a hook that prunes before the audit. Prune reads the working tree, and the commit holds the index. So the hook prunes only when the working tree has no unstaged changes and no untracked files, and then runs `git add -u`. Otherwise it prints a note and skips the prune. It also skips the prune for a commit with paths (`git commit <path>` or `--only`), because git builds a temporary index for such a commit. A failed prune never blocks the commit, because the audit is the gate. For Lefthook or a hook that exists, the install command prints the lines to add.
+
 ## Output
 
 ```bash
@@ -88,7 +128,98 @@ With `--format json`, the output has these top-level fields:
 | `files` | One object for each file: `kind`, `path`, `status`, `entries_before`, `entries_after`, `removed`, `reason_code`, `reason`. |
 | `actions` | `stage-baselines` with the `git add` command for the written files, `prune-baselines` after `--check`, and `resave-baseline` for each skipped file. |
 
-`status` is `pruned`, `would-prune`, `unchanged`, `refused` (skipped) or `error`. `reason_code` gives the cause of a skip: `parse-error`, `not-this-kind`, `legacy-keys`, `unknown-key-scheme`, `incompatible-identity`, `shared-clone-keys`, `unknown-fields` or `scope-mismatch`. The [JSON output reference](/reference/json-output) has each field.
+`status` is `pruned`, `would-prune`, `unchanged`, `refused` (skipped) or `error`. `reason_code` gives the cause of a skip: `parse-error`, `not-this-kind`, `legacy-keys`, `unknown-key-scheme`, `incompatible-identity`, `shared-clone-keys`, `unknown-fields` or `scope-mismatch`. It is `null` for `error` and the other statuses. `reason` is a sentence for people, set for `refused` and `error`. Each `removed` entry has `category`, `key` and `count`. For a `scope-mismatch` skip, the action is `prune-baselines` with the mode options of the file when the run can prune it, else `resave-baseline`. The [JSON output reference](/reference/json-output) has each field.
+
+### Baseline staleness {#baseline-staleness}
+
+A run of `fallow dead-code`, `fallow dupes` or `fallow health` with `--baseline` has a `baseline_staleness` object. It tells how much of the baseline still matches:
+
+```json
+{
+  "baseline_entries": 7,
+  "matched_entries": 6,
+  "stale_entries": 1,
+  "current_findings": 6,
+  "change_scoped": false,
+  "stale": false,
+  "warning": "none",
+  "gate_trips": true,
+  "moved_entries": 0
+}
+```
+
+| Field | Content |
+|:--|:--|
+| `baseline_entries`, `matched_entries`, `stale_entries` | The entries of the file, the entries that matched a current finding, and the entries that matched none. |
+| `current_findings` | The findings of the run before the baseline filtered them. |
+| `remaining_findings` | Health only: the functions above a threshold that the baseline does not hold. |
+| `change_scoped` | `true` when the run cannot judge the file, because it saw only part of the project or ran in another mode. Then `stale` and `gate_trips` are `false`. |
+| `scope_reasons` | Present when `change_scoped` is `true`: each cause, for example `diff`, `changed-since`, `changed-files`, `package-baselines`, `workspace`, `changed-workspaces`, `scope`, `file`, `issue-type-filter`, `production` or `include-entry-exports`. The set is open. |
+| `stale`, `warning` | `true` when fallow printed the staleness warning. `warning` is `none`, `partial` (a quarter or more of the entries matched nothing) or `zero-overlap` (no entry matched). |
+| `gate_trips` | `true` when `--fail-on-stale-baseline` fails on this file: one entry matched nothing, or the file is of another kind. |
+| `moved_entries` | Health only, in identity mode: entries that matched by following a moved file. |
+| `unrecognised_format`, `saved_by` | Present only for a file of another command. `saved_by` names that command: `dead-code`, `dupes` or `health`. |
+| `format` | `legacy` for a file with an older key form. |
+
+The staleness warning on stderr, and the message of `--fail-on-stale-baseline`, give the `fallow baselines prune` command for the file, with an absolute path.
+
+Read `change_scoped` before you divide the counts: a narrowed run can match few entries of a correct baseline. `production`, `include-entry-exports`, `workspace` and `changed-workspaces` are your choice of the project, so a repeat run keeps them. A run that is narrowed only by `diff`, `changed-since`, `scope`, `file` or `issue-type-filter` adds a `recheck-baseline` entry to `next_steps`. Its command reads the baseline again over the whole project, and never saves it:
+
+```json
+{
+  "id": "recheck-baseline",
+  "command": "fallow dead-code --baseline fallow-baselines/dead-code.json",
+  "reason": "this run was narrowed to part of the project (changed-since), which cannot judge this baseline"
+}
+```
+
+[`fallow audit`](/cli/audit#audit-baselines) loads baselines, but never judges them.
+
+### Baseline files {#baseline-files}
+
+Each file that `--save-baseline` writes has a top-level `kind`: `dead-code`, `dupes` or `health`. A file without `kind` still loads, and its keys decide the format. A command that loads a file of another `kind` suppresses nothing. It prints a warning on stderr, also with `--quiet`, and sets `unrecognised_format` and `saved_by`. `--fail-on-stale-baseline` then exits with code 1. Do not read `baseline_entries: 0` as a wrong file: a project with nothing to record has an empty baseline.
+
+A dead-code baseline has `"identity": "dc1"` and keys without lines ([Baseline file](/cli/dead-code#baseline-file)). A dead-code baseline without `identity` still loads, and each old entry matches only its exact old form. Some old keys hold a line, so they can go stale after a line shift. The run prints a note on stderr and sets `format: "legacy"`:
+
+```text
+Note: fallow-baselines/legacy.json uses the old baseline key format. Run --save-baseline to rewrite it without line numbers.
+```
+
+Run `--save-baseline` once to write the file again. An unknown `identity` value exits with code 2.
+
+### Install state {#install-state}
+
+A dead-code baseline records if `node_modules` existed at the save. Dependency, unlisted, unresolved-import and script-binary findings need installed packages. So a run in the other install state can report baseline findings as new. Such a run prints a warning, also with `--quiet`, and adds this entry to `workspace_diagnostics`:
+
+```json
+{
+  "path": "fallow-baselines/dead-code.json",
+  "kind": "baseline-install-state-mismatch",
+  "baseline_node_modules": "present",
+  "run_node_modules": "missing",
+  "degrades_analysis": true
+}
+```
+
+The entry also has a `message`. The warning does not change the comparison or the exit code. Save and compare the baseline in the same install state. A file without this record gives no warning. Health and duplication baselines do not record the install state.
+
+### Regression baseline {#regression-baseline}
+
+A regression baseline holds the issue counts, not the findings. `--save-regression-baseline <PATH>` writes the counts of each issue type and `total_issues`, with `fallow_version`, `timestamp` and `git_sha`. `--fail-on-regression` exits with code 1 when the total grows by more than `--tolerance` (for example `5` or `2%`, default `0`). The check works with `fallow dead-code` and the bare `fallow` run. With `--format json`, the output has a `regression` object (`check.regression` on the bare run):
+
+```json
+{
+  "status": "exceeded",
+  "baseline_total": 6,
+  "current_total": 7,
+  "delta": 1,
+  "tolerance": 0.0,
+  "tolerance_kind": "absolute",
+  "exceeded": true
+}
+```
+
+`status` is `pass`, `exceeded` or `skipped`. `tolerance` and `tolerance_kind` (`percentage` or `absolute`) are present only on `exceeded`. A run with `--changed-since` or `--workspace` skips the check, because its counts do not compare with the whole project: `skipped` has a `reason`. A regression baseline file that does not exist exits with code 2.
 
 ## Exit codes
 

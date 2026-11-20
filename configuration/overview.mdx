@@ -192,21 +192,65 @@ Some keys have a behavior that the short entry in the [config reference](/refere
 
 A config file grows with the project, and an entry can stop doing anything after the code changes. Fallow compares some config entries with the result of the run. It reports an entry that has no effect as a warning. Each warning is an entry in the `workspace_diagnostics` array of the [JSON output](/reference/json-output#workspace-diagnostics), and a note in the other formats. A warning does not change the exit code.
 
+Each format shows the warnings in a different place:
+
+| Output | Place |
+|:--|:--|
+| JSON | `workspace_diagnostics`, with the `kind` of the warning. |
+| SARIF | `invocations[0].toolConfigurationNotifications` of the first run. `descriptor.id` is the kind, and `properties.setting` names the config key. |
+| Markdown and the pull request comments | A section after the findings, for example `## Unmatched config patterns` or `## Redundant config entries`. |
+| Human, compact, CodeClimate, `github-annotations` | A `Note:` line on stderr, so stdout does not change. `--quiet` removes the line. |
+
 ### Unmatched config patterns {#unmatched-config-patterns}
 
-An `ignoreDependencies` glob matches no declared dependency, or an `ignoreFindings` pattern matches no finding. The usual cause is a typo. `fallow dead-code`, `fallow audit` and the bare `fallow` run report it.
+An `ignoreDependencies` glob matches no declared dependency, or an `ignoreFindings` pattern matches no finding. The usual cause is a typo. `fallow dead-code`, `fallow audit` and the bare `fallow` run report it, with the kind `ignore-dependencies-glob-unmatched` or `ignore-findings-pattern-unmatched` and a `pattern` field:
+
+```json
+{"path":".","kind":"ignore-dependencies-glob-unmatched","pattern":"@acm/*","message":"ignoreDependencies glob '@acm/*' matched no declared dependency in this run, so it has no effect. A glob matches package names, such as @scope/*. Fix the glob, or remove it from the config."}
+```
+
+- Fallow reports an `ignoreDependencies` glob only when the run reports dependency findings. A run with `--file`, or with an issue filter without `--unused-deps` or `--unlisted-deps`, does not report it. An exact package name never gives this warning.
+- Fallow compares an `ignoreFindings` pattern with each finding of the analysis, before the issue filters and the scope filters. So a filtered run does not make a pattern look unused.
 
 ### Redundant config entries {#redundant-config-entries}
 
-An `entry`, `ignoreDependencies` or `ignorePatterns` entry changes nothing, because fallow does the same without it. Remove the entry, unless it is for files that only a build makes. The same commands report it.
+An entry matches, but changes nothing, because fallow does the same without it. Remove the entry, unless it is for files that only a build makes. The same commands report it:
+
+| `kind` | Entry | When it has no effect |
+|:--|:--|:--|
+| `entry-pattern-redundant` | An `entry` pattern | Another source already makes each matched file a runtime entry point: a `package.json` field or script, a plugin, an infrastructure file or `dynamicallyLoaded`. |
+| `ignore-dependencies-entry-redundant` | An `ignoreDependencies` entry | The entry hid no dependency finding. |
+| `ignore-patterns-entry-redundant` | An `ignorePatterns` glob | The glob left out no file that fallow analyzes otherwise, because a built-in ignore, `.gitignore` or the file type already skips each match. |
+
+- An `entry` pattern that matches no file gives no warning.
+- An `ignorePatterns` glob that names a hidden directory, and a `!` exception, give no warning.
+- A run with `--production` reports no redundant entry, because it reads fewer files.
 
 ### Override rules with no effect {#override-rules-with-no-effect}
 
-An `overrides[].rules` entry cannot change the result for its files. [Overrides](/configuration/rules#overrides) names the rules that read only the top-level severity.
+An `overrides[].rules` entry cannot change the result for its files. The kind is `override-rule-ineffective`, with these fields:
+
+| Field | Value |
+|:--|:--|
+| `rule` | The rule name, also when the config uses an alias. |
+| `files` | The `overrides[].files` globs, as written. |
+| `reason` | `project-level`: the rule reads only the top-level severity. `base-rule-off`: the top-level rule is `off`, so its check does not run, and the override cannot start it. Accept other values too. |
+
+```json
+{"path":".","kind":"override-rule-ineffective","rule":"unused-dependencies","files":["src/lib/**"],"reason":"project-level","message":"overrides.rules.unused-dependencies has no effect for files matching [src/lib/**]: unused-dependencies is a project-level rule, so fallow reads only the top-level severity. To hide one package, add it to `ignoreDependencies`. That entry applies to the whole project. To change the rule for all packages, set `rules.unused-dependencies`."}
+```
+
+The message names a method that works. [Overrides](/configuration/rules#overrides) names the rules that read only the top-level severity.
 
 ### Requested rules that are off {#requested-rules-that-are-off}
 
-An option such as `--unused-deps` asks for a rule that the config sets to `off`, so fallow does not run that check. A count of zero then measures nothing. `fallow dead-code` and `fallow architecture` report it. Set the rule to `warn` or `error` to run the check.
+An option such as `--unused-deps` asks for a rule that the config sets to `off`, so fallow does not run that check. A count of zero then measures nothing. `fallow dead-code` and `fallow architecture` report it with the kind `requested-rule-off`, the `rule` and the `flag`. Set the rule to `warn` or `error` to run the check.
+
+```text
+Note: unused-dependencies is off in config, so --unused-deps did not check it. Set the rule to "error" or "warn" to run this check.
+```
+
+The findings and the exit code do not change, so a script that passes `--unused-deps` with the rule at `off` exits with code 0. A run without an issue filter gives no such warning.
 
 ## See the resolved config
 

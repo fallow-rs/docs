@@ -63,34 +63,68 @@ The [global options](/cli/global-flags) are in these groups: [Project](/cli/glob
 
 ## Option details {#option-details}
 
+### Detection {#detection}
+
+Each flag site has a `confidence`:
+
+| Confidence | When fallow uses it |
+|:--|:--|
+| `high` | An environment variable flag, or an SDK call to a name of one provider, such as `useFlag()` or `checkGate()`. |
+| `medium` | An SDK call to a generic name in a file that imports no flag SDK and no flag module. The generic names are `isEnabled()`, `getValue()`, `useFeature()`, `isOn()`, `isOff()`, `useConfig()`, `variation()`, `getVariant()` and `hasFeature()`. Other code, such as form libraries, uses the same names. |
+| `low` | A config object match. |
+
+A flag SDK or a flag module is an import or a top-level `require()` with a path segment that names a flag provider or flags. Examples are `@unleash/proxy-client-react`, `flags/next`, `@/lib/flags`, `./featureFlags` and `./flags.server`. `country-flag-icons`, `@/features/checkout/api` and `./ThemeToggle` are not flag modules. In a file with a flag import, a generic name gets `high`. To give your own `isEnabled()` `high` in each file, add it to `sdkPatterns`.
+
+In a file without a flag import, fallow does not report a call to a generic name that the file declares, or that the file imports from a project module, such as `getVariant("oak-30x40")` from `./product`. A project module with a name such as `./featureGate`, `@/lib/features` or `./experiments` can be a flag module, so a call from it stays a flag with `medium`.
+
+An SDK call can name its flag through a registry of keys, such as `useFlag(FLAGS.NewCheckout)` or `useFlag(FLAGS["NewCheckout"])`. Fallow reports the key that the registry member holds. The registry is a module-level `as const` object with string values, or an enum with string values. It can be local or imported:
+
+- A relative import names the file that declares the registry.
+- An import through a path alias or a barrel file resolves when exactly one registry in the project has the imported name.
+- An import from a dependency does not resolve.
+
+Fallow does not report a call that it cannot resolve.
+
+A flag read that controls a block of code is a guard. Fallow uses the guarded lines to find unused exports in them, and reports each match in `dead_code_overlap`. These shapes are guards:
+
+- The test of an `if` statement or a ternary, for example `if (useFlag("beta"))`.
+- `flag && <Component />` in JSX.
+- `if (!flag) return`. It guards the rest of the block.
+- A `const` that holds one flag read, such as `const enabled = useFlag("beta")`. The first `if`, ternary or JSX `&&` that tests the `const` is its guard.
+
 ### Regression gate {#regression}
 
 With `--retirement`, the regression options compare the flag counts with a saved file:
 
 - `--save-regression-baseline <PATH>` writes `total_flags`, `distinct_flags` and `by_reason` (a count for each reason) under `flags`, with `schema_version`, `fallow_version`, `timestamp` and `git_sha`. The path is required.
 - `--fail-on-regression` with `--regression-baseline <PATH>` exits with code 1 when `distinct_flags` grows by more than `--tolerance`. Each `--reason` adds the count of that reason to the gate.
-- A run with `--changed-since` or `--workspace` skips the gate and saves no file.
+- A run with `--changed-since` or `--workspace` skips the gate and saves no file, because its counts do not compare with a whole-project file.
 - Without `--retirement`, the regression options have no effect and the command prints a warning.
+- The verdict is in `retirement.regression`. Each output format also prints the verdict of each gate on stderr, so a run that exits with code 1 tells you why.
 
 ### Retirement report {#retirement-report}
 
-`--retirement` puts all sites of one flag in one row and lists the reasons why the flag can go. The report is advisory: fallow removes no code. These are the values of `--reason`:
+`--retirement` puts all sites of one flag in one row and lists the reasons why the flag can go. The report is advisory: fallow removes no code, and each action has `auto_fixable: false`. The identity of a flag is its kind, its SDK provider and its name. In a monorepo, the workspace root is also part of the identity, so each workspace gets its own row. These are the values of `--reason`:
 
 | Reason | Meaning |
 |:--|:--|
 | `single-read-site` | The flag has one read site in the project. |
 | `test-only` | Each read site is in a test, story or mock file. |
-| `literal-constant` | The flag is a module-level `const` with a literal value, and a guard in the same module tests it. |
-| `identical-branches` | Both branches of the guard have the same code. |
-| `empty-branch` | No branch of the guard has code, for example `if (flag) {}`. |
+| `literal-constant` | The flag is a module-level `const` with a flag prefix and a literal value, such as `const FEATURE_NEW_UI = true`, and a guard in the same module tests it. |
+| `identical-branches` | Both branches of the guard have the same code. Whitespace and comments do not count. |
+| `empty-branch` | No branch of the guard has code, for example `if (flag) {}` or `flag ? null : <></>`. An empty branch is `{}`, `;`, `null`, `undefined`, `void 0`, `<></>`, or `false` next to JSX. A missing `else` is also empty. `flag ? <New /> : null` is normal gating and does not count. |
 | `guards-dead-code` | The guarded block holds unused exports. |
-| `defined-never-read` | The flag is defined, but no code reads it. |
+| `defined-never-read` | The flag is defined, but no code reads it: a Vercel `flag()` definition whose export is unused, or an unused member of an exported flag registry enum. |
 | `fully-rolled-out` | With `--flag-state`: the state is `rolled_out`, or the flag serves one variation. |
 | `archived-in-vendor` | With `--flag-state`: the state is `archived`. |
 | `missing-in-vendor` | With `--flag-state`: the code reads the flag, but the export does not have its key. |
 | `vendor-only` | With `--flag-state`: the export has the key, but no code reads it. Only a whole-project run adds these rows. |
 
-`single-read-site`, `test-only` and `defined-never-read` count each read in the project, also the reads outside `--changed-since` or `--workspace`.
+`single-read-site`, `test-only` and `defined-never-read` count each read in the project, also the reads in other workspaces and outside `--changed-since` or `--workspace`.
+
+A literal `const` flag has the kind `constant`. It shows only in the retirement report, not in `feature_flags`. The `const` must be the value of the test, as in `if (FEATURE_X)` or `if (FEATURE_X === "on")`.
+
+### Flag age {#flag-age}
 
 These are the values of `--flag-age`:
 
@@ -100,7 +134,30 @@ These are the values of `--flag-age`:
 | `pickaxe` | `git log -S<name>` for each flag. The age counts from the first commit that added the name. Slower on a long history. |
 | `off` | No age, and no git process. |
 
-The age counts in days to the commit time of `HEAD`, or to `FALLOW_CLOCK_EPOCH` when you set it. In a shallow clone, the age is `null` and `--max-flag-age` has the status `skipped`.
+The age counts in days to the commit time of `HEAD`, or to `FALLOW_CLOCK_EPOCH` when you set it. Thus two runs on one commit give the same ages. Fallow keeps the ages in its cache directory for the current `HEAD`, so a second run starts no `git blame`.
+
+When fallow has no git history, the age is `null`, and `generated_at_clock` is also `null`:
+
+| Case | `workspace_diagnostics` entry |
+|:--|:--|
+| A shallow clone. Run `git fetch --unshallow` for the full history. | `flag-age-shallow-clone` |
+| No git repository, or a branch without commits. | `flag-age-unavailable` |
+
+`--min-age` and `--max-flag-age` need an age:
+
+- With `--flag-age off`, both options exit with code 2.
+- `--min-age` drops a flag without an age.
+- Without git history, `--max-flag-age` cannot check a flag. `retirement.max_flag_age.status` is then `skipped`, stderr shows `Flag age check skipped`, and the run does not fail.
+- `retirement.max_flag_age.unmeasured` counts the flags in scope without an age. The gate does not check them.
+
+The default checkout of GitHub Actions is a shallow clone with depth 1. Set `fetch-depth: 0` for the age gate:
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0
+- run: npx fallow flags --retirement --max-flag-age 180
+```
 
 ### Vendor flag state {#vendor-flag-state}
 
@@ -129,9 +186,96 @@ The age counts in days to the commit time of `HEAD`, or to `FALLOW_CLOCK_EPOCH` 
 | `flags[].created_at`, `flags[].last_evaluated_at` | no | Dates as the provider gives them. |
 
 - Only the flags of an SDK match the export. Environment variable flags and config object flags do not.
-- The [`flags.vendorKeyPrefix`](/reference/config-other#flags-vendorkeyprefix) config key removes a prefix from each key before the match.
+- When `source` names an SDK of the project, such as `launchdarkly` for `LaunchDarkly`, only the flags of that SDK match. Thus a LaunchDarkly export does not mark your Statsig flags as `missing-in-vendor`. Set `source` to a name that is not an SDK, such as `in-house`, to match each SDK flag.
+- The [`flags.vendorKeyPrefix`](/reference/config-other#flags-vendorkeyprefix) config key removes a prefix from each key before the match. For example, `"web."` makes `web.new-checkout` match the code flag `new-checkout`.
+- The SDK check reads each SDK site of the project. Thus a run with `--changed-since` or `--workspace` gives a flag the same vendor reasons as a full run.
+- `vendor-only` rows need a whole-project run. They do not count in `summary.distinct_flags`, so a key that only the export has does not change the flag count, and it does not trip the [regression gate](#regression).
+- When the export file is outside the project root, the evidence and the SARIF and CodeClimate locations show only its file name.
 - An unknown field, an unknown state, a duplicate key or a file larger than 16 MiB exits with code 2 and the error code `FALLOW_FLAG_STATE_INVALID`.
-- The human output warns when the export is more than 30 days old.
+- The human output warns when the export is more than 30 days old. The JSON output gives the age in `retirement.vendor_state.export_age_days`.
+
+#### jq recipes {#jq-recipes}
+
+Each recipe turns the JSON of the REST API of one provider into the schema above. The field names follow the provider APIs at the time of writing, so compare them with your export. When your data shows that a flag serves one variation, set `state` to `rolled_out` or `serves_single_variation` to `true`. That gives the strongest reason.
+
+<Warning>
+Most list endpoints return one page of flags for each request. An export with only the first page marks each flag on the other pages as `missing-in-vendor`. Get each page before you run a recipe:
+
+- LaunchDarkly returns 20 flags for each page by default. Set `limit`, and follow `_links.next` until it is absent. `totalCount` gives the number of flags.
+- GrowthBook pages with `limit` and `offset`. Request pages until `hasMore` is `false`.
+- PostHog returns about 100 flags for each page. Follow the `next` URL until it is `null`.
+
+Merge the pages into one file with the shape of one page, for example `jq -s '{items: [.[].items[]]}' page-*.json > launchdarkly-flags.json`. For GrowthBook, use `.features` instead of `.items`. For PostHog, use `.results`. Compare the number of keys in `flag-state.json` with the flag count of your provider before you trust `missing-in-vendor`.
+</Warning>
+
+```bash
+# LaunchDarkly: GET /api/v2/flags/{projectKey}?env=production
+jq --arg env production '{
+  schema_version: 1,
+  source: "launchdarkly",
+  exported_at: (now | todate),
+  flags: [.items[] | {
+    key,
+    state: (if .archived then "archived"
+            elif .environments[$env].on then "on"
+            else "off" end),
+    created_at: (.creationDate / 1000 | floor | todate)
+  }]
+}' launchdarkly-flags.json > flag-state.json
+```
+
+```bash
+# Unleash: GET /api/admin/features
+jq '{
+  schema_version: 1,
+  source: "unleash",
+  exported_at: (now | todate),
+  flags: [.features[] | {
+    key: .name,
+    state: (if .enabled then "on" else "off" end),
+    created_at: .createdAt,
+    last_evaluated_at: .lastSeenAt
+  }]
+}' unleash-features.json > flag-state.json
+```
+
+```bash
+# GrowthBook: GET /api/v1/features
+jq --arg env production '{
+  schema_version: 1,
+  source: "growthbook",
+  exported_at: (now | todate),
+  flags: [.features[] | {
+    key: .id,
+    state: (if .archived then "archived"
+            elif .environments[$env].enabled then "on"
+            else "off" end),
+    created_at: .dateCreated
+  }]
+}' growthbook-features.json > flag-state.json
+```
+
+```bash
+# PostHog: GET /api/projects/{project_id}/feature_flags
+jq '{
+  schema_version: 1,
+  source: "posthog",
+  exported_at: (now | todate),
+  flags: [.results[] | {
+    key,
+    state: (if .deleted then "archived"
+            elif (.active and ((.filters.groups // []) | length > 0)
+                  and all(.filters.groups[]; .rollout_percentage == 100
+                          and ((.properties // []) | length == 0)))
+              then "rolled_out"
+            elif .active then "on"
+            else "off" end),
+    created_at
+  }]
+}' posthog-flags.json > flag-state.json
+```
+
+For another provider, or for an in-house flag service, write the same schema from its data.
 
 ### Configuration {#configuration}
 
@@ -175,14 +319,68 @@ A flag site has one of these `kind` values: `environment_variable` (for example 
 
 Each row of `retirement.flags` has `flag_name`, `kind`, `sites`, `read_sites`, `test_only`, `age_days`, `first_seen`, `last_touched`, `oldest_surviving_site`, `reasons`, `evidence` and `actions`. The set of reasons is open: ignore a reason that you do not know. The [JSON output reference](/reference/json-output) has each field.
 
+### Retirement fields {#retirement-fields}
+
+This is one row of `retirement.flags`, for a flag that only a test reads, in a project without git history:
+
+```json
+{
+  "flag_name": "FEATURE_OLD_CHECKOUT",
+  "kind": "environment_variable",
+  "sites": [
+    { "path": "src/checkout.test.ts", "line": 5, "col": 8, "role": "read", "in_test": true }
+  ],
+  "read_sites": 1,
+  "test_only": true,
+  "first_seen": null,
+  "oldest_surviving_site": null,
+  "last_touched": null,
+  "age_days": null,
+  "reasons": ["single-read-site", "test-only"],
+  "evidence": [
+    { "reason": "single-read-site", "path": "src/checkout.test.ts", "line": 5, "detail": "the flag has one read site" },
+    { "reason": "test-only", "path": "src/checkout.test.ts", "line": 5, "detail": "the only read site is in a test, story or mock file" }
+  ],
+  "actions": [
+    { "type": "review-retirement", "auto_fixable": false, "description": "Review this flag for retirement. The evidence lists the reasons." }
+  ]
+}
+```
+
+| Field | Content |
+|:--|:--|
+| `retirement.summary` | `distinct_flags`, `candidates` and `by_reason`, for each flag in scope, before `--reason` and `--min-age`. `distinct_flags` counts only the flags in the code. `by_reason["vendor-only"]` counts the keys that only the export has. |
+| `sites[].role` | `read`, or `definition` for a site that defines the flag. A definition is not a read site. |
+| `oldest_surviving_site`, `last_touched` | `commit` and `date` from git, or `null`. `first_seen` has a value only with `--flag-age pickaxe`. |
+| `workspace` | The workspace root of the flag, when the project has workspaces. |
+| `reasons` | The reason codes. A row with an empty array is not a candidate, and the other formats leave it out. |
+| `vendor` | With `--flag-state`: the `key`, the `state` and the optional fields of the flag in the export. |
+| `retirement.vendor_state` | With `--flag-state`: `source`, `exported_at`, `export_age_days` and the number of `flags` in the export. |
+| `retirement.regression` | With `--fail-on-regression`: `status` (`pass`, `exceeded` or `skipped`), `tolerance`, `tolerance_kind`, `metrics` (`metric`, `baseline`, `current`, `delta`, `exceeded`) and `exceeded`. |
+| `retirement.max_flag_age` | With `--max-flag-age`: `status` (`pass`, `exceeded` or `skipped`), `max_days`, `exceeded`, `unmeasured`, `reason` (only when `skipped`) and the older `flags`, oldest first. |
+
+`--top` limits the rows of `retirement.flags` and the candidates of the human output.
+
 The other formats show the candidates after the flag sites:
 
 | Format | Retirement output |
 |:--|:--|
 | `compact` | One `flag-retire:<reason>:<path>:<line>:<name>` line for each reason. |
-| `sarif` | The rule `fallow/flag-retirement-candidate` at level `note`, one result for each candidate. |
-| `codeclimate` | One `fallow/flag-retirement` issue with severity `info` for each reason. |
-| `markdown` | A "Retirement candidates" table. |
+| `sarif` | The rule `fallow/flag-retirement-candidate` at level `note`, one result for each candidate at its first read site. |
+| `codeclimate` | One `fallow/flag-retirement` issue with severity `info` for each reason. The fingerprint comes from the flag identity and the reason, not from the line. |
+| `markdown` | A "Retirement candidates" table with the flag, the age, the read sites and the reasons. |
+
+### MCP tool {#mcp-tool}
+
+The MCP `feature_flags` tool runs `fallow flags --format json --quiet --explain` and returns the same JSON. Its parameters are `root`, `config`, `production`, `workspace`, `top`, `no_cache`, `threads` and `allow_remote_extends`, and these for the retirement report:
+
+| Parameter | Content |
+|:--|:--|
+| `retirement` | `true` adds the `retirement` object. |
+| `flag_state` | The path of a provider export. A relative path resolves against `root`. Needs `retirement`. |
+| `flag_age` | `blame`, `pickaxe` or `off`. Needs `retirement`. |
+
+The regression gate and `--max-flag-age` are only in the CLI.
 
 ## Exit codes
 

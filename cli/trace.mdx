@@ -56,7 +56,14 @@ The [global options](/cli/global-flags) are in these groups: [Project](/cli/glob
 
 {/* generated:end */}
 
-`FILE` in the target is a path from the project root. When no file has the exact path, fallow accepts a path suffix and takes the first match. `--path` and `--dependency` replace the target. The walk is syntactic: fallow does not use the TypeScript type checker.
+`FILE` in the target is a path from the project root. A file with the exact path wins, so `src/api.ts` never selects `packages/x/src/api.ts`. When no file has the exact path, fallow accepts a path suffix and takes the first match, so use the full path in a monorepo. `--path` and `--dependency` replace the target. The walk is syntactic: fallow does not use the TypeScript type checker.
+
+## Option details
+
+- `--path` cannot go with the target, `--callers`, `--callees` or `--depth`. `--dependency` cannot go with the target, `--path` or `--callees`.
+- For `--path`, an exact path wins over a suffix match. Fallow accepts a short path only when it names one module. A missing or ambiguous endpoint exits with code 2.
+- With `--dependency`, `--callers` adds `closure`: the files that import the files that use the package, up to `--depth`.
+- The results are not part of the ranked [review brief](/cli/audit), and they do not change its order. [`fallow inspect --symbol-chain`](/cli/inspect) gives the same call chain as one part of its evidence.
 
 ## Output
 
@@ -82,7 +89,7 @@ Resolved callees (down): 1
 Unresolved callees (reported, not dropped): 0
 ```
 
-Callers are the files that import the symbol. Resolved callees are the imports of the file of the symbol. An unresolved callee is a call that fallow cannot follow, for example `Math.round`. With `--format json`, the fields are `file`, `symbol`, `symbol_found`, `depth`, `callers`, `callees`, `unresolved_callees`, `best_effort` and `reason`. When two `export *` sources give the same name, `star_export_ambiguity` lists the `sources` and the `namespaces`.
+Callers are the files that import the symbol. Resolved callees are the imports of the file of the symbol. An unresolved callee is a call that fallow cannot follow, for example `Math.round`. With `--format json`, the fields are `file`, `symbol`, `symbol_found`, `depth`, `callers`, `callees`, `unresolved_callees`, `best_effort` and `reason`. When two `export *` sources give the same name, the barrel file exports nothing under that name. `symbol_found` is then `false`, and `star_export_ambiguity` lists the `sources` (the files that declare the name, sorted) and the `namespaces` (`type`, `value` or both). So you can tell a collision from a wrong name. To fix it, rename the name in all sources but one, or replace the `export *` statements with named re-exports.
 
 ### Import path between two modules {#import-path-between-two-modules}
 
@@ -102,7 +109,7 @@ Shortest import path (syntactic; OFF the ranked path)
   [2] src/lib/index.ts:1 -> src/lib/format.ts
 ```
 
-Each hop gives the importing file, the line of the import, and the imported file. A hop through `import()` or a worker has the tag `[dynamic]`. A pair without a path has `reachable: no`. That is a result, and the exit code stays `0`. With `--eager-only`, fallow follows only the static imports that load a value at startup. With `--format json`, the fields are `schema_version`, `from`, `to`, `reachable`, `hops`, `path` and `reason`. Each hop in `path` has `from`, `to`, `import_line`, `type_only` and `dynamic`.
+Each hop gives the importing file, the line of the import, and the imported file. A hop through `import()` or a worker has the tag `[dynamic]`. A pair without a path has `reachable: no`. That is a result, and the exit code stays `0`. With `--eager-only`, fallow follows only the static imports that load a value at startup. With `--format json`, the fields are `schema_version`, `from`, `to`, `reachable`, `hops`, `path` and `reason`. Each hop in `path` has `from`, `to`, `import_line`, `type_only` and `dynamic`. A type-only hop stays in the path with `type_only: true`, so a path that exists only for the type checker shows. A trace from a module to itself gives `reachable: true` and `hops: 0`. A pair without a path also gives `hops: 0`, so read `reachable`.
 
 ### Usage of a package {#usage-of-a-package}
 
@@ -121,7 +128,17 @@ fallow trace --dependency zod
     z         1          0      3  -
 ```
 
-Each row gives one imported name: the number of files that import it, the files that import only its type, the calls, and the uses that fallow cannot follow. With `--format json`, the fields are `package_name`, `is_used`, `import_count`, `imported_by`, `type_only_imported_by`, `used_in_scripts` and `usage`. `usage` holds `specifiers`, `unresolved` and `confidence`, and `sites` with `next_cursor` when the site page is on.
+Each row gives one imported name: the number of files that import it, the files that import only its type, the calls, and the uses that fallow cannot follow. With `--format json`, the fields are `package_name`, `is_used`, `import_count`, `imported_by`, `type_only_imported_by`, `used_in_scripts` and `usage`. `usage` holds these fields:
+
+| Field | Content |
+|:--|:--|
+| `specifiers` | One entry for each imported name: `name`, `file_count`, `type_only_file_count`, `call_site_count`, `unresolved` and `wrappers`. `wrappers` lists the project exports that wrap the name, such as `export const useAppSelector = useSelector.withTypes<RootState>()`, with their files and calls. The trace follows one wrapper step. |
+| `unresolved` | The uses that the trace cannot follow, counted and not dropped. The `unresolved` object of a name counts `value_alias`, `non_call_reference`, `jsx_element`, `re_export`, `nested_wrapper` and `binding_without_site`. The top-level object counts `dynamic_import`, `require`, `side_effect_import`, `star_re_export` and `unattributed_file`. |
+| `confidence` | `"syntactic"`. |
+| `sites` | A page of the use sites: `items` (sorted by file, line and column, each with a `kind`), `total`, `limit` and `next_cursor`. Present when the site page is on. Pass `next_cursor` to `--cursor` for the next page. |
+| `closure` | The files that import the users, with `--callers`. |
+
+`fallow dead-code --trace-dependency` gives the same output without `usage`.
 
 Each mode has `kind: "trace"`. The [JSON output reference](/reference/json-output) has each field.
 

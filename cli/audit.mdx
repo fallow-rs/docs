@@ -105,6 +105,10 @@ Fallow takes the first base that it finds:
 
 A base that git cannot resolve exits with code 2. `--staged` compares the staged files with `HEAD` and reads each file from the index. It cannot go together with `--base`.
 
+The detected base is a merge-base commit, not a branch name. So a feature branch compares with the commit where it forked, also when the local `main` is old. When the branch has no common ancestor with the remote branch, for example in a shallow clone, fallow uses the tip of the remote branch.
+
+The detected base also gives the [merge commits rule](#how-it-works). `--base` and `FALLOW_AUDIT_BASE` give one base only.
+
 ### Gate values {#gate}
 
 The `--gate` value is the [audit gate](/concepts/changed-code). The `Audit scope` line of the output is another thing: the changed files and the base.
@@ -130,17 +134,133 @@ Under `new-only`, a complexity finding that the base already has is **worsened**
 
 `--worsened` has no effect with `--gate all`.
 
+The line count is the physical span of the function, so comments and blank lines count. The minimum of 5 lines keeps a short comment or a formatter rewrap from making a finding worsened. Fallow compares the CRAP score only when the base finding and the head finding both have a score. For example, a function that grows from 80 to 300 lines with the same complexity is worsened.
+
+The growth of a metric that the finding already exceeds is worsened while the finding stays in its severity tier (`moderate`, `high` or `critical`). The finding is introduced in two cases:
+
+- The growth of an exceeded metric moves the finding to a higher severity tier.
+- The finding now exceeds a metric that the base finding did not exceed, and that metric grew.
+
+The tiers are the fixed severity bands of [`fallow health`](/cli/health), not your thresholds. The exceeded metrics and the tier of the base finding come from the base run. So a threshold change in the same change, for example in `health.thresholdOverrides`, does not make an old finding introduced.
+
+The `human`, `compact` and `markdown` output have a `Worse than base` section. It lists each complexity finding with a grown value, with the base value and the head value. A `compact` record has this shape:
+
+```text
+worse-than-base:src/parser.ts:45:parseExpression:attribution=worsened,line_count=80->300
+```
+
 ### Estimated CRAP {#estimated-crap-new-only}
 
-Without coverage data, fallow estimates the CRAP score. Under `new-only`, a finding that exceeds only the CRAP threshold with an estimated score has `effective_severity: "warn"` and does not fail the audit. `--coverage` gives a measured score, which can fail the audit.
+Without coverage data, fallow estimates the CRAP score from static test reachability. The estimate does not measure the change. Under `new-only`:
+
+- A finding that exceeds only the CRAP threshold with an estimated score has `effective_severity: "warn"`. It stays in the report, makes the verdict at least `warn`, and does not fail the audit. SARIF reports it at level `warning`.
+- A finding that also exceeds the cyclomatic or the cognitive threshold keeps the severity of its `complexity-*` rule.
+- An estimated CRAP score never makes a matched finding introduced. When the score grows, the finding is worsened.
+
+A measured score can fail the audit. It comes from `--coverage`, `health.coverage`, `FALLOW_COVERAGE` or runtime coverage. `--gate all` does not use this rule.
 
 ### Clone groups {#introduced-clone-group}
 
-The `introduced-clone-group` key in [`rules`](/configuration/rules) sets the effect of a clone group on the verdict: `warn` (the default), `error` or `off`. Under `new-only`, only a clone group that the change introduces counts.
+The `introduced-clone-group` key in [`rules`](/configuration/rules) sets the effect of a clone group on the verdict:
+
+| Severity | Effect |
+|:--|:--|
+| `warn` | The default. The verdict is at least `warn`. The exit code stays `0`. |
+| `error` | The clone group fails the audit with exit code 1. |
+| `off` | The clone group stays in the report, and does not change the verdict. |
+
+Under `new-only`, only a clone group that the change introduces counts. Under `all`, each clone group in the changed files counts. Fallow also accepts the plural key `introduced-clone-groups`.
+
+With `overrides`, fallow resolves the rule for the file of each instance, and the most severe result applies. So an override cannot exempt a clone group that has an instance outside the override. To keep generated code out, use `duplicates.ignore` or `ignorePatterns`.
+
+The rule does not change `duplicates.threshold`. The threshold reads the same clone groups, and it can fail the audit also when the rule is `off`.
 
 ### Quiet report {#quiet-audit-report}
 
-With `--quiet`, the `human`, `compact` and `markdown` reports show only the introduced findings, the worsened findings, the diff-risk findings and the analysis errors. When nothing is left, they print `No introduced or worsened findings.`. The verdict, the exit code and the other formats use the complete result.
+With `--quiet`, the `human`, `compact` and `markdown` reports show only what the change must act on. `FALLOW_QUIET=1` gives the same report. `--ci` also sets quiet, but its default format is SARIF.
+
+| The quiet report keeps | The quiet report drops |
+|:--|:--|
+| Introduced and worsened findings | Inherited findings that the change did not make worse |
+| Diff-risk findings | The health score, the vital signs, the file scores, the hotspots, the targets, the trend and the CSS analytics |
+| Config errors, analysis failures and warnings about an incomplete analysis | The `stale` and `active` records of `health.thresholdOverrides` |
+| The `insufficient` and `no_match` records of `health.thresholdOverrides` | |
+
+When nothing is left, the `human` and `markdown` reports print `No introduced or worsened findings.`, and the `compact` report is empty. Under `--gate all`, each finding counts, so the quiet report keeps all findings. The verdict, the exit code and the other formats use the complete result.
+
+### How new-only matches findings {#how-it-works}
+
+Under `new-only`, fallow runs the analyses on the head and on the base, and compares the keys of the findings. A key holds no line, so a line shift above a finding keeps it inherited.
+
+- **Dead code.** The key is the rule, the root-relative path and the names, the same input as the [`finding_id`](/cli/dead-code). The keys compare by count, so a second finding with the key of an inherited finding is introduced. An unlisted dependency has the package name as its key, so a new import of a package that the base already reports stays inherited.
+- **Complexity.** A finding matches its base finding by the root-relative path and the function name. The line and the exceeded metric do not affect the match, and a renamed file keeps its match. When a file has two or more functions of one name, each base finding matches at most one head finding. Findings with the same values and the same line count match first, then findings with the same values, then the others in line order.
+- **Clone groups.** The key holds the files, the token count, the line count and a hash of the text.
+
+A change that moves code to another file gives it a new path. Fallow then looks for the base finding in the other changed or deleted files:
+
+- A moved function takes a base finding of the same name from another changed or deleted file. Findings with the same values match first. Then one remaining head finding and one remaining base finding of a deleted file match, and a moved function that grew is worsened. When two or more functions of one name moved and changed, they stay introduced.
+- A moved unused symbol (an export, a type, an enum member, a class member and the like) is inherited when the base reports the same rule and symbol in another changed or deleted file, and the change adds a line with the symbol to the new file. Each base finding matches one head finding, so a copy of moved code is introduced. A dependency finding or a suppression finding never moves.
+- A moved clone group is inherited when the base has a group with the same token count, line count and text, in files that the change touched or deleted. A clone group whose text changed in the move stays introduced.
+
+A base finding in a file that the change did not touch never matches. A function in such a file still exists, so a new function of the same name in another file is new.
+
+A merge of the default branch brings in code that the default branch already has. When fallow detects the base, it also analyzes these commits: `MERGE_HEAD` of a merge in progress, and the merge base with the remote default branch after a merge commit. A finding that one of these commits has is inherited. So the gate does not block a merge commit or the push after it. Code from a merged branch that the default branch does not hold stays introduced.
+
+### Classes that the base cannot prove {#unprovable-base-classes}
+
+The base checkout holds committed files only. A file that git ignores, for example a workspace member that CI clones into the repository, is not in it. The base run then cannot prove some dead-code classes, and skips them. This applies to unused catalog entries while a workspace pattern points to a directory that does not exist.
+
+The head run can see these files and reports the class. Under `new-only`, each finding of such a class is inherited, also a really new one. The human output counts these findings in the line `audit gate excluded N inherited findings`. To gate each finding of the class, use `--gate all`.
+
+### Complexity findings in test files {#test-file-complexity}
+
+A complexity finding in a test file never fails the audit, under each gate. A long `it(...)` callback often exceeds the cognitive threshold, and the gate is for production code. Test files are, for example, spec files (`*.test.*`, `*.spec.*`, `*.e2e.*`), files below a test directory (`__tests__/`, `test/`, `tests/`, `e2e/`), and mocks and fixtures (`__mocks__/`, `fixtures/`, `*.fixture.*`).
+
+The finding stays in the report with its attribution. In JSON, it has `effective_severity: "warn"` and `gate_exemption: "test-file"`. It makes the verdict at least `warn`. The `human`, `compact` and `markdown` output list it under `Test files, not gated`. A `compact` record has this shape:
+
+```text
+gate-exemption:src/__tests__/build.spec.ts:34:it("builds the bundle"):test-file
+```
+
+`fallow health` reports these findings at the severity of their rule.
+
+### Docs-only fast path {#docs-only-diff-fast-path}
+
+Under `new-only`, fallow does not analyze the base when no changed file can change a finding. Each changed file must be one of these:
+
+- a document: `.md`, `.markdown`, `.txt`, `.rst` or `.adoc`
+- a `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.mts`, `.cjs` or `.cts` file with the same tokens as at the base, for example after a change of comments or whitespace
+
+The head findings then stand for the base, and each finding is inherited. A source file that holds `fallow-ignore`, a JSDoc visibility tag such as `@public` or `@internal`, `@expected-unused` or `import(` does not qualify, because a comment change there can change a finding. With `health.maxFileLines`, a source file must also keep its line count.
+
+No option turns the fast path on or off. To see if it ran, pass `--performance`: the JSON output then has `base_snapshot_skipped`, and the human output prints `base_snapshot_skipped: true` on stderr.
+
+### New-only duplication demotion {#new-only-duplication-demotion}
+
+Under `new-only`, fallow demotes an introduced clone group to inherited when no instance overlaps an added line of the diff. This happens when a change removes duplication elsewhere, and a clone group that stays gets a new key. The change wrote no duplicated line, so the group does not fail the gate. The stderr note names the demotion and the diff that decided it:
+
+```text
+audit gate excluded 3 inherited findings (run with --gate all to enforce)
+  of which 1 clone group was reclassified as pre-existing: no duplicated line was added by this change (diff source: merge-base worktree diff vs main)
+```
+
+With `--explain`, the duplication section adds one line for each demoted group, with its `dup:` handle, its instances and the rule. In JSON, a demoted group has `demotion_reason` (`no-added-lines`), and `attribution.duplication_demoted` counts the demoted groups.
+
+A diff from `--diff-file`, `--diff-stdin` or `FALLOW_DIFF_FILE` wins over the merge-base diff. A diff with a narrower base, for example of the last commit only, can demote duplication that the branch added. Compute a diff from the same base as the audit. Without a diff, fallow skips this rule, and each introduced clone group counts.
+
+### Baselines in an audit {#audit-baselines}
+
+An audit loads the baselines that you pass, but it does not judge them. It analyzes only the changed files, so a whole-project baseline matches less of the run. Each loaded baseline has a [`baseline_staleness`](/cli/baselines#baseline-staleness) object:
+
+| Section | Object | `scope_reasons` |
+|:--|:--|:--|
+| Dead code | `dead_code.baseline_staleness` | `changed-since` |
+| Duplication | `duplication.baseline_staleness` | `changed-files` |
+| Complexity | `complexity.summary.baseline_staleness` | `changed-files` |
+
+Each object has `change_scoped: true` and `gate_trips: false`, except for a file of another kind. `gate_outcomes["stale-baseline"]` is `{"status": "skipped", "enforced": false}`, with one entry for each run. `--fail-on-stale-baseline` never runs in an audit, and prints a note that names the commands that run it. To judge a baseline, run `fallow dead-code`, `fallow dupes` or `fallow health` on the whole project.
+
+The audit checks the `kind` of each baseline. A baseline of another command suppresses nothing. For each such file, fallow prints a note on stderr that names the command that saved it, the path and the option to correct, for example `--dead-code-baseline`. That section then has `unrecognised_format: true`, `saved_by` and `gate_trips: true`. `--fail-on-baseline-growth` runs in an audit: it compares each baseline file with the same file at the base ref ([Baseline growth gate](/cli/global-flags#baseline-growth-gate)).
 
 ## Output
 
@@ -260,7 +380,7 @@ The audit output and the `dead_code` object each have their own `schema_version`
 | `verdict` | `pass`, `warn` or `fail`. Use this field, or the exit code, to gate CI. |
 | `command` | `"audit"`. |
 | `changed_files_count`, `base_ref`, `base_description`, `head_sha` | The changed files, the base, how fallow found the base (for example `local main`), and the commit of the run. |
-| `base_snapshot_skipped` | `true` when fallow did not analyze the base, so it could not tell introduced findings from inherited findings. Optional. |
+| `base_snapshot_skipped` | Only with `--performance`. `true` when the [docs-only fast path](#docs-only-diff-fast-path) ran: the head findings stood for the base, and each finding is inherited. |
 | `summary` | The counts of all findings in the changed files, at each severity: `dead_code_issues`, `dead_code_has_errors`, `complexity_findings`, `max_cyclomatic`, `duplication_clone_groups`. `dead_code_skipped`, `complexity_skipped` and `duplication_skipped` are `true` when `--only` or `--skip` left out an analysis. |
 | `attribution` | `gate`, `worsened`, and the counts `<analysis>_introduced` and `<analysis>_inherited` for `dead_code`, `complexity`, `duplication` and `styling`. Also `complexity_worsened`, `duplication_demoted` and `diff_risk_introduced`. Under `gate: all`, the introduced and inherited counts are `0`. |
 | `gate_outcomes` | The `audit-verdict` gate, and each other gate of the run. |
@@ -270,6 +390,23 @@ The audit output and the `dead_code` object each have their own `schema_version`
 | `_meta` | Metadata of the run, for example `telemetry.analysis_run_id`. |
 
 The `summary` and `attribution` counts do not use the severity. Gate on `verdict`. The [JSON output reference](/reference/json-output) has each field.
+
+Some fields of the findings are only in an audit:
+
+| Field | Content |
+|:--|:--|
+| `complexity.findings[].worsened_metrics` | One entry for each value that grew against the matched base finding: `metric` (`cyclomatic`, `cognitive`, `crap` or `line_count`), `base` and `head`. Absent when no value grew. |
+| `complexity.findings[].effective_severity`, `gate_exemption` | `effective_severity: "warn"` for an [estimated CRAP score](#estimated-crap-new-only) or a [test file](#test-file-complexity). `gate_exemption` is `test-file` for a test file. |
+| `duplication.clone_groups[].demotion_reason` | Only on a [demoted clone group](#new-only-duplication-demotion), for example `no-added-lines`. The set is open. |
+| `attribution.complexity_worsened` | The worsened complexity findings. `complexity_inherited` also counts them. |
+| `attribution.duplication_demoted` | The demoted clone groups. `duplication_inherited` also counts them. |
+| `attribution.diff_risk_introduced` | The diff-risk findings. Unlike the other counts, it counts under each gate. |
+
+### Review comments {#review-comments}
+
+In the `review-github` and `review-gitlab` formats, the comment of a finding names its attribution after the severity: `introduced`, `worsened` or `inherited`. When the gate does not count the finding, the label gives the cause, for example `` **error** (inherited, not gated: `--gate new-only`) ``. The other causes are `--worsened warn`, `--worsened off` and `test file`. Under `--gate all`, the label has only the severity.
+
+The comment of an inherited complexity finding also names each exceeded metric with its base and head values, for example `(inherited from the base: cyclomatic 23 -> 19, cognitive 22 -> 18)`. The `codeclimate` output has the same text. The JSON output does not keep the base values, so `fallow report --from` on a saved audit shows the comment without them.
 
 ### Diff-risk rules {#diff-risk-rules}
 
@@ -283,6 +420,18 @@ A diff-risk rule reports a fact about the change itself. Fallow compares the bas
 
 [`added-suppression`](/rules/added-suppression), default `warn`: the change adds a lint, type-check, coverage or fallow suppression comment.
 
+A finding for a `fallow-ignore` comment has a `suppression` object with `kinds`, `reason` and `security_without_reason`. Write the reason after `--`, for example `// fallow-ignore-next-line security-sink -- the HTML is a constant template`. When the comment hides `security-sink` or `security-client-server-leak` without a reason, `security_without_reason` is `true`:
+
+```json
+"suppression": {
+  "kinds": ["security-sink"],
+  "reason": null,
+  "security_without_reason": true
+}
+```
+
+This signal does not change the severity, the verdict or the exit code. To find old security suppressions without a reason, run [`fallow suppressions --format json`](/cli/suppressions).
+
 #### test-only-branch {#test-only-branch}
 
 [`test-only-branch`](/rules/test-only-branch), default `warn`: the change adds a check for the test environment in source code.
@@ -294,6 +443,24 @@ A diff-risk rule reports a fact about the change itself. Fallow compares the bas
 #### added-dependency {#added-dependency}
 
 [`added-dependency`](/rules/added-dependency), default `off`: the change adds a dependency to a `package.json`. A `package.json` cannot hold a comment, so use an `overrides` entry to turn the rule off for a path.
+
+#### Diff-risk findings in each format {#diff-risk-formats}
+
+| Format | Diff-risk findings |
+|:--|:--|
+| `human` | A `Diff risk` section with one line for each finding. |
+| `compact` | One record for each finding: `<rule>:<path>:<line>:<evidence>,severity=<severity>`, with `,kind=<kind>` for `weakened-tests`. The line is `0` for a finding about a whole file. |
+| `markdown` | A `Fallow: N diff-risk findings` table with the location, the rule, the severity and the evidence. |
+| `json` | The `diff_risk` object. |
+| `sarif` | A run with the `automationDetails.id` `fallow/audit/diff-risk/`, and the rule ids `fallow/<rule>`. |
+| `codeclimate` | Issues with the check name `fallow/<rule>`. |
+| `github-annotations` | One annotation for each finding: `::error` or `::warning`. |
+
+For example, a change that adds a `@ts-ignore` comment gives this `compact` record:
+
+```text
+added-suppression:src/services/customers.ts:1:@ts-ignore,severity=warn
+```
 
 ### Review brief {#review-brief-and-decision-surface}
 
@@ -315,6 +482,81 @@ A diff-risk rule reports a fact about the change itself. Fallow compares the bas
 
 The focus `score` components are `fan_io`, `risk_zone`, `change_shape`, `churn`, `worsened`, `test_reach`, `mutation` (with `--mutation-report`), `runtime` (with `--runtime-coverage`) and `security_taint`.
 
+#### Focus score {#focus-score}
+
+| Component | Source | Present when |
+|:--|:--|:--|
+| `fan_io` | The importers and the imports of the file. | Always. |
+| `risk_zone` | A new edge across zones, a wider public API, or a security taint path. | Always. |
+| `change_shape` | A new or wider export, or a changed contract that files outside the diff use. | Always. |
+| `churn` | The commits that changed the file in the last 12 months, weighted by age with a half-life of 90 days, in 3 bands. | A git history exists, the clone is not shallow, and the file is not a test file. |
+| `worsened` | The changed functions whose complexity grew against the base. | A base exists. |
+| `test_reach` | The changed exports that no test runs for real: `mocked-only`, `none` or `none-file`. | The project has tests. |
+| `mutation` | The surviving mutants on the added lines. A file that changed after the mutation run adds nothing. | `--mutation-report` is set. |
+| `runtime` | The invocations of a hot path. | `--runtime-coverage` is set. |
+| `security_taint` | A security path from a source to a sink touches the file. | A security pass feeds the brief. |
+
+Each component has a cap, so one signal cannot hide the others. The components only add, so you can see which component moved a file up. The `reason` names each present component, for example `fan-in (1 importer), 1 changed export with no real test run`. A unit with a `total` of 3 or more is `review-here`.
+
+Without `--mutation-report`, fallow does not measure mutants, so an absent `mutation` component does not mean that each mutant was killed. The focus score does not change `triage.risk_class`, which depends only on the size of the change.
+
+#### Weakening {#weakening}
+
+The `test-weakened`, `threshold-lowered` and `suppression-added` entries come from the [diff-risk findings](#diff-risk-rules) of the same run. So they follow the rule severities and the suppressions: when you turn off `weakened-tests` or `added-suppression`, the brief drops the signal. The `rule-severity` and `ignore-pattern` kinds use the stricter of the old and the new `weakened-tests` severity.
+
+`security-check-removed` comes from the brief only. It reports a security scan step that the change removes from a CI file. It also reports a security sink that the change replaces with a sink of the same class in the same source file, for example `new Function sink replaced by vm.runInNewContext`. A rule that flags one sink does not flag the other, so the swap silences the rule and keeps the risk. The classes are:
+
+- code execution: `eval`, `new Function`, `vm.runIn*`, `vm.compileFunction` and `new vm.Script`
+- HTML: `innerHTML`, `outerHTML`, `srcdoc`, `insertAdjacentHTML`, `setHTMLUnsafe`, `createContextualFragment`, `document.write` and `dangerouslySetInnerHTML`
+
+A sink that moves into an object key under a JSX spread, into a computed member such as `globalThis['eval']`, or into an alias also reports. A sink that only moves in the file, or that goes away, does not report. Test files do not take part. The `evidence` text is free text: do not parse it.
+
+#### Impact closure {#impact-closure}
+
+`impact_closure` gives the reach of the change as a number, a sample and a distribution:
+
+- `affected_count`: the exact number of files outside the diff that the change reaches.
+- `affected_not_shown`: at most 10 of those files, in path order. It is the start of the sorted list, so it shows the first directory only. Do not read the shape of the reach from it.
+- `affected_by_dir`: `{ dir, count }` rows, the largest count first, at most 25 rows. `affected_by_dir_omitted` counts the other directories.
+- `coordination_gap`: has no cap. It leaves out the story and test files that `affected_count` counts.
+- `search_gap`: the files outside the diff that use a changed export, and that a text search for the export name does not find (`missed`) or finds under another name (`renamed`). Each export has at most 10 consumers. A barrel file or another file that only exports the name again is never a gap. The fields of a consumer are the same as in a [trace](/cli/dead-code).
+- `co_change_gap`: the changed files that often changed together with a file outside the diff, with no import between them. Each entry has `changed_file`, `partner_file`, `shared_revisions`, `degree` (0 to 1) and `note`. At most 10 entries, the highest `degree` first. `co_change_gap_count` gives the full number. It is history evidence only, and never gates.
+
+#### Partition and ownership {#ownership}
+
+`partition.independent_slices` is present only with two or more slices. A slice is a set of module directories that import each other. Two slices mean that you can review and merge the parts apart. The field never asks you to split the change.
+
+`ownership` reads the `CODEOWNERS` file only (the `codeowners` config path, else the standard places), so it needs no git history. Each file belongs to its primary owner: the first owner of the last rule that matches.
+
+- `group_count`: the owner groups of the changed files and of the impact closure. `(unowned)` counts as one group.
+- `transitive_only_count`: the groups that own no changed file, and that the change reaches only through the impact closure.
+- `unowned_direct_count`: the changed files that no rule owns.
+- `groups`: at most 10 `{ owner, direct_count, affected_count }` rows, sorted by `direct_count`, then `affected_count`, then `owner`. `groups_omitted` counts the other groups.
+- `slices`: present with `partition.independent_slices`, in the same order. Each entry is `{ module_dirs, owners, separable }`. `separable` is `true` when the slice has one owner.
+
+A configured `codeowners` path that fallow cannot read prints a warning.
+
+#### Test reach {#test-reach}
+
+`test_reach` covers each value export whose declaration overlaps an added line. Type-only exports, re-exports and exports of test files do not count. Fallow reads the reach from the module graph, so it needs no coverage run.
+
+| `reach` | Meaning |
+|:--|:--|
+| `direct` | A test file uses the export. |
+| `transitive` | Tests reach the export only through other modules. |
+| `mocked-only` | Only tests that replace a module on the import path with a closed `vi.mock` or `jest.mock` factory use the export. The real code does not run in those tests. |
+| `none` | Tests load the file, but no module that tests reach uses the export. |
+| `none-file` | No test loads the file. |
+| `framework` | A framework reads the export as config with a literal value, for example the Next.js `revalidate` option. |
+
+- `status`: `measured`, or `no-tests` when the project has no test files. Then each export counts as `none-file`, and `exports` is empty.
+- `masking`: `active` when a test uses a closed mock factory, `no-mocks` when no test does, and `capped` above 1024 distinct mock sets. With `capped`, a mocked module counts as reached.
+- `total` and `counts`: the number of changed value exports, and the number for each `reach` value.
+- `exports`: at most 25 rows that need attention, in the order `mocked-only`, `none`, `none-file`, `transitive`. Each row has `file`, `export_name`, `line`, `reach` and `change` (`new` or `modified`). A `mocked-only` row also has `tests`, `tests_total`, `test_changed` and `mocked_targets`. `exports_omitted` counts the other rows.
+- `e2e_runner`: `true` when the project uses Playwright or Cypress. End-to-end tests do not import source files, so the `reach` values do not count them.
+
+Read an unknown `reach` value as "needs attention". A change inside a helper that is not exported does not count for the exports that call it. An automock without a factory (`vi.mock('./x')`) counts as reach. A file that only a setup file or an `import type` reaches gets `none-file`.
+
 #### Walkthrough contract {#json-envelope}
 
 `--walkthrough-guide --format json` prints a guide for a reviewing agent, with the `kind` `"review-walkthrough-guide"`. It has `digest`, `direction`, `change_anchors`, `graph_snapshot_hash`, `agent_schema` and `injection_note`. The agent returns a JSON file with the echoed `graph_snapshot_hash` and a `judgments` array. Each judgment cites a `signal_id` or a `change_anchor` from the guide, and has `framing`, an optional `concern` and an optional `action` (`block`, `address`, `consider` or `fyi`).
@@ -329,7 +571,18 @@ The focus `score` components are `fan_io`, `risk_zone`, `change_shape`, `churn`,
 | `rejected`, `invalid-action` | The `action` is not in the list. `invalid_value` holds the value. |
 | `rejected`, `stale-snapshot` | The `graph_snapshot_hash` does not match the current graph. Get a new guide. |
 
-Keep the guide and the judgment file outside the project. A new file in the project changes the graph hash.
+Keep the guide and the judgment file outside the project, for example in the temp directory. A new file in the project changes the graph hash, and fallow then refuses the judgment as `stale-snapshot`.
+
+Fallow builds the digest from the module graph only, and never adds the text of a pull request. So text in the change cannot steer the guide. An accepted judgment has the text of the agent in `agent_framing`, with `deterministic: false`. The framing and the `action` never gate.
+
+| Field | Content |
+|:--|:--|
+| `direction.units[].test_adjacency` | `none`: no test file imports the unit. `untouched`: a test imports the unit, and the diff changes no such test. `changed`: the diff also changes a test that imports the unit. A mock, a fixture or a snapshot does not count as a test. Absent for a test file. |
+| `agent_schema.action_vocabulary` | The values of `action`: `block` and `address` (the author must act), `consider` (optional) and `fyi` (no action). |
+| `agent_schema.concern_vocabulary` | The suggested values of `concern`: `abstraction`, `coupling`, `data-model`, `error-handling`, `control-flow`, `performance`, `dependencies`, `api-ergonomics`, `compatibility`, `state-ownership`, `extensibility`, `testability` and `trust-boundary`. Other text is accepted. |
+| `change_anchors` | One `chg:` id for each changed hunk, from the path and the added text, without line numbers. An edit above the hunk or a change of whitespace keeps the id. After a rename, `previous_change_anchor` holds the id under the old path. |
+
+A `change_anchor` proves only that the region changed, so it is a weaker anchor than a `signal_id`. An accepted judgment repeats the `concern` and the `action` of the agent.
 
 ## Exit codes
 
