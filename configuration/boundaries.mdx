@@ -74,6 +74,9 @@ In a [monorepo](/configuration/workspaces), give each package a zone with `root`
 
 An import from `apps/web` into `packages/ui/src/internal/x.ts` is then a finding with `reason: "internal_file"`. [Public entry files](#public-entry-files) explains this reason.
 
+- `packages/app`, `packages/app/` and `./packages/app/` are the same `root`. Fallow also changes `\` to `/`. A file outside the `root` directory never matches the zone.
+- Do not repeat the root in the patterns. `root: "packages/app"` with `patterns: ["packages/app/src/**"]` stops the config load with `FALLOW-BOUNDARY-ROOT-REDUNDANT-PREFIX`. Write `patterns: ["src/**"]`.
+
 ## Rules {#rules}
 
 With the zones in place, the rules say which imports between them are allowed. Each entry of `rules` restricts one zone:
@@ -88,7 +91,18 @@ With the zones in place, the rules say which imports between them are allowed. E
 - A zone without a rule has no restrictions.
 - A rule with an empty `allow` list isolates the zone. It can import no other zone.
 - The rules apply to each analyzed file, also to a file that no entry point reaches.
-- A named or default import through a barrel file counts against the zone of the module that declares the name. The finding names the barrel in `via_path`. A namespace import or a side-effect import counts against its direct target.
+- An import that does not run its target is not checked, for example `require.resolve("./x")` or a webpack loader request such as `raw-loader!./x.js`.
+- Start with the rules of the lowest zones, the zones that may import nothing. Then add the rules of the zones above them.
+
+### Re-export chains {#re-export-chains}
+
+A named or default import through a barrel file counts against the zone of the module that declares the name.
+
+- `to_path` and `to_zone` name the module that declares the name. `via_path` names the barrel that the file imports, and the human output shows it as `via <path>`.
+- Fallow reports one finding for each importing file and declaring module. A direct import of the declaring module wins over an import through a barrel.
+- When a re-export in the barrel breaks a rule of the barrel zone, only the barrel gets a finding.
+- A namespace import (`import * as x`) or a side-effect import counts against its direct target.
+- The chain stops at the first [public entry file](#public-entry-files) of a zone.
 
 ## Type-only imports {#type-only-imports-across-boundaries}
 
@@ -132,7 +146,8 @@ A rule allows a zone, but it does not say which files of that zone are the publi
 - A re-export chain stops at a public file. Fallow judges the import by the public file.
 - The check applies to imports from each other zone, also from a zone without a rule. Files outside each zone are not checked.
 - When no file of a zone matches its `publicFiles` globs, fallow writes a warning.
-- On an `autoDiscover` zone, each glob is relative to each discovered directory. `["index.ts"]` gives each child zone its own `index.ts`.
+- The globs use the same base as `patterns`: the project root, or `root` when the zone sets it. A zone can have more than one glob, for example `["index.ts", "*.routes.ts"]`.
+- On an `autoDiscover` zone, each glob is relative to each discovered directory. `["index.ts"]` gives each child zone its own `index.ts`. The files that only the `patterns` of such a zone match get no public entry files.
 
 ## Auto-discovered zones {#auto-discovered-zones}
 
@@ -214,6 +229,8 @@ A file in no zone has no restrictions (see [Zones](#zones)), so a new folder out
 }
 ```
 
+Coverage checks each analyzed file, also a file that no entry point reaches. For generated code, use `allowUnmatched` and not a suppression comment in each file: the config keeps the exception in one place. Use coverage together with [forbidden calls](#forbidden-calls), so that no file escapes a call policy.
+
 ## Forbidden calls {#forbidden-calls}
 
 An import rule cannot stop a call to a global, such as `process.exit`, because the code imports nothing. `calls.forbidden` bans calls in the files of a zone:
@@ -233,18 +250,41 @@ An import rule cannot stop a call to a global, such as `process.exit`, because t
 }
 ```
 
-Each matching call or `new` expression is a `boundary-call-violation` finding. The finding names the callee, the pattern and the zone.
+Each matching call or `new` expression is a `boundary-call-violation` finding. The finding names the callee, the pattern and the zone. A `new` expression has the prefix `new ` in `callee`, for example `new Date` for the pattern `Date`.
 
 - A pattern compares whole name segments. `fetch` matches `fetch` and not `myfetch`.
 - `object.*` matches each member of the object. `*.member` matches the member on each object.
-- A pattern follows imports: `child_process.*` also matches `execSync` from `import { execSync } from "node:child_process"`.
-- Fallow matches direct callee paths, also with `?.`. It does not follow a callee in a variable, a computed member or an injected object.
-- The policy applies only to files in a zone. Use `coverage.requireAllFiles` to put each file in a zone.
+- A pattern follows imports: `child_process.*` also matches `execSync` from `import { execSync } from "node:child_process"`, the bare `child_process` specifier, a namespace import and a default import.
+- Fallow matches direct callee paths, also with `?.`. It does not follow a callee in a variable (`const run = cp.exec; run()`), a computed member or an injected object (`this.client.exec()`).
+- The policy applies only to files in a zone, also to a file that no entry point reaches. Use `coverage.requireAllFiles` to put each file in a zone.
+- Each call site is one finding, so `Date()` and `new Date()` on two lines give two findings. A `fallow-ignore-next-line` comment covers only the call site on its next line.
 - When two entries match a call, the first entry wins. A bare `*` pattern stops the config load.
 
 ## Severity and suppression
 
-The import findings, the coverage findings and the call findings all use the `boundary-violation` rule. Its default is `error`. The `boundary-violation` token in a [suppression comment](/configuration/suppression) hides each of these findings on the line or in the file.
+The import findings, the coverage findings and the call findings all use the `boundary-violation` rule. Its default is `error`. The `boundary-violation` token in a [suppression comment](/configuration/suppression) hides each of these findings on the line or in the file. The tokens `boundary-call-violation` and `boundary-call-violations` do the same.
+
+Because all boundary findings share one rule, `"boundary-violation": "warn"` also makes the import findings warnings. Use it while you triage the existing findings, then set the rule back to `error`.
+
+## Common patterns {#common-patterns}
+
+### A router that imports features {#trpc-router}
+
+In a tRPC app, the server router imports the routers of the feature modules. With the `bulletproof` preset, each of these imports is a `server → features` finding. Suppress the one file that combines the routers:
+
+```ts
+// src/server/_app.ts
+// fallow-ignore-file boundary-violation
+import { authRouter } from "../features/auth/router";
+```
+
+A rule `{ "from": "server", "allow": ["shared", "features"] }` also removes the findings, but then each server file may import the features.
+
+### A test zone next to a preset {#test-zone-with-preset}
+
+Fallow puts the preset zones first and your zones after them, and a file belongs to the first zone that matches. So a `test` zone with `src/**/*.test.ts` matches only test files outside the preset directories, such as `src/__tests__/**`. A test file such as `src/features/auth/auth.test.ts` stays in the `features` zone.
+
+To put the `test` zone first, list it first and then list each preset zone again with all its patterns. A zone with the name of a preset zone replaces it and keeps the place in your list, and the preset rules stay. Run `fallow list --boundaries` to check the order.
 
 ## Check the config {#inspect}
 

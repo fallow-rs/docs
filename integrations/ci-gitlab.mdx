@@ -129,6 +129,28 @@ fallow:
 
 A later job, for example a deploy step, can act on the result without a second run of fallow. The template writes the gate results to `fallow-gates.env` and declares it as a `dotenv` report. A later job can read `FALLOW_GATES_FAILED`, `FALLOW_GATES_WARNED`, `FALLOW_GATES_SKIPPED`, `FALLOW_GATES_PASSED`, `FALLOW_ANALYSIS_DEGRADED`, `FALLOW_REQUESTS_UNAPPLIED` and `FALLOW_MUTATION_OUTCOME`. The job also keeps `fallow-results.json` and the comment files as artifacts for 30 days.
 
+Two more artifacts tell a later job when a post did less than it should, for example after an API error:
+
+| Artifact | Values | Meaning |
+|:--|:--|:--|
+| `fallow-skip-reason.txt` | `none` (default), `pagination_failure` | The template did not post the discussions, because the lookup of the existing discussions failed. A post could then make duplicate threads. |
+| `fallow-dedup-lookup-failed.txt` | `false` (default), `true` | A lookup of the existing comments failed. The summary comment still posts, so it can be a duplicate. |
+
+```yaml
+alert-degraded-fallow:
+  stage: notify
+  needs: [fallow]
+  script: |
+    if [ "$(cat fallow-skip-reason.txt)" = "pagination_failure" ]; then
+      echo "WARNING: Fallow inline review skipped to avoid duplicates"
+    fi
+    if [ "$(cat fallow-dedup-lookup-failed.txt)" = "true" ]; then
+      echo "WARNING: Fallow MR comments may be duplicated; re-run the fallow job"
+    fi
+```
+
+The template runs the review script as `bash /tmp/fallow-scripts/review.sh || echo "WARNING: MR review failed"`, so a failed review post does not fail the job. Read these artifacts to find such a failure.
+
 ## If it fails
 
 The template writes the cause of most problems in the job log. Find the message in this list:

@@ -44,14 +44,36 @@ The [global options](/cli/global-flags) are in these groups: [Project](/cli/glob
 - `--cycles` reports [circular dependencies](/rules/circular-dependency), [re-export cycles](/rules/re-export-cycle) and [package cycles](/rules/package-cycle). `--boundaries` reports [boundary violations](/rules/boundary-violation), [boundary coverage](/rules/boundary-coverage) and [forbidden calls](/rules/boundary-call-violation). `--policy` reports [policy violations](/rules/policy-violation).
 - `fallow dead-code` with `--circular-deps`, `--re-export-cycles`, `--package-cycles`, `--boundary-violations` or `--policy-violations` reports the same findings, with the same finding ids.
 
+## Option details {#option-details}
+
+### Requested rules that are off {#requested-rule-off}
+
+When a selection option asks for a rule that the config sets to `off`, fallow does not run that check. The findings and the exit code do not change. Fallow prints a note on stderr, and adds a `requested-rule-off` entry with the `rule` and the `flag` to `workspace_diagnostics`:
+
+```text
+Note: circular-dependencies is off in config, so --cycles did not check it. Set the rule to "error" or "warn" to run this check.
+```
+
+A run without a selection option gives no note.
+
 ### Shared-state inventory {#shared-state-inventory}
 
 `--shared-state` adds a list of the places where code writes to an imported value, and of the custom properties of `window`, `globalThis`, `self` or `global` that more than one file reads or writes. Alone, it selects only the inventory. With `--cycles`, `--boundaries` or `--policy`, the run also reports those findings.
 
+- An imported write is an assignment, an update or a delete of a property of an imported value, with the declaration that the import resolves to.
+- A global group lists the reads and the writes of one custom property in different non-test files. These sites do not prove that the files share one runtime or an order of execution.
 - The inventory is not a finding. It does not change the totals, the health score, a baseline or the exit code.
-- Only the `human`, `json` and `markdown` formats show it. Another format, `--sarif-file`, `--group-by` or `--finding-id` together with `--shared-state` exits with code 2.
-- The inventory uses static property keys only. It leaves out aliases, dynamic keys, `Object.assign` and destructuring targets.
-- The `shared-state` suppression token and the [`sharedStateAllowlist`](/reference/config-dead-code#sharedstateallowlist) config key remove a site from the inventory.
+- Only the `human`, `json` and `markdown` formats show it. Another format, `--sarif-file`, `--group-by` or `--finding-id` together with `--shared-state` exits with code 2, also for an empty inventory.
+- The inventory uses static property keys only. It leaves out aliases, dynamic keys, mutator calls, `Object.assign`, destructuring targets and iteration targets. Check each site in the source before you change the code.
+- In JSON, `shared_state.complete` is `false` when a parse error or a limit cut the inventory, and `shared_state.truncated` is `true` when a limit cut it. A complete inventory covers the supported syntax only.
+- When one site of a global group matches a file, workspace or diff filter, the output keeps all reads and writes of that group.
+- The `fallow-ignore-next-line shared-state` and `fallow-ignore-file shared-state` comments and the [`sharedStateAllowlist`](/reference/config-dead-code#sharedstateallowlist) config key remove a site from the inventory.
+
+### Relation to `fallow dead-code` {#relation-to-dead-code}
+
+The `fallow dead-code` options above are deprecated aliases. `fallow dead-code` also reports the architecture findings by default. In human output, it then prints a tip on stderr that points to `fallow architecture`.
+
+Bare `fallow` reports the architecture findings in an "Architecture" category of its dead-code section. The machine formats keep them in the dead-code part of the output. `--only architecture` runs only this part, and `--skip architecture` leaves it out. See [global options](/cli/global-flags).
 
 ## Output
 
@@ -85,21 +107,54 @@ With `--format json`, the output has the shape of the [`fallow dead-code` output
 |:--|:--|
 | `kind` | `"architecture"`. A `--group-by` run gives `"architecture-grouped"`. |
 | `schema_version` | The version of the architecture output format, separate from the version of `dead-code`. |
-| `circular_dependencies`, `re_export_cycles`, `package_cycles` | The cycle findings. |
+| `circular_dependencies`, `re_export_cycles`, `package_cycles` | The cycle findings. [Re-export cycles](/cli/dead-code#re-export-cycles) gives the `kind` values of a re-export cycle. |
 | `boundary_violations`, `boundary_coverage_violations`, `boundary_call_violations` | The boundary findings. |
 | `policy_violations` | The rule-pack findings. |
 | `shared_state` | The inventory: `version`, `complete`, `truncated`, `imported_writes` and `globals`. Present only with `--shared-state`. |
 
 The other issue arrays of `dead-code` are present and empty. The [JSON output reference](/reference/json-output) has each field.
 
-A `fallow architecture` baseline has the `dead-code` format and `"kind": "dead-code"`. Because the run reports only some issue types, `--fail-on-stale-baseline` does not gate this command: the `stale-baseline` gate has the status `skipped`.
+[`fallow report`](/cli/report) renders a saved `architecture` or `architecture-grouped` result in another format. A result with `shared_state` renders only as Markdown.
+
+### Package cycles {#package-cycles}
+
+A [package cycle](/rules/package-cycle) shows the packages in cycle order, from the package with the lowest name, and one example import for each step:
+
+```text
+● Package cycles (1)
+  @acme/core → @acme/utils → @acme/core
+    packages/core/src/format.ts:3 → packages/utils/src/index.ts
+    packages/utils/src/log.ts:1 → packages/core/src/index.ts (type-only)
+```
+
+Each entry of `package_cycles` has these fields:
+
+| Field | Content |
+|:--|:--|
+| `packages` | The package labels in cycle order. The last package imports the first. |
+| `package_roots` | The root directory of each package, in the same order. |
+| `length` | The number of packages in the cycle. |
+| `edges` | One example import for each step: `from_package`, `to_package`, `path`, `target_path`, `line`, `col` and `type_only`. `type_only` is `true` when each import of the step is type-only. |
+| `group_truncated` | `true` when the group of packages that holds this cycle has more cycles than fallow lists. |
+
+- A label is the package name. When two workspace packages have the same name, the label adds the package root, for example `example (examples/basic)`.
+- Fallow lists at most 20 cycles for one group of packages, shortest first. Each output format then shows the note `this package group has more cycles than listed`. Break a listed cycle and run fallow again.
+- `--changed-since`, the diff scope of `fallow audit` and `--workspace` keep a cycle when the file of one example import (`edges[].path`) is in scope. A new cycle always shows, because it adds a step whose imports are all new.
+- `--group-by` puts a cycle in the group of its first example import file. Per-file severity in `overrides` uses the highest severity of the example import files.
+- A regression baseline and `fallow audit` identify a cycle by its package labels, so a cycle that exists already does not fail a gate again.
+
+### Baselines {#baselines}
+
+A `fallow architecture` baseline has the `dead-code` format and `"kind": "dead-code"`. `fallow architecture --baseline` also reads a baseline of `fallow dead-code --save-baseline`. Because the run reports only some issue types, `--fail-on-stale-baseline` does not gate this command: the `stale-baseline` gate has the status `skipped`.
+
+A baseline that `fallow architecture --save-baseline` writes lists only the architecture findings. When `fallow dead-code` reads it, fallow prints a warning that the baseline lists only part of the findings.
 
 ## Exit codes
 
 | Code | Meaning |
 |:--|:--|
 | `0` | No finding at `error` severity, and no other gate failed. |
-| `1` | A finding has a rule at `error`. By default, circular dependencies, boundary violations, boundary coverage and forbidden calls are at `error`. Re-export cycles, package cycles and policy violations are at `warn`. |
+| `1` | A finding has a rule at `error`. By default, circular dependencies, boundary violations, boundary coverage and forbidden calls are at `error`. Re-export cycles, package cycles and policy violations are at `warn`. A rule in a rule pack can set its own `severity`. |
 | `2` | Invalid input, for example `--shared-state` with `--format sarif`. |
 
 [Exit codes](/reference/exit-codes) has the codes that all commands share.
@@ -107,6 +162,10 @@ A `fallow architecture` baseline has the `dead-code` format and `"kind": "dead-c
 ## Examples
 
 ```bash
+# Before an edit, show the rules of a file; after the edit, find the violations
+fallow guard src/ui/App.ts --format json --quiet
+fallow architecture --format json --quiet
+
 # Report cycles, boundaries and policy rules
 fallow architecture
 

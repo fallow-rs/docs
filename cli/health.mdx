@@ -100,8 +100,58 @@ Without a section option, the run shows the health score, the complexity finding
 - `--hotspots` and `--ownership` need git history, or a `--churn-file`. Outside a git repository, the section is empty and the run continues.
 - `--score` alone does not read the git history, so the score has no hotspot penalty. Add `--hotspots` for the penalty.
 - `--coverage-gaps` and `--type-coupling` are opt-in. `--type-coupling` needs `--type-aware`.
-- Fallow takes the coverage path from `--coverage`, else from `FALLOW_COVERAGE`, else from `health.coverage`. When none is set, fallow reads `coverage/coverage-final.json` when it exists, else it estimates the CRAP score. `--coverage-root` follows the same order with `FALLOW_COVERAGE_ROOT` and `health.coverageRoot`, and must be an absolute path.
+- Fallow takes the coverage path from `--coverage`, else from `FALLOW_COVERAGE`, else from `health.coverage`. When none is set, fallow reads `coverage/coverage-final.json`, then `.nyc_output/coverage-final.json`, in the project root. Without these files, it estimates the CRAP score. A file that fallow finds on disk gives the note `using auto-detected coverage at <path>` on stderr. `--coverage-root` follows the same order with `FALLOW_COVERAGE_ROOT` and `health.coverageRoot`, and must be an absolute path.
 - `--coverage` reads an Istanbul coverage map (`coverage-final.json`), a directory that holds one, a raw V8 coverage directory, or one V8 coverage JSON file. It does not read LCOV: with `lcov.info`, the run stops with `failed to parse coverage data` and exits with code 2. Add the `json` reporter to the test runner, and pass `coverage-final.json`.
+
+### Coverage input {#coverage-input}
+
+Fallow computes the statement coverage of each function over the statements in the body of that function. The statements of a nested function belong to the nested function, not to the function that holds it.
+
+- For an Istanbul map, fallow counts the statements of each function from the file on disk, and reads the counts from the map. The coverage of a function can therefore differ from the text table of the test runner.
+- For V8 input, fallow takes the statements from the file on disk and the counts from the V8 block ranges. It adds the dumps of all test processes together. A transpiled script (`tsx`, an esbuild or webpack bundle) maps back to its source files through the source map that Node writes into the dump. A script that is different from the file on disk and has no source map keeps the estimate.
+- A function that the coverage data does not describe keeps the estimate. The human output counts the matched functions: `CRAP scores use Istanbul coverage where matched (22/25 functions); the rest fall back to the static estimate.`
+- When the coverage data describes files that match no analyzed file, fallow prints `note: the coverage file describes N files that no analyzed file matched`. Set `--coverage-root` to the checkout that made the data.
+
+In the JSON output, `summary.coverage_model` names the model (see [CRAP](#crap-formula)). With measured coverage, `summary.coverage_input_format` names the input: `istanbul` or `v8`. Each CRAP finding has `coverage_source`, and `summary.coverage_source_consistency` is `uniform` when all findings have the same source, else `mixed`.
+
+### Literal membership chains {#literal-membership-chains}
+
+The standard cyclomatic count adds 1 for each `||`. A check of one value against a list of literals therefore gets a high value, although it is one decision:
+
+```ts
+if (kind === "a" || kind === "b" || kind === "c" || kind === "d") {
+  throw new Error("Unsupported kind");
+}
+```
+
+The standard value of this function is 5. Set [`health.cyclomaticPolicy`](/reference/config-health#health-cyclomaticpolicy) to `"literal-membership"` to count the chain as one predicate. The function then has the value 2 for the gates. A chain qualifies only when all of these are true:
+
+- Each operator of the chain is `||`. Parentheses do not change the chain.
+- Each operand is a `===` check between a plain identifier and a string, number, bigint, boolean or `null` literal, on either side.
+- Each operand checks the same identifier, and the chain has two operands or more.
+
+Member access (`obj.kind === "a"`), calls, `==`, `!==` and a chain with another operator keep the standard count. A chain inside a wider condition, such as `flag && (kind === "a" || kind === "b")`, counts as one predicate, and the `&&` still adds 1.
+
+The policy changes the cyclomatic value of the `maxCyclomatic` gate, of each CRAP score and of the CRAP values of the file scores. The health score, the complexity density, the vital signs and the hotspots keep the standard count. The cognitive complexity does not change. In the JSON output, `summary.cyclomatic_policy` names the policy. A finding has the policy value in `cyclomatic`, and the standard value in `standard_cyclomatic` when the two values are different. With `--complexity-breakdown`, each `||` contribution of a chain has `"literal_membership": true`.
+
+### Threshold overrides {#threshold-overrides}
+
+A [`health.thresholdOverrides`](/reference/config-health#health-thresholdoverrides) entry gives some files or functions their own limits. The entry keeps the function in the output, and a suppression comment hides it. A finding that fallow checked against an override has `effective_thresholds` and `threshold_source: "override"`.
+
+When an entry affects the run, the JSON output has a `threshold_overrides` array. It has one row for each entry and each dimension that the entry sets. The dimension `complexity` covers `maxCyclomatic`, `maxCognitive`, `maxUnitSize` and `maxFileLines`. The dimension `crap` covers only `maxCrap`. To count the entries and not the rows, group on `override_index`.
+
+| Field | Content |
+|:--|:--|
+| `status` | `active`: the entry raises a limit that the unit needs, or the unit exceeds a limit that the entry lowers. `stale`: the entry changes no result, because the unit passes the global limits or a suppression comment covers it. `insufficient`: the unit still exceeds the raised limit, so the finding stays. `no_match`: the entry matches no analyzed file or function. |
+| `override_index` | The position of the entry in `thresholdOverrides`. |
+| `dimension` | `complexity` or `crap`. |
+| `outstanding` | The dimensions that the unit still exceeds with the entry. Absent when empty. |
+| `path`, `function`, `line`, `col` | The matched unit. `line` is 1-based, `col` is 0-based. No position on a `no_match` row. |
+| `configured_thresholds`, `effective_thresholds` | The limits of the entry, and the limits after fallow applies each matching entry to the defaults. |
+| `metrics` | The current `cyclomatic` and `cognitive` of the unit, `crap` when coverage data exists, and `line_count` on a complexity row. |
+| `reason` | The `reason` of the entry, when set. |
+
+For an `insufficient` row, raise the limit more or make the function simpler.
 
 ### Option values {#option-values}
 
@@ -119,7 +169,34 @@ Without a section option, the run shows the health score, the complexity finding
 
 ### Baseline {#baseline}
 
-`--save-baseline` saves the complexity findings with `"kind": "health"`. `--baseline` hides the findings in the file. A baseline applies only to complexity findings, not to file scores. The result of the comparison is in `summary.baseline_staleness`.
+`--save-baseline` saves the complexity findings and the refactoring targets with `"kind": "health"`. `--baseline` hides the findings and the targets in the file. A baseline does not apply to file scores. The key of a target is `<path>:<category label>`, for example `src/utils.ts:dead code`. A target stays known while its file and category stay the same, also when its priority or effort changes. The result of the comparison is in `summary.baseline_staleness`.
+
+### Performance timings {#performance}
+
+`--performance` prints the time of each health stage on stderr. In the demo project:
+
+```text
+┌─ Health Pipeline Performance ─────────────────────
+│  config:                0.0ms
+│  discover files:       16.6ms
+│  parse/extract:        38.5ms
+│  complexity:            0.0ms
+│  file scores:           0.2ms
+│  git churn:           246.2ms (cold, 597 git log bytes)
+│  hotspots:              0.0ms
+│  duplication:          20.2ms
+│  targets:               0.0ms
+│  (other):              33.6ms
+│  ────────────────────────────────────────────────
+│  TOTAL:               355.4ms
+└───────────────────────────────────────────────────
+```
+
+- `git churn` shows `cached` when the churn came from the cache, else `cold`. The byte count is the `git log` output that the run read. It is 0 when the cache or a churn file gave all the history.
+- `(other)` is `TOTAL` minus the stage rows, at least `0.0ms`.
+- In a bare `fallow` run, the health stages reuse the parse of the dead-code pass. `discover files` and `parse/extract` then show `(measured above)`.
+
+With `--format json`, fallow writes the timings as one JSON object on stderr, so stdout keeps one report. The object has the `_ms` field of each stage, `parse_cpu_ms`, `git_churn_cache_hit`, `git_log_bytes`, `total_ms` and `shared_parse`. The times change from run to run, so do not use them as a gate.
 
 ### Mutation report {#mutation-report}
 
@@ -167,6 +244,24 @@ Without a section option, the run shows the health score, the complexity finding
 - Each file score gives the maintainability index, the size, the fan-in and fan-out, the share of unused code, the complexity density and the CRAP risk.
 - Each refactoring target gives its score, its priority, its effort and the recommendation.
 
+### Severity bands and labels {#severity-bands}
+
+Each complexity finding gets the highest band of its three values. The bands are fixed. The limits `maxCyclomatic`, `maxCognitive` and `maxCrap` decide only if a function has a finding, and the `complexity-*` rules decide if the finding fails the run.
+
+| Value | `moderate` | `high` | `critical` |
+|:--|:--|:--|:--|
+| Cyclomatic complexity | below 30 | 30 to 49 | 50 or more |
+| Cognitive complexity | below 25 | 25 to 39 | 40 or more |
+| CRAP | below 50 | 50 to 99 | 100 or more |
+
+A [long file](/rules/long-file) finding is always `moderate`.
+
+The other labels of the human output:
+
+- `maintainability 92.8 (good)`: `good` for an average maintainability index of 85 or more, `moderate` for 65 or more, `low` below 65. The health score counts a file below 70 as low (`maintainability_low_pct`).
+- The `risk` column of a file score shows the highest CRAP score of the file: low below half of `maxCrap`, moderate up to `maxCrap`, high at `maxCrap` or more. With the default limit, that is `low <15`, `moderate 15-30` and `high >=30`. A value above 999 shows as `>999`. The JSON output has the exact value.
+- The `risk` or `structure` tag tells which value puts the file in its place: the CRAP risk, or the low maintainability index.
+
 ### JSON output {#json-output}
 
 With `--format json`, the output has these top-level fields. The field of a section is present only when the section ran.
@@ -203,9 +298,58 @@ With `--format json`, the output has these top-level fields. The field of a sect
 
 The [JSON output reference](/reference/json-output) has each field.
 
+### CSS analysis {#css-analysis}
+
+With `--css`, the output has three fields. [Styling](/analysis/styling) explains the analysis.
+
+- `css_analytics`: the measurements and the cleanup candidates.
+- `styling_findings`: the findings of the five styling rules, each with `code`, `sub_kind`, `effective_severity`, the location, the evidence value and read-only actions.
+- `styling_health`: the styling score.
+
+[Styling findings](/explanations/health#css-analytics) has the cleanup candidates, the token consumers and the styling score formula.
+
+### Coverage gaps {#with-coverage-gaps}
+
+With `--coverage-gaps`, the output has `coverage_gaps`:
+
+- `summary`: `runtime_files`, `covered_files`, `file_coverage_pct`, `untested_files` and `untested_exports`.
+- `files[]`: the runtime files that no test reaches, with `path`, `value_export_count` and `actions`.
+- `exports[]`: the exports that no test reaches in files that tests reach, with `path`, `export_name`, `line`, `col` and `actions`.
+
+The analysis knows test mocks. A `vi.mock` or `jest.mock` call with a closed factory replaces the module: the factory has no `vi.importActual` or `jest.requireActual`, and the test has no other import of the module. Such a test does not reach the module, so the module can be a gap. When fallow cannot prove the replacement, the module keeps its credit:
+
+- A mock without a factory keeps the credit, because the test runner can still load the original module.
+- `vi.doMock` and `jest.doMock` keep the credit, because they are not hoisted and depend on the order of the code.
+
+The [`coverage-gaps`](/reference/config-rules) rule sets the severity, and it is `off` by default. To leave one file out, put `// fallow-ignore-file coverage-gaps` in the file.
+
+### Runtime coverage {#runtime-coverage}
+
+With `--runtime-coverage`, the output has `runtime_coverage` with the verdict of the run, the findings for each function and the hot paths. [Runtime coverage](/analysis/runtime-coverage) explains the data and the capture. See [Evidence fields](/explanations/health#coverage-evidence).
+
 ### Degraded inputs {#degraded-inputs}
 
 An input that fallow cannot read gives zeros, for example a project without git or an unreadable snapshot. To tell a measured zero from a missing measurement, read `workspace_diagnostics`: an entry with `degrades_analysis: true` marks a missing input. Select on that field, and not on a list of kinds.
+
+```bash
+fallow health --format json --quiet | jq '.workspace_diagnostics[] | select(.degrades_analysis)'
+```
+
+Fallow writes each entry with or without `--quiet`. These kinds come from the health inputs:
+
+| `kind` | Meaning | `degrades_analysis` |
+|:--|:--|:--|
+| `file-scores-unavailable` | The file score pass failed. The score list is empty, and each number from the scores is zero. | `true` |
+| `hotspots-skipped` | The hotspot, churn and ownership sections report nothing. `cause` is `not-a-repository`, `invalid-since` or `churn-file-unreadable`. | `true` |
+| `shallow-clone` | The churn covers only the fetched history. `ownership_requested` tells if the run asked for ownership. | `true` |
+| `unpinned-clock` | No commit time is available, so the recency weights move between two runs on the same commit. | `true` |
+| `ownership-unavailable` | The ownership inputs did not load. `cause` is `invalid-bot-pattern` or `codeowners-parse-failed`. | `true` |
+| `trend-snapshot-unreadable` | Fallow could not read a saved snapshot, so the trend uses fewer snapshots. | `true` |
+| `change-coupling-skipped` | `change_coupling.pairs` is empty. `cause` is `shallow-clone` or `too-few-commits`. The other sections still measure. | absent |
+| `trend-group-baseline-unavailable` | The baseline snapshot has no group data for the `--group-by` mode. See [Group trends](#group-trends). | absent |
+| `coverage-auto-detected` | Not a failure: `path` names the coverage file that fallow found on disk. | absent |
+
+The set of kinds is open. Read a kind that you do not know as one more diagnostic, not as an error.
 
 ### Vital signs {#vital-signs}
 
@@ -215,7 +359,7 @@ An input that fallow cannot read gives zeros, for example a project without git 
 | `avg_cyclomatic`, `p90_cyclomatic`, `critical_complexity_pct` | The average and the 90th percentile of the cyclomatic complexity, and the percentage of functions with a cyclomatic complexity of 50 or more. |
 | `cyclomatic_population`, `total_loc` | The count, sum and maximum of the cyclomatic complexity for functions, module scopes and templates, and the lines of code. |
 | `duplication_pct` | The percentage of duplicated code. `null` without `--score`. |
-| `hotspot_count`, `hotspot_top_pct_count` | The files with a hotspot score of 50 or more, and the files in the top 1 percent of the ranking. |
+| `hotspot_count`, `hotspot_top_pct_count` | The files with a hotspot score of 50 or more, and the files with a positive score in the top 1 percent of the ranking. `hotspot_count` feeds the health score. `groups[].hotspot_count` of a `--group-by` run is a different count: the length of the ranked hotspot list of the group, before `--top`. Do not compare the two counts. |
 | `maintainability_avg`, `maintainability_low_pct` | The average maintainability index, and the percentage of files below 70. |
 | `unused_dep_count`, `unused_deps_per_k_files` | The unused dependencies. |
 | `circular_dep_count`, `circular_deps_per_k_files` | The circular dependencies. |
@@ -235,7 +379,7 @@ The score starts at 100. Fallow subtracts each penalty in `health_score.penaltie
 | `complexity` | `critical_complexity_pct` × 4 | 20 |
 | `p90_complexity` | (`p90_cyclomatic` − 10), only when `critical_complexity_pct` is absent | 10 |
 | `maintainability` | `maintainability_low_pct` × 1.5 | 15 |
-| `hotspots` | `hotspot_count` ÷ (1 percent of the files, at least 1) × 10 | 10 |
+| `hotspots` | `hotspot_count` ÷ (1 percent of the files, rounded up, at least 1) × 10 | 10 |
 | `unused_deps` | `unused_deps_per_k_files` × 0.5 | 25 |
 | `circular_deps` | `circular_deps_per_k_files` × 0.5 | 25 |
 | `unit_size` | `functions_over_60_loc_per_k` × 0.5 | 10 |
@@ -263,7 +407,21 @@ MI = 100 − complexity_density × 30 × min(lines ÷ 50, 1) − dead_code_ratio
 CRAP = CC² × (1 − coverage)³ + CC
 ```
 
-`CC` is the cyclomatic complexity of the function. With a coverage file, `coverage` is the measured coverage of the function (`coverage_model` `istanbul`). Without one, fallow estimates it (`coverage_model` `static_estimated`): 85 percent for a function that a test imports, 40 percent for another function in a file that a test reaches, and 0 for a function that no test reaches.
+`CC` is the cyclomatic complexity of the function. With a coverage file, `coverage` is the measured coverage of the function (`coverage_model` `istanbul`). Without one, fallow estimates it (`coverage_model` `static_estimated`): 85 percent for a function that a test imports, 40 percent for another function in a file that a test reaches, and 0 for a function that no test reaches. Only a value import counts as a direct test reference, not an `import type`. An old snapshot can also have `static_binary`, a model that the current version does not produce.
+
+A function with full coverage scores its `CC`, and a function without coverage scores `CC² + CC`. With the default estimate, an untested function with a cyclomatic complexity of 5 scores 5² + 5 = 30, which is the default limit.
+
+Each finding has `coverage_tier`: `none` (no coverage), `partial` (below 70 percent) or `high` (70 percent or more). The first action of a CRAP finding follows from the formula:
+
+| Condition | First action |
+|:--|:--|
+| `cyclomatic` is below `maxCrap`, and `coverage_tier` is `none` | `add-tests` |
+| `cyclomatic` is below `maxCrap`, and `coverage_tier` is `partial` or `high` | `increase-coverage` |
+| `cyclomatic` is `maxCrap` or more: full coverage cannot bring the score below the limit | `refactor-function` |
+
+A CRAP-only finding also gets a second `refactor-function` action when its cyclomatic complexity is within [`health.crapRefactorBand`](/reference/config-health#health-craprefactorband) (default 5) of `maxCyclomatic`, and its cognitive complexity is half of `maxCognitive` or more. The cognitive condition keeps this advice away from a flat `switch`, which has many paths and is easy to read.
+
+The `actions` of a finding have no `suppress-line` hint when a baseline is active, or when [`health.suggestInlineSuppression`](/reference/config-health#health-suggestinlinesuppression) is `false`. The output then has `actions_meta` with `"suppression_hints_omitted": true` and a `reason` of `baseline-active` or `config-disabled`.
 
 ### Refactoring targets {#refactoring-targets}
 
@@ -280,16 +438,32 @@ efficiency = priority ÷ effort
 
 `target_thresholds` holds the percentiles of the project: `fan_in_p95` (at least 5), `fan_in_p75` (at least 3), `fan_out_p95` (at least 8) and `fan_out_p90` (at least 5).
 
-| `category` | `confidence` |
+Fallow checks the rules of this table in order, and gives a file the category of the first rule that matches. The human output shows the label. The JSON `factors` still list each signal of the file.
+
+| `category` | Label | Rule | `confidence` |
+|:--|:--|:--|:--|
+| `urgent_churn_complexity` | `churn+complexity` | A hotspot score of 50 or more, the trend `Accelerating`, and a complexity density above 0.5. | `low` |
+| `break_circular_dependency` | `circular dependency` | The file is in an import cycle, and has a fan-in of 5 or more. | `high` |
+| `split_high_impact` | `high impact` | A complexity density above 0.3, and a fan-in of `fan_in_p95` or more, or of `fan_in_p75` or more with 5 functions or more. | `medium` |
+| `remove_dead_code` | `dead code` | Half or more of the value exports are unused, and the file has 3 value exports or more. | `high` |
+| `extract_complex_functions` | `complexity` | A function with a cognitive complexity of 30 or more. | `high` |
+| `extract_dependencies` | `coupling` | A fan-out of `fan_out_p90` or more and a maintainability index below 60. Entry points do not match. | `medium` |
+| `add_test_coverage` | `untested risk` | 2 functions or more at or above `maxCrap`, and a complexity density above 0.3. | `high` |
+| `break_circular_dependency` | `circular dependency` | Each other file in an import cycle. | `high` |
+| `resolve_hidden_coupling` | `hidden coupling` | A strong [change coupling](#change-coupling) pair (degree 0.5 or more). Only a file that no other rule claims. | `medium` |
+
+A strong pair also adds the `hidden_coupling` factor to the targets of both files, whatever their category. The factor has the degree as `value` and `0.5` as `threshold`.
+
+The `evidence` object links a target to the data behind it. Fallow leaves out `evidence` when it has no data.
+
+| Field | Content |
 |:--|:--|
-| `urgent_churn_complexity` | `low` |
-| `break_circular_dependency` | `high` |
-| `split_high_impact` | `medium` |
-| `remove_dead_code` | `high` |
-| `extract_complex_functions` | `high` |
-| `extract_dependencies` | `medium` |
-| `add_test_coverage` | `high` |
-| `resolve_hidden_coupling` | `medium` |
+| `unused_exports` | For `remove_dead_code`: the names of the unused exports. |
+| `complex_functions` | `name`, `line` and `cognitive` of each function. For `extract_complex_functions`, the functions with a cognitive complexity of 30 or more. For `add_test_coverage`, up to 3 functions with the highest cognitive complexity. |
+| `cycle_path` | For `break_circular_dependency`: the files of the cycle. |
+| `co_change_partners` | For `resolve_hidden_coupling`: up to 5 files that change together with the target, strongest first, with `path`, `shared_revisions` and `degree`. |
+| `direct_callers` | Up to 5 files that import the target, with the symbols that they import. |
+| `clone_siblings` | Up to 5 other instances of the clones in the file, with their `dup:` handle for `fallow dupes --trace`. |
 
 ### Hotspots {#hotspots}
 
@@ -309,6 +483,42 @@ With `--ownership`, each hotspot also has these fields:
 
 The `actions` of a hotspot can then have `low-bus-factor`, `unowned-hotspot` and `ownership-drift`. The [`health.ownership`](/reference/config-health#health-ownership) config key sets the bot patterns and the email mode.
 
+| Action | When | Next step |
+|:--|:--|:--|
+| `low-bus-factor` | `bus_factor` is 1. | Add a second reviewer. The `note` names candidates from `suggested_reviewers` when they exist. |
+| `unowned-hotspot` | `unowned` is `true`: a `CODEOWNERS` file exists, and no rule matches. | Add a `CODEOWNERS` entry. `suggested_pattern` gives the deepest directory of the file, and `heuristic` is `directory-deepest`. |
+| `ownership-drift` | `ownership_state` is `drifting`. | Update `CODEOWNERS` to the new top contributor. |
+
+The human output marks the [bus factor](/explanations/health#ownership-markers) of each hotspot.
+
+In the `handle` mode, fallow also removes a GitHub noreply prefix: `12345+alice@users.noreply.github.com` shows as `alice`. The `anonymized` mode keeps raw emails out of CI artifacts, but it is not strong privacy: a person with a list of the emails of an organization can compute the same names. The default bot patterns do not include `*noreply*`, because most people commit from a GitHub noreply address.
+
+Fallow computes the ownership signals only for files that pass `--min-commits`. Squash merges make one author look more dominant, and a shallow clone distorts the signals more.
+
+The `[test]` tag and `is_test_path` follow the [test path rules](/explanations/health#test-paths).
+
+### Change coupling {#change-coupling}
+
+The `change_coupling` section lists [hidden pairs](/explanations/health#change-coupling): two files that change together, without an import or re-export chain between them. The section is present when the hotspot section ran on git history, and `sections` then has `change-coupling`. The section is advisory: it has no weight in the health score and never fails a run. With `--group-by`, it stays at the root of the output.
+
+Without `--since`, change coupling and change dispersion read 12 months of history, and hotspots read 6 months. With `--since`, the three read the same window. A commit that changes more analyzed files than `health.changeCoupling.maxFilesPerCommit` does not count.
+
+| Field | Content |
+|:--|:--|
+| `since` | The window that the section read, for example `"12 months"`. |
+| `commits_analyzed`, `commits_skipped` | The commits that count, and the commits with too many files. |
+| `total_pairs` | The pairs before `--top`. |
+| `thresholds` | `max_files_per_commit`, `min_revisions`, `min_shared_revisions`, `min_degree` and `strong_degree` (0.5). |
+| `pairs[]` | `path_a` (sorts first), `path_b`, `revisions_a`, `revisions_b`, `shared_revisions`, `degree` (0 to 1, two decimals) and `strong` (present and `true` at `strong_degree` or more). Sorted by `degree`, then `shared_revisions`, highest first, then by path. |
+
+Each hotspot also has `median_files_per_commit` and `median_lines_per_commit`: the median number of analyzed files, and of added plus deleted lines, in the commits that change the file. They use the change coupling window. They are absent when the history has no commit ids, for example a churn file without `commit` fields. In a churn file, the events with the same `commit` form one commit.
+
+The markdown format adds a `Hidden Change Coupling` table after the hotspots, when pairs exist. The compact format has one line for each pair:
+
+```text
+change-coupling:src/a.ts:src/b.ts:degree=1.00,shared=6,commits_a=6,commits_b=6,strong=true
+```
+
 ### Snapshot file {#snapshots}
 
 `--save-snapshot` writes `.fallow/snapshots/<timestamp>.json`, or the path that you give. `--trend` reads the newest file in that directory, and `--trend-from` reads one file. A snapshot has these fields:
@@ -322,6 +532,24 @@ The `actions` of a hotspot can then have `low-bus-factor`, `unowned-hotspot` and
 | `coverage_model` | The source of the CRAP coverage. |
 | `groups` | The metrics of each group, when the run used `--group-by`. |
 | `analysis_identity` | The mode of the analysis, for example `syntactic`, and its completeness. |
+
+`--save-snapshot` computes the file scores and the hotspots, so the saved metrics are complete. A trend without a formula version, or with a different version, has no score delta. The other metrics still compare.
+
+With `--trend`, the output has `health_trend`:
+
+- `compared_to`: the `timestamp`, `git_sha`, `score`, `grade` and `score_formula_version` of the snapshot.
+- `metrics[]`: one entry for each metric, with `name`, `label`, `previous`, `current`, `delta`, `unit` and `direction` (`improving`, `declining` or `stable`). A percentage has `previous_count` and `current_count` with `value` and `total`.
+- `snapshots_loaded`, and `overall_direction`: `improving` when more metrics improve than decline, `declining` for the reverse, else `stable`.
+
+Without a saved snapshot, the output has no `health_trend`.
+
+#### Group trends {#group-trends}
+
+With `--group-by`, `--trend` and `--trend-from` also compare each group with the same group key in the snapshot. Save the snapshot with the same `--group-by` mode. Each group gets `trend_status`:
+
+- `compared`: the group has a `trend` object with the shape of `health_trend`.
+- `new_group`: the snapshot has group data, but not for this key.
+- `no_group_baseline`: the snapshot did not measure this group. When it has no group data for the mode, the run adds a `trend-group-baseline-unavailable` diagnostic. The project trend still works.
 
 ### Churn file {#importing-churn-from-a-non-git-vcs}
 
@@ -343,8 +571,18 @@ The `actions` of a hotspot can then have `low-bus-factor`, `unowned-hotspot` and
 | `timestamp` | yes | The commit time in Unix seconds, UTC. A time more than one year in the future exits with code 2. |
 | `author` | no | One stable identity for each person, for example the email. Fallow does not apply a mailmap. |
 | `added`, `deleted` | yes | The changed lines. The hotspot score counts events, so the line counts are only for display. |
+| `commit` | no | A commit id. The events with the same id form one commit. Change coupling and change dispersion need it. |
 
-Give one event for each commit and file. Leave out merge commits and binary files. Give a renamed file under its new path only. Fallow ignores other fields.
+For git, fallow runs `git log --numstat --no-merges --no-renames --use-mailmap`. A file from another version control system must follow the same rules, else the hotspots and the ownership signals are wrong:
+
+1. Leave out merge commits. Else the author of the merge looks like a contributor to each merged file.
+2. Leave out binary files. Do not write them with `0` lines.
+3. Give a renamed file under its new path only, with the real line counts. Do not write a delete of the old path.
+4. Give one event for each commit and file, with `timestamp` in seconds.
+
+Fallow ignores other fields. When your version control system records commits under a merge or CI identity, add that identity to `health.ownership.botPatterns`. Else the bus factor is 1 for each file. An empty `events` array is valid and gives no hotspots. A file that is not valid stops the run with exit code 2. The file is resolved from `--root`, and it sets the window, so fallow ignores `--since`.
+
+The file feeds only the churn sections. `--changed-since` needs git: use `--diff-file` or `--diff-stdin` with a unified diff. `fallow audit` and `fallow impact` analyze the base revision again, so they need git.
 
 ## Exit codes
 

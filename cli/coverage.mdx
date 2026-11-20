@@ -350,6 +350,137 @@ When the two deployments cannot be compared, `comparable` is `false` and `reason
 
 `fallow coverage` has no options of its own. The section of each subcommand under [Subcommands](#subcommands) lists its options.
 
+## Option details
+
+### What setup detects {#setup-detection}
+
+`fallow coverage setup` reads `package.json`, the lockfiles and the scripts, and writes instructions for the project:
+
+| Detection | Use |
+|:--|:--|
+| Framework | Selects a recipe for Next.js, NestJS, Nuxt, SvelteKit, Astro, Remix, Vite browser apps, plain Node services, or a general recipe. When one `package.json` has a Node server framework (Elysia, Express, Fastify, Hono, Koa, `@trpc/server`) and Vite, the server framework wins, so the recipe targets the API, not the client bundle. |
+| Workspaces | Reads `workspaces` (npm, pnpm, yarn, bun) and writes one recipe for each member that runs code. It skips a library member: a member without a `start`, `preview` or `dev` script and without a Node server dependency. |
+| Package manager | Uses `packageManager`, the lockfiles, or both, to select the install commands. |
+| Coverage data | Finds `coverage/coverage-final.json`, `.nyc_output/coverage-final.json`, or V8 directories with JSON files. |
+
+A project without runtime code, for example a repository that only runs the `dev` scripts of its children, gets no recipe. The JSON then has `framework_detected: "unknown"`, an empty `members` array and the warning `No runtime workspace members were detected; emitted install commands only.`
+
+### The generated recipe {#recipe}
+
+`docs/collect-coverage.md` holds the steps for one capture. For an app with a build script, the steps are:
+
+```text
+1. Remove any old dump directory: `rm -rf ./coverage`
+2. Build the app: `<build command>`
+3. Start the app with V8 coverage enabled: `NODE_V8_COVERAGE=./coverage <start command>`
+4. Exercise the routes or jobs you care about.
+5. Stop the app and run: `fallow coverage setup`
+6. In CI, after the build, run `fallow coverage upload-inventory` with `FALLOW_API_KEY` set. ...
+```
+
+Fallow uses the `build`, `start` or `preview` scripts of the project when they exist. Else it uses the usual commands of the framework. A project that matches no recipe still gets a general `docs/collect-coverage.md`. After the capture, the next `fallow coverage setup` runs `fallow health --runtime-coverage` on the data.
+
+### The Fallow Cloud plan {#cloud-plan}
+
+Fallow Cloud joins runtime coverage to your code only when five things name the same commit SHA: the beacon, the inventory, the source maps, the deployment registration and the first runtime data. `--cloud` writes a plan that gives each part that SHA:
+
+- **Beacon snippets.** A server reads the SHA from `FALLOW_COMMIT_SHA`, `VERCEL_GIT_COMMIT_SHA`, `RENDER_GIT_COMMIT` or `RAILWAY_GIT_COMMIT_SHA`. A browser bundle reads `VITE_FALLOW_COMMIT_SHA`, which the build sets. In a workspace, each member gets its own `runtimeSurface` tag.
+- **CI steps.** `cloud.ci.steps` holds GitHub Actions steps for the job that builds and deploys: a checkout with `fetch-depth: 0`, `upload-inventory`, `upload-source-maps` for each bundled member, and the deployment registration. `cloud.ci.workflows_detected` names the workflow files that look like a deploy.
+- **Keys.** The plan names `FALLOW_API_KEY` for CI and the server, and `VITE_FALLOW_API_KEY` for a browser key that can only send data.
+
+`--wait` retries a network error, a rate limit and a server error. It exits with code 0 when each step is done, 1 when `--wait-timeout` passes first, and 2 on a key, scope or input error. With `--json`, `cloud.wait` holds the result (`complete`, `timeout` or `error`) and the last setup state. Its `next` field names the step to do now. Read the state as open data, because Fallow Cloud can add step ids and states.
+
+### How cloud analysis joins functions {#cloud-join}
+
+`analyze --cloud` gives the same `runtime_coverage` block as a local capture, with `data_source: "cloud"`. Fallow matches each cloud function to a local function in these steps:
+
+1. It matches on stable ids.
+2. It maps a runtime path, such as `/app/src/a.ts` of a container, onto the local tree. It compares the file name, then the path segments from the end.
+3. It matches a function whose runtime name differs, for example an anonymous callback reported as `map` or `then`, on its position in the file.
+
+Steps 2 and 3 do not guess. When two local files match one runtime path equally well, or two functions start on the same line, the function stays unmatched. Fallow leaves an unmatched function out of the findings and reports it in a `cloud_functions_unmatched` warning. `--debug-unmatched` lists them, highest traffic first.
+
+In cloud mode, each finding and each hot path has a `cloud_context` object with the fields of the cloud row that fallow does not read itself, for example `errors`, `performance.cpu`, `performance.browser`, `branches`, `covered_by_test` and `test_hit_count`. A blast-radius entry from the cloud has `production_callers`, `caller_sites` and the caller counts in its `cloud_context`. `runtime_coverage.cloud_context` holds the top-level fields of the answer, for example `capabilities` and `page`. These fields do not change a verdict. A `null` count or an `untracked` state means "not measured", never zero.
+
+The `actions[].type` of a finding is `delete-cold-code` for the verdict `safe_to_delete` and `review-runtime` for `review_required`. Read an unknown type as a later addition, not as an error.
+
+### Function names in the inventory {#function-naming}
+
+The runtime join needs the same function names on both sides. Fallow selects the name of each function in this order:
+
+1. The parent context: a method key, a variable binding, a property key or `export default`.
+2. The name of the function itself, for example `function foo() {}`.
+3. `(anonymous_N)`, where `N` counts the functions of the file.
+
+### Entry routes {#entry-routes}
+
+With `--with-callers`, the upload has a `routes` array and a `routeIds` array for each function. Fallow takes each route pattern from a file name or the source code, never from a request.
+
+- **File-based routes.** The Next.js, Remix, SvelteKit and Nuxt plugins find the route files. A route handler gives one route for each exported HTTP method. A TanStack Router file gives the pattern in its `createFileRoute("/repo/$repo")` argument.
+- **Elysia routes.** Fallow reads calls such as `app.get("/v1/repos/:repo", handler)` in each file that imports `elysia`, and joins the prefixes of the app, of `.group()` and of each mounted plugin. A route with a path that is not a string literal stays out.
+
+A route in `routeIds` can reach the function through the imports, but a request did not have to reach it. The upload keeps at most 500 routes and at most 50 route ids for each function. The `routeLimits` field and a warning show each cut.
+
+### Path prefix {#path-prefix}
+
+The beacon reports the path of a file as the runtime sees it. In a container, that is the path in the image, for example `/app/src/foo.ts`. The inventory has paths relative to the repository by default. Fallow Cloud joins the two on the path and the function name, so the paths must have the same prefix:
+
+| Target | `--path-prefix` |
+|:--|:--|
+| Docker image with `WORKDIR /app` | `/app` |
+| Cloud Run, Buildpacks | `/workspace` |
+| Older official Node images | `/usr/src/app` |
+| AWS Lambda | `/var/task` |
+| GitHub Actions checkout | `/home/runner/work/<repo>/<repo>` |
+
+The prefix starts with `/` and uses `/` as separator. After the upload, Fallow Cloud compares recent runtime paths with the inventory. When fewer than half of them match, fallow prints a warning: `inventory paths don't overlap with runtime coverage for this SHA (<matched>/<sampled> runtime paths matched).`
+
+### Upload errors {#upload-errors}
+
+For a known error code of Fallow Cloud, `upload-inventory` and `upload-static-findings` print a hint:
+
+| Command and code | Message |
+|:--|:--|
+| `upload-inventory`, `unauthorized` | ``authentication failed. Generate an API key at https://fallow.cloud/settings#api-keys and set FALLOW_API_KEY on the runner. Note: this key is separate from the license JWT; `fallow license activate --trial` will not fix this error.`` |
+| `upload-inventory`, `payload_too_large` | `inventory exceeds the 200,000-function server limit. Scope the walk with --exclude-paths, or open an issue if this is a legitimately large repo.` |
+| `upload-static-findings`, `unauthorized` | ``authentication failed. Generate a live API key at https://fallow.cloud/settings#api-keys and set FALLOW_API_KEY on the runner. Note: a publishable ingest key (fallow_pub_k1_) is not accepted here, and `fallow license activate --trial` will not fix this error.`` |
+| `upload-static-findings`, `payload_too_large` | `static findings exceed the 200,000-finding server limit. Scope the analysis with your fallow ignore rules, or open an issue if this is a legitimately large repo.` |
+
+### Source maps {#source-maps}
+
+When two maps have the same file name, for example two `index.js.map` files in different folders, fallow sends each one under its path in the build folder, so that no map replaces another. `--dry-run` does not read `FALLOW_API_KEY`. Without `--fail-fast`, fallow uploads the other maps after a failure and prints a summary.
+
+Before the first upload, run the command with `--dry-run`, and fix each warning about `sources` that do not resolve to files of the repository. After the deployed service gets traffic, run `fallow coverage analyze --cloud`. A `coverage_unresolved` warning means that runtime positions did not map to source for this commit. Upload the maps for the same `--git-sha` that the beacon reports.
+
+Run the upload in the CI job that builds the app:
+
+```yaml
+# GitHub Actions
+- run: npm run build
+- run: npx fallow coverage upload-source-maps --dir dist --git-sha "$GITHUB_SHA"
+  env:
+    FALLOW_API_KEY: ${{ secrets.FALLOW_API_KEY }}
+```
+
+```yaml
+# GitLab CI
+upload_source_maps:
+  stage: deploy
+  script:
+    - npm run build
+    - npx fallow coverage upload-source-maps --dir dist --git-sha "$CI_COMMIT_SHA"
+```
+
+```yaml
+# CircleCI
+- run: npm run build
+- run:
+    name: Upload source maps to fallow
+    command: npx fallow coverage upload-source-maps --dir dist --git-sha "$CIRCLE_SHA1"
+```
+
+Each job needs `FALLOW_API_KEY` as a secret variable of the CI system.
+
 ## Output
 
 ```bash

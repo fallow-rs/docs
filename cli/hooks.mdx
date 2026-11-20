@@ -84,9 +84,9 @@ fallow hooks install [OPTIONS] --target <TARGET>
 
 `--target` takes `git` or `agent`. `--agent` takes `claude` or `codex`.
 
-With `--target git`, fallow writes `.husky/pre-commit` when a `.husky/` directory exists. With Lefthook, fallow writes no file and prints the command to add to `lefthook.yml`. Else fallow writes `.git/hooks/pre-commit`. When the hook file exists, fallow prints the block to add by hand and exits with code 2, except with `--force`.
+With `--target git`, fallow writes `.husky/pre-commit` when a `.husky/` directory exists. With Lefthook (a `.lefthook/` directory, `lefthook.yml` or `lefthook.json`), fallow writes no file and prints the command to add to `lefthook.yml`. Else fallow writes `.git/hooks/pre-commit`. When the hook file exists, fallow prints the block to add by hand and exits with code 2, except with `--force`. This is also true for a hook that fallow wrote before.
 
-The Git hook runs `fallow audit --staged --quiet --gate-marker pre-commit`. The audit compares the staged changes with `HEAD`, so unstaged edits do not change the verdict. A `fail` verdict blocks the commit. The hook takes the first fallow that works from `./node_modules/.bin/fallow`, the `PATH`, `yarn exec` and `npx --no-install`. When that fallow has a version lower than 3.43.0, the hook blocks the commit. When the hook finds no fallow, it lets the commit continue. Before the first commit of a repository, the hook skips the audit.
+The Git hook runs `fallow audit --staged --quiet --gate-marker pre-commit`. The audit compares the staged changes with `HEAD`, so unstaged edits do not change the verdict. A `fail` verdict blocks the commit. The hook takes the first fallow that works from `./node_modules/.bin/fallow`, the `PATH`, `yarn exec` and `npx --no-install`. When that fallow has a version lower than 3.43.0, the hook blocks the commit. When the hook finds no fallow, it lets the commit continue. Before the first commit of a repository, the hook skips the audit. [Git hook behavior](#git-hook-behavior) has the details.
 
 With `--target agent`, fallow writes the Claude Code gate to `.claude/settings.json` and `.claude/hooks/fallow-gate.sh`. When a `.codex/` directory exists, it also writes the Codex gate and a block in `AGENTS.md`.
 
@@ -120,6 +120,76 @@ The [global options](/cli/global-flags) are in these groups: [Project](/cli/glob
 
 `fallow hooks` has no options of its own. The section of each subcommand under [Subcommands](#subcommands) lists its options.
 
+## Option details
+
+### `--agent` {#agent}
+
+Without `--agent`, `install --target agent` selects the agent from the project folders: `.claude/` gives the Claude Code gate, `.codex/` gives the Codex gate, both give both, and neither gives the Claude Code gate. An `AGENTS.md` file alone does not select Codex, because Cursor and fallow also write that file. With `--agent claude` or `--agent codex`, fallow writes only the files of that agent, also when its folder does not exist.
+
+Without `--agent`, `uninstall` removes the gate of each agent that it finds. It also finds an `AGENTS.md` routing block that fallow wrote in a project without a `.codex/` folder.
+
+### `--user` {#user}
+
+With `--user`, fallow writes the gate to your home folder:
+
+| Agent | Settings | Gate script | Handler command |
+|:--|:--|:--|:--|
+| Claude Code | `~/.claude/settings.json` | `~/.claude/hooks/fallow-gate.sh` | Runs `"$HOME"/.claude/hooks/fallow-gate.sh`, so it works in each repository. |
+| Codex | `~/.codex/hooks.json` | `~/.codex/hooks/fallow-gate.sh` | Goes to the Git root of the session, then runs the script. |
+
+With `--user`, fallow does not write the `AGENTS.md` block. `uninstall --user` removes the files in your home folder, not the project files.
+
+### `--gitignore-claude` {#gitignore-claude}
+
+The option adds `.claude/` to the `.gitignore` of the project. Fallow creates `.gitignore` when it does not exist. It adds no line when `.gitignore` already has `.claude` or `.claude/`, and the summary then says `unchanged (.claude/ already listed)`. The option applies only when fallow writes the Claude Code gate. A `--dry-run` does not change `.gitignore`. Use it when each developer installs the gate locally and the team does not commit `.claude/`.
+
+### `--force` {#force}
+
+On install, `--force` overwrites a gate script that you edited, a `settings.json` that is not valid JSON, or an existing Git hook file. On uninstall, it also removes a gate script or a Git hook that you edited. Without `--force`, fallow keeps such a file.
+
+### `--branch` {#branch}
+
+`install --target git` accepts a hidden `--branch <REF>` option that has no effect, so that old install scripts still run. The hook audits the staged changes against `HEAD` and uses no base. Fallow prints a note when you pass the option. `--branch` and `--prune-baselines` are valid only with `--target git`.
+
+### Git hook behavior {#git-hook-behavior}
+
+The Git hook that `install --target git` writes:
+
+- Tries these runners in this order: `./node_modules/.bin/fallow`, `fallow` on `PATH`, `yarn exec fallow` (for Yarn Plug'n'Play) and `npx --no-install fallow`. The project pins its fallow version, and a global install can have another version.
+- Uses a runner only when its `--version` prints a fallow version.
+- Keeps the commit and prints one line on stderr when it finds no runner.
+- Blocks the commit when a runner exists but cannot run, and no later runner works. The hook prints the runner and its first error line.
+- Blocks the commit when the fallow is older than 3.43.0, because older versions do not have `audit --staged`. The message names the runner and tells you to update the fallow of the project or of `PATH`.
+- Reads each staged file from the index. Unstaged edits and untracked files do not change the verdict.
+- Uses the default [`audit.gate`](/reference/config-rules#audit-gate) value `new-only`. Old findings in a changed file do not block the commit.
+- Gets exit code 1 from the audit on the verdict `fail`, so it needs no `--fail-on-issues`.
+
+To skip the hook on one commit, run `git commit --no-verify`.
+
+### Refresh an installed hook {#refresh}
+
+An installed hook does not change when you update fallow. A hook from an older fallow can try the `fallow` on `PATH` before `./node_modules/.bin/fallow`. To get the current hook:
+
+- For a Husky or bare Git hook, run `fallow hooks install --target git --force`.
+- For Lefthook, run `fallow hooks install --target git` and copy the job that it prints into `lefthook.yml`.
+- For the agent gate, run [`fallow agent install`](/cli/agent) or `fallow hooks install --target agent`.
+
+`install --target agent` also finds the handlers of a hand-written setup, with absolute paths, `~/` paths or Windows drive paths. It replaces them with the current handler and leaves no duplicates.
+
+### What uninstall removes {#uninstall-details}
+
+`uninstall --target agent`:
+
+- Removes the fallow handler from `.claude/settings.json` and `.codex/hooks.json`. When nothing else is left in `.codex/hooks.json`, it deletes that file.
+- Deletes each gate script that still has the fallow marker. Add `--force` to also remove a script that you edited.
+- Removes the managed block from `AGENTS.md`.
+
+A second run prints `unchanged` or `not present` and exits with code 0.
+
+### Symlinks {#symlinks}
+
+Fallow does not write, back up or delete a project path when the path, or a directory on the way to it, is a symlink that resolves outside the project root, or a dangling link. A link that stays inside the project still works. `.git/hooks` and the `--user` targets still follow symlinks.
+
 ## Output
 
 ```bash
@@ -144,7 +214,22 @@ Codex hook: not installed
 Codex block: installed (AGENTS.md)
 ```
 
-With `--format json`, `fallow hooks status` prints a `hooks` object with one entry for each surface: `git`, `claude`, `codex` and `codex_gate`. An entry with `user_edited: true` holds a file that you changed. The [JSON output reference](/reference/json-output) has each field.
+With `--format json`, `fallow hooks status` prints a `hooks` object with one entry for each surface: `git` (the Git hook), `claude` (the Claude Code gate), `codex` (the routing block in `AGENTS.md`) and `codex_gate` (the Codex gate). This is the output in the demo project after `fallow hooks install --target agent`:
+
+```json
+{"hooks":{"git":{"installed":false,"managed_block_present":false,"user_edited":false,"path":".git/hooks/pre-commit","script_version":null,"min_version_floor":null},"claude":{"installed":true,"managed_block_present":true,"user_edited":false,"path":".claude/hooks/fallow-gate.sh","script_version":"3.45.0","min_version_floor":"2.85.0"},"codex":{"installed":false,"managed_block_present":false,"user_edited":false,"path":"AGENTS.md","script_version":null,"min_version_floor":null},"codex_gate":{"installed":false,"managed_block_present":false,"user_edited":false,"path":".codex/hooks/fallow-gate.sh","script_version":null,"min_version_floor":null}}}
+```
+
+| Field | Content |
+|:--|:--|
+| `installed` | `true` when the file or block exists. |
+| `managed_block_present` | `true` when the fallow marker or managed block is in the file. |
+| `user_edited` | `true` when the file exists but has lost the fallow marker, or when a managed block is broken. Ask before you overwrite such a file. |
+| `path` | The path of the file. |
+| `script_version` | The fallow version that wrote the gate script, from its `# Installer version:` line. |
+| `min_version_floor` | The [version floor](/integrations/claude-hooks#version-floor) of the gate script. |
+
+The [JSON output reference](/reference/json-output) has the other output shapes.
 
 ## Exit codes
 

@@ -105,6 +105,75 @@ The [global options](/cli/global-flags) are in these groups: [Project](/cli/glob
 
 The subcommands accept the [global options](/cli/global-flags) `--root`, `--format` and `--quiet`. `status` accepts only the `human` and `json` formats.
 
+## Option details {#option-details}
+
+### Discovery order {#discovery-order}
+
+Fallow does not search `node_modules` or `PATH` for `fallow-type-aware`. It uses the first program that it finds in this order:
+
+1. The path in `FALLOW_TYPE_AWARE_BIN`. When the variable names a file that does not exist, fallow stops the search and reports it.
+2. A program next to the active `fallow` executable.
+3. The `setup` directory. Fallow takes the install of its own version. Else it takes the newest install with the same protocol version.
+
+The `fallow` npm launcher, the Node bindings and the VS Code extension find the npm package themselves, and give it to fallow through `FALLOW_TYPE_AWARE_BIN`. The npm launcher looks next to the `fallow` package first. Then it looks in the project root, but only when the package is in the same `node_modules` tree as `fallow`, so a pnpm project works too. A global `fallow` never runs a program that a cloned project holds.
+
+In VS Code, a `FALLOW_TYPE_AWARE_BIN` that you set wins. Next is a project package of the same version, for a `fallow` binary from the `node_modules` of the project. Last is the program that the extension bundles.
+
+### Setup directory {#setup-directory}
+
+`setup` installs the program into a directory that has the fallow version in its name:
+
+| Platform | Directory |
+|:--|:--|
+| macOS | `~/Library/Application Support/fallow/fallow-type-aware/<version>/` |
+| Linux | `$XDG_DATA_HOME/fallow/fallow-type-aware/<version>/`, else `~/.local/share/fallow/fallow-type-aware/<version>/` |
+
+`setup` does these steps:
+
+1. It runs `node` from `PATH` to read the platform and the architecture. An x64 Node on an arm64 Mac gets the x64 bundle.
+2. It shows the bundle, the source URL and the target directory, and asks for approval.
+3. It downloads the bundle of its own fallow version from the GitHub release. The download uses `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY` and `FALLOW_CA_BUNDLE`.
+4. It checks the signature of the bundle with the release key in the binary, before it unpacks the bundle.
+
+The program needs `node` on `PATH` each time it starts. An editor can start `fallow-lsp` with a shorter `PATH` than your shell. The program then reports that Node.js 20 or later must be on `PATH`.
+
+After a fallow upgrade, fallow keeps the installed program while it has the same protocol version. When the protocol changes, `status` tells you to run `setup` again. A program of an older protocol stops with `unsupported protocol_version`, and fallow adds the same hint.
+
+### Experimental tsrs backend {#experimental-tsrs-backend}
+
+Set `FALLOW_TYPE_AWARE_BACKEND=tsrs` to run the type checker of tsrs, a Rust port of the TypeScript 7 checker, in place of the default TypeScript-Go backend. The environment variable is the only way to select the backend. The config file rejects a `typeAware.backend` key as an unknown field.
+
+- Fallow accepts `tsrs` from `0.18.0` to below `1.0.0`, and from `7.1.0` to below `8.0.0`. Only the `major.minor.patch` part counts, so `7.1.0-beta.tsrs3` is in the range.
+- `tsrs` must be where `fallow-type-aware` can resolve it. The version that fallow tests is `7.1.0-beta.tsrs3`: `npm install --save-dev tsrs@7.1.0-beta.tsrs3`.
+- The default backend accepts each TypeScript release from `7.0.0` to below `8.0.0`.
+- The tsrs backend can remove findings, but its evidence never makes a `fallow fix --type-aware` removal eligible. A guarded fix needs the default backend at the version that fallow tests.
+- A version outside the range, or an unknown backend name, makes the type-aware analysis unavailable. `status` then names the supported range or the known names.
+
+Each fallow process reads the variable from its own environment. So set it where the process starts:
+
+| Surface | Where to set `FALLOW_TYPE_AWARE_BACKEND=tsrs` |
+|:--|:--|
+| CLI, npm scripts and CI | In the script or in the `env` of the job. |
+| MCP | In the `env` block of the server entry in the config of the MCP client. |
+| LSP in other editors | In the environment of the `fallow-lsp` process. |
+| VS Code | In the shell that starts the editor, together with `FALLOW_TYPE_AWARE_BIN`. |
+
+The program that VS Code bundles has only the default backend. To use tsrs in VS Code, point `FALLOW_TYPE_AWARE_BIN` at a project program that can resolve `tsrs`, with an absolute path, and start the editor from that shell:
+
+```bash
+export FALLOW_TYPE_AWARE_BACKEND=tsrs
+export FALLOW_TYPE_AWARE_BIN="$PWD/node_modules/.bin/fallow-type-aware"
+code .
+```
+
+Run `status` in the same environment as the surface to see the backend and the version. `_meta.type_aware` in the JSON output of an analysis names them too.
+
+### Runs without the program {#runs-without-the-program}
+
+When a `--type-aware` run finds no program with `typeAware.require` at `best-effort`, fallow lowers each `error` rule of `unused-export`, `unused-type`, `unused-class-member` and `private-type-leak` to `warn`, in the base rules and in `overrides`. `--fail-on-issues` and `--ci` then do not raise these four kinds to `error`. They still raise each other `warn` rule. This applies to `fallow dead-code`, `fallow audit` and the bare `fallow` run.
+
+The JSON output of such a run has `_meta.type_aware.executed: false` and a `type-aware-fallback` entry in `gate_outcomes`, with `status: "skipped"` and `enforced: false`. A program that starts and then fails adds no such entry, and the findings keep their configured severity. With `--type-aware-require complete`, both cases exit with code 2.
+
 ## Output
 
 ```text

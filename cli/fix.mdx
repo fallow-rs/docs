@@ -41,6 +41,85 @@ The [global options](/cli/global-flags) are in these groups: [Project](/cli/glob
 
 Fallow fixes these issue types: [`unused-export`](/rules/unused-export), [`unused-dependency`](/rules/unused-dependency), [`unused-enum-member`](/rules/unused-enum-member), [`unused-catalog-entry`](/rules/unused-catalog-entry) and [`duplicate-export`](/rules/duplicate-export). It fixes [`unused-class-member`](/rules/unused-class-member) only after [type-aware analysis](/analysis/type-aware) found no reference.
 
+## Option details
+
+### Export lists {#export-lists}
+
+In an `export { ... }` list, on one line or on more lines, `fallow fix` removes only the unused names. It keeps the layout, the comments and the trailing commas of the names that stay. When no name stays, it deletes the statement. It removes an aliased name, such as `export { a as b }`, by its exported name `b`.
+
+```ts
+// Before: b is unused
+export {
+  a,
+  b,
+  c,
+} from "./mod";
+
+// After
+export {
+  a,
+  c,
+} from "./mod";
+```
+
+### Exports that a kept re-export names {#kept-re-exports}
+
+`fallow fix` does not remove the `export` keyword of a declaration while a re-export that it keeps still names the declaration. Else the type check of the fixed code fails, because the re-export names a name that the file no longer exports. A re-export stays, for example, when fallow skips its file as low confidence, or when `ignoreExports` hides its names. To remove the export, remove the re-export first, then run `fallow fix` again.
+
+A file in `ignorePatterns` is not in the module graph, so a re-export in that file cannot stop a removal. When such a file exports project code again, run the type check after `fallow fix`.
+
+### Declarations that export more than one name {#shared-declarations}
+
+One `export` keyword can export more than one name, for example `export const { a, b } = source;` or `export const a = 1, b = 2;`. `fallow fix` removes that keyword only when each name of the declaration is unused. It does not split the declaration, because a split runs the initializer twice. To remove one unused name, move it to its own declaration, then run `fallow fix` again.
+
+### Catalog entries {#catalog-entries}
+
+Fallow removes a catalog entry from `pnpm-workspace.yaml` line by line, and keeps the other comments and the layout of the file. It removes an entry in object form as one block. When it removes the last entry of a catalog group, it writes `catalog: {}` (or `<name>: {}`), because pnpm fails to install with an empty `catalog:` key. After the change, fallow tells you to run `pnpm install`, so that `pnpm-lock.yaml` stays current.
+
+Fallow also removes a block of comment lines directly above the entry. [`fix.catalog.deletePrecedingComments`](/reference/config-dead-code#fix) sets the policy:
+
+| Value | Effect |
+|:--|:--|
+| `auto` (default) | Fallow removes the block when a blank line or the catalog header is above it. It keeps a banner block, whose text starts with three or more of `=`, `-`, `*`, `_`, `~`, `+` or `#`, for example `# === React 18 pins ===`. |
+| `always` | Fallow removes the block. |
+| `never` | Fallow keeps the block. |
+
+A `# fallow-keep` marker on a line of the block keeps the block with each policy. When fallow removes comment lines, the count line says so, for example `Fixed 1 issue(s) (+1 catalog comment line).` Fallow skips an entry that a workspace package still pins with a version (`hardcoded_consumers`), because the next install would fail.
+
+### Config file for duplicate exports {#missing-config-file}
+
+For a duplicate export, `fallow fix` adds an `ignoreExports` rule to your config file. When no config file exists, it creates `.fallowrc.json`, with the same content that [`fallow init`](/cli/init) writes. `--dry-run` shows the change as a unified diff. This sample leaves out the lines between `$schema` and `ignoreExports`:
+
+```diff
+Would create .fallowrc.json with 2 ignoreExports rule(s):
+--- .fallowrc.json (does not exist)
++++ .fallowrc.json (proposed)
+@@ -0,0 +1,33 @@
++{
++  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
++  "ignoreExports": [
++    {
++      "file": "src/ui/button/index.ts",
++      "exports": ["*"]
++    },
++    {
++      "file": "src/ui/card/index.ts",
++      "exports": ["*"]
++    }
++  ]
++}
+```
+
+The JSON fix entry has the same diff in `proposed_diff`, and `created_files` names the new file.
+
+Fallow does not create a config file in a package of a monorepo, so that the config does not split over the packages. A directory is in a monorepo when a directory above it has `pnpm-workspace.yaml`, `turbo.json`, `lerna.json`, `rush.json`, a Deno workspace, or a `package.json` with `workspaces`. Fallow then prints this message, and the JSON fix entry has `skip_reason: "monorepo_subpackage"`:
+
+```text
+Skipped duplicate-export config fix: no fallow config file at packages/ui and the directory is inside a monorepo (workspace root: /repo). Run `fallow init` at the workspace root, or invoke `fallow fix` from /repo instead of from a subpackage.
+```
+
+`--no-create-config` stops the creation of a config file in each case. Use it in a pre-commit hook, a CI job and `fallow watch`. Fallow then skips the config change, and makes the source changes as usual.
+
 ## Output
 
 ```bash
@@ -74,7 +153,27 @@ With `--format json`, the output has these top-level fields:
 | `skipped_shared_declarations` | Unused names that share one `export` keyword with a used name. |
 | `created_files` | The config files that the run creates. Present only when fallow creates a file. |
 
-A config change also has a `proposed_diff` field with the unified diff. The [JSON output reference](/reference/json-output) has each field.
+A config change also has a `proposed_diff` field with the unified diff. A catalog change has `entry_line`, the line of the entry, next to `line`, the first line that fallow removes, which can be a comment line. The [JSON output reference](/reference/json-output) has each field.
+
+### Skipped changes {#skipped-changes}
+
+A skipped change has `skipped: true` and a `skip_reason`. The human output prints a line on stderr for each skipped file.
+
+| `skip_reason` | Cause | Exit code |
+|:--|:--|:--|
+| `content_changed` | The file changed on disk after the analysis, for example from an editor or a rebase. | 2 |
+| `mixed_line_endings` | The file has both CRLF and LF line endings. A new run gives the same skip, until you change the file to one form, for example with `dos2unix`. | 2 |
+| `low_confidence_off_graph` | A directory of the path is `__mocks__`, `__fixtures__`, `fixtures`, `e2e`, `e2e-tests`, `cypress`, `playwright`, `examples`, `evals` or `golden`. Code that fallow does not see can import these files. `test`, `tests` and `__tests__` are not in the list. | 0 |
+| `low_confidence_unresolved_imports` | The file has an import that fallow cannot resolve, so its use of names is not complete. | 0 |
+| `low_confidence_incomplete_analysis` | The finding has `reachability_caveats`, because a file did not parse, could not be read, or was skipped. `workspace_diagnostics` names the cause. | 0 |
+| `kept_re_export` | A re-export that the run keeps still names the export. See [Exports that a kept re-export names](#kept-re-exports). | 0 |
+| `shared_declaration_in_use` | The same `export` keyword also exports a name that is in use. See [Declarations that export more than one name](#shared-declarations). | 0 |
+
+A low-confidence skip is a choice, not an error, so `fallow dead-code` still reports the finding, and you can remove the code by hand. Check the `skipped_*` counters also when the command exits with code 0.
+
+Fallow writes each changed file to a temporary file next to it first, and moves the temporary files to their paths after all are written. When a write fails, for example on a full disk, each file keeps its old content. Fallow reads `package.json` and `pnpm-workspace.yaml` again before it changes them, so an entry that is already gone changes nothing.
+
+Fallow edits UTF-8 files only. When a file starts with a byte order mark, fallow removes it before the analysis, so the line numbers do not move, and writes it back with the change.
 
 ## Exit codes
 

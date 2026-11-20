@@ -38,7 +38,30 @@ Full reference: [High cognitive complexity](/rules/high-cognitive-complexity)
 
 ### Function names {#function-names}
 
-A finding names the function by its declaration or by its variable, for example `load` for `const load = () => {}`. A callback gets a name from the call around it when that call has a string as first argument, for example `it("renders the empty state")`. Other callbacks are `<anonymous>` or `<arrow>`: use the path and the line of the finding to find them.
+A finding names the function by its declaration or by its variable, for example `load` for `const load = () => {}`. An anonymous `export default` is `default`. A callback gets a name from the call around it when that call has a string as first argument:
+
+| Code | Finding `name` |
+|:--|:--|
+| `Effect.fn("Users.create")(function* () {...})` | `Users.create` |
+| `Command.make("setup", {...}, (args) => ...)` | `Command.make("setup")` |
+| `api.group().handle("github", (req) => ...)` | `handle("github")` |
+| `it("renders the empty state", () => ...)` | `it("renders the empty state")` |
+| `const load = (id) => Effect.gen(function* () {...})` | `load`, for the arrow and for the generator |
+
+Fallow keeps the first 40 characters of a long string. A generator takes the name of the function that returns it, also through `.pipe(...)`. Other callbacks are `<anonymous>` or `<arrow>`: use the path and the line of the finding to find them. The name does not change the score or the coverage match.
+
+In [Effect](https://effect.website) code, the combinators are calls, so they add nothing: `pipe(...)`, `Effect.catchTag(...)`, `Effect.if(...)`, `Match.when(...)`, and `yield*` in `Effect.gen`. Each callback is its own unit, and its nesting starts at zero.
+
+### Templates and components {#templates-and-components}
+
+A component template is a unit of its own, with the name `<template>`. For an Angular component, fallow reads an external `templateUrl` file and an inline `@Component({ template })` literal. When a class method of the component has a finding, fallow also adds a `<component>` finding. Its values are the values of the worst class method plus the values of the template. The ranking and `--targets` use these totals, and `component_rollup` has the class part and the template part.
+
+- Fix a `<template>` finding with child components, or move derived data to the class as computed signals.
+- Fix the larger part of a `<component>` finding first.
+- A template file gets its CRAP estimate from its component class: `coverage_source` is `estimated_component_inherited`, and `inherited_from` names the class file. Add tests to the class.
+- To hide an inline template and the `<component>` finding, put `// fallow-ignore-next-line complexity` above the decorator or above the worst class method. To hide an external template, put `<!-- fallow-ignore-file complexity -->` at the top of the template.
+
+Full reference: [High complexity](/rules/high-complexity)
 
 ### Unit size {#unit-size}
 
@@ -56,7 +79,7 @@ The complexity metrics rate one function. A file can be hard to change for other
 
 ### Maintainability index {#maintainability-index-mi}
 
-The [maintainability index](/analysis/health) (MI) is a number from 0 to 100 for one file. It goes down with more complexity for each line, more unused exports and more imports. Higher is better. In the demo project, `src/utils/legacy-currency.ts` has the MI 78.8, lower than most files, because each of its exports is unused. The health score counts a file below 70 as low. The formula is different from the index of other tools, so do not compare the numbers.
+The [maintainability index](/analysis/health) (MI) is a number from 0 to 100 for one file. It goes down with more complexity for each line, more unused exports and more imports. Higher is better. In the demo project, `src/utils/legacy-currency.ts` has the MI 78.8, lower than most files, because each of its exports is unused. The health score counts a file below 70 as low. The formula is different from the index of other tools, so do not compare the numbers. [The MI formula](/cli/health#maintainability-index-formula) gives each coefficient.
 
 ## Untested complexity risk {#untested-complexity-risk}
 
@@ -70,7 +93,7 @@ This line is not an error. Give fallow real coverage data with `--coverage` for 
 
 ### CRAP score {#crap-score}
 
-CRAP combines the cyclomatic complexity of a function with its test coverage. A complex function without tests gets a high score: `classifyCustomer` has 23 paths and no test, so its estimate is 552.0. Fallow reports a score of 30 or more by default. Add tests for the function first, then make it simpler.
+CRAP combines the cyclomatic complexity of a function with its test coverage. A complex function without tests gets a high score: `classifyCustomer` has 23 paths and no test, so its estimate is 552.0. Fallow reports a score of 30 or more by default. Add tests for the function first, then make it simpler. [CRAP](/cli/health#crap-formula) gives the formula and the action of each case, and [Severity bands](/cli/health#severity-bands) gives the bands.
 
 Full reference: [High CRAP score](/rules/high-crap-score)
 
@@ -84,17 +107,47 @@ Test coverage shows the code that your tests run. [Runtime coverage](/analysis/r
 
 Full reference: [Runtime coverage](/rules/runtime-coverage), [Safe to delete](/rules/runtime-safe-to-delete), [Review required](/rules/runtime-review-required), [Low traffic](/rules/runtime-low-traffic), [Coverage unavailable](/rules/runtime-coverage-unavailable)
 
+### Evidence fields {#coverage-evidence}
+
+Each entry of `runtime_coverage.findings` has an `evidence` object with the facts behind its verdict:
+
+| Field | Values |
+|:--|:--|
+| `static_status` | `used`: the module graph reaches the function. `unused`: static analysis finds it unused. |
+| `test_coverage` | `covered`: the local tests run the function. Else `not_covered`. |
+| `v8_tracking` | `tracked`: V8 saw the function in the capture window. Else `untracked`. |
+| `test_only_reference` | `true`: the production graph does not reach the function, but a test, spec, story, fixture or benchmark file uses it. The verdict is then never `safe_to_delete`. `false`: fallow compared both graphs and found no such use. Absent when the run had no production filter. |
+
 ### Coverage intelligence {#coverage-intelligence}
 
 Coverage intelligence combines runtime coverage with the static analysis, the tests, the CRAP score, the owners and the changed files. It gives one recommendation for a function: [delete](/rules/coverage-intelligence-delete), [review with an owner](/rules/coverage-intelligence-review), [refactor with care](/rules/coverage-intelligence-refactor), or [add tests before a risky change](/rules/coverage-intelligence-risky-change). Follow the rule page of the recommendation.
 
 ## Hotspot metrics {#hotspot-metrics}
 
-A complex file costs you time only when you change it, so the metrics above need the change history too. A hotspot is a file that is complex and changes often. `fallow health --hotspots` reads the git history to find them. Recent commits count more than old commits. The score is relative to your project: the worst file of a clean project can still have a high score. Refactor the top hotspots first, because a fix there helps most.
+A complex file costs you time only when you change it, so the metrics above need the change history too. A hotspot is a file that is complex and changes often. `fallow health --hotspots` reads the git history to find them. Recent commits count more than old commits. The score is relative to your project: the worst file of a clean project can still have a high score. Refactor the top hotspots first, because a fix there helps most. [Hotspots](/cli/health#hotspots) gives the formula, the trend rules and the fields.
+
+### Ownership markers {#ownership-markers}
+
+With `--ownership`, the human output adds a summary line above the hotspots, for example `9/10 hotspots depend on a single recent contributor · top authors: alice (6), bob (4)`. Each hotspot row has a `bus=` marker:
+
+- Red and bold, when the top contributor has 90 percent or more of the weighted commits, or when the bus factor is 1 and the trend is `Accelerating`. The marker then says `(sole author)` for a share of 100 percent, else `(at risk)`.
+- Yellow, for a bus factor of 1 in other cases.
+- Dimmed, for a bus factor of 2 or more.
+
+### Test paths {#test-paths}
+
+Hotspots keep test files in the ranking, because the work on tests is real work. The human output tags them `[test]`, and the JSON output has `is_test_path: true`. A path is a test path when one of these is true:
+
+- A directory of the path is `test`, `tests`, `__tests__`, `__test__`, `e2e`, `test-d`, `__mocks__`, `__fixtures__`, `fixtures` or `__snapshots__`.
+- A directory is `spec` or `specs` at a test root: the project root, a package root, or a directory next to a `src` or `lib` directory.
+- The file name has `.test.`, `.test-d.`, `.spec.`, `.e2e.`, `.e2e-spec.` or `.fixture.`.
+- The file name has `.cy.`, and the file is a script below a `cypress` directory, or below a directory that holds a Cypress config or a `cypress` directory.
+
+The match ignores ASCII case. `fallow audit` and `fallow similar-code inspect` use the same definition.
 
 ## Change coupling {#change-coupling}
 
-Two files often change in the same commits, and no import connects them. Fallow reports a pair when the two files share at least 5 commits, and the shared commits are at least 30 percent of the mean commit count of the two files. A person who follows the imports does not find the second file. Make the dependency visible with an import, or move the shared logic to one file. Ignore a pair when it is a coincidence of the history. This section never fails a run.
+Two files often change in the same commits, and no import connects them. Fallow reports a pair when the two files share at least 5 commits, and the shared commits are at least 30 percent of the mean commit count of the two files. A person who follows the imports does not find the second file. Make the dependency visible with an import, or move the shared logic to one file. Ignore a pair when it is a coincidence of the history. This section never fails a run. [Change coupling](/cli/health#change-coupling) gives the window and the fields.
 
 ### Change dispersion {#change-dispersion}
 
@@ -102,7 +155,7 @@ Each hotspot shows how far a change to the file usually spreads: the median numb
 
 ## Refactoring targets {#refactoring-targets}
 
-`fallow health --targets` gives a list of files to refactor, with the reason, the expected effort and the confidence. The quick wins come first. Start at the top of the list, and act on the evidence of each target, for example the unused exports or the complex functions that it names.
+`fallow health --targets` gives a list of files to refactor, with the reason, the expected effort and the confidence. The quick wins come first. Start at the top of the list, and act on the evidence of each target, for example the unused exports or the complex functions that it names. [Refactoring targets](/cli/health#refactoring-targets) gives the priority formula and the rule of each category.
 
 Full reference: [Refactoring target](/rules/refactoring-target)
 
@@ -139,6 +192,69 @@ Full reference: [CSS dead surface](/rules/css-dead-surface)
 Code uses a class or an animation that no stylesheet of the project defines. Correct the name, unless an external stylesheet defines it.
 
 Full reference: [CSS broken reference](/rules/css-broken-reference)
+
+### CSS analytics {#css-analytics}
+
+With `--css`, the JSON output of `fallow health` has `css_analytics`, `styling_findings` and `styling_health`.
+
+Each cleanup candidate in `css_analytics` is a list. A list is absent when it is empty.
+
+| Field | Content |
+|:--|:--|
+| `unreferenced_css_classes` | A class of a plain stylesheet that no `class` or `className` of the project markup uses. |
+| `unresolved_class_references` | A class in markup that is one edit away from a defined class, probably a typo. |
+| `undefined_keyframes` | An animation that names a `@keyframes` block that no file defines. |
+| `unused_font_faces` | A `@font-face` family that no rule uses. |
+| `unused_theme_tokens` | A Tailwind v4 `@theme` token whose utility no file uses. |
+| `token_consumers` | The users of each design token. See [Token consumers](#token-consumers). |
+| `font_size_unit_mix` | `font-size` values in more than one unit, for example `px` and `rem`. |
+
+A `@theme` token counts as used through its utility (`bg-brand` for `--color-brand`), a `var(--token)` read, an `@apply` body, an arbitrary value such as `rounded-[--radius-card]`, or a reference from another `@theme` token. The token check runs only for a Tailwind v4 project: a `tailwindcss` dependency and a `@theme` block. It reports nothing when Tailwind plugins or published CSS can use the tokens.
+
+A Sass or Less animation value can hold a variable, for example `animation: #{$name} 1s`. Such a value can name each `@keyframes` block of a Sass or Less source, so fallow does not report these blocks as unused. `css_analytics.summary.keyframes_unchecked` counts them, and the human output shows them as `not checked`. A `@keyframes` block in plain CSS is always checked.
+
+A class prefix before a `{{` expression, as in `grid--{{ columns }}`, uses each class that starts with `grid--`. Fallow reads server templates as class references. [`markupExtensions`](/reference/config-files#markupextensions) lists the template extensions.
+
+### Token consumers {#token-consumers}
+
+`token_consumers` is a reverse index of the design tokens. Each entry has these fields:
+
+| Field | Content |
+|:--|:--|
+| `token` | A Tailwind token with its `--` prefix (`--color-brand`), or the path of a CSS-in-JS token (`vars.color.primary`). |
+| `namespace` | The Tailwind namespace (`color`), or the export binding of a CSS-in-JS token set (`vars`). |
+| `definition_path`, `definition_line` | The place of the definition. |
+| `consumer_count` | The number of uses. |
+| `consumers` | A sample of up to 20 uses, each with `path`, `line` and `kind`. |
+
+| `kind` | Use |
+|:--|:--|
+| `utility` | A class that ends in `-<name>`, such as `bg-brand`. |
+| `apply` | A class in an `@apply` body. |
+| `css-var` | A `var(--token)` read outside `@theme`. |
+| `theme-var` | A `var(--token)` read in another `@theme` token. |
+| `js-member` | A member access on a StyleX or vanilla-extract token binding, also through an import. |
+| `js-call` | A PandaCSS `token(...)` call, or a StyleX `createTheme` call. |
+
+CSS-in-JS entries cover StyleX `defineVars`, vanilla-extract `createTheme`, `createThemeContract` and `createGlobalTheme`, PandaCSS `defineTokens`, styled-components and Emotion. Fallow resolves each import to the file of the definition, so a `vars` binding of another module does not count.
+
+`consumer_count` is a lower bound. Fallow cannot see a computed class name such as `bg-${color}`, an import that it cannot resolve, or computed token access. A count of `0` is a reason to investigate, not proof that you can delete the token. A run on a part of the project has no `token_consumers`.
+
+### Styling score {#styling-score}
+
+`styling_health` has `score` (0 to 100), `grade`, `formula_version`, `penalties`, `confidence` and `confidence_reason`. The score starts at 100, and fallow subtracts five penalties:
+
+| Penalty | Measures | Maximum |
+|:--|:--|:--|
+| `duplication` | The removable declarations in copied declaration blocks. | 20 |
+| `dead_surface` | The unused `@theme` tokens as a share of all tokens, plus the unused classes, `@property` and `@layer` rules and `@font-face` families as a share of all declarations. | 20 |
+| `broken_references` | The unresolved class references and the undefined `@keyframes`. | 15 |
+| `token_erosion` | Mixed `font-size` units, Tailwind arbitrary values, and the hardcoded `box-shadow`, `border-radius` and `line-height` values above a small set for each property. A `var(--*)` value does not count. | 10 |
+| `structural` | `!important` above a small share, and deep nesting. | 10 |
+
+`confidence` is `low` when the score comes from few declarations, or from mostly compile-time CSS-in-JS. `confidence_reason` then says why, and the human output puts `~` before the score. Confidence does not change the score. The styling score never changes an exit code, a badge or the health score.
+
+`formula_version` (`3`) is separate from the formula version of the health score. When you compare styling scores over time, compare only scores with the same `formula_version`.
 
 ## Health score {#health-score}
 

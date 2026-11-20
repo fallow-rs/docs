@@ -65,6 +65,8 @@ The `"use client"` and `"use server"` lines tell the bundler where a file runs. 
 | [`misplaced-directive`](/rules/misplaced-directive) | A `"use client"` or `"use server"` line comes after another statement, so the bundler ignores it. | `next`, `waku`, `@lazarv/react-server`, `@vitejs/plugin-rsc` or a `react-server-dom-*` package |
 | [`unused-server-action`](/rules/unused-server-action) | No code calls an export of a `"use server"` file. | `next` |
 
+`mixed-client-server-barrel` checks only the files that the barrel re-exports directly, and only project files. It skips a type-only re-export, and a re-export through a webpack inline loader such as `export * from "raw-loader!./server"`, because the loader forwards its output and not the module.
+
 An unused export of a `"use server"` file is an `unused-server-action` finding, not an `unused-export` finding. Its default severity is `warn`. To fail a run on it, set `unused-server-action` to `error` in [`rules`](/reference/config-rules#rules).
 
 ## App Router routes {#app-router-routes}
@@ -90,6 +92,12 @@ The checks above look at files and routes. The next issue types look inside the 
 | [`thin-wrapper`](/rules/thin-wrapper) | A component only renders one other component with all of its props. | `off` |
 | [`duplicate-prop-shape`](/rules/duplicate-prop-shape) | Three or more components in two or more files declare the same prop names. | `off` |
 
+For a React or Preact component, `unused-component-prop` checks the props that the first parameter destructures. It reports nothing for a component that is exported, because its props are part of a public contract. It also reports nothing for a component whose props it cannot list with certainty:
+
+- a rest element, such as `{ ...rest }`, or a rest parameter;
+- a props parameter without destructuring, as with `forwardRef` or `memo` over an imported interface;
+- an array pattern, a computed key, or a nested destructuring that fallow cannot flatten.
+
 Four of these issue types are `off` by default. To turn one on, set it in your config file:
 
 ```jsonc
@@ -104,6 +112,19 @@ Four of these issue types are `off` by default. To turn one on, set it in your c
 ```
 
 When `prop-drilling` is on, each chain also costs one point of the [health score](/analysis/health), at most five points.
+
+### Component render fan-in {#component-render-fan-in}
+
+The [fan-in of a file](/explanations/health#file-health-scores) counts the files that import it. A shared component such as `<Button>` is rendered in more places than it is imported. So, in a React or Preact project, `fallow health` also counts the parents that render each component. A parent is one component in one file, or the top level of a file. Fallow leaves out test, spec, story and fixture files.
+
+| Field of `vital_signs` | Content |
+|:--|:--|
+| `max_render_fan_in` | The highest number of parents of one component. |
+| `p95_render_fan_in` | The 95th percentile of the number of parents. |
+| `render_fan_in_high_pct` | The percentage of components with more parents than the larger of `p95_render_fan_in` and 10. |
+| `top_render_fan_in` | The components with the most parents: `component`, `path`, `distinct_parents`, and `render_sites` (each render, also repeats in one parent). |
+
+The human output prints the top five components on one `Render fan-in:` line. A complexity finding in a file that declares a component with many renders also has a `blast radius:` line. These numbers are context: they are no gate and no finding. Fallow counts only the renders that it can follow. It does not count a render through a JSX spread, through `createElement` with a variable, or through a member tag such as `<Lib.Button />`.
 
 ## What fallow counts as used {#what-counts-as-used}
 

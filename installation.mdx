@@ -91,7 +91,9 @@ docker build -t fallow:local https://github.com/fallow-rs/fallow.git#main
 docker run --rm -v "$PWD:/workspace" --user "$(id -u):$(id -g)" fallow:local audit --format json --quiet
 ```
 
-The image runs one fallow command on `/workspace` and exits, and the exit code of the container is the exit code of fallow. With `--user`, your user owns the files that fallow writes, and git accepts the mounted repository. The image does not install the dependencies of your project, so run your install step before fallow. For Docker Compose, copy [`examples/docker/compose.yaml`](https://github.com/fallow-rs/fallow/blob/main/examples/docker/compose.yaml) to your project.
+The image runs one fallow command on `/workspace` and exits, and the exit code of the container is the exit code of fallow. With `--user`, your user owns the files that fallow writes, and git accepts the mounted repository. The image does not install the dependencies of your project, so run your install step before fallow. For Docker Compose, copy [`examples/docker/compose.yaml`](https://github.com/fallow-rs/fallow/blob/main/examples/docker/compose.yaml) to your project, and run `docker compose run --rm fallow audit --format json --quiet`.
+
+The image holds git, Node.js, npm and Corepack. Run it as a command that exits, not as a service that stays on. On Windows outside WSL, give a project path that Docker Desktop accepts, and keep `/workspace` as the folder in the container. To upload a runtime coverage inventory from the container, add `--path-prefix /workspace` to `fallow coverage upload-inventory`, so that the paths match the paths that the runtime beacon reports.
 
 ## Check the install
 
@@ -110,6 +112,32 @@ A command that starts can still read your project wrongly, for example when the 
 Fallow reads all of your source code, so a changed binary could read it too. That is why each release signs its binaries. Before the first run, the npm package checks the Ed25519 signature and the SHA-256 digest of the binary for your platform. It saves the result next to the binary, so later runs skip the check. When the check fails, fallow prints `fallow: binary verification failed`, does not start, and exits with code 1.
 
 The check needs no network access. When the folder of the binary is read-only, the npm package saves the result in a cache folder. Set `FALLOW_VERIFY_CACHE_DIR` to choose that folder. Set `FALLOW_SKIP_BINARY_VERIFY=1` only when you replace the published binary on purpose. The [security policy](https://github.com/fallow-rs/fallow/blob/main/SECURITY.md) describes the trust model.
+
+### How the check works {#verification-details}
+
+The check has two parts. Each `@fallow-cli/<platform>` package has a `.sig` file next to each binary, and a SHA-256 digest of each binary in the `fallowDigests` field of its `package.json`.
+
+1. The public key in the `fallow` package checks the Ed25519 signature of the binary.
+2. The npm package compares the SHA-256 digest of the binary with the digest in `fallowDigests`. A changed binary with a valid signature thus still fails.
+
+The `fallow`, `fallow-lsp` and `fallow-mcp` commands run the check before they start the binary. A failed check names its cause: `sig-invalid`, `sig-missing`, `digest-mismatch`, `digest-unavailable` or `binary-missing`.
+
+The npm package saves the result in the first of these places that it can write:
+
+1. The folder of the platform package (`.fallow-verified`).
+2. The folder in `FALLOW_VERIFY_CACHE_DIR`.
+3. `$XDG_CACHE_HOME/fallow/sentinels/`, `~/.cache/fallow/sentinels/`, or `%LOCALAPPDATA%\fallow\sentinels\` on Windows.
+
+When it can write in none of them, it runs the check on each start. `npx fallow --version` shows the result:
+
+```text
+fallow 3.45.0
+verified: yes (cache hit at <path>/node_modules/@fallow-cli/darwin-arm64/.fallow-verified); fallow 3.45.0 signed
+```
+
+With `FALLOW_SKIP_BINARY_VERIFY=1`, the line is `verified: skipped (FALLOW_SKIP_BINARY_VERIFY is set)`, and fallow also prints a warning, so a CI log still shows the bypass. With `FALLOW_VERIFY_LOG=1`, fallow writes one line for each check on stderr, for example `fallow-verify outcome=ok cache=hit sentinel=<path>`.
+
+The GitHub Action runs the same check again after it installs fallow. It loads the verifier from the files of the action, not from the npm package that it installed. A failed check stops the job before a later step runs the binary.
 
 Each release on GitHub Releases has a CycloneDX SBOM for each platform, named `fallow-<target>.cdx.json`. The OpenVEX document [`.vex/openvex.json`](https://github.com/fallow-rs/fallow/blob/main/.vex/openvex.json) in the fallow repository lists the advisories that do not affect fallow, with the reason for each.
 

@@ -134,6 +134,91 @@ The [global options](/cli/global-flags) are in these groups: [Project](/cli/glob
 
 `fallow rule-pack` has no options of its own. The section of each subcommand under [Subcommands](#subcommands) lists its options.
 
+## Option details {#option-details}
+
+### Pack file {#pack-file}
+
+`init` writes a pack file, and `test` reads one. A pack has `version: 1`, a unique `name`, an optional `description` and a non-empty `rules` array. Fallow loads a pack as data and never runs project code.
+
+```jsonc
+// rule-packs/team-policy.jsonc
+{
+  "$schema": "../node_modules/fallow/rule-pack-schema.json",
+  "version": 1,
+  "name": "team-policy",
+  "rules": [
+    { "id": "no-moment", "kind": "banned-import", "specifiers": ["moment"], "message": "Use date-fns." },
+    { "id": "no-child-process", "kind": "banned-call", "callees": ["child_process.*"], "severity": "error" }
+  ]
+}
+```
+
+- Pack names and rule ids use only ASCII letters, digits, `.`, `_` and `-`. A finding has the id `<pack>/<rule-id>`.
+- A field on the wrong rule kind is a load error. An invalid or missing pack stops the config load with exit code 2.
+- `files` and `exclude` globs limit where a rule applies. `zones` limits it to files in the named [boundary zones](/configuration/boundaries). The three combine.
+- `severity` overrides the `policy-violation` rule for one rule, and `off` turns the rule off. When the `policy-violation` rule is `off`, no pack rule runs. The exit code uses the severity of each finding.
+- Keep pack files in a committed directory, not in the gitignored `.fallow/` directory.
+
+### Rule kinds {#rule-kinds}
+
+| `kind` | Key | Matches |
+|:--|:--|:--|
+| `banned-call` | `callees` | Calls and `new` expressions whose callee path matches a pattern. |
+| `banned-import` | `specifiers` | Imports and re-exports whose specifier matches, as written. `moment` covers `moment/locale/nl`, and not `moment-timezone`. `@org/ui/*` matches the subpaths only. |
+| `banned-effect` | `effects` | Calls with an effect class of the security catalogue: `read`, `write`, `network`, `storage`, `process`, `shell`, `crypto`, `randomness`, `dom`, `database` and others. Calls only, not `new` expressions. |
+| `banned-export` | `exports` | Exported names. `default` matches the default export, and a trailing `*` matches a name prefix. |
+| `gdp-proof-producer` | `allowedFiles` | Calls to `@gdp-ts/core.defineProof` outside the allowed files. See [gdp-ts proof producers](#gdp-proof-producers). |
+
+`"ignoreTypeOnly": true` skips type-only imports for `banned-import`, and type-only exports for `banned-export`.
+
+### Call forms {#call-forms}
+
+- A `banned-call` pattern matches whole name segments, and follows imports, as a [forbidden call](/configuration/boundaries#forbidden-calls) does. `child_process.*` covers named, namespace and default imports from `child_process` and `node:child_process`.
+- A pattern matches a call and a `new` expression, so `Date` covers `Date()` and `new Date()`. A `new` finding has `matched` set to `new Date`. Write the pattern as `Date`, not as `new Date`.
+- A bare pattern matches the written name, so it also matches a local function or class with that name.
+- Each call site is one finding. A `fallow-ignore-next-line` comment covers only the site on its next line.
+- `banned-call` does not follow a callee in a variable (`const D = Date; new D()`), `Reflect.construct`, a subclass (`class X extends Date`) or `globalThis.Date`.
+- `banned-import` does not match a rewritten specifier such as `npm:moment`. The rules do not read `require()`, dynamic `import()` or `import x = require()`.
+
+### Allowed names {#allow-names}
+
+`allowNames` on a `banned-import` rule bans a package and keeps some of its exports:
+
+```json
+{ "id": "three-math-only", "kind": "banned-import", "specifiers": ["three"], "allowNames": ["Vector3", "Quaternion"] }
+```
+
+- `import { Vector3 } from "three"` is allowed, and `import { Mesh } from "three"` is a finding.
+- Each entry is an exact imported name, without globs. `default` allows a default import. The rule compares the name in the package, so `import { Mesh as Vector3 }` reports `three: Mesh`.
+- A namespace import, a star re-export and a side-effect import always report, because fallow cannot prove that they stay in the list.
+- A finding has `matched` set to `<specifier>: <binding>`, for example `three: Mesh`, `three: default`, `three: *` or `three: side-effect`. So `allowNames` changes the baseline keys and finding ids of the rule. Save the baseline again in the same commit.
+- A blank entry, an entry with `*`, and `allowNames` on another rule kind are load errors.
+- To ban only some exports, use `banned-call` with a pattern such as `three.Mesh`. It reports calls and `new` expressions, but not the import, a re-export, `extends Mesh` or a value reference.
+
+### gdp-ts proof producers {#gdp-proof-producers}
+
+A `gdp-proof-producer` rule restricts the files that create proof factories with `@gdp-ts/core.defineProof`. A global rule allows factories only in your authorization modules. A rule with `proofKinds` requires the factory of one proof kind in one owner file:
+
+```json
+{
+  "version": 1,
+  "name": "gdp",
+  "rules": [
+    { "id": "trusted-producers", "kind": "gdp-proof-producer", "allowedFiles": ["src/auth/**"], "severity": "error" },
+    { "id": "delete-project-owner", "kind": "gdp-proof-producer", "allowedFiles": ["src/auth/project.ts"], "proofKinds": ["CanDeleteProject"], "severity": "error" }
+  ]
+}
+```
+
+- Each rule reports on its own. A call outside `src/auth/**` can break both rules. A call in `src/auth/other.ts` breaks only the owner rule.
+- `allowedFiles` needs at least one glob relative to the project root. It grants the permission. `files`, `exclude` and `zones` still limit where the rule checks code.
+- An absent or empty `proofKinds` checks each factory call, also a call with a dynamic label. A list matches exact static labels only, so keep the global rule for the dynamic labels.
+- The rule follows named and namespace imports, renamed imports and unambiguous re-exports through project modules and workspace packages. It checks each analyzed file, also a file that no entry point reaches.
+- It does not follow wrappers, local value aliases, `require()` or dynamic imports. It skips optional calls, computed member calls such as `gdp["defineProof"](...)` and ambiguous re-exports.
+- The check is about the place of the factories. It does not check the authorization or the runtime permission. Keep the gdp-ts lint rules, such as `no-exported-prover`, and your TypeScript checks.
+
+`fallow rule-pack list --format json` and [`fallow guard`](/cli/guard) show the permissions of the rules.
+
 ## Output
 
 ```bash

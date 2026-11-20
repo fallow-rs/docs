@@ -42,6 +42,154 @@ The [global options](/cli/global-flags) are in these groups: [Project](/cli/glob
 
 Without an option, fallow shows the plugins, the files and the entry points. Fallow finds the entry points with the same plugins as [`fallow dead-code`](/cli/dead-code), so the two commands agree. A `PATH` limits the list, and fallow still reads the whole project.
 
+## Option details {#option-details}
+
+These sections tell how fallow finds the entry points that `--entry-points` shows, and which files it counts as reachable from them. [Entry points](/concepts/entry-points) explains the concept.
+
+### Entry points from scripts {#script-entry-points}
+
+Fallow reads each command in the `package.json` scripts of the root package and of each workspace package. A file that a command runs becomes an entry point with the label `package.json script`:
+
+- A file path argument, for example `node scripts/seed.js`.
+- A `--config` argument, for example `jest --config jest.e2e.config.ts`.
+- The command after an env wrapper or a package manager runner: `cross-env`, `dotenv`, `env`, `npx`, `pnpx`, `yarn dlx`, `pnpm exec`, `npm exec --`, `yarn run`, `bun run`, `varlock run --` and `dotenvx run --`. Fallow also removes the flags of these prefixes, for example `dotenv -e .env.ci --` and `pnpm --filter web exec`.
+- A script call, for example `npm run lint -- src/a.ts` or `yarn lint src/a.ts`. Fallow reads the body of the `lint` script with the extra arguments, as the package manager does. npm forwards positional arguments without `--`, and reads a `-` argument before `--` as npm config.
+- `yarn node <file>`, which runs the file with Node.js.
+
+A command can select other workspace packages or another directory. Fallow then resolves the file arguments in the directory of each selected package:
+
+| Command form | Example |
+|:--|:--|
+| One package by name | `yarn workspace web node scripts/a.ts`, `npm exec -w web -- tsx scripts/a.ts` |
+| A pnpm filter | `pnpm --filter web exec tsx scripts/a.ts`. A filter can be a name, a name glob (`'@acme/*'`), a directory (`./packages/*`) or an exclusion (`'!web'`). |
+| Each package | `pnpm -r exec tsx scripts/a.ts`, `yarn workspaces foreach -A exec tsx scripts/a.ts`, `yarn workspaces run gen scripts/a.ts`, `npm --workspaces run gen -- scripts/a.ts` |
+| Another directory | `pnpm -C docs exec tsx scripts/a.ts`, `npm --prefix packages/web run gen -- scripts/a.ts`, `yarn --cwd packages/web gen scripts/a.ts` |
+
+- When several packages are selected, a file becomes an entry point in each package where the file exists.
+- `pnpm -w`, `yarn workspaces foreach -A`, and a selection by the name or directory of the root package include the root package. `--include-workspace-root` adds the root package in pnpm and npm. Without it, `pnpm -r`, `yarn workspaces run` and `npm --workspaces` leave the root package out.
+- These forms make no entry point: a pnpm dependency or change filter (`web...`, `[origin/main]`), the `yarn workspaces foreach` options `--since`, `--recursive`, `--from`, `--worktree` and `--no-private`, and the task runners `turbo`, `nx` and `lerna`. The binary still counts as a used dependency.
+
+#### Formatter and linter targets {#formatter-and-linter-targets}
+
+A formatter or a linter reads its file arguments, but it does not run them. So `oxlint src/`, `eslint src/a.ts` and `prettier --check "**/*.ts"` make no entry point. This is also true in each command form above. Fallow knows these tools: alex, Biome, CSpell, dependency-cruiser, dprint, EditorConfig checkers, ember-template-lint, ESLint (also `eslint_d`), HTMLHint, jscpd, JSHint, madge, markdownlint, markuplint, Oxfmt, Oxlint, Prettier, remark, Secretlint, Standard, Stylelint, textlint, TSLint and XO.
+
+The tool is still a used dependency, and its `--config` file is still an entry point. A module that the tool loads through a flag also stays reachable:
+
+- A formatter, parser or reporter, for example `eslint -f ./tools/formatter.js`.
+- A plugin, for example `prettier --plugin=./tools/plugin.mjs` or `remark --use ./plugins/lint.mjs`.
+- A rule directory, for example `eslint --rulesdir ./rules`. The source files directly in that directory stay reachable.
+
+#### File utilities {#file-utilities}
+
+A shell utility that copies, moves, deletes, searches or changes files runs none of its arguments. So `cp ./README.md ./lib` makes no entry point. This applies to `awk`, `cat`, `chmod`, `chown`, `cp`, `echo`, `grep`, `head`, `ln`, `ls`, `mkdir`, `mv`, `rimraf`, `rm`, `rmdir`, `sed`, `sleep`, `sort`, `tail`, `tee`, `touch`, `uniq` and `wc`. `find`, `xargs` and the shells can run another program, so their arguments keep the normal rules: `xargs node scripts/run.js` keeps `scripts/run.js` as an entry point.
+
+#### Commands that read files as data {#ignore-command-entries}
+
+A code generator that reads `src/**/*.ts` does not run those files. Add its name to [`ignoreCommandEntries`](/reference/config-dead-code#ignorecommandentries), and its file arguments make no entry point:
+
+```jsonc
+{ "ignoreCommandEntries": ["my-codegen"] }
+```
+
+The key applies to `package.json` scripts, CI files and infrastructure files, also when a script call runs the command. `["*"]` turns off the entry points of each command. It also drops the modules that a linter loads through a flag, so list those files in `entry`. The key does not change a command that a plugin reads from a tool config, for example the Playwright `webServer.command`.
+
+### Entry points from CI and infrastructure files {#infrastructure-entry-points}
+
+A worker or a migration script often starts from a Dockerfile or a CI job, not from an import. Fallow reads these files and makes each file that a command runs an entry point. The rules of the scripts above apply to these commands too.
+
+| File | Place | What fallow reads |
+|:--|:--|:--|
+| `Dockerfile`, `Dockerfile.*`, `*.Dockerfile` | The project root, `config/`, `docker/`, `deploy/` and `.docker/` | `RUN`, `CMD` and `ENTRYPOINT`, in shell form and in exec form, also the source files of an `esbuild` command |
+| `Procfile` | The project root | Each process |
+| `fly.toml`, `fly.*.toml` | The project root | `release_command`, `cmd`, and each key under `[processes]` |
+| `.gitlab-ci.yml`, `.github/workflows/*.yml` | The project root | The commands of each step |
+| `action.yml`, `action.yaml` | The project root, `.github/actions/<name>/` and `.github/actions/<group>/<name>/` | The `run` steps of a composite action |
+
+```dockerfile
+# Fallow makes scripts/migrate.ts and src/worker.ts entry points
+FROM node:20
+RUN node scripts/migrate.ts
+CMD ["node", "src/worker.ts"]
+```
+
+#### CI working directories {#ci-working-directories}
+
+A GitHub Actions step runs in its `working-directory`. Fallow resolves the file arguments of the step in that directory. It reads the value of the step, and the `defaults.run.working-directory` of the job and of the workflow. The innermost value applies.
+
+```yaml
+jobs:
+  build:
+    defaults:
+      run:
+        working-directory: packages/web
+    steps:
+      # Fallow makes packages/web/scripts/build.ts an entry point
+      - run: tsx scripts/build.ts
+      # Fallow makes scripts/check.ts in the project root an entry point
+      - run: tsx $GITHUB_WORKSPACE/scripts/check.ts
+```
+
+- A path that starts with `$GITHUB_WORKSPACE/`, `${{ github.workspace }}/`, `${{ env.GITHUB_WORKSPACE }}/` or the GitLab `$CI_PROJECT_DIR/` resolves from the project root.
+- In a composite action, a path that starts with `${{ github.action_path }}/` resolves from the directory of the action.
+- When the directory is a workspace package, a script call such as `npm run gen` uses the scripts of that package.
+- A directory that is known only at run time, such as `${{ matrix.name }}`, or a directory outside the project, such as `${{ runner.temp }}`, makes no entry point for a relative path.
+- `working-directory` under `with:` is an input of an action. It does not change the directory of a `run` step.
+
+The working directory changes only the file arguments. A binary in the step counts as a used dependency in each directory.
+
+#### Commands outside a `run` value {#ci-commands-outside-run}
+
+Fallow also finds the files that a workflow runs from these places:
+
+- **A matrix value.** When a step is only `run: ${{ matrix.project.command }}`, fallow reads the `command` values under `project` in the `matrix` of the same job, also under `include`.
+- **An `actions/github-script` step.** In the `script` input, a path after `${process.env.GITHUB_WORKSPACE}/` or `${{ github.workspace }}/`, and a `require('./path')`, resolve from the project root. A relative `import('./path')` resolves from the action itself, so fallow does not read it.
+- **A step `env` variable.** When the whole value of a step `env` entry is an anchor such as `${{ github.action_path }}`, a path that starts with that variable resolves like the anchor.
+
+### Files that a dynamic import loads {#dynamic-imports}
+
+Fallow changes a computed import path into a glob, and counts each matching file as reachable:
+
+| Pattern | Example | Glob |
+|:--|:--|:--|
+| Template literal | ``import(`./icons/${name}.svg`)`` | `./icons/*.svg` |
+| String concatenation | `import("./routes/" + path)` | `./routes/*` |
+| `import.meta.glob` | `import.meta.glob("./modules/*.ts")` | `./modules/*.ts` |
+| `require.context` | `require.context("./themes", true, /\.css$/)` | `./themes/**/*.css` |
+
+- The static text of a template literal, a concatenation or a `require.context` directory matches only itself. `` import(`./[id]/${name}.js`) `` matches `./[id]/view.js`.
+- A pattern that is not a valid glob gives a warning and matches no file.
+- A match uses each value export of the file, also `default`. A type export of a matched file is used only by an import that names it.
+- An `import()` of a `const` string, such as `const p = "./x"; import(p)`, loads `./x`.
+
+An `import.meta.glob` pattern can use the groups `@(..)`, `?(..)`, `+(..)`, `*(..)` and `!(..)`, as Vite does. In an array, an entry that starts with `!` excludes files from each other entry of the call, and fallow can report an excluded file as unused:
+
+```ts
+// ./pages/skip.js is not loaded, so fallow can report it as unused
+const pages = import.meta.glob(["./pages/*.js", "!./pages/skip.js"]);
+```
+
+- Fallow applies a `!` entry that starts with `./`, `../` or `**`. Another `!` entry needs the alias resolver of Vite, so fallow keeps the files.
+- A `**` entry matches from the common base directory of the other entries. Next to `./pages/*.js`, `!**/pages/a.js` excludes nothing.
+
+The options object of an `import.meta.glob` call decides which exports of each match are used:
+
+| Options | Used exports of each match |
+|:--|:--|
+| No options | Each value export |
+| `query: '?raw'` or `query: '?url'`, also in a longer query such as `'?url&inline'` | None. The file stays reachable. |
+| `as: 'raw'` or `as: 'url'` | None. The file stays reachable. |
+| `import: 'default'` or `import: '<name>'`, without a query | Only that export |
+| `import: '*'` | Each value export |
+| Another query, such as `'?inline'` | Each value export |
+
+Fallow also uses each value export when the options are not an object literal, when they hold a spread, or when an option value is not a string literal.
+
+A path in `new URL("./lib/sign.ts", import.meta.url)` uses the `default` export of the module, because a build tool or a script runner can load the module and call that export. The other exports stay reportable. A `new URL()` that a `Worker` or `SharedWorker` constructor gets uses no export, because a worker runs the module as a script. A path without an extension, such as `new URL("./services", import.meta.url)`, also uses no export.
+
+### Re-export chains {#re-export-chains}
+
+Fallow follows `export *` and `export { a } from` through each level of barrel files to the file that defines the name. When two `export *` sources give the same name, ECMAScript treats the name as ambiguous, and the barrel does not export it. Fallow then reports none of the declarations that give that name, until you fix the collision. [`fallow trace FILE:NAME`](/cli/trace) shows the sources of the name in `star_export_ambiguity`.
+
 ## Output
 
 ```bash
@@ -102,20 +250,20 @@ In JSON, `entry_weight` has `unit`, `entry_count` and `entries`. Each entry has 
 
 A problem in the workspace setup gives an entry in `workspace_diagnostics`. Each entry has a `kind`, a `path` and a `message`. `degrades_analysis: true` marks an entry that makes the findings less complete. The JSON output of `dead-code`, `dupes` and `health` holds the same array.
 
-| `kind` | Problem |
-|:--|:--|
-| `malformed-package-json` | The `package.json` of a workspace does not parse. Fallow drops the workspace. |
-| `glob-matched-no-package-json` | A workspace pattern matches a directory without a `package.json`. |
-| `workspace-glob-outside-root` | A workspace pattern points outside the project root. Fallow skips it. |
-| `workspace-pattern-dir-missing` | A workspace pattern names a directory that does not exist. Fallow then does not report unused catalog entries. |
-| `undeclared-workspace` | A directory has a `package.json` with a name or dependencies, and no pattern declares it. |
-| `nested-project-root` | A directory has its own `package.json` and `pnpm-workspace.yaml`. Fallow analyzes it as a workspace. |
-| `malformed-tsconfig` | A `tsconfig.json` does not parse. |
-| `tsconfig-reference-dir-missing` | A `references[].path` in `tsconfig.json` does not exist. |
-| `malformed-pnpm-workspace-yaml` | `pnpm-workspace.yaml` does not parse. Fallow skips the catalog checks. |
-| `excluded-by-default-ignore` | A built-in ignore pattern, for example `**/dist/**`, removed source files. The entry has `pattern`, `file_count` and `directory_count`. |
-| `bun-lockb-override-resolution-skipped`, `bun-lock-override-resolution-skipped`, `pnpm-lock-override-resolution-skipped`, `npm-lock-override-resolution-skipped` | Fallow cannot read a lockfile, so it skips the check for unused dependency overrides. |
-| `pnpm-workspace-overrides-ignored` | The pnpm version ignores the `overrides` of `pnpm-workspace.yaml`. The `cause` field gives the reason. |
+| `kind` | Problem | Fix |
+|:--|:--|:--|
+| `malformed-package-json` | The `package.json` of a workspace does not parse. Fallow drops the workspace. | Correct the JSON syntax, or remove the directory from the workspace pattern. |
+| `glob-matched-no-package-json` | A workspace pattern matches a directory without a `package.json`. | Add a `package.json`, make the pattern narrower, or add the directory to `ignorePatterns`. |
+| `workspace-glob-outside-root` | A workspace pattern points outside the project root. Fallow skips it. | Move the package into the project root, or run fallow with `--root` set to a directory that holds both. |
+| `workspace-pattern-dir-missing` | A workspace pattern names a directory that does not exist. Fallow then does not report unused catalog entries. | Create the directory before the run, or remove the pattern. |
+| `undeclared-workspace` | A directory has a `package.json` with a name or dependencies, and no pattern declares it. | Add the directory to the workspace patterns, to [`workspaces.patterns`](/reference/config-workspaces#workspaces-patterns), or to `ignorePatterns`. |
+| `nested-project-root` | A directory has its own `package.json` and `pnpm-workspace.yaml`. Fallow analyzes it as a workspace. | None needed. To leave the project out, add it to `ignorePatterns`. |
+| `malformed-tsconfig` | A `tsconfig.json` does not parse. | Correct the JSON syntax. Until then, fallow ignores the references, path aliases and compiler options of the file. |
+| `tsconfig-reference-dir-missing` | A `references[].path` in `tsconfig.json` does not exist. | Update or remove the reference, or restore the directory. |
+| `malformed-pnpm-workspace-yaml` | `pnpm-workspace.yaml` does not parse. Fallow skips the catalog checks. | Indent each continuation line of a quoted value or a list deeper than its key. `pnpm install` can accept the file, but `pnpm add` rejects it. |
+| `excluded-by-default-ignore` | A built-in ignore pattern, for example `**/dist/**`, removed source files. The entry has `pattern`, `file_count` and `directory_count`. | To analyze the files, add a `!` exception such as `!src/**/build/**` to `ignorePatterns`. |
+| `bun-lockb-override-resolution-skipped`, `bun-lock-override-resolution-skipped`, `pnpm-lock-override-resolution-skipped`, `npm-lock-override-resolution-skipped` | Fallow cannot read a lockfile, so it skips the check for unused dependency overrides. | Run `bun install --save-text-lockfile` to write a text `bun.lock`, or delete a stale `bun.lockb`. For the other lockfiles, resolve the merge-conflict markers, or run the install of the package manager again. |
+| `pnpm-workspace-overrides-ignored` | The pnpm version ignores the `overrides` of `pnpm-workspace.yaml`. The `cause` field gives the reason. | With `cause: "pnpm-version"`, set `packageManager` to pnpm 10.5.1 or later, or move the entries to `pnpm.overrides`. With `cause: "package-json-overrides"`, keep the entries in one source. |
 
 Other kinds report files that fallow skipped because of their size or because they are minified. Treat an unknown `kind` as a new diagnostic. A malformed root `package.json` stops the run with exit code 2.
 

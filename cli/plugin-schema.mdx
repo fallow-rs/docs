@@ -43,7 +43,85 @@ The output is a JSON Schema (draft 2020-12) with each plugin key, for example `e
 | A local file | The path of the file that `fallow plugin-schema > plugin-schema.json` wrote, relative to the plugin file. |
 | The fallow repository | `https://raw.githubusercontent.com/fallow-rs/fallow/main/plugin-schema.json` |
 
-The [MCP server](/integrations/mcp) serves the same schema as the resource `fallow://schema/plugin`.
+The [MCP server](/integrations/mcp) serves the same schema as the resource `fallow://schema/plugin`. The key [`framework`](/reference/config-plugins#framework) of the config file takes the same plugin objects inline.
+
+### Plugin files {#plugin-files}
+
+A plugin file is JSONC (`.jsonc`, with `//` and `/* */` comments), JSON (`.json`) or TOML (`.toml`, with `#` comments). Each format uses camelCase key names. Fallow reads the plugin files in this order:
+
+1. The files and directories that the `plugins` config key names.
+2. The files in `.fallow/plugins/`.
+3. The `fallow-plugin-*.{jsonc,json,toml}` files in the project root.
+
+Fallow reads the files of one directory in sorted order. When two files have the same `name`, the first file wins, and fallow warns about the second file. Fallow also skips a file with an empty `name`, a file that it cannot parse, and a file outside the project root, also through a symlink. Each of these gives a warning on stderr.
+
+Fallow checks each glob of a plugin when it loads the file, also the globs inside `detection`. A glob with an absolute path or a `..` segment stops the run with exit code `2`:
+
+```text
+Error: invalid external plugin definition:
+  - framework[].entryPoints: '../outside/*.ts' contains a '..' segment; rewrite the pattern to stay inside the project root, or run fallow with --root pointing at the directory you want to scan
+```
+ In a glob, a single `*` stays inside one path segment. Use `**` to match across directories.
+
+### Detection {#plugin-detection}
+
+`detection` takes priority over `enablers`. It is one condition object, and `type` selects the kind:
+
+| `type` | Other keys | The condition is true when |
+|:--|:--|:--|
+| `dependency` | `package` | A `package.json` of the project declares this exact package. |
+| `fileExists` | `pattern` | A discovered file matches the glob, relative to the project root. |
+| `all` | `conditions` | Each condition of the list is true. |
+| `any` | `conditions` | One or more conditions of the list are true. |
+
+`all` and `any` can hold other `all` and `any` objects. There is no `not` condition.
+
+```jsonc
+{
+  "detection": {
+    "type": "all",
+    "conditions": [
+      { "type": "dependency", "package": "@my-org/core" },
+      { "type": "fileExists", "pattern": "my-org.config.*" }
+    ]
+  }
+}
+```
+
+A plugin with no `detection` and an empty `enablers` list never turns on. Fallow then warns once on stderr, and [`fallow plugin-check`](/cli/plugin-check) shows the reason.
+
+### Used class members {#plugin-used-class-members}
+
+Each item of `usedClassMembers` is one of these forms:
+
+- A string: a member name, or a glob such as `enter*`. Fallow counts each class member with a matching name as used, in each class.
+- An object `{ extends?, implements?, members }`: the names count as used only in a class whose heritage matches. `extends` must equal the name of the parent class. `implements` must equal one of the interfaces of the class. When the object sets both keys, both must match. An object without `extends` and without `implements` is not valid. Fallow then cannot parse the file, and it skips the plugin with a warning.
+
+```jsonc
+{
+  "usedClassMembers": [
+    "agInit",
+    { "implements": "ICellRendererAngularComp", "members": ["refresh"] }
+  ]
+}
+```
+
+Use a plain string only for a name that is rare, such as `agInit`. Scope a common name such as `refresh` or `execute`, or fallow hides the unused members of the same name in other classes. The rules apply to class methods and properties only. Fallow still checks enum members with the same names. The top-level [`usedClassMembers`](/reference/config-dead-code#usedclassmembers) key of the config file takes the same forms for the whole project.
+
+### Manifest entries {#plugin-manifest-entries}
+
+Each rule of `manifestEntries` has these keys:
+
+| Key | Content |
+|:--|:--|
+| `manifests` | A recursive glob of the manifest files. The search obeys `.gitignore` and skips `node_modules`. |
+| `format` | `jsonc` (the default, which also reads plain JSON) or `json`. |
+| `when` | A map from a field path to a condition. Each condition must match. An empty map matches each manifest. |
+| `entries` | A list of `{ path, when? }`. Each `path` is a glob relative to the directory of the manifest. |
+
+A field path is a list of keys with dots, such as `plugin.browser`. A `[*]` segment visits each item of an array, and the condition then matches when one value matches. A condition is a JSON value that must be strictly equal, or `{ "exists": true }` or `{ "exists": false }` to test only that the field is there.
+
+In a `path`, `${dotted.field}` puts the value of a manifest field in the path. A string field gives one entry, an array field gives one entry for each item, and a missing or empty field gives no entry. A `path` must include its extension, for example `public/index.{ts,tsx}`, because fallow does not try other extensions. The entries get the `entryPointRole` of the plugin. [`fallow plugin-check`](/cli/plugin-check#output) shows what each rule matched, and the warnings with their limits.
 
 ## Exit codes
 

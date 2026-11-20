@@ -64,6 +64,25 @@ Each finding is an object in an array of its issue type, for example `unused_exp
 
 Each entry of `actions` has a `type`, an `auto_fixable` boolean and a `description`. `auto_fixable` applies to this finding only: one `type` can be fixable on one finding and not on another. A suppression action has the comment to add in `comment`. [`fallow fix`](/cli/fix) applies the actions with `auto_fixable: true`.
 
+An `add-to-config` action resolves a finding with a new entry in the config file, for example in `ignoreDependencies` or `ignoreExports`. It has `config_key`, `value`, and can have `value_schema`: a URL to the part of the published `schema.json` that describes `value`. A program can read that schema and check `value` before it writes the value into the config file:
+
+```json
+{
+  "type": "add-to-config",
+  "config_key": "ignoreDependencies",
+  "value": "autoprefixer",
+  "value_schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json#/properties/ignoreDependencies/items"
+}
+```
+
+### Next steps {#next-steps}
+
+`next_steps` is separate from the `actions` of each finding. Each entry is `{ id, command, reason }`, and `command` never changes a file. The `id` values are `setup`, `impact-report`, `trace-unused-export`, `trace-clone`, `complexity-breakdown`, `scope-workspaces`, `audit-changed` and `recheck-baseline`. Through MCP, use the `id` to call the matching tool, not the `command` in a shell.
+
+- `setup` (`fallow agent install --dry-run`) comes only in a run outside CI, on a project with findings and no config file. It goes away when a config file exists, or after `fallow init --decline`.
+- `impact-report` (`fallow impact`) comes at most once a week, when local [Impact tracking](/cli/impact) is on and its counts are not zero. It can come on a clean run.
+- `recheck-baseline` comes when a narrowed run loads a baseline that it cannot judge. Its command reads the baseline again over the whole project. See [Baseline staleness](/cli/baselines#baseline-staleness).
+
 ### Gate outcomes {#gate-outcomes}
 
 `gate_outcomes` holds one entry for each gate, keyed by the gate name, for example `error-severity-findings`:
@@ -166,8 +185,8 @@ When a command fails with `--format json`, stdout holds an error document, and t
 | `summary` | The number of findings of each issue type. |
 | `unused_files`, `unused_exports`, `unused_dependencies` and the other arrays | One array for each issue type, with one object for each finding. |
 | `stale_suppressions` | Suppressions that hide no finding. `origin` describes the comment or the tag. `origin.kind_known: false` marks a token that is not an issue type. |
-| `cascade_hidden` | The number of findings in unused files that the report leaves out. Absent when it is 0. See [`showCascade`](/reference/config-rules#showcascade). |
-| `baseline`, `baseline_deltas`, `baseline_staleness` | Only in a run with `--baseline`. |
+| `cascade_hidden` | The number of findings in unused files that the report leaves out. Absent when it is 0. With `--group-by`, the field is at the root, and no group has it. SARIF has the same count in `runs[0].properties.cascadeHidden`. See [`showCascade`](/reference/config-rules#showcascade). |
+| `baseline`, `baseline_deltas`, `baseline_staleness` | Only in a run with `--baseline`. `baseline_staleness` tells how much of the baseline still matches. Dead code, duplication and health share its fields, for example `scope_reasons`, `gate_trips`, `unrecognised_format`, `saved_by` and `format`. See [Baseline staleness](/cli/baselines#baseline-staleness). |
 
 ```json
 {
@@ -485,6 +504,8 @@ A `boundary_violations` entry has `from_path`, `to_path`, `from_zone`, `to_zone`
 | `unresolved_edge_files`, `unresolved_callee_sites` | The number of places that fallow could not follow. |
 
 With `--summary`, the output has `summary` and no arrays of findings. Each finding is a candidate that a person must check. See [Security](/analysis/security).
+
+Each hop of `trace` has `path`, `line`, `col` and `role`. A hop with the role `secret-source` also has `secret_reads`: one entry (`name`, `line`, `col`) for each non-public env read of that module. [Client-server leak location and trace](/cli/security#client-server-leak-trace) has the detail.
 
 ```json
 {
