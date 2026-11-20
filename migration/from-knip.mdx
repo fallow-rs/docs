@@ -26,7 +26,7 @@ Most knip keys have a fallow key with the same name or the same purpose. The tab
 | `ignore` | [`ignoreFindings`](/reference/config-dead-code#ignorefindings). The files stay in the analysis. |
 | `ignoreDependencies`, `ignoreBinaries` | The same keys. A regular expression becomes a glob when a glob matches the same names. |
 | `ignoreExportsUsedInFile`, `includeEntryExports` | The same keys. |
-| `rules`, `include`, `exclude` | [`rules`](/reference/config-rules#rules), with the fallow name of each issue type. `nsExports` and `nsTypes` follow `exports` and `types`. |
+| `rules`, `include`, `exclude` | [`rules`](/reference/config-rules#rules), with the fallow name of each issue type. `nsExports` and `nsTypes` follow `exports` and `types`. `dependencies` in `include` or `exclude` also covers `devDependencies`, as in knip. The migration keeps the knip severity: see [Severity](#severity). |
 | `ignoreIssues` | An [`overrides`](/reference/config-rules#overrides) entry that turns the issue types off for the file glob. |
 | `cycles.allow` | [`circularDependencies.allow`](/reference/config-architecture#circulardependencies-allow). |
 | A `workspaces.<path>` section | The same fallow keys, with the workspace path in front of each pattern. `ignoreDependencies` and `includeEntryExports` go to [`workspaces.settings`](/reference/config-workspaces#workspaces-settings) for the same path. |
@@ -69,7 +69,10 @@ The steps use the demo project of these docs, with this `knip.json` in the proje
      ],
      "rules": {
        "unused-types": "warn",
-       "unlisted-binaries": "off"
+       "unlisted-binaries": "off",
+       "unused-dev-dependencies": "error",
+       "unused-namespace-members": "error",
+       "duplicate-export-aliases": "error"
      },
      "supportEntry": [
        "scripts/seed.js"
@@ -84,7 +87,7 @@ The steps use the demo project of these docs, with this `knip.json` in the proje
      [knip] `vitest`: plugin config `vitest` is auto-detected by fallow's built-in plugins (suggestion: remove this section; fallow detects framework config automatically)
    ```
 
-   `src/index.ts!` has the production marker and `scripts/seed.js` has none, so the seed script goes to `supportEntry`. The regular expression `^@types/` becomes the glob `@types/*`, but no glob matches `^(react|vue)$`, so the migration skips it.
+   `src/index.ts!` has the production marker and `scripts/seed.js` has none, so the seed script goes to `supportEntry`. The regular expression `^@types/` becomes the glob `@types/*`, but no glob matches `^(react|vue)$`, so the migration skips it. The three `error` rules keep the knip severity: see [Severity](#severity).
 
 2. Write the config file:
 
@@ -115,6 +118,48 @@ Note: entry pattern matched only files that are entry points anyway: src/index.t
 ```
 
 The demo has no generated files and no `@types` packages, so the first two notes are correct, and a typo shows in the same way. Then compare the findings of fallow with the findings of knip on the same commit.
+
+## Severity
+
+knip reports each issue type as an error, unless `rules` sets another severity. In fallow, these rules have the default severity `warn`, and a warning does not fail a run:
+
+- `unused-dev-dependencies`
+- `unused-optional-dependencies`
+- `unused-namespace-members`
+- `duplicate-export-aliases`
+- `unlisted-binaries`
+
+So `fallow migrate` writes `"error"` for each of these rules that has a knip issue type, unless the knip config sets a severity for that issue type or turns it off. The run that failed in knip, for example on an unused `devDependencies` entry, then also fails in fallow. After the warnings, the migration prints a note that names the rules:
+
+```text
+Note: the migrated config sets these rules to `error`, because knip reports
+their issue types as errors. The fallow default for them is `warn`, and a
+warning does not fail a run.
+  unused-dev-dependencies, unused-namespace-members, duplicate-export-aliases
+https://fallow.tools/docs/migration/from-knip/
+```
+
+knip has no issue type for unused `optionalDependencies`, so `unused-optional-dependencies` keeps the default `warn`.
+
+A fallow version before this change wrote none of these rules. If you migrated with such a version, add the rules to the `rules` of your config by hand:
+
+```json
+{
+  "rules": {
+    "unused-dev-dependencies": "error",
+    "unused-namespace-members": "error",
+    "unlisted-binaries": "error",
+    "duplicate-export-aliases": "error"
+  }
+}
+```
+
+When a run passes with findings, the human report says so under the status line:
+
+```text
+⚠ 1 dev/optional dependency (0.03s)
+  Warnings do not fail the run. Set a rule to `error` to fail on its findings.
+```
 
 ## What differs
 
