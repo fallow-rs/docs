@@ -13,6 +13,7 @@ import {
   lineAt,
   listPagePaths,
   stripCode,
+  countLinesOutsideCode,
 } from "./mdx-source.mjs";
 
 // Checks the page rules of PAGE-TYPES.md. Pages that existed before a rule
@@ -118,6 +119,9 @@ const trimSlashes = (path) => path.replace(/^\/+|\/+$/gu, "");
 
 const violation = (rule, path, line, message, measure) =>
   measure === undefined ? { rule, path, line, message } : { rule, path, line, message, measure };
+
+/** The page type whose line budget does not count the lines of code blocks: the example files of a rule. */
+const CODE_FREE_BUDGET_SCOPE = "rules";
 
 const pageScope = (path) => (path.includes("/") ? path.split("/")[0] : path);
 
@@ -287,7 +291,8 @@ export const checkSize = (path, text) => {
     found.push(violation("page-size", path, 1, `The page has ${characters} characters. The limit is ${CHARACTER_LIMIT}. Split the page.`, { name: "characters", value: characters }));
   }
   const budget = LINE_BUDGETS.get(pageScope(path));
-  const lines = toLines(text.replace(/\n$/u, "")).length;
+  const body = text.replace(/\n$/u, "");
+  const lines = pageScope(path) === CODE_FREE_BUDGET_SCOPE ? countLinesOutsideCode(body) : toLines(body).length;
   if (budget !== undefined && lines > budget) {
     found.push(violation("page-size", path, budget + 1, `The page has ${lines} lines. The budget of its page type is ${budget}. Move detail to the owner page, or split the page.`, { name: "lines", value: lines }));
   }

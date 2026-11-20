@@ -120,6 +120,13 @@ test("page-size accepts a page at its budget and pages without a budget", () => 
   assert.deepEqual(checkSize("cli/audit.mdx", "line\n".repeat(2000)), []);
 });
 
+test("page-size does not count the code block lines of a rule page", () => {
+  const code = ["```ts", ..."line\n".repeat(100).trim().split("\n"), "```"].join("\n");
+  assert.deepEqual(checkSize("rules/unused-file.mdx", `${"line\n".repeat(70)}${code}\n`), []);
+  assert.equal(checkSize("rules/unused-file.mdx", "line\n".repeat(81)).length, 1);
+  assert.equal(checkSize("concepts/graph.mdx", `${"line\n".repeat(140)}${code}\n`).length, 1);
+});
+
 test("page-size reports lines over the budget of the page type and characters over the hard limit", () => {
   const [lineViolation] = checkSize("quickstart.mdx", "line\n".repeat(151));
   assert.deepEqual(lineViolation.measure, { name: "lines", value: 151 });
