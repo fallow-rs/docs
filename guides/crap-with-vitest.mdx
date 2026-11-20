@@ -6,9 +6,9 @@ keywords: ["CRAP", "Vitest", "coverage", "coverage-final.json", "v8", "istanbul"
 icon: "flask-vial"
 ---
 
-At the end of this guide, fallow computes the [CRAP](/analysis/health) score of each function from the real test coverage of Vitest, and CI fails when a change adds a risky function.
+Your health report says "No coverage file found, so CRAP scores are a static estimate". The [CRAP](/analysis/health) score of each function then depends on that estimate. Without a coverage file, fallow guesses the coverage from the imports of your tests, and the guess can be wrong in both directions. In the demo project, `classifyCustomer` gets a CRAP score of 552 while no test imports it. Add one test that calls it, and the estimate counts it as 85% tested, so it gets no CRAP problem at all. Vitest measures that the test runs 21% of it.
 
-Without a coverage file, fallow estimates the coverage from the imports of your tests. The estimate does not know which branches a test runs. A coverage file gives each function its measured score.
+At the end of this guide, fallow computes the CRAP score of each function from the real test coverage of Vitest. CI fails when a change adds a risky function.
 
 ## Before you start
 
@@ -30,6 +30,8 @@ For an older Vitest, add its major version to the package name, for example `@vi
 ## Steps
 
 ### 1. Configure the coverage
+
+Fallow reads the `json` report of Vitest. Set the provider, the reports and the files to measure in the Vitest config:
 
 ```ts
 // vitest.config.ts
@@ -55,7 +57,7 @@ Add `coverage/` to `.gitignore`.
 
 ### 2. Run the tests with coverage
 
-The samples on this page come from a project where one test calls `classifyCustomer` with one customer.
+The samples on this page come from the demo project with one added test, `src/services/customers.test.ts`, which calls `classifyCustomer` with one customer.
 
 ```bash
 npx vitest run --coverage
@@ -69,6 +71,8 @@ File               | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
   customers.ts     |   24.13 |     7.69 |     100 |      25 | 13,15,19-44
   orders.ts        |       0 |      100 |       0 |       0 | 11-18
 ```
+
+The `text` reporter prints this table. The `json` reporter writes the same data to `coverage/coverage-final.json`.
 
 ### 3. Pass the coverage file to fallow
 
@@ -91,9 +95,9 @@ npx fallow health --coverage coverage/coverage-final.json
 - `(21% tested)` is the share of the statements of the function that a test ran. Without this part, the score comes from the estimate.
 - The line `22/25 functions` counts the functions that the coverage file describes. Fallow uses the estimate for the other functions, for example the functions in test files.
 
-The estimate gave this function a score of 552. The estimate counts a function as untested when no test imports its file. The measured score is lower, because one test runs a part of the function.
+The estimate counts an export that a test imports as 85% tested, and an export that no test reaches as 0% tested. That is why it gave 552 before the test existed, and no CRAP problem after. The measured score sits between the two, because the one test runs only a part of the function.
 
-Each finding tells you what to do. In the JSON output (`--format json`), the first action of a finding is one of these:
+The score tells you that the function is a risk. The finding also tells you what to do about it. In the JSON output (`--format json`), the first action of a finding is one of these:
 
 | Action | Meaning |
 |:--|:--|
@@ -105,37 +109,50 @@ To set another limit, pass `--max-crap`, or set [`health.maxCrap`](/reference/co
 
 ### 5. Gate new risk in CI
 
-`fallow health` fails on each function above the limit, also on old code. To fail only on the risk that a change adds, run [`fallow audit`](/analysis/changed-code) with the same coverage file:
+`fallow health` fails on each function above the limit, also on old code. A CI job with it fails on `classifyCustomer` until somebody splits it. To fail only on the risk that a change adds, run [`fallow audit`](/analysis/changed-code) with the same coverage file:
 
 ```bash
 npx vitest run --coverage
 npx fallow audit --base main --coverage coverage/coverage-final.json
 ```
 
-In this example, a pull request adds `shippingCost`, and one test runs only its first line:
+In this example, a pull request adds `src/services/delivery.ts`, calls `deliveryFee` from `src/index.ts`, and adds a test that runs only the first branch:
+
+```ts
+// src/services/delivery.ts
+export const deliveryFee = (weight: number, country: string, express: boolean, insured: boolean): number => {
+  if (weight <= 0) return 0;
+  let fee = weight > 20 ? 1500 : weight > 5 ? 900 : 500;
+  if (country === "BE" || country === "DE") fee += 300;
+  else if (country !== "NL") fee += 900;
+  if (express) fee *= 2;
+  if (insured && fee < 2000) fee += 250;
+  return fee;
+};
+```
 
 ```text
-Audit scope: 2 changed files vs main (f791316..HEAD)
+Audit scope: 3 changed files vs main (26d723d..HEAD)
 
 ── Complexity ─────────────────────────────────────
 
 ● High complexity functions (1)
   CRAP scores use Istanbul coverage where matched (23/27 functions); the rest fall back to the static estimate.
-  src/services/shipping.ts
-    :1 shippingCost HIGH
-          10   cyclomatic    9   cognitive   11 lines
-          63.6 ! CRAP  (19% tested)
+  src/services/delivery.ts
+    :1 deliveryFee HIGH
+          10   cyclomatic   10   cognitive    9 lines
+          52.2 ! CRAP  (25% tested)
 
-✗ complexity: 1 finding · 2 changed files (0.44s)
+✗ complexity: 1 finding · 3 changed files (0.41s)
 ```
 
-The exit code is 1. A function that was above the limit on `main` already does not fail the audit.
+The exit code is 1. The function is below the cyclomatic and the cognitive limits, so only the CRAP score fails it: the tests run a quarter of the statements of a function with 10 paths. A function that was above the limit on `main` already does not fail the audit, also when the pull request changes its file.
 
 Run the tests before the audit in the same job. Then the coverage file describes the code of the pull request.
 
 ## Check the result
 
-Add tests for the branches that no test runs, and run both commands again:
+Add tests for the branches that no test runs, for example one call for each country and option, and run both commands again:
 
 ```bash
 npx vitest run --coverage
@@ -143,8 +160,8 @@ npx fallow audit --base main --coverage coverage/coverage-final.json
 ```
 
 ```text
-Audit scope: 2 changed files vs main (f791316..HEAD)
-✓ No issues in 2 changed files (0.48s)
+Audit scope: 3 changed files vs main (26d723d..HEAD)
+✓ No issues in 3 changed files (0.17s)
 ```
 
 ## If it fails
@@ -157,10 +174,10 @@ Audit scope: 2 changed files vs main (f791316..HEAD)
 | The line `CRAP scores use` counts few matched functions. | Vitest 2 with the v8 provider writes no function data for a file that no test loads. | Update Vitest and the provider to a current major version. |
 | A file that no test loads has no `% tested`. | The coverage file has no data for the file. | Add the file to `coverage.include` of Vitest. |
 | The scores change after an update of Vitest or of the provider. | Two versions can count statements in another way. | Use one provider and one version of Vitest in CI. |
-| A monorepo has one coverage file for each package. | `--coverage` takes one file. | Run one Vitest config for all packages, or run fallow once for each package with `--workspace`. See [Set up a monorepo](/guides/monorepo). |
+| A monorepo has one coverage file for each package. | `--coverage` takes one file. | Run one Vitest config for all packages, or run fallow once for each package with `--workspace`. See [Set up fallow in a monorepo](/guides/monorepo). |
 
 ## Related
 
+- Next: [Mutation testing](/analysis/mutation). Coverage shows which lines a test runs; mutation testing shows if the test fails when the code is wrong.
 - [Health](/analysis/health): CRAP, complexity and the other numbers.
 - [`fallow health`](/cli/health): each coverage option.
-- [Mutation testing](/analysis/mutation): check that a test fails when the code is wrong.

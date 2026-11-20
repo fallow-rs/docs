@@ -6,13 +6,15 @@ keywords: ["madge", "circular dependencies", "orphans", "dependency graph", "gra
 icon: "scale-balanced"
 ---
 
-Fallow finds circular dependencies and draws the import graph, like madge. This guide maps each madge command to a fallow command. `fallow migrate` does not read a madge config. Fallow finds the [entry points](/concepts/entry-points) and the `tsconfig.json` path aliases itself, so you do not give it a source directory.
+Your scripts or your CI run madge, for example `madge --circular src/` to fail a build on an import cycle. Fallow finds circular dependencies and draws the import graph too, so you can replace each madge command with a fallow command. There is no config to convert: `fallow migrate` does not read a madge config. Fallow finds the [entry points](/concepts/entry-points) and the `tsconfig.json` path aliases itself, so you do not give it a source directory.
 
 ## Before you start
 
 - The madge commands that your scripts and your CI run.
 
 ## What maps to what
+
+Find each madge command of your scripts in the left column:
 
 | madge | fallow |
 |:--|:--|
@@ -28,21 +30,50 @@ To find the shortest chain of imports between two files, run `fallow trace --pat
 
 ## Steps
 
+The demo project of these docs has no cycle. For the example, `src/services/catalog.ts` gets a `sampleOrder` function that imports `createOrder` from `src/services/orders.ts`, which already imports `catalog.ts`.
+
 1. Replace the cycle check of your CI:
 
    ```bash
    npx fallow architecture --cycles
    ```
 
-   The command exits with code 1 when it finds a cycle, because `circular-dependency` has the default severity `error`.
+   ```text
+   ● Circular dependencies (1)
+     src/services/catalog.ts
+       → orders.ts → catalog.ts
 
-2. Replace each other madge command with the command of the table.
+     Import cycles that can cause initialization failures and prevent tree-shaking
+     https://fallow.tools/docs/explanations/dead-code/#circular-dependencies
+
+   ✗ 1 circular dependency (0.05s)
+   ```
+
+   The command exits with code 1 when it finds a cycle, because `circular-dependency` has the default severity `error`. So the CI step fails in the same situation as before.
+
+2. Replace each other madge command with the command of the table. For `madge --depends`, the `Imported by` list of the trace gives the importers of a file:
+
+   ```bash
+   npx fallow dead-code --trace-file src/services/catalog.ts
+   ```
+
+   ```text
+     Imports from (1):
+       <- src/services/orders.ts
+
+     Imported by (1):
+       -> src/services/orders.ts
+   ```
+
+   `orders.ts` is in both lists, because the two files import each other.
 
 ## Check the result
 
-Run `fallow architecture --cycles` on a commit where madge found a cycle. Fallow does not report a cycle of `import type` imports, because such a cycle cannot fail at run time.
+Run `fallow architecture --cycles` on a commit where madge found a cycle. When fallow does not report it, check the kind of the imports first. Fallow does not report a cycle of `import type` imports, because such a cycle cannot fail at run time.
 
 ## What differs
+
+The other differences come from how each tool decides that a file is used, and from the files that each tool reads:
 
 - madge reports an orphan when no module imports it. Fallow reports an unused file when no entry point reaches it. So fallow does not report an entry point that nothing imports, and it reports a group of files that only import each other.
 - Fallow reads JavaScript and TypeScript, and the imports of Vue, Svelte, Astro, MDX and HTML files. See [File types](/guides/file-types).
@@ -54,6 +85,6 @@ You can run both tools in CI until the cycle lists agree, then remove madge. To 
 
 ## Related
 
-- [Architecture](/analysis/architecture): cycles and boundaries.
+- [Architecture](/analysis/architecture): read it next to break a cycle, or to add layer rules to the same check.
 - [`fallow viz`](/cli/viz): draw the import graph.
 - [`fallow trace`](/cli/trace): follow one import chain.

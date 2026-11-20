@@ -6,7 +6,7 @@ keywords: ["jscpd", "migration", "duplication", "config conversion", "migrate fr
 icon: "right-left"
 ---
 
-`fallow migrate` reads your jscpd config and writes the `duplicates` section of a fallow [config file](/configuration/overview). `fallow dupes` then finds the duplicated code. [Duplication](/analysis/duplication) explains how fallow compares code.
+Your project has a jscpd config with a threshold, a minimum size for a copy, and a list of ignored files. Your CI fails when the share of duplicated code goes above the threshold. `fallow migrate` reads that config and writes the same limits into the `duplicates` section of a fallow [config file](/configuration/overview). Then `fallow dupes` fails at the same threshold. [Duplication](/analysis/duplication) explains how fallow compares code.
 
 ## Before you start
 
@@ -14,6 +14,8 @@ icon: "right-left"
 - No fallow config file in the project. `fallow migrate` does not overwrite one.
 
 ## What maps to what
+
+Most jscpd options have a fallow key with the same name. The options that change how code is compared go to `duplicates.normalization`:
 
 | jscpd | fallow |
 |:--|:--|
@@ -31,19 +33,17 @@ icon: "right-left"
 
 ## Steps
 
+The steps use the demo project of these docs, with this `.jscpd.json` in the project root:
+
+```json
+{ "threshold": 5, "minTokens": 60, "minLines": 6, "mode": "weak", "ignore": ["**/*.generated.ts"], "ignoreIdentifiers": true, "format": ["typescript"] }
+```
+
 1. Preview the config. The command writes no file:
 
    ```bash
    npx fallow migrate --dry-run
    ```
-
-   For this `.jscpd.json`:
-
-   ```json
-   { "threshold": 5, "minTokens": 60, "minLines": 6, "mode": "weak", "ignore": ["**/*.generated.ts"], "ignoreIdentifiers": true, "format": ["typescript"] }
-   ```
-
-   the output is:
 
    ```text
    {
@@ -72,6 +72,8 @@ icon: "right-left"
      [jscpd] `format`: fallow auto-detects JS/TS files
    ```
 
+   The config has `mode: "weak"` and no `ignoreLiterals`, so the migration adds `ignoreStringValues: false`. [What differs](#what-differs) gives the reason.
+
 2. Write the config file:
 
    ```bash
@@ -86,9 +88,26 @@ icon: "right-left"
    npx fallow dupes
    ```
 
+   ```text
+   ● Duplicates (2 clone groups)
+
+        17 lines  2 instances  spread 2  dup:ca69f412
+       src/reports/export.ts:3-19
+       src/utils/summary.ts:7-23
+
+        17 lines  2 instances  dup:06de2df9
+       src/reports/invoice.ts:4-20
+       src/reports/receipt.ts:4-20
+
+   ✗ 68 lines (40.7%) duplicated across 4 files (0.02s)
+   Duplication (40.7%) exceeds threshold (5.0%)
+   ```
+
+   The migrated `threshold` of 5 percent makes the run fail. `invoice.ts` and `receipt.ts` use other names for the same code, and the migrated `ignoreIdentifiers` lets fallow match them. With these settings, the group of `export.ts` and `summary.ts` gets another [handle](/analysis/duplication) than in a run with the default settings.
+
 ## Check the result
 
-Compare the clone groups of fallow with the result of jscpd. The fallow modes `strict` and `mild` (the default) give the same result, because fallow compares parsed code. To also match copies with other names, try the `semantic` mode:
+Compare the clone groups of fallow with the result of jscpd on the same commit. The warning about `mode` tells you to try a second mode. The fallow modes `strict` and `mild` (the default) give the same result, because fallow compares parsed code. To also match copies with other names, try the `semantic` mode:
 
 ```bash
 npx fallow dupes --mode semantic
@@ -106,6 +125,6 @@ npx fallow dupes --mode semantic
 
 ## Related
 
+- [Duplication](/analysis/duplication): read it next to decide which copies to merge and which to keep.
 - [`fallow migrate`](/cli/migrate): each option of the command.
-- [Duplication](/analysis/duplication): how fallow finds copies.
 - [`fallow dupes`](/cli/dupes): each option and the output.

@@ -6,15 +6,17 @@ keywords: ["auto-fix", "fallow fix", "remove unused exports", "remove unused dep
 icon: "wand-magic-sparkles"
 ---
 
-At the end of this guide, `fallow fix` has removed the unused exports and unused dependencies of your project, and your tests still pass.
+The report of the demo project lists three unused exports in three files and one unused dependency in `package.json`. You can remove each one by hand. In a real project, the list often has hundreds of lines, and each edit is the same small change. At the end of this guide, `fallow fix` has removed the unused exports and unused dependencies of your project, and your tests still pass.
 
 ## Before you start
 
 - Commit or stash your work. Then `git diff` shows only the changes of `fallow fix`, and `git checkout .` undoes them.
 - Run `fallow dead-code` and read the findings. Each change of `fallow fix` comes from one [finding](/concepts/findings).
-- Correct the false positives first. A wrong finding gives a wrong fix. [Fix a false positive](/guides/false-positives) shows how.
+- Correct the false positives first, because a wrong finding gives a wrong fix. [Fix a false positive](/guides/false-positives) shows how.
 
 ## What fallow fix changes
+
+For each fixable finding, `fallow fix` makes the smallest change that removes it:
 
 | Finding | Change |
 |:--|:--|
@@ -28,7 +30,7 @@ At the end of this guide, `fallow fix` has removed the unused exports and unused
 
 An exported enum that the file does not use is an exception: fallow removes the whole declaration. A class member is removed only when the [type-aware analysis](/analysis/type-aware) proves that no code uses it.
 
-The [issue types](/reference/issue-types) reference lists each issue type. Its rule page tells you if the type is fixable.
+The [issue types](/reference/issue-types) reference lists each issue type, and its rule page tells you if the type is fixable.
 
 ## Steps
 
@@ -46,21 +48,23 @@ Would remove `left-pad` from dependencies in package.json
 Dry run complete. No files were modified.
 ```
 
-A dry run changes no file.
+A dry run changes no file, so you can run it again after each change of the config.
 
 ### 2. Review each line
 
-For each line, ask one question: can code that fallow does not see use this name or this package? Examples are a script outside the repository, a test that loads a file by path, or a package that the runtime loads without an import.
+The dry run shows what fallow wants to change. Before you accept it, ask one question for each line: can code that fallow does not see use this name or this package? Examples are a script outside the repository, a test that loads a file by path, or a package that the runtime loads without an import.
 
-When the answer is yes, do not apply the fix. Tell fallow about the use, and run the dry run again. [Trace a finding](/guides/trace-a-finding) shows where fallow looked.
+When the answer is yes, do not apply the fix. Tell fallow about the use, and run the dry run again. [Find why fallow reports a finding](/guides/trace-a-finding) shows where fallow looked.
 
 ### 3. Apply the changes
+
+When each line of the preview is correct, apply the changes:
 
 ```bash
 npx fallow fix
 ```
 
-In a terminal, fallow asks for a confirmation. In a script, CI or an agent, there is no terminal, so add `--yes`:
+In a terminal, fallow asks for a confirmation. A script, a CI job or an agent has no terminal, so add `--yes` there:
 
 ```bash
 npx fallow fix --yes
@@ -74,23 +78,32 @@ Without `--yes`, a run without a terminal stops with exit code 2 and changes no 
 
 ```text
 Error: fix command requires --yes (or --force) in non-interactive environments. Use --dry-run to preview changes first, then pass --yes to confirm.
+  hint: Run `fallow fix --dry-run` and review the preview, then pass --yes to apply the approved changes.
 ```
 
 ### 4. Read the diff
 
+Fallow edited your files, so read each change as you read the change of a colleague:
+
 ```bash
 git diff
 ```
+
+In `src/services/orders.ts`, `cancelOrder` loses its `export` keyword:
 
 ```diff
 -export const cancelOrder = (order: Order): Order => ({ ...order, quantity: 0 });
 +const cancelOrder = (order: Order): Order => ({ ...order, quantity: 0 });
 ```
 
+The [barrel file](/concepts/entry-points) `src/lib/index.ts` stops passing on `formatPercent`, and `src/lib/format.ts` loses the `export` keyword of the same function:
+
 ```diff
 -export { formatPrice, formatPercent } from "./format";
 +export { formatPrice } from "./format";
 ```
+
+In `package.json`, the `left-pad` line is gone:
 
 ```diff
    "dependencies": {
@@ -104,6 +117,8 @@ After the fix, `cancelOrder` is a local function that no code calls. Fallow does
 
 ### 5. Build and test
 
+The diff looks right, and the build and the tests prove it:
+
 ```bash
 npm run build && npm test
 ```
@@ -112,7 +127,7 @@ After a dependency removal, also run `npm install` (or the install command of yo
 
 ## Fix from a script or an agent
 
-A script cannot answer a prompt, and it cannot review prose. Use the JSON output for both steps:
+A script cannot answer a prompt, and it cannot review prose, so it uses the JSON output for both steps:
 
 ```bash
 npx fallow fix --dry-run --format json --quiet
@@ -128,7 +143,7 @@ The script checks the `fixes` array. When it accepts the changes, it runs:
 npx fallow fix --yes --format json --quiet
 ```
 
-In the JSON output of `fallow dead-code`, each finding has an `actions` array. An action with `auto_fixable: true` is a change that `fallow fix` makes. The value can differ between two findings of the same issue type. [`fallow fix`](/cli/fix) describes the output fields.
+A script can also decide before the dry run. In the JSON output of `fallow dead-code`, each finding has an `actions` array. An action with `auto_fixable: true` is a change that `fallow fix` makes. The value can differ between two findings of the same issue type. [`fallow fix`](/cli/fix) describes the output fields.
 
 ## Check the result
 
@@ -149,10 +164,10 @@ npx fallow dead-code
   Packages imported in code but missing from package.json
   https://fallow.tools/docs/explanations/dead-code/#unlisted-dependencies
 
-✗ 1 file · 1 unlisted dependency (0.04s)
+✗ 1 file · 1 unlisted dependency (0.03s)
 ```
 
-The unused exports and the unused dependency are gone. The unused file and the unlisted dependency stay, because `fallow fix` does not change them.
+The unused exports and the unused dependency are gone. The unused file and the unlisted dependency stay, because `fallow fix` does not change them: delete `src/utils/legacy-currency.ts`, and add `uuid` to `package.json`.
 
 ## If it fails
 
@@ -165,6 +180,6 @@ The unused exports and the unused dependency are gone. The unused file and the u
 
 ## Related
 
+- Next: [Suppress a finding](/guides/suppress). Use it for a finding that you keep on purpose.
 - [`fallow fix`](/cli/fix): each option, the JSON output and the exit codes.
-- [Suppress a finding](/guides/suppress): keep a finding on purpose.
 - [Dead code](/analysis/dead-code): what fallow reports and how it decides.

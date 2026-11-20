@@ -6,7 +6,28 @@ keywords: ["MCP", "Model Context Protocol", "fallow-mcp", "MCP server", "Claude 
 icon: "robot"
 ---
 
-Register the fallow MCP server in your agent, so that the agent can call each fallow analysis as a typed tool. The server runs on your machine and talks to the client over stdio.
+Your coding agent asks if it can delete `cancelOrder` from `src/services/orders.ts`. With the fallow MCP server, the agent does not build a shell command for that question. It calls the `trace_export` tool with two typed parameters:
+
+```json
+{ "file": "src/services/orders.ts", "export_name": "cancelOrder" }
+```
+
+The tool runs `fallow dead-code --trace` and returns its JSON, with `"is_used": false` and the reason `No references found, export is unused`. Each fallow analysis is a tool of this kind, and a JSON schema describes the parameters of each tool.
+
+The server runs on your machine, and the client starts it as a child process that talks over stdio:
+
+```mermaid
+flowchart LR
+  client["Agent client"]
+  server["fallow-mcp"]
+  project["Your project"]
+  cloud["Fallow Cloud"]
+  client -->|stdio| server
+  server -->|reads| project
+  server -.->|"cloud tools only"| cloud
+```
+
+Only the `get_cloud_*` tools, and `inspect_target` with `cloud: true`, contact Fallow Cloud. [Errors and limits](#error-handling) says what they send.
 
 An agent with a shell can also run the CLI with `--format json`. Use the MCP server for a client without a shell, or when you want structured tool calls. [Fallow for coding agents](/integrations/agents) compares the parts.
 
@@ -19,23 +40,23 @@ An agent with a shell can also run the CLI with `--format json`. Use the MCP ser
 
 1. Add the server to the config of your client. For Claude Code, create `.mcp.json` in the project root:
 
-```json
-{
-  "mcpServers": {
-    "fallow": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["--no", "fallow-mcp"]
-    }
-  }
-}
-```
+   ```json
+   {
+     "mcpServers": {
+       "fallow": {
+         "type": "stdio",
+         "command": "npx",
+         "args": ["--no", "fallow-mcp"]
+       }
+     }
+   }
+   ```
 
-`npx --no fallow-mcp` starts the launcher from `node_modules/.bin` and downloads nothing. When fallow is a global install, use `"command": "fallow-mcp"` with no `args`.
+   `npx --no fallow-mcp` starts the launcher from `node_modules/.bin` and downloads nothing. When fallow is a global install, use `"command": "fallow-mcp"` with no `args`.
 
 2. Start the agent from the project root, and approve the server when the client asks.
 
-The other clients take the same command in their own format:
+Each other client starts the same command, but it reads the entry from its own file and format:
 
 <Tabs>
   <Tab title="Claude Code (user)">
@@ -75,7 +96,7 @@ The other clients take the same command in their own format:
 
 ## Check the result
 
-Run the launcher with `--version`. The output names the server version:
+First check that the launcher starts. Run it with `--version`, and the output names the server version:
 
 ```bash
 ./node_modules/.bin/fallow-mcp --version
@@ -85,7 +106,7 @@ Run the launcher with `--version`. The output names the server version:
 fallow-mcp 3.44.0
 ```
 
-In the agent, ask for the tools of the `fallow` server. The list has `audit`, `analyze` and the other tools in the [Tools](#tools) table.
+Then, in the agent, ask for the tools of the `fallow` server. The list has `audit`, `analyze`, `trace_export` and the other tools in the [Tools](#tools) table.
 
 ## If it fails
 

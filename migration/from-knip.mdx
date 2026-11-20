@@ -6,7 +6,7 @@ keywords: ["knip", "migration", "config conversion", "migrate from knip", "fallo
 icon: "right-left"
 ---
 
-`fallow migrate` reads your knip config and writes a fallow [config file](/configuration/overview) with the same settings. It warns about each setting that it cannot convert.
+Your project has a knip config with entry patterns, ignore lists and rules that your team tuned over time. You do not want to write those settings again by hand, and you want to know which of them fallow cannot use. `fallow migrate` reads your knip config and writes a fallow [config file](/configuration/overview) with the same settings. It prints a warning for each setting that it cannot convert, so you know what to check by hand.
 
 ## Before you start
 
@@ -16,6 +16,8 @@ icon: "right-left"
 Fallow finds `knip.ts` and `knip.config.ts`, but it cannot read them. Convert such a file to `knip.json` first.
 
 ## What maps to what
+
+Most knip keys have a fallow key with the same name or the same purpose. The table shows where each key goes. Read it now, or come back to it when the migration prints a warning.
 
 | knip | fallow |
 |:--|:--|
@@ -33,26 +35,24 @@ Fallow finds `knip.ts` and `knip.config.ts`, but it cannot read them. Convert su
 
 ## Steps
 
+The steps use the demo project of these docs, with this `knip.json` in the project root:
+
+```json
+{
+  "entry": ["src/index.ts!", "scripts/seed.js"],
+  "project": ["src/**/*.ts"],
+  "ignore": ["src/**/*.generated.ts"],
+  "ignoreDependencies": ["^@types/", "^(react|vue)$"],
+  "rules": { "types": "warn", "binaries": "off" },
+  "vitest": { "config": ["vitest.config.ts"] }
+}
+```
+
 1. Preview the config. The command writes no file:
 
    ```bash
    npx fallow migrate --dry-run
    ```
-
-   For this `knip.json`:
-
-   ```json
-   {
-     "entry": ["src/index.ts!", "scripts/seed.js"],
-     "project": ["src/**/*.ts"],
-     "ignore": ["src/**/*.generated.ts"],
-     "ignoreDependencies": ["^@types/", "^(react|vue)$"],
-     "rules": { "types": "warn", "binaries": "off" },
-     "vitest": { "config": ["vitest.config.ts"] }
-   }
-   ```
-
-   the output is:
 
    ```text
    {
@@ -84,6 +84,8 @@ Fallow finds `knip.ts` and `knip.config.ts`, but it cannot read them. Convert su
      [knip] `vitest`: plugin config `vitest` is auto-detected by fallow's built-in plugins (suggestion: remove this section; fallow detects framework config automatically)
    ```
 
+   `src/index.ts!` has the production marker and `scripts/seed.js` has none, so the seed script goes to `supportEntry`. The regular expression `^@types/` becomes the glob `@types/*`, but no glob matches `^(react|vue)$`, so the migration skips it.
+
 2. Write the config file:
 
    ```bash
@@ -102,9 +104,21 @@ Fallow finds `knip.ts` and `knip.config.ts`, but it cannot read them. Convert su
 
 ## Check the result
 
-Compare the findings of fallow with the findings of knip. The two tools use different glob engines, so `entry` and `ignoreFindings` can match a few other files. Fallow names each `ignoreDependencies` glob that matches no dependency, so a typo shows.
+The new config can be valid and still match other files than before, because the two tools use different glob engines. So fallow helps you check it: after the report, it prints a note for each migrated pattern that had no effect. The demo run ends with these lines:
+
+```text
+  3 entry points detected (2 manual entry, 1 plugin)
+✗ 1 file · 3 exports · 1 unused dependency · 1 unlisted dependency (0.02s)
+Note: ignoreFindings pattern matched no finding this run: src/**/*.generated.ts (patterns are project-root-relative globs; check for typos).
+Note: ignoreDependencies glob matched no declared dependency this run: @types/* (globs match package names such as @scope/*; check for typos).
+Note: entry pattern matched only files that are entry points anyway: src/index.ts (remove from the config).
+```
+
+The demo has no generated files and no `@types` packages, so the first two notes are correct, and a typo shows in the same way. Then compare the findings of fallow with the findings of knip on the same commit.
 
 ## What differs
+
+A difference in the findings has one of these causes:
 
 - knip `ignore` also hides dependency findings by file path. Fallow `ignoreFindings` never hides findings that belong to `package.json`, such as unused dependencies.
 - Fallow has more issue types, such as duplicate exports and [stale suppressions](/rules/stale-suppression). A finding that knip did not report can be correct.
@@ -118,6 +132,6 @@ To start on a project with many findings, save a [baseline](/guides/baselines), 
 
 ## Related
 
+- [Adopt fallow](/guides/adopt): read it next to plan the first cleanup and the CI check.
 - [`fallow migrate`](/cli/migrate): each option of the command.
 - [Dead code](/analysis/dead-code): how fallow finds unused code.
-- [Adopt fallow](/guides/adopt): start on an existing project.

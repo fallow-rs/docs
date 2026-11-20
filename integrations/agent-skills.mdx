@@ -6,18 +6,23 @@ keywords: ["agent skills", "skills", "SKILL.md", "Claude Code", "Codex", "Cursor
 icon: "wand-magic-sparkles"
 ---
 
-Install the fallow skills, so that your coding agent runs the right fallow command for a task and reads the output correctly.
+Your coding agent can run any command, but it does not know the options of fallow or the rules for its output. Ask it to clean up the demo project, and it can run `fallow fix` in its shell. That shell has no terminal, so fallow refuses to change files and exits with code 2:
 
-A **skill** is a folder with a `SKILL.md` file and reference files. The agent reads the description of each skill, and loads the skill when a task matches. The fallow skills follow the open [Agent Skills](https://agentskills.io) format, so each agent that reads this format can use them.
+```text
+Error: fix command requires --yes (or --force) in non-interactive environments. Use --dry-run to preview changes first, then pass --yes to apply the approved changes.
+  hint: Run `fallow fix --dry-run` and review the preview, then pass --yes to apply the approved changes.
+```
+
+The `fallow` skill gives the agent this rule before it runs the command: preview with `--dry-run`, then apply with `--yes`. A **skill** is a folder with a `SKILL.md` file and reference files. The agent reads the description of each skill, and loads the skill when a task matches. The fallow skills follow the open [Agent Skills](https://agentskills.io) format, so each agent that reads this format can use them.
 
 ## Before you start
 
-- Add fallow to the project: `npm install --save-dev fallow`. The skills run the CLI.
-- Read [Fallow for coding agents](/integrations/agents). It recommends `npx fallow agent install`, which installs the skills together with the other parts.
+- Add fallow to the project: `npm install --save-dev fallow`. The skills run the CLI, so the agent uses the fallow version of your team.
+- Read [Fallow for coding agents](/integrations/agents). It recommends `npx fallow agent install`, which installs the skills together with the MCP server and the commit gate.
 
 ## Install the skills
 
-Use one of these ways. Each way installs the `fallow` skill.
+The skills come from two sources. The fallow package holds two skills, and the fallow-skills repository holds a plugin with more skills. Pick the way that fits your agent. Each way installs the `fallow` skill.
 
 | Way | Command | Skills |
 |:--|:--|:--|
@@ -27,20 +32,22 @@ Use one of these ways. Each way installs the `fallow` skill.
 | Another agent | `npx skills add fallow-rs/fallow-skills`, or `npx skills add fallow-rs/fallow-skills --agent <name>` | All skills in the table below |
 | Gemini CLI | `gemini skills install https://github.com/fallow-rs/fallow-skills.git` | All skills in the table below |
 
-`fallow agent install` copies the skills from the fallow binary into the project. Claude Code reads them from `.claude/skills/`, and Codex and Cursor read them from `.agents/skills/`. Commit these folders, so that each team member gets the same skills. Remove `--without mcp --without hooks` to also install the MCP server and the [commit gate](/integrations/claude-hooks), a hook that runs `fallow audit` before the agent commits.
+`fallow agent install` writes the skills into the project. Claude Code reads them from `.claude/skills/`, and Codex and Cursor read them from `.agents/skills/`. When the project has `node_modules/fallow`, each skill is a small file that points to the same skill in that package. Without it, fallow writes the copy that its binary holds. The command also writes `AGENTS.md` with the fallow task map, and a `CLAUDE.md` that imports it.
 
-The [fallow-skills](https://github.com/fallow-rs/fallow-skills) repository holds the plugin, with more skills than the fallow package.
+Commit these files, so that each team member gets the same skills. Remove `--without mcp --without hooks` to also install the MCP server and the [commit gate](/integrations/claude-hooks), a hook that runs `fallow audit` before the agent commits.
 
 ## Keep the skills current
 
-The skills describe the options of one fallow version.
+A skill describes the options of one fallow version, so an update of fallow can make it wrong. How you update it depends on where it came from:
 
-- A project copy comes from the fallow binary that wrote it. After an update of fallow, run `npx fallow agent install` again. `npx fallow agent status` shows a copy from an older fallow as `stale`.
+- A skill in the project names the fallow version that wrote it. `npx fallow agent status` shows a skill from another fallow version as `stale`. After an update of fallow, run `npx fallow agent install` again.
 - A plugin follows the releases of the fallow-skills repository. Update the plugin with the plugin manager of your agent.
 
 `fallow agent install` replaces only the files that it wrote. To replace a skill that fallow did not write, add `--force`.
 
 ## The skills
+
+The fallow package holds the first two skills of this table. The [fallow-skills](https://github.com/fallow-rs/fallow-skills) plugin holds all of them:
 
 | Skill | Source | What it does |
 |:--|:--|:--|
@@ -52,24 +59,27 @@ The skills describe the options of one fallow version.
 | `cargo-fallow` | plugin | Runs `cargo fallow` on a Rust workspace. |
 | `fallow-codex-onboarding` | plugin | Sets up the Fallow app in Codex after the install. |
 
-The `fallow` skill has reference files for the CLI, the MCP tools, the issue types and common mistakes. The agent reads them only when the task needs them.
+The `fallow` skill keeps its details in reference files, for example for the CLI, the MCP tools, the issue types and common mistakes. The agent reads a reference file only when the task needs it.
 
 ## Check the result
 
-Ask the agent for a task that the skill covers, for example "find the unused exports in this project". The agent then runs a `fallow` command with `--format json`.
-
-For a project copy, run `npx fallow agent status`:
+Run `npx fallow agent status` in the project. These are the skill rows after the install in the demo project:
 
 ```text
-  .claude/skills/fallow                     absent      skill (claude)
-  .claude/skills/fallow-setup               absent      skill (claude)
+  .agents/skills/fallow                     installed   skill             embedded skill from fallow 3.45.0
+  .agents/skills/fallow-setup               installed   skill             embedded skill from fallow 3.45.0
+  .claude/skills/fallow                     installed   skill (claude)    embedded skill from fallow 3.45.0
+  .claude/skills/fallow-setup               installed   skill (claude)    embedded skill from fallow 3.45.0
 ```
 
-`absent` means that the install did not write the skill. After the install, the state is `installed`.
+The demo project has no `node_modules/fallow` package, so each skill is a copy (`embedded`). With fallow in `node_modules`, the last column says `pointer`. A row with `absent` is a skill that the install did not write.
+
+Then ask the agent for a task that the skill covers, for example "find the unused exports in this project". The agent runs a `fallow` command with `--format json`.
 
 ## If it fails
 
 - **The agent does not use the skill.** Start a new session after the install, and name fallow in the request.
+- **The agent runs `fallow fix` and gets exit code 2.** The agent did not follow the skill. Start a new session, and ask the agent to use the `fallow` skill.
 - **The agent uses options that do not exist.** The skill is from an older fallow. Run `npx fallow agent install` again, or update the plugin.
 
 ## Related

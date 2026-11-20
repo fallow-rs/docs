@@ -6,11 +6,57 @@ keywords: ["React", "Next.js", "React Server Components", "App Router", "use cli
 icon: "atom"
 ---
 
-Fallow reads the whole project, so it finds React and Next.js problems that span files: a `"use client"` file that exports a server-only name, two route files with one URL, a prop that goes through a chain of components, or a server action that no code calls. This page lists these issue types. The rule page of each issue type has the example, the fix and the facts.
+In a Next.js app, no file imports a page. Next.js loads each `page.tsx` from its place in the `app/` folder, so fallow needs the Next.js [plugin](/concepts/plugins) to know that the page is in use. With the plugin, fallow also finds mistakes that Next.js reports only in the build or at run time.
+
+To see both, add `next` to the dependencies of the demo project, and add this page:
+
+```tsx
+// app/orders/page.tsx
+"use client";
+
+import { formatPrice } from "../../src/lib";
+
+export const metadata = { title: "Orders" };
+export const pageSize = 20;
+
+export default function OrdersPage() {
+  return <p>{formatPrice(1999)}</p>;
+}
+```
+
+Without `next` in `package.json`, no plugin knows the page, and `fallow dead-code --unused-files` reports it:
+
+```text
+● Unused files (2)
+  app/orders/page.tsx
+  src/utils/legacy-currency.ts
+```
+
+With `next`, the plugin makes the page an [entry point](/concepts/entry-points), and the default export counts as used. The plugin also knows which other exports Next.js reads from a page, so fallow checks the rest:
+
+```text
+  4 entry points detected (2 package.json, 2 plugin)
+
+● Unused exports (4)
+  app/orders/page.tsx
+    :7 pageSize
+
+● Invalid client exports (1)
+  app/orders/page.tsx
+    :6 metadata (from "use client")
+  Server-only or route-config exports in a "use client" file (Next.js rejects
+  this at build time)
+```
+
+Next.js does not read `pageSize`, and no file imports it, so it is an unused export. `metadata` is a name that only a server file can export, so the build fails on this page.
+
+Fallow reads the whole project, so it also finds React and Next.js problems that span files. Examples are two route files with one URL, a prop that goes through a chain of components, or a server action that no code calls. The sections below list these issue types. The rule page of each issue type has the example, the fix and the facts.
 
 Each issue type runs only when the project declares the package that it needs. In a project without React or Next.js, these issue types report nothing.
 
 ## Server Components directives {#server-components-directives}
+
+The `"use client"` and `"use server"` lines tell the bundler where a file runs. These issue types check how the files use these lines:
 
 | Issue type | Finding | Runs when the project declares |
 |:--|:--|:--|
@@ -23,6 +69,8 @@ An unused export of a `"use server"` file is an `unused-server-action` finding, 
 
 ## App Router routes {#app-router-routes}
 
+The directives decide where code runs. The App Router also decides which file answers a URL, and two issue types check that each URL has one clear answer:
+
 | Issue type | Finding | Default severity |
 |:--|:--|:--|
 | [`route-collision`](/rules/route-collision) | Two or more route files resolve to the same URL. The build fails and names only one file. Fallow lists each file. | `error` |
@@ -32,7 +80,7 @@ Both issue types run when the project declares `next`. Fallow checks each app se
 
 ## Components {#components}
 
-For React and Preact components, these issue types run when the project declares `react`, `react-dom`, `next` or `preact`. `unused-component-prop` also checks Vue and Svelte components, and `absent-component-prop` checks the components of more frameworks. Their rule pages list each framework.
+The checks above look at files and routes. The next issue types look inside the components, at the props that flow between them. For React and Preact components, they run when the project declares `react`, `react-dom`, `next` or `preact`. `unused-component-prop` also checks Vue and Svelte components, and `absent-component-prop` checks the components of more frameworks. Their rule pages list each framework.
 
 | Issue type | Finding | Default severity |
 |:--|:--|:--|
@@ -42,7 +90,7 @@ For React and Preact components, these issue types run when the project declares
 | [`thin-wrapper`](/rules/thin-wrapper) | A component only renders one other component with all of its props. | `off` |
 | [`duplicate-prop-shape`](/rules/duplicate-prop-shape) | Three or more components in two or more files declare the same prop names. | `off` |
 
-To turn on the issue types that are `off`, set them in your config file:
+Four of these issue types are `off` by default. To turn one on, set it in your config file:
 
 ```jsonc
 // .fallowrc.json
@@ -59,17 +107,17 @@ When `prop-drilling` is on, each chain also costs one point of the [health score
 
 ## What fallow counts as used {#what-counts-as-used}
 
-The [plugins](/concepts/plugins) of fallow know how each router reaches code, so fallow does not report these files and exports as unused:
+The example at the top showed one convention: Next.js loads a page by its path. The [plugins](/concepts/plugins) of fallow know how each router reaches code, so fallow does not report these files and exports as unused:
 
 - Next.js App Router: the convention files (`page`, `layout`, `loading`, `error`, `route` and the metadata files), the route segment config, `middleware`, `proxy` and `instrumentation`.
 - Next.js Pages Router: each file under `pages/`, and the data functions that Next.js calls by name, such as `getStaticProps`.
 - Server actions: an `action={fn}` binding, a `<form action={fn}>`, an import and call, a prop that passes the action on, and a wrapped action factory.
 - React Router, Remix and TanStack Router: the route modules of each router.
 
-[Built-in plugins](/frameworks/built-in) lists the packages that turn each plugin on. When fallow misses a convention of your project, add the file to [`entry`](/reference/config-files#entry), or write a [custom plugin](/guides/custom-plugins).
+When fallow reports a file that your router loads, first check that `fallow list --plugins` shows the plugin. [Built-in plugins](/frameworks/built-in) names the packages that turn each plugin on. When fallow misses a convention of your project, add the file to [`entry`](/reference/config-files#entry), or write a [custom plugin](/guides/custom-plugins).
 
 ## Related
 
-- [Dead code issue types](/explanations/dead-code): the meaning of each finding.
-- [Built-in plugins](/frameworks/built-in): the packages that turn each plugin on.
+- [Built-in plugins](/frameworks/built-in): check that the plugin of your router is on.
+- [Dead code and architecture issue types](/explanations/dead-code): the meaning of each finding.
 - [Issue types](/reference/issue-types): each issue type of each command.

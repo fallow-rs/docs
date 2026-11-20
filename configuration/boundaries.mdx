@@ -6,7 +6,9 @@ keywords: ["boundaries", "zones", "boundary rules", "presets", "layered", "hexag
 icon: "layer-group"
 ---
 
-The `boundaries` key of the [config file](/configuration/overview) sets which parts of the code may import which other parts. [Architecture](/analysis/architecture) explains the analysis and how to act on a finding.
+Your team agreed on an architecture: the report code and the service code use the shared helpers, and they do not use each other. Nothing in the build stops a new import that breaks the agreement, so the layers slowly grow together. The `boundaries` key of the [config file](/configuration/overview) writes the agreement down, and fallow checks each import against it. [Architecture](/analysis/architecture) explains the analysis and how to act on a finding.
+
+In the demo project, this config gives the three parts of `src` a zone each:
 
 ```jsonc
 // .fallowrc.json
@@ -34,11 +36,11 @@ The `boundaries` key of the [config file](/configuration/overview) sets which pa
   src/reports/receipt.ts:1 → src/services/orders.ts (reports → services)
 ```
 
-The [`boundaries` reference](/reference/config-architecture#boundaries) has the type of each key.
+Both invoice and receipt code import from `src/services/orders.ts`, and no rule allows `reports` to import `services`. [Type-only imports](#type-only-imports-across-boundaries) shows how to accept these two imports. The [`boundaries` reference](/reference/config-architecture#boundaries) has the type of each key.
 
 ## Zones {#zones}
 
-A zone is a named set of files. Each entry of `zones` has these keys:
+Each rule names zones, so the zones come first. A zone is a named set of files. Each entry of `zones` has these keys:
 
 | Key | Content |
 |:--|:--|
@@ -74,7 +76,7 @@ An import from `apps/web` into `packages/ui/src/internal/x.ts` is then a finding
 
 ## Rules {#rules}
 
-Each entry of `rules` restricts one zone:
+With the zones in place, the rules say which imports between them are allowed. Each entry of `rules` restricts one zone:
 
 | Key | Content |
 |:--|:--|
@@ -90,7 +92,14 @@ Each entry of `rules` restricts one zone:
 
 ## Type-only imports {#type-only-imports-across-boundaries}
 
-`allowTypeOnly` allows imports of types from a zone that is not in `allow`. TypeScript removes these imports, so they add no runtime dependency.
+The two findings at the top of this page come from the same first line in `invoice.ts` and `receipt.ts`: `import type { Order } from "../services/orders"`. The report code needs the shape of an order, and it does not call the services. `allowTypeOnly` allows imports of types from a zone that is not in `allow`. TypeScript removes these imports, so they add no runtime dependency.
+
+```jsonc
+// .fallowrc.json, in "rules"
+{ "from": "reports", "allow": ["shared"], "allowTypeOnly": ["services"] }
+```
+
+With this rule, `fallow architecture` reports no finding in the demo project. An import of a value from `services`, such as a function call, is still a finding:
 
 | Allowed by `allowTypeOnly` | Not allowed |
 |:--|:--|
@@ -103,7 +112,7 @@ A type-only import is allowed when its target zone is in `allow` or in `allowTyp
 
 ## Public entry files {#public-entry-files}
 
-`publicFiles` lists the files of a zone that other zones may import, for example an `index.ts`:
+A rule allows a zone, but it does not say which files of that zone are the public interface. Without that limit, another zone can import an internal file, and a change to that file breaks code far away. `publicFiles` lists the files of a zone that other zones may import, for example an `index.ts`:
 
 ```jsonc
 // .fallowrc.json
@@ -127,7 +136,7 @@ A type-only import is allowed when its target zone is in `allow` or in `allowTyp
 
 ## Auto-discovered zones {#auto-discovered-zones}
 
-`autoDiscover` makes each child directory its own zone, named `<zone>/<directory>`:
+A project with many features needs one zone for each feature, and a new feature must not need a config change. `autoDiscover` makes each child directory its own zone, named `<zone>/<directory>`:
 
 ```jsonc
 // .fallowrc.json
@@ -150,7 +159,7 @@ With `src/features/auth` and `src/features/billing`, the zones are `features/aut
 
 ## Presets {#presets}
 
-`preset` gives a set of zones and rules for a common architecture:
+When your project follows a known architecture, you do not need to write each zone. `preset` gives a set of zones and rules for a common architecture:
 
 ```jsonc
 // .fallowrc.json
@@ -168,7 +177,7 @@ A preset zone has the pattern `<root>/<zone>/**`. The `shared` zone of `bulletpr
 
 ## Merge a preset with your zones {#merging-presets-with-custom-config}
 
-You can set `preset` together with `zones` and `rules`:
+A preset rarely matches the folders of a real project in each detail. You can set `preset` together with `zones` and `rules`:
 
 - A zone with the name of a preset zone replaces the preset zone. It takes the place of your zone in the list.
 - A rule with the `from` of a preset rule replaces the preset rule.
@@ -188,7 +197,7 @@ This config keeps `adapters`, `ports` and the three rules, and puts the `domain`
 
 ## Zone coverage {#boundary-coverage}
 
-`coverage` reports the files that are in no zone:
+A file in no zone has no restrictions (see [Zones](#zones)), so a new folder outside each zone escapes the check. `coverage` reports the files that are in no zone:
 
 | Key | Content |
 |:--|:--|
@@ -207,7 +216,7 @@ This config keeps `adapters`, `ports` and the three rules, and puts the `domain`
 
 ## Forbidden calls {#forbidden-calls}
 
-`calls.forbidden` bans calls in the files of a zone:
+An import rule cannot stop a call to a global, such as `process.exit`, because the code imports nothing. `calls.forbidden` bans calls in the files of a zone:
 
 ```jsonc
 // .fallowrc.json
@@ -239,7 +248,7 @@ The import findings, the coverage findings and the call findings all use the `bo
 
 ## Check the config {#inspect}
 
-`fallow list --boundaries` prints the zones after preset expansion and merge, with the number of files in each zone:
+A zone with a wrong pattern holds the wrong files, and its rules then check the wrong imports. Before you trust the findings, check the zones. `fallow list --boundaries` prints the zones after preset expansion and merge, with the number of files in each zone. For the demo config at the top of this page:
 
 ```text
 Boundaries: 3 zones, 3 rules
@@ -259,7 +268,7 @@ Add `--format json` for the same data as JSON. See [JSON output](/reference/json
 
 ## Accepted cycles {#accepted-cycles}
 
-`circularDependencies.allow` lists [circular dependencies](/rules/circular-dependency) that you accept. Each entry is the list of files of one cycle, in import order, relative to the project root:
+The last two keys are not part of `boundaries`, but they also accept a structure that you keep on purpose. `circularDependencies.allow` lists [circular dependencies](/rules/circular-dependency) that you accept. Each entry is the list of files of one cycle, in import order, relative to the project root:
 
 ```jsonc
 // .fallowrc.json
@@ -279,6 +288,6 @@ The entry accepts only the cycle with these files in this order. The cycle can s
 
 ## Related
 
-- [Architecture](/analysis/architecture): what boundary findings mean and how to fix them.
+- Next: [Architecture](/analysis/architecture). Read it to decide what to do with each boundary finding.
 - [`fallow architecture`](/cli/architecture): the options and output of the command.
 - [Boundaries reference](/reference/config-architecture#boundaries): the type of each key.

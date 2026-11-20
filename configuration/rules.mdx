@@ -6,7 +6,7 @@ keywords: ["rules", "severity", "error", "warn", "off", "overrides", "fallow rul
 icon: "scale-balanced"
 ---
 
-The `rules` object of the [config file](/configuration/overview) sets the severity of each issue type. [Findings](/concepts/findings#rules-and-severities) defines rules, severities and gates.
+In the demo project, `fallow dead-code` finds an unused file, three unused exports and two dependency problems, and it exits with code 1. Your team can agree with each finding and still want to remove the exports next month, without a red CI job until then. The `rules` object of the [config file](/configuration/overview) sets the severity of each issue type, so you decide which findings fail a run. [Findings](/concepts/findings#rules-and-severities) defines rules, severities and gates.
 
 ## The `rules` object
 
@@ -41,13 +41,19 @@ private-type-leaks = "warn"
 
 A rule that you do not set keeps its default. An unknown rule name gives a warning on stderr, and fallow ignores the entry.
 
+Set each of the four rules of the demo findings to `warn`, and `fallow dead-code` still lists each finding. The summary line starts with `⚠` instead of `✗`, and the command exits with code 0:
+
+```text
+⚠ 1 file · 3 exports · 1 unused dependency · 1 unlisted dependency (0.02s)
+```
+
 ## Rule names {#available-rule-names}
 
-The rule name is the plural form of the issue type in most cases, for example `unused-exports` for the issue type `unused-export`. Most rules also accept the other form as an alias, for example `circular-dependency` for `circular-dependencies`. The page of each issue type gives its key in the row "Config key in `rules`". [Issue types](/reference/issue-types) lists each issue type with its default severity. The [`rules` reference](/reference/config-rules#rules) lists each key.
+To set a rule, you need its name. The rule name is the plural form of the issue type in most cases, for example `unused-exports` for the issue type `unused-export`. Most rules also accept the other form as an alias, for example `circular-dependency` for `circular-dependencies`. The page of each issue type gives its key in the row "Config key in `rules`". [Issue types](/reference/issue-types) lists each issue type with its default severity. The [`rules` reference](/reference/config-rules#rules) lists each key.
 
 ## Defaults
 
-A rule defaults to `error` unless it is in one of these groups:
+Before you change a rule, know where it starts. A rule defaults to `error` unless it is in one of these groups:
 
 - `off`: the checks that you turn on yourself. Examples are `private-type-leaks`, `deprecated-exports-in-use`, `unused-protected-class-members`, `absent-component-props`, `constant-parameters`, `prop-drilling`, `thin-wrapper`, `duplicate-prop-shape`, `coverage-gaps`, `feature-flags`, `require-suppression-reason`, `security-sink`, `security-client-server-leak`, `diverged-clone-sibling` and `added-dependency`.
 - `warn`: these groups of rules.
@@ -62,24 +68,38 @@ To see the severity of each rule for your project, run `fallow config`. The `rul
 
 ## Overrides {#overrides}
 
-`overrides` sets other severities for the files that its globs match. The globs follow the [glob rules](/configuration/overview#path-globs).
+A severity in `rules` applies to the whole project, but one part of the code can need another one. `overrides` sets other severities for the files that its globs match. The globs follow the [glob rules](/configuration/overview#path-globs).
+
+In this config for the demo project, unused exports only warn. The rule is off in `src/lib`, but `src/lib/format.ts` must stay clean:
 
 ```jsonc
 // .fallowrc.json
 {
-  "rules": { "unused-exports": "error" },
+  "rules": { "unused-exports": "warn" },
   "overrides": [
-    {
-      "files": ["**/*.test.ts", "src/generated/**"],
-      "rules": { "unused-exports": "off" }
-    },
-    {
-      "files": ["src/legacy/**"],
-      "rules": { "complexity-cyclomatic": "warn" }
-    }
+    { "files": ["src/lib/**"], "rules": { "unused-exports": "off" } },
+    { "files": ["src/lib/format.ts"], "rules": { "unused-exports": "error" } }
   ]
 }
 ```
+
+```bash
+npx fallow dead-code --unused-exports
+```
+
+```text
+● Unused exports (2)
+  src/lib/format.ts
+    :3 formatPercent
+  src/services/orders.ts
+    :18 cancelOrder
+  Exported symbols with no known consumers
+  https://fallow.tools/docs/explanations/dead-code/#unused-exports
+
+✗ 2 exports (0.03s)
+```
+
+The re-export in `src/lib/index.ts` is gone, because the first entry turns the rule off in `src/lib`. `formatPercent` stays, at `error`, so the run fails. `cancelOrder` keeps the top-level `warn`.
 
 - Fallow applies the entries in list order. When two entries match a file and set the same rule, the later entry wins.
 - An override cannot start a check that the top-level `rules` turns off. Set the rule on at the top level, then set it to `off` for the other files.
@@ -89,7 +109,7 @@ Fallow reports an override entry that has no effect as an [override rule with no
 
 ## Production mode
 
-[Production mode](/concepts/production-mode) changes some dependency rules:
+The same config can give other results in [production mode](/concepts/production-mode), because a development dependency does not ship. Production mode changes some dependency rules:
 
 - `unused-dev-dependencies` and `unused-optional-dependencies` are `off`.
 - Fallow reports `type-only-dependencies` (default `warn`) only in production mode.
@@ -97,7 +117,7 @@ Fallow reports an override entry that has no effect as an [override rule with no
 
 ## Complexity rules {#complexity-rules}
 
-The health limits, for example `health.maxCyclomatic`, decide if a function has a complexity finding. The rules `complexity-cyclomatic`, `complexity-cognitive`, `complexity-crap` and `complexity-file-lines` decide if that finding fails the run.
+Complexity findings use two settings with different jobs. The health limits, for example `health.maxCyclomatic`, decide if a function has a complexity finding. The rules `complexity-cyclomatic`, `complexity-cognitive`, `complexity-crap` and `complexity-file-lines` decide if that finding fails the run.
 
 - A rule at `warn` keeps the finding in the report. `fallow health` then exits with code 0, and the verdict of `fallow audit` is `warn`.
 - A rule at `off` removes the finding from the report.
@@ -108,7 +128,7 @@ After you set a complexity rule to `off`, save the health baseline again. Its en
 
 ## Change the result for one run
 
-The config file stays the same for these options:
+A CI job or a local check can need a stricter or a narrower run than the config file sets. The config file stays the same for these options:
 
 - `--fail-on-issues` makes a `warn` finding fail the run too. `--ci` includes it. `fallow audit` ignores it and keeps its own verdict.
 - An issue type filter, such as `--unused-deps`, does not turn on a rule that is `off`. Fallow then adds a [requested rule that is off](/configuration/overview#requested-rules-that-are-off) warning.
@@ -118,7 +138,7 @@ The config file stays the same for these options:
 
 ## Levels in CI formats {#levels-in-ci-formats}
 
-The CI formats take the level of a finding from its rule severity, also from an `overrides` entry. A complexity finding takes its level from its `complexity-*` rule, not from its band.
+A severity also decides how a finding looks in a pull request. The CI formats take the level of a finding from its rule severity, also from an `overrides` entry. A complexity finding takes its level from its `complexity-*` rule, not from its band.
 
 | Rule severity | `github-annotations` | SARIF | CodeClimate |
 |:--|:--|:--|:--|
@@ -127,6 +147,6 @@ The CI formats take the level of a finding from its rule severity, also from an 
 
 ## Related
 
+- Next: [Suppression comments](/configuration/suppression). Use a comment when you keep one finding and want the rule to stay on.
 - [Findings](/concepts/findings): rules, severities and gates.
 - [Issue types](/reference/issue-types): each issue type with its default severity.
-- [Suppression](/configuration/suppression): keep one finding, and keep the rule on.

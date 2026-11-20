@@ -6,17 +6,25 @@ keywords: ["workspaces", "monorepo", "pnpm workspaces", "--workspace", "--change
 icon: "folder-tree"
 ---
 
-This page lists the options and config keys for a monorepo. [Workspaces](/concepts/workspaces) explains how fallow finds the packages and follows imports between them. [Analyze a monorepo](/guides/monorepo) shows the steps.
+A monorepo needs settings that a single package does not. One team wants the report of its own package only. A folder such as `tools/codegen` has a `package.json`, but no workspace pattern declares it, so its files show as unused. A library package has exports that only other repositories import. The examples below use the small monorepo of [Workspaces](/concepts/workspaces), which explains how fallow finds the packages and follows imports between them. [Analyze a monorepo](/guides/monorepo) shows the steps of a first run.
 
-To see the packages that fallow found, run:
+Start with the packages that fallow found:
 
 ```bash
 npx fallow workspaces
 ```
 
+```text
+Discovered 2 workspaces
+  @acme/ui -> packages/ui (internal dep)
+  @acme/web -> packages/web
+1 workspace discovery diagnostic:
+  - Directory 'tools/codegen' contains package.json but is not declared as a workspace. Add it to package.json workspaces or pnpm-workspace.yaml, or add it to ignorePatterns.
+```
+
 ## Scope a run to packages
 
-These options limit the report to some [workspaces](/concepts/workspaces). Fallow still analyzes each package, so an export that another package uses stays used.
+These options limit the report to some [workspaces](/concepts/workspaces). Fallow still analyzes each package, so an export that another package uses stays used. In the example monorepo, `fallow dead-code -w packages/web` reports only the unused `left-pad` dependency of `packages/web`, and leaves out `packages/ui/src/old-card.ts`.
 
 | Option | Effect |
 |:--|:--|
@@ -36,6 +44,8 @@ Put a pattern with `!` or `*` in quotes, so that your shell does not change it. 
 
 ## Config keys
 
+An option changes one run. A setting that must apply to each run, for each person and each CI job, goes in the config file:
+
 | Key | Use |
 |:--|:--|
 | [`workspaces.patterns`](/reference/config-workspaces#workspaces-patterns) | Add packages that the package manager does not declare. |
@@ -48,22 +58,29 @@ Fallow loads one config file for each run. It looks in the project root and then
 
 ## Additional workspace patterns {#additional-workspace-patterns}
 
-Fallow reads the workspace patterns of `package.json`, `pnpm-workspace.yaml`, a root `deno.json` and the `references` of `tsconfig.json`. Add the packages that none of these files declare:
+Fallow reads the workspace patterns of `package.json`, `pnpm-workspace.yaml`, a root `deno.json` and the `references` of `tsconfig.json`. In the example, none of them declares `tools/codegen`, so `fallow dead-code` reports `tools/codegen/index.js` as an unused file. Add the packages that none of these files declare:
 
 ```jsonc
 // .fallowrc.json
 {
   "workspaces": {
-    "patterns": ["tools/*", "shared/*"]
+    "patterns": ["tools/*"]
   }
 }
 ```
 
-A package that a pattern finds is a full workspace. It gets its own plugins, entry points and dependency checks. `--workspace`, `--changed-workspaces`, `--group-by package` and `fallow workspaces` use it too.
+```text
+Discovered 3 workspaces
+  @acme/ui -> packages/ui (internal dep)
+  @acme/web -> packages/web
+  @acme/codegen -> tools/codegen
+```
+
+With the pattern, the `main` file of `tools/codegen/package.json` becomes an entry point, so `tools/codegen/index.js` is reachable and is not an unused file. A package that a pattern finds is a full workspace. It gets its own plugins, entry points and dependency checks. `--workspace`, `--changed-workspaces`, `--group-by package` and `fallow workspaces` use it too.
 
 ## Per-workspace settings {#per-workspace-settings}
 
-`workspaces.settings` sets two keys for the packages that a key selects. A key is a workspace path or a glob over workspace paths.
+Packages differ: a server app needs a native package that no file imports, and a library must check the exports of its entry files. `workspaces.settings` sets two keys for the packages that a key selects. A key is a workspace path or a glob over workspace paths.
 
 ```jsonc
 // .fallowrc.json
@@ -83,7 +100,7 @@ A package that a pattern finds is a full workspace. It gets its own plugins, ent
 
 ## Per-package change baselines {#per-package-change-baselines}
 
-`workspaces.changedSince` gives a package its own Git ref. For that package, fallow reports only the findings in files that changed since the ref. Other packages and the files outside each package stay in full scope.
+In a large monorepo, the packages are often at different stages of a cleanup. A team that starts today wants to see only the findings of its new work. `workspaces.changedSince` gives a package its own Git ref. For that package, fallow reports only the findings in files that changed since the ref. Other packages and the files outside each package stay in full scope.
 
 ```jsonc
 // .fallowrc.json
@@ -122,6 +139,8 @@ A value is a package name or a glob over package names.
 
 ## Details {#details}
 
+When a package in your repository has an unusual layout, find its case in this table:
+
 | Topic | Fact |
 |:--|:--|
 | Nested pnpm projects | A folder with its own `package.json` and `pnpm-workspace.yaml`, which no root pattern declares, is an independent pnpm project. Fallow looks for these folders up to two levels below the root, and only when the root declares workspace patterns. The project is a workspace with a `nested-project-root` diagnostic, which is information only. The members of its `packages` list are workspaces too, and its `catalog:` references use its own catalog. To leave it out, add it to `ignorePatterns`. |
@@ -134,6 +153,6 @@ A value is a package name or a glob over package names.
 
 ## Related
 
+- Next: [Analyze a monorepo](/guides/monorepo). Follow it for the first run on your own monorepo.
 - [Workspaces](/concepts/workspaces): how fallow finds the packages.
-- [Analyze a monorepo](/guides/monorepo): the steps for a first run.
 - [`fallow workspaces`](/cli/workspaces): list the packages and the discovery problems.

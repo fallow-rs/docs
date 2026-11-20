@@ -6,29 +6,41 @@ keywords: ["custom plugins", "external plugins", "fallow-plugin", "plugin-check"
 icon: "screwdriver-wrench"
 ---
 
-At the end of this guide, a plugin file tells fallow how your framework loads files, and fallow counts those files as used.
+Your team runs its background jobs with an internal job runner, `@acme/jobs`. The runner loads each file in `src/jobs/` and reads two exports of the file: `schedule` and `handler`. No file imports a job, so fallow reports each job as an unused file. Add the dependency `@acme/jobs` and the job `src/jobs/nightly-cleanup.ts` to the demo project, and the report shows it next to the real unused file:
 
-A [plugin](/concepts/plugins) tells fallow the conventions of one framework or tool. Fallow has [built-in plugins](/frameworks/built-in) for many frameworks. For an internal framework or a tool without a plugin, you write a plugin file in JSONC, JSON or TOML.
+```text
+● Unused files (2)
+  src/jobs/nightly-cleanup.ts
+  src/utils/legacy-currency.ts
+```
+
+A person who trusts this report deletes a job that runs each night. At the end of this guide, a plugin file tells fallow how your framework loads files, and fallow counts those files as used. A [plugin](/concepts/plugins) tells fallow the conventions of one framework or tool. Fallow has [built-in plugins](/frameworks/built-in) for many frameworks. For an internal framework or a tool without a plugin, you write a plugin file in JSONC, JSON or TOML.
 
 ## Before you start
 
 - Check that no built-in plugin fits. Run `npx fallow list --plugins` to see the active plugins.
 - Decide if you need a plugin. For one or two files, add them to [`entry`](/reference/config-files#entry). Write a plugin when the framework has a rule that applies to many files: a directory, a file name pattern, or export names that it reads.
 
-The example is an internal job runner, `@acme/jobs`. It loads each file in `src/jobs/` and reads two exports of the file: `schedule` and `handler`. No file imports a job, so fallow reports each job as an unused file:
+The job of the example has the two exports that the runner reads, and one export that it does not read:
 
-```text
-● Unused files (2)
-  src/jobs/nightly-cleanup.ts
-  src/utils/legacy-currency.ts
-  Files not reachable from any entry point
+```ts
+// src/jobs/nightly-cleanup.ts
+import { formatPrice } from "../lib";
+
+export const schedule = "0 3 * * *";
+
+export const handler = async (): Promise<void> => {
+  console.log(`Cleanup done: ${formatPrice(0)}`);
+};
+
+export const describe = (): string => "Remove old carts";
 ```
 
 ## Steps
 
 ### 1. Write the plugin file
 
-Put the file in the project root. Fallow loads each file in the project root whose name starts with `fallow-plugin-`.
+The plugin states the rule of the runner in a form that fallow reads. Put the file in the project root, because fallow loads each file in the project root whose name starts with `fallow-plugin-`.
 
 ```jsonc
 // fallow-plugin-acme-jobs.jsonc
@@ -62,11 +74,11 @@ npx fallow plugin-schema > plugin-schema.json
 | `toolingDependencies` | Packages that you use through a command, not through an import. Fallow does not report them as unused. |
 | `usedExports` | Export names that the framework reads from matching files. Fallow counts them as used. |
 
-Other fields cover config files (`configPatterns`), files that are always used (`alwaysUsed`), class members that the framework calls (`usedClassMembers`), and entry points that manifest files declare (`manifestEntries`). A `detection` object replaces `enablers` when the plugin depends on more than one condition, for example a package and a config file. [`fallow plugin-schema`](/cli/plugin-schema) prints each field with its description.
-
-A plugin without `enablers` and without `detection` never turns on.
+Other fields cover config files (`configPatterns`), files that are always used (`alwaysUsed`) and class members that the framework calls (`usedClassMembers`). `manifestEntries` reads entry points from manifest files. A `detection` object replaces `enablers` when the plugin depends on more than one condition, for example a package and a config file. [`fallow plugin-schema`](/cli/plugin-schema) prints each field with its description. A plugin without `enablers` and without `detection` never turns on.
 
 ### 3. Check that the plugin is active
+
+A plugin that does not turn on changes nothing, and the report gives no sign of it. Check it first:
 
 ```bash
 npx fallow plugin-check
@@ -78,13 +90,15 @@ plugin 'acme-jobs': active, 0 manifestEntries rules
 0 warnings.
 ```
 
-`fallow plugin-check` changes nothing and exits with code 0. When the plugin is not active, it gives the reason:
+`fallow plugin-check` changes nothing and exits with code 0. When the plugin is not active, it gives the reason. With a wrong package name in `enablers`, the output is:
 
 ```text
 plugin 'acme-jobs': INACTIVE (no enabler present; requires one of these dependencies: @acme/job-runner)
 ```
 
 ### 4. Check the entry points and the findings
+
+An active plugin is not yet a correct plugin: its globs must also match your files. The list of entry points shows the result:
 
 ```bash
 npx fallow list --entry-points
@@ -110,20 +124,22 @@ npx fallow dead-code --unused-files --unused-exports
   Files not reachable from any entry point
   https://fallow.tools/docs/explanations/dead-code/#unused-files
 
-● Unused exports (3)
+● Unused exports (4)
   src/jobs/nightly-cleanup.ts
     :9 describe
   src/lib/format.ts
     :3 formatPercent
   src/lib/index.ts
     :1 formatPercent (re-export)
+  src/services/orders.ts
+    :18 cancelOrder
 ```
 
-The job file is no longer unused. Fallow checks the other exports of the job, because the plugin names the exports that the framework reads. The runner does not read `describe`, so fallow reports it.
+The job file is no longer unused. Fallow checks the other exports of the job, because the plugin names the exports that the framework reads. The runner does not read `describe`, so fallow reports it. The other three findings were in the report before the plugin.
 
 ### 5. Share the plugin
 
-Commit the plugin file. Each run in the repository then loads it, also in CI.
+The plugin works on your machine. Commit the plugin file, and each run in the repository loads it, also in CI. Fallow also loads plugins from `.fallow/plugins/`, but fallow tells Git to ignore the `.fallow/` directory, so a plugin there stays on your machine.
 
 To keep plugin files in another directory, list the directory or the files in [`plugins`](/reference/config-plugins#plugins):
 
@@ -134,11 +150,9 @@ To keep plugin files in another directory, list the directory or the files in [`
 }
 ```
 
-Fallow also loads plugins from `.fallow/plugins/`. Fallow tells Git to ignore the `.fallow/` directory, so a plugin there stays on your machine.
-
 ## Entry points from manifest files {#manifest-derived-entries}
 
-Some frameworks declare the entry file of each package in a manifest file, for example a `kibana.jsonc` in each plugin directory. A static glob cannot read the fields of these files. A `manifestEntries` rule finds the manifests, reads them, and makes the paths that they name entry points:
+A glob works when the framework finds its files by name. Some frameworks declare the entry file of each package in a manifest file instead, for example a `kibana.jsonc` in each plugin directory. A static glob cannot read the fields of these files. A `manifestEntries` rule finds the manifests, reads them, and makes the paths that they name entry points:
 
 ```jsonc
 // fallow-plugin-acme.jsonc
@@ -159,7 +173,7 @@ Some frameworks declare the entry file of each package in a manifest file, for e
 }
 ```
 
-Each `path` is relative to the directory of the manifest. `${plugin.extraPublicDirs}` gives one entry for each value of that manifest field. A `when` gate compares fields with strict equality. `fallow plugin-check --format json` shows for each rule the manifests that matched, the entries that it added, and a warning for each glob or field that matched nothing. Fallow has a built-in plugin for Kibana.
+Each `path` is relative to the directory of the manifest. `${plugin.extraPublicDirs}` gives one entry for each value of that manifest field. A `when` condition compares fields with strict equality. For each rule, `fallow plugin-check --format json` shows the manifests that matched and the entries that the rule added. It also warns about each glob or field that matched nothing. Fallow has a built-in plugin for Kibana.
 
 ## Check the result
 
@@ -181,6 +195,6 @@ The plugin is `active`, and the files of the framework show the plugin name as t
 
 ## Related
 
-- [Plugins](/concepts/plugins): how fallow turns plugins on.
+- Next: [Plugins](/concepts/plugins). Read it to see when fallow turns a plugin on, and what a plugin can change.
 - [`fallow plugin-schema`](/cli/plugin-schema): each field of a plugin file.
 - [`fallow plugin-check`](/cli/plugin-check): the output of the check.

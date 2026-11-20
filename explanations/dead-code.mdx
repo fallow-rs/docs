@@ -1,32 +1,36 @@
 ---
-title: "Dead code issue types"
-sidebarTitle: "Dead code issue types"
+title: "Dead code and architecture issue types"
+sidebarTitle: "Dead code and architecture issue types"
 description: "Learn what each dead code, dependency, architecture and framework finding of fallow means, and what to do about it."
 keywords: ["dead code", "issue types", "unused exports", "unused files", "unused dependencies", "unused class members", "circular dependencies", "findings"]
 icon: "skull-crossbones"
 ---
 
-This page lists the issue types of `fallow dead-code` and `fallow architecture`. Each section tells in a few sentences what a finding means and what to do. Each section links to the rule page of the issue type, which has an example, the fix and the facts: the default severity, the config key and the suppression comment.
+You probably came here from a link in the output of `fallow dead-code` or `fallow architecture`. In the demo project, the unused export `cancelOrder` has the link `https://fallow.tools/docs/explanations/dead-code/#unused-exports` below it. The section at each link tells you what the finding means and what to do now. It also links to the rule page of the issue type. The rule page has an example, the fix and the facts: the default severity, the config key and the suppression comment.
 
-To learn how fallow decides that code is unused, read [Dead code](/analysis/dead-code). Before you remove code, check the finding with [`fallow dead-code --trace`](/guides/trace-a-finding).
+A finding can be wrong when a tool loads the code in a way that the source text does not show. So check a finding before you remove code. [Find why fallow reports a finding](/guides/trace-a-finding) shows each trace command, and [Dead code](/analysis/dead-code) explains how fallow decides that code is unused.
 
 ## Files and exports {#files-and-exports}
 
 ### Unused files {#unused-files}
 
-No [entry point](/concepts/entry-points) reaches the file. No reachable file imports it, and no plugin or `entry` pattern names it. Delete the file. When a tool or a script loads the file without an import, tell fallow about that loader.
+No [entry point](/concepts/entry-points) reaches the file: no reachable file imports it, and no plugin or `entry` pattern names it. In the demo project, nothing imports `src/utils/legacy-currency.ts`, but the file still shows in each search, and people still read it.
+
+Check first: `fallow dead-code --trace-file <path>` shows the exports of the file, its imports and the files that import it. Then delete the file. When a tool or a script loads the file without an import, tell fallow about that loader.
 
 Full reference: [Unused files](/rules/unused-file)
 
 ### Unused exports {#unused-exports}
 
-A reachable file exports a name, and no other file imports it. Remove the export, or remove the `export` keyword when the file uses the name itself. When code outside the project imports the name, mark it as public API.
+A reachable file exports a name, and no other file imports it. In the demo project, nothing imports `cancelOrder` from `src/services/orders.ts`. People read each export as part of the API of the module, so they keep `cancelOrder` working each time they change `Order`.
+
+Check first: `fallow dead-code --trace src/services/orders.ts:cancelOrder` shows the importers of the name, or the reason that it has none. Then remove the export, or remove the `export` keyword when the file uses the name itself. Code outside the project can import the name, for example when you publish the package. Then put `/** @public */` on the line above the export, and fallow does not report it.
 
 Full reference: [Unused exports](/rules/unused-export)
 
 ### Unused types {#unused-types}
 
-A type alias or an interface is exported, and no file uses it. Remove the type, or remove its `export` keyword. Keep it when a package publishes it for its users.
+A type alias or an interface is exported, and no file uses it. The module then seems to offer a type that no code needs. Check first: `fallow dead-code --trace <file>:<type>` shows `Namespace: type` and the importers. Then remove the type, or remove its `export` keyword. When a package publishes the type for its users, keep it and put `/** @public */` above it.
 
 Full reference: [Unused types](/rules/unused-type)
 
@@ -62,15 +66,17 @@ Full reference: [Unresolved imports](/rules/unresolved-import)
 
 ## Members {#members}
 
+The issue types above look at whole files and exports. An export can be in use while a part of it is not. The next issue types look at one member of an enum, a class, a namespace or a store.
+
 ### Unused enum members {#unused-enum-members}
 
-No code uses a member of an enum. Remove the member. Keep it when stored data or another system still sends its value.
+No code uses a member of an enum. A reader of the enum then sees a value that the code never uses. Check first: `fallow dead-code --trace <file>:<member>` names the enum and the files that import it. Then remove the member. Keep it when stored data or another system still sends its value.
 
 Full reference: [Unused enum members](/rules/unused-enum-member)
 
 ### Unused class members {#unused-class-members}
 
-No code uses a public method or property of the class. A use through `this` inside the class counts as a use. Remove the member, or make it `private`. A member that a framework calls at run time can be a false positive: tell fallow about it.
+No code uses a public method or property of the class. A use through `this` inside the class counts as a use. Check first: `fallow dead-code --trace <file>:<member>` names the class and the files that import it. Then remove the member, or make it `private`. A member that a framework calls at run time can be a false positive: tell fallow about it.
 
 Full reference: [Unused class members](/rules/unused-class-member)
 
@@ -94,11 +100,11 @@ Full reference: [Unused store members](/rules/unused-store-member)
 
 ## Dependencies {#dependencies}
 
-[Dependencies](/analysis/dependencies) explains how fallow compares `package.json` with the imports.
+Code can also depend on a package that `package.json` does not list, or list a package that no code uses. [Dependencies](/analysis/dependencies) explains how fallow compares `package.json` with the imports.
 
 ### Unused dependencies {#unused-dependencies}
 
-A package in `dependencies` has no import, and no `package.json` script runs it. Remove it from `package.json`. When another workspace imports it, move it to that workspace.
+A package in `dependencies` has no import, and no `package.json` script runs it. In the demo project, `left-pad` is such a package, and each install still downloads it. Check first: `fallow dead-code --trace-dependency left-pad` shows the imports of the package and the `package.json` that lists it. Then remove it from `package.json`. When another workspace imports it, move it to that workspace.
 
 Full reference: [Unused dependencies](/rules/unused-dependency)
 
@@ -134,7 +140,7 @@ Full reference: [Dev dependencies used in production](/rules/dev-dependency-in-p
 
 ### Unlisted dependencies {#unlisted-dependencies}
 
-Code imports a package that its `package.json` does not declare. The import can work through a package that another workspace installs, and fail in a clean install. Declare the package in the `package.json` that owns the file.
+Code imports a package that its `package.json` does not declare, as `src/services/orders.ts` of the demo project does with `uuid`. The import can work through a package that another workspace installs, and fail in a clean install. Declare the package in the `package.json` that owns the file.
 
 Full reference: [Unlisted dependencies](/rules/unlisted-dependency)
 
@@ -194,7 +200,7 @@ When fallow skips the `overrides` of `pnpm-workspace.yaml`, it records the `pnpm
 
 ## Architecture {#architecture}
 
-[`fallow architecture`](/cli/architecture) reports these issue types. [Architecture](/analysis/architecture) explains them.
+The issue types above are about code that nothing uses. The next ones are about imports that exist but form a loop or cross a line that your team drew. [`fallow architecture`](/cli/architecture) reports them, and [Architecture](/analysis/architecture) explains them.
 
 ### Circular dependencies {#circular-dependencies}
 
@@ -228,7 +234,7 @@ Full reference: [Policy violations](/rules/policy-violation)
 
 ## Framework rules {#framework-rules}
 
-Fallow runs these issue types only when the project declares the framework as a dependency. [Built-in plugins](/frameworks/built-in) lists the frameworks.
+A framework adds rules that plain imports do not show, for example which exports a `"use client"` file may have. Fallow runs these issue types only when the project declares the framework as a dependency. [React and Next.js](/frameworks/react) shows a Next.js example, and [Built-in plugins](/frameworks/built-in) names the package that turns on each plugin.
 
 ### Invalid client exports {#invalid-client-exports}
 
@@ -380,6 +386,6 @@ Full reference: [Stale suppressions](/rules/stale-suppression), [Missing suppres
 
 ## Related
 
+- [Find why fallow reports a finding](/guides/trace-a-finding): check a finding before you remove code.
 - [Dead code](/analysis/dead-code): how fallow finds unused code.
-- [Issue types](/reference/issue-types): each issue type of each command.
-- [Suppress findings](/guides/suppress): keep a finding that is correct to ignore.
+- [Suppress a finding](/guides/suppress): keep code that fallow reports, on purpose.

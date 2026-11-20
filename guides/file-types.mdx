@@ -6,9 +6,9 @@ keywords: ["file types", "Vue", "Svelte", "Astro", "MDX", "HTML", "CSS modules",
 icon: "file-code"
 ---
 
-At the end of this guide, you can predict the findings for a file that is not plain JavaScript or TypeScript, and you can correct a surprising result.
+Your project has an HTML page, a Vue component or a stylesheet next to its TypeScript, and you want to know what fallow reports for these files. At the end of this guide, you can predict the findings for each file type, and you can correct a result that surprises you.
 
-Fallow picks the parser for a file from its extension, with no plugin and no config. So a file that only an HTML page, a Vue template or a stylesheet uses is not unused.
+The question matters, because a tool that reads only `.ts` files sees no use of a file that only a stylesheet or a template uses. Fallow picks the parser for a file from its extension, with no plugin and no config. So a file that only an HTML page, a Vue template or a stylesheet uses is not unused.
 
 ## Before you start
 
@@ -35,55 +35,71 @@ Fallow does not analyze other files, for example `.json` and `.md` files. It nev
 
 ### 2. Run fallow and read the findings
 
-This example project has an `index.html`, a Vue component, a CSS module and GraphQL documents:
+The table is easier to trust when you see it on real files. This example adds a Vite and Vue front end to the [demo project](/quickstart): `vite` and `vue` in `package.json`, a `dev` script that runs `vite`, an `index.html`, and these files under `src/web/`:
 
 ```text
-index.html                       loads ./src/main.ts and ./src/styles/global.css
-src/main.ts                      imports Card.vue, data/config.json, graphql/user.graphql
-src/components/Card.vue          uses formatDate and styles.root in its template
-src/format.ts                    exports formatDate and formatTime
-src/styles/card.module.css       defines .root and .shadow
-src/graphql/user.graphql         #import "./fields"
-src/graphql/old.graphql
-src/Old.svelte
+index.html                          loads /src/web/main.ts and /src/web/styles/global.css
+src/web/main.ts                     imports OrderCard.vue and graphql/orders.graphql
+src/web/components/OrderCard.vue    uses formatDate and styles.root in its template
+src/web/dates.ts                    exports formatDate and formatTime
+src/web/styles/card.module.css      defines .root and .shadow
+src/web/graphql/orders.graphql      #import "./order-fields"
+src/web/graphql/order-fields.graphql
+src/web/graphql/old-orders.graphql
+src/web/OldBanner.svelte
 ```
 
 ```bash
-npx fallow dead-code
+npx fallow dead-code --unused-files --unused-exports
 ```
 
 ```text
-  2 entry points detected (1 default index, 1 plugin)
+  4 entry points detected (2 package.json, 2 plugin)
 
 ── Unused Code ─────────────────────────────────────
 
-● Unused files (2)
-  src/Old.svelte
-  src/graphql/old.graphql
+● Unused files (3)
+  src/utils/legacy-currency.ts
+  src/web/OldBanner.svelte
+  src/web/graphql/old-orders.graphql
   Files not reachable from any entry point
   https://fallow.tools/docs/explanations/dead-code/#unused-files
+  To suppress: // fallow-ignore-file unused-file
 
-● Unused exports (2)
-  src/format.ts
+● Unused exports (5)
+  src/lib/format.ts
+    :3 formatPercent
+  src/lib/index.ts
+    :1 formatPercent (re-export)
+  src/services/orders.ts
+    :18 cancelOrder
+  src/web/dates.ts
     :3 formatTime
-  src/styles/card.module.css
+  src/web/styles/card.module.css
     :3 shadow
   Exported symbols with no known consumers
   https://fallow.tools/docs/explanations/dead-code/#unused-exports
+  To auto-fix: fallow fix --dry-run
+  To suppress: // fallow-ignore-next-line unused-export
 
-✗ 2 files · 2 exports (0.19s)
+✗ 3 files · 5 exports (0.04s)
 ```
 
-- `global.css` is used, because `index.html` loads it. The Vite plugin makes `index.html` an [entry point](/concepts/entry-points).
-- `formatDate` is used, because the template of `Card.vue` calls it. The script block alone does not use it.
+The findings in `src/utils/`, `src/lib/` and `src/services/` are the findings of the demo. The new findings come from the front end. Read them together with the files that are not in the list:
+
+- `global.css` is used, because `index.html` loads it. The Vite plugin makes `index.html` an [entry point](/concepts/entry-points), so the entry point count goes from 3 to 4.
+- `formatDate` is used, because the template of `OrderCard.vue` calls it. The script block alone does not use it.
 - `.shadow` is an unused export of the CSS module. Fallow treats each class of a `.module.css` file as an export.
-- `fields.graphql` is used through `#import "./fields"`. Fallow tries `.graphql` and `.gql` for a path without an extension.
+- `order-fields.graphql` is used through `#import "./order-fields"`. Fallow tries `.graphql` and `.gql` for a path without an extension.
+- `OldBanner.svelte` and `old-orders.graphql` are unused files, because no file loads them.
 
 ### 3. Read the notes for your file type
 
+The run above shows the common case of each file type. Each type also has rules that decide the edge cases, for example a Svelte prop or a path that starts with `/`.
+
 #### Vue and Svelte
 
-Fallow parses `<script>` and `<script setup>`, also with `lang="ts"`. In the template, it counts component tags, directives and expressions as uses of the imported names. A name that only the template uses is therefore used.
+Fallow parses `<script>` and `<script setup>`, also with `lang="ts"`. In the template, it counts component tags, directives and expressions as uses of the imported names. A name that only the template uses is therefore used, and that is why `formatDate` in the run above is not in the list.
 
 A Svelte component declares its props as exports. Fallow cannot tell a prop from a helper export, so it does not report unused exports of a `.svelte` file. Put helpers in a `.ts` file, where fallow checks them.
 
@@ -93,11 +109,11 @@ Fallow parses the frontmatter between the two `---` lines as TypeScript. It also
 
 #### HTML
 
-An HTML file is reachable only when an entry point or a plugin names it. The Vite and Parcel plugins make `index.html` an entry point. Fallow resolves a path that starts with `/` against the directory of the HTML file, then the nearest package directory, then the project root, then `public/`.
+An HTML file is reachable only when an entry point or a plugin names it. The Vite and Parcel plugins make `index.html` an entry point. Fallow resolves a path that starts with `/` against the directory of the HTML file, then the nearest package directory, then the project root, then `public/`. In the demo, `index.html` is in the project root, so `/src/web/main.ts` resolves at the first step.
 
 `fallow health` also reports the complexity of Angular templates: external `.html` templates and inline `template` strings.
 
-Fallow reads the same tags in an `` html`...` `` tagged template in JavaScript and TypeScript, for example in a Hono layout. It does not read `<script src>` in JSX: there it is a string, not an import.
+Fallow reads the same tags in an `` html`...` `` tagged template in JavaScript and TypeScript, for example in a Hono layout. In JSX, `<script src>` is a string, so fallow does not follow it.
 
 #### CSS
 
@@ -124,9 +140,22 @@ The `expo-router` plugin does not turn on platform files. An Expo Router app get
 
 ## Check the result
 
-Run `npx fallow dead-code` again after each change. A file that an HTML page, a template or a stylesheet uses is not in the list of unused files.
+Run `npx fallow dead-code` again after each change. A file that an HTML page, a template or a stylesheet uses is not in the list of unused files. To see which file keeps it in use, trace it:
+
+```bash
+npx fallow dead-code --trace-file src/web/styles/global.css
+```
+
+```text
+  REACHABLE src/web/styles/global.css
+
+  Imported by (1):
+    -> index.html
+```
 
 ## If it fails
+
+When a result still surprises you, the cause is usually a file that no entry point names, or a use that fallow cannot read:
 
 | Problem | Cause | Fix |
 |:--|:--|:--|
@@ -138,4 +167,4 @@ Run `npx fallow dead-code` again after each change. A file that an HTML page, a 
 
 - [Entry points and reachability](/concepts/entry-points): how fallow decides that a file is used.
 - [Built-in plugins](/frameworks/built-in): the frameworks that add entry points.
-- [Known limits](/guides/limits): what fallow cannot know.
+- [Known limits of fallow](/guides/limits): what fallow cannot know.

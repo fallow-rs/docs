@@ -6,7 +6,9 @@ keywords: ["trace", "debugging", "why unused", "trace-file", "trace-dependency",
 icon: "bug"
 ---
 
-At the end of this guide, you know why fallow reports one [finding](/concepts/findings), or why it does not report one. Each numbered step answers one question. Do step 1, then go to the step of your question.
+Fallow reports `cancelOrder` as unused, and before you delete it, you want to see why. Or fallow reports nothing for a file that you think nothing uses. At the end of this guide, you know why fallow reports one [finding](/concepts/findings), or why it does not report one.
+
+Each trace command shows the facts that fallow used for one decision: the entry points, the imports, the files that use a name. Each numbered step below answers one question. Do step 1, then go to the step of your question.
 
 ## Before you start
 
@@ -14,9 +16,9 @@ At the end of this guide, you know why fallow reports one [finding](/concepts/fi
 - Install the dependencies of the project. Without `node_modules`, fallow cannot read the exports of packages, and a trace can differ from the real run.
 - Run each command from the project root. Each path is relative to the root.
 
-## 1. Check which entry points and plugins are active
+## 1. Where does fallow start?
 
-Start here when many findings look wrong.
+Start here when many findings look wrong, because one missing entry point makes each file behind it unused.
 
 ```bash
 npx fallow list --entry-points
@@ -29,7 +31,7 @@ src/index.ts (package.json main)
 src/math.test.ts (vitest)
 ```
 
-Each line gives a file and the source that made it an entry point.
+Each line gives a file and the source that made it an entry point. A framework adds its entry points through a [plugin](/concepts/plugins), so check the active plugins too:
 
 ```bash
 npx fallow list --plugins
@@ -41,11 +43,11 @@ Active plugins:
   - typescript
 ```
 
-A framework that you use and that is not in this list adds no entry points. [Plugins](/concepts/plugins) explains when fallow turns a plugin on.
+A framework that you use and that is not in this list adds no entry points. The plugins page explains when fallow turns a plugin on.
 
-## 2. Find why an export is unused
+## 2. Why is this export unused?
 
-Give the file and the export name to `--trace`:
+When the entry points are right, look at the finding itself. Give the file and the export name to `--trace`:
 
 ```bash
 npx fallow dead-code --trace src/services/orders.ts:cancelOrder
@@ -59,7 +61,7 @@ npx fallow dead-code --trace src/services/orders.ts:cancelOrder
   Reason: No references found, export is unused
 ```
 
-For an export that a [barrel file](/concepts/entry-points#barrel-files) exports again, the trace also lists the barrel:
+`File: reachable` tells you that an entry point reaches the file, so only the export is unused. `Namespace: value` tells you that `cancelOrder` is a value. For a type, the trace says `Namespace: type`. For an export that a [barrel file](/concepts/entry-points#barrel-files) exports again, the trace also lists the barrel:
 
 ```bash
 npx fallow dead-code --trace src/lib/format.ts:formatPercent
@@ -78,7 +80,9 @@ npx fallow dead-code --trace src/lib/format.ts:formatPercent
 
 For a used export, the status is `USED`, and the trace lists each file that imports the name.
 
-## 3. Find why a file is unused
+## 3. Why is this file unused?
+
+A file-level finding needs a trace of the whole file:
 
 ```bash
 npx fallow dead-code --trace-file src/utils/legacy-currency.ts
@@ -96,7 +100,9 @@ npx fallow dead-code --trace-file src/utils/legacy-currency.ts
 
 For each file, reachable or not, the trace lists its exports, its imports (`Imports from`) and the files that import it (`Imported by`). A list that is empty does not show. For an entry point, the first line ends with `(entry point)`. `fallow list --entry-points` names the source of each entry point.
 
-## 4. Find the import path between two files
+## 4. Which import path connects two files?
+
+The file trace tells you that no path exists, but not where the path breaks. `fallow trace --path` shows the chain of imports from one file to another. For a reachable file, it lists each hop:
 
 ```bash
 npx fallow trace --path src/index.ts src/services/catalog.ts
@@ -116,20 +122,11 @@ Shortest import path (syntactic; OFF the ranked path)
 src/index.ts reaches src/services/catalog.ts in 2 hops
 ```
 
-Each hop gives the file and the line of the import. For an unused file, the answer is `reachable: no`:
+Each hop gives the file and the line of the import. For the unused file, `npx fallow trace --path src/index.ts src/utils/legacy-currency.ts` prints `reachable: no` and `hops: 0`. Then find the file that you expect to import it, and check that import. Often the import has a wrong path, or the code builds the path at run time.
 
-```bash
-npx fallow trace --path src/index.ts src/utils/legacy-currency.ts
-```
+## 5. Where does the code use this package?
 
-```text
-  reachable: no
-  hops:      0
-```
-
-Then find the file that you expect to import it, and check that import.
-
-## 5. Find where a dependency is used
+Dependency findings are about `package.json`, so their trace starts from the package name:
 
 ```bash
 npx fallow dead-code --trace-dependency zod
@@ -158,9 +155,9 @@ npx fallow dead-code --trace-dependency left-pad
 
 The trace also reports a binary of the package that a `package.json` script or a CI file runs. To see which names of a package the code uses, run [`fallow trace --dependency`](/cli/trace).
 
-## 6. Find why a clone is reported
+## 6. Why is this block a clone?
 
-Give the [handle](/analysis/duplication) of a clone group, or a `FILE:LINE` inside it, to `fallow dupes --trace`:
+The last kind of finding is a copied block. Give the [handle](/analysis/duplication) that the report prints, or a `FILE:LINE` inside the block, to `fallow dupes --trace`:
 
 ```bash
 npx fallow dupes --trace dup:f42424e8
@@ -183,7 +180,7 @@ You have the cause when the trace shows the missing link: an entry point that is
 
 ## If it fails
 
-Most findings that surprise you have one of two causes.
+Most findings that surprise you have one of two causes, and each cause leaves a sign in the trace:
 
 | Cause | What you see | Fix |
 |:--|:--|:--|

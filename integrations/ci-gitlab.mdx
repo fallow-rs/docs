@@ -6,13 +6,16 @@ keywords: ["GitLab CI", "GitLab", "merge request", "CI template", "Code Quality"
 icon: "gitlab"
 ---
 
-Include the fallow CI template in `.gitlab-ci.yml`, so that fallow checks the code that each merge request changes and posts the result on the merge request.
+Your project runs on GitLab, and you want each merge request checked before a reviewer reads it. The fallow CI template runs the [changed-code check](/concepts/changed-code), fails the job on a new problem, and posts the result on the merge request: a comment and a Code Quality report. The reviewer then sees a new unused export, such as `cartTotalCents` in the demo project, without a look into the job log. You include the template in `.gitlab-ci.yml` and add one job.
 
 ## Before you start
 
+The template installs fallow and its tools when the job starts. So the job needs network access, a fixed fallow version, and a token for the comment:
+
 - The runner can start the `node:22-alpine` image and reach the npm registry. The template installs fallow with `npm install -g`, and installs `bash`, `jq`, `git` and `curl` with `apk` or `apt-get`.
 - The runner can reach `raw.githubusercontent.com`, or you [vendor the template](#vendor-the-template).
-- Pin an exact fallow version in `package.json`: `npm install --save-dev --save-exact fallow`. `FALLOW_COMMENT`, `FALLOW_REVIEW` and `FALLOW_MUTATION` need helper scripts, and the template downloads them for that exact version. With a version range, such as `^3.44.0`, these variables stop the job with exit code 2. An exact `FALLOW_VERSION` also works. As an alternative, `npx fallow ci-template gitlab --vendor` writes the template and its helper scripts into the repository, and then a version range works too (see [Vendor the template](#vendor-the-template)). `npx fallow ci-template gitlab` without `--vendor` prints the template.
+- Pin an exact fallow version in `package.json`: `npm install --save-dev --save-exact fallow`. `FALLOW_COMMENT`, `FALLOW_REVIEW` and `FALLOW_MUTATION` need helper scripts, and the template downloads them for that exact version. With a version range, such as `^3.44.0`, these variables stop the job with exit code 2. An exact `FALLOW_VERSION` also works.
+- As an alternative to the exact version, `npx fallow ci-template gitlab --vendor` writes the template and its helper scripts into the repository. Then a version range works too (see [Vendor the template](#vendor-the-template)). `npx fallow ci-template gitlab` without `--vendor` prints the template.
 - For the comment, create a project access token with the `api` scope. Save it as the CI/CD variable `GITLAB_TOKEN`, with the "Masked" option. The `CI_JOB_TOKEN` of GitLab cannot write merge request notes.
 
 ## Steps
@@ -35,8 +38,10 @@ fallow:
     - bash /tmp/fallow-run.sh
 ```
 
+Each line of the job has a reason:
+
 - The URL names a release tag, because GitLab includes the file from a fixed ref.
-- `FALLOW_COMMAND: "audit"` runs the [changed-code check](/concepts/changed-code). In a merge request pipeline, the template compares the change with `CI_MERGE_REQUEST_DIFF_BASE_SHA`.
+- `FALLOW_COMMAND: "audit"` runs the changed-code check. In a merge request pipeline, the template compares the change with `CI_MERGE_REQUEST_DIFF_BASE_SHA`.
 - `FALLOW_COMMENT: "true"` posts a sticky comment on the merge request.
 - The `script` installs the dependencies before the run, because fallow reads the packages in `node_modules`. `bash /tmp/fallow-run.sh` is the script of the template.
 
@@ -44,17 +49,19 @@ The `.fallow` job runs in merge request pipelines and on the default branch. The
 
 ## Check the result
 
-The job fails on the verdict `fail` (see [Exit codes and gates](/integrations/ci#gates)). The merge request shows the comment and the Code Quality findings. [What fallow posts on a pull request](/integrations/ci-comments) shows each one.
+In the demo project, the merge request that adds `cartTotalCents` gets the verdict `fail`, and the job fails (see [Exit codes and gates](/integrations/ci#gates)). The merge request shows the comment and the Code Quality findings. [What fallow posts on a pull request](/integrations/ci-comments) shows each one with its real text.
 
 ## Variants
 
+The job above fits most projects. Each variant below changes one part of it, for a team that adopts fallow step by step, for a closed network, or for a monorepo.
+
 ### Report only
 
-Set `FALLOW_FAIL_ON_ISSUES: "false"`. The job then passes, and the comment and the Code Quality report stay.
+A project with many findings may not want a failed job on day one. Set `FALLOW_FAIL_ON_ISSUES: "false"`. The job then passes, and the comment and the Code Quality report stay.
 
 ### Discussions on lines
 
-Set `FALLOW_REVIEW: "true"` to post a discussion on each finding line. A discussion can hold a suggestion that you apply with one click. The discussions need `GITLAB_TOKEN` too. When a later run does not report the finding again, the template resolves its discussion.
+The comment lists the findings in one place. To put each finding next to its line instead, set `FALLOW_REVIEW: "true"` to post a discussion on each finding line. A discussion can hold a suggestion that you apply with one click. The discussions need `GITLAB_TOKEN` too. When a later run does not report the finding again, the template resolves its discussion.
 
 ### Code Quality report {#code-quality}
 
@@ -80,11 +87,11 @@ Then give the `fallow` job the rule `if: $CI_MERGE_REQUEST_IID`, so that the aud
 
 ### Monorepo
 
-Set `FALLOW_WORKSPACE` to scope a job to one [workspace](/concepts/workspaces). When several jobs post discussions on the same merge request, give each job its own `FALLOW_REVIEW_ID`. A job then does not resolve the discussions of the other jobs.
+One job at the repository root checks all workspaces in one run. When each team wants its own job, set `FALLOW_WORKSPACE` to scope a job to one [workspace](/concepts/workspaces). When several jobs post discussions on the same merge request, give each job its own `FALLOW_REVIEW_ID`. A job then does not resolve the discussions of the other jobs.
 
 ### Mutation testing {#mutation-testing}
 
-Set `FALLOW_MUTATION: "true"` to run [`fallow mutation`](/cli/mutation) on the lines that the merge request adds, before the analysis. The run executes your tests, so the `npm ci` line of the example is necessary. The default time budget is `10m`. The comment then shows a "Mutation testing" section. The job refuses a merge request from a fork that runs in the target project, because that pipeline has the CI/CD variables of the target project.
+The audit does not show that your tests catch a bug in the change. Set `FALLOW_MUTATION: "true"` to run [`fallow mutation`](/cli/mutation) on the lines that the merge request adds, before the analysis. The run executes your tests, so the `npm ci` line of the example is necessary. The default time budget is `10m`. The comment then shows a "Mutation testing" section. The job refuses a merge request from a fork that runs in the target project, because that pipeline has the CI/CD variables of the target project.
 
 ### Vendor the template {#vendor-the-template}
 
@@ -105,7 +112,7 @@ The vendored template uses the local scripts, so the comment, the discussions an
 
 ### Use your own fallow install
 
-Set `FALLOW_SKIP_INSTALL: "true"` to use the fallow on `PATH`. GitLab does not add `node_modules/.bin` to `PATH`, and a `before_script` in your job replaces the one of the template. Install the dependencies, add the folder to `PATH`, then run the `before_script` of the template:
+By default, the template installs fallow with `npm install -g` in each job. When your project already installs fallow, for example from a pnpm catalog, set `FALLOW_SKIP_INSTALL: "true"` to use the fallow on `PATH`. GitLab does not add `node_modules/.bin` to `PATH`, and a `before_script` in your job replaces the one of the template. Install the dependencies, add the folder to `PATH`, then run the `before_script` of the template:
 
 ```yaml
 fallow:
@@ -120,9 +127,11 @@ fallow:
 
 ## Read the result in a later job
 
-The template writes the gate results to `fallow-gates.env` and declares it as a `dotenv` report. A later job can read `FALLOW_GATES_FAILED`, `FALLOW_GATES_WARNED`, `FALLOW_GATES_SKIPPED`, `FALLOW_GATES_PASSED`, `FALLOW_ANALYSIS_DEGRADED`, `FALLOW_REQUESTS_UNAPPLIED` and `FALLOW_MUTATION_OUTCOME`. The job also keeps `fallow-results.json` and the comment files as artifacts for 30 days.
+A later job, for example a deploy step, can act on the result without a second run of fallow. The template writes the gate results to `fallow-gates.env` and declares it as a `dotenv` report. A later job can read `FALLOW_GATES_FAILED`, `FALLOW_GATES_WARNED`, `FALLOW_GATES_SKIPPED`, `FALLOW_GATES_PASSED`, `FALLOW_ANALYSIS_DEGRADED`, `FALLOW_REQUESTS_UNAPPLIED` and `FALLOW_MUTATION_OUTCOME`. The job also keeps `fallow-results.json` and the comment files as artifacts for 30 days.
 
 ## If it fails
+
+The template writes the cause of most problems in the job log. Find the message in this list:
 
 - **"FALLOW_COMMENT/FALLOW_REVIEW/FALLOW_MUTATION require vendored ci/ + action/ scripts or a pinned FALLOW_SCRIPTS_REF".** The `package.json` has a version range, for example `^3.44.0`, or no fallow at all. Pin an exact version, set `FALLOW_VERSION` to an exact version, or vendor the template.
 - **"GITLAB_TOKEN is required to create or update MR comments".** The job has no `GITLAB_TOKEN`. The job continues without the comment.
@@ -234,6 +243,6 @@ Each variable is optional. This table gives the first sentence of the comment in
 
 ## Related
 
-- [What fallow posts on a pull request](/integrations/ci-comments)
+- Next: [What fallow posts on a pull request](/integrations/ci-comments). It shows how to read the comment and the Code Quality report.
 - [`fallow ci-template`](/cli/ci-template)
 - [GitHub Actions](/integrations/ci-github)

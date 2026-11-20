@@ -6,7 +6,7 @@ keywords: ["GitHub Actions", "fallow-rs/fallow", "GitHub Action", "pull request"
 icon: "github"
 ---
 
-Add the fallow GitHub Action to a workflow, so that fallow checks the code that each pull request changes and posts the result on the pull request.
+Your repository runs on GitHub, and you want each pull request checked before a reviewer reads it. The fallow GitHub Action runs the [changed-code check](/concepts/changed-code) and posts the result on the pull request: a comment, a check named **Fallow**, and an annotation on each finding line. The reviewer then sees a new unused export, such as `cartTotalCents` in the demo project, without a look into the job log. This page gives the workflow first, then the variants, the permissions and each input.
 
 ## Before you start
 
@@ -43,22 +43,26 @@ jobs:
           comment: true
 ```
 
+Each line of the workflow has a reason:
+
 - `fetch-depth: 0` gives the job the history of the base branch. With a shallow clone, the action fetches the commits that it needs to find the merge base.
 - `npm ci` installs the dependencies, because fallow reads the packages in `node_modules`. Use the install command of your package manager.
-- `command: audit` runs the [changed-code check](/concepts/changed-code) against the base commit of the pull request.
+- `command: audit` runs the changed-code check against the base commit of the pull request.
 - `comment: true` posts a sticky comment and a check named **Fallow**.
 
-`fallow-rs/fallow@v3` selects the action. The action and the fallow version that it installs are separate.
+`fallow-rs/fallow@v3` selects the action. The action and the fallow version that it installs are separate, so a new fallow release does not need a change of this line.
 
 ## Check the result
 
-The job fails on the verdict `fail` (see [Exit codes and gates](/integrations/ci#gates)). The pull request shows the comment, the check, an annotation on each finding in the **Files changed** tab, and a job summary. [What fallow posts on a pull request](/integrations/ci-comments) shows each one.
+In the demo project, the pull request that adds `cartTotalCents` gets the verdict `fail`, and the job fails (see [Exit codes and gates](/integrations/ci#gates)). The pull request shows the comment, the check, an annotation on each finding in the **Files changed** tab, and a job summary. [What fallow posts on a pull request](/integrations/ci-comments) shows each one with its real text.
 
 ## Variants
 
+The workflow above fits most repositories. Each variant below changes one part of it, for a team that adopts fallow step by step, for code scanning, or for a monorepo.
+
 ### Report only
 
-To see the findings before the check can block a merge, add `fail-on-issues: false`. The comment and the annotations stay. Remove the line when your team is ready for the gate.
+A project with many findings may not want a failed check on day one. To see the findings before the check can block a merge, add `fail-on-issues: false`. The comment and the annotations stay. Remove the line when your team is ready for the gate.
 
 ### Full analysis on the default branch
 
@@ -91,11 +95,11 @@ Code scanning is free on a public repository. A private or internal repository n
 
 ### Review comments on lines
 
-Set `review-comments: true` to post one review with a comment on each finding line. A comment can hold a suggestion that you apply with one click. When this input is on, the action posts no annotations. Add `review-guidance: true` to append a collapsed "What to do" block to each comment.
+The sticky comment lists the findings in one place. To put each finding next to its line instead, set `review-comments: true` to post one review with a comment on each finding line. A comment can hold a suggestion that you apply with one click. When this input is on, the action posts no annotations. Add `review-guidance: true` to append a collapsed "What to do" block to each comment.
 
 ### Monorepo: one job for each workspace {#monorepo}
 
-Run one job for each [workspace](/concepts/workspaces) with a matrix. Give each job its own `review-id`, so that the jobs do not resolve the review comments of each other:
+One job at the repository root checks all workspaces in one run, and fallow follows the imports between them. When each team wants its own comment and its own failed job, run one job for each [workspace](/concepts/workspaces) with a matrix. Give each job its own `review-id`, so that the jobs do not resolve the review comments of each other:
 
 ```yaml
     strategy:
@@ -119,11 +123,11 @@ When `workspace` names one workspace, the action adds the workspace name to the 
 
 ### Mutation testing {#mutation-testing}
 
-Set `mutation: true` to run [`fallow mutation`](/cli/mutation) on the lines that the pull request adds, before the analysis. The step runs your tests, so install the dependencies first. The default time budget is `10m`. The comment and the job summary then show a "Mutation testing" section, and each survived mutant on a changed line becomes a finding. The step runs only on the `pull_request`, `push`, `schedule`, `workflow_dispatch` and `merge_group` events. It refuses `pull_request_target`, because that event gives the job the secrets of the base repository.
+The audit does not show that your tests catch a bug in the change. Set `mutation: true` to run [`fallow mutation`](/cli/mutation) on the lines that the pull request adds, before the analysis. The step runs your tests, so install the dependencies first. The default time budget is `10m`. The comment and the job summary then show a "Mutation testing" section, and each survived mutant on a changed line becomes a finding. The step runs only on the `pull_request`, `push`, `schedule`, `workflow_dispatch` and `merge_group` events. It refuses `pull_request_target`, because that event gives the job the secrets of the base repository.
 
 ## Permissions and tokens {#permissions}
 
-Each surface needs a permission of the job token. A job with a `permissions` block gets only the permissions that the block lists.
+The workflow and its variants write to several places on GitHub, and each place needs a permission of the job token. A job with a `permissions` block gets only the permissions that the block lists, so add a line for each surface that you turn on.
 
 | Surface | Input | Permission |
 |:--|:--|:--|
@@ -139,6 +143,8 @@ Without `id-token: write`, the comments come from `github-actions[bot]`. With it
 A pull request from a fork gets a read-only token. The comment and the review then fail. The annotations and the job summary need no write token, so they still show.
 
 ## If it fails
+
+The action writes a warning in the job log for most problems. Find the warning text in this list:
 
 - **Warning "found no merge base".** The clone is too shallow. Set `fetch-depth: 0` on `actions/checkout`.
 - **Warning "SARIF upload skipped".** The repository is private or internal and has no GitHub Advanced Security. Remove `sarif: true`.
@@ -286,6 +292,6 @@ An input with the default `false` that matches a CLI option, for example `produc
 
 ## Related
 
-- [What fallow posts on a pull request](/integrations/ci-comments)
+- Next: [What fallow posts on a pull request](/integrations/ci-comments). It shows how to read the comment, the check and the annotations.
 - [`fallow audit`](/cli/audit)
 - [GitLab CI](/integrations/ci-gitlab)

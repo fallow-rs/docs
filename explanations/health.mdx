@@ -6,23 +6,33 @@ keywords: ["health", "cyclomatic complexity", "cognitive complexity", "CRAP", "m
 icon: "chart-line"
 ---
 
-This page lists the findings and the metrics of `fallow health`. Each section tells in a few sentences what a value means and what to do. A section for an issue type links to its rule page, with an example, the fix and the facts.
+The output of `fallow health` has a number next to each function and each file, and a link below each section. You probably followed one of these links, and you want to know what the number means and what to do now. Each section on this page answers that for one metric or one finding. A section for an issue type links to its rule page, with an example, the fix and the facts.
 
 To learn how fallow measures complexity and risk, read [Health](/analysis/health).
 
 ## Complexity metrics {#complexity-metrics}
 
-Fallow measures each function, and the template of a component, with two numbers: the [cyclomatic complexity](#cyclomatic-complexity) and the [cognitive complexity](#cognitive-complexity). A function above a limit is a finding. A function above both limits gets the [High complexity](/rules/high-complexity) issue type. Split such a function into smaller functions, and test it first.
+In the demo project, `fallow health` reports one function:
+
+```text
+● High complexity functions (1)
+  src/services/customers.ts
+    :9 classifyCustomer CRITICAL
+          23 ! cyclomatic   32 ! cognitive   39 lines
+         552.0 ! CRAP
+```
+
+Fallow measures each function, and the template of a component, with two numbers: the [cyclomatic complexity](#cyclomatic-complexity) and the [cognitive complexity](#cognitive-complexity). A function above a limit is a finding, and `!` marks each limit that it passes. A function above both limits, such as `classifyCustomer`, gets the [High complexity](/rules/high-complexity) issue type. Test such a function first, then split it into smaller functions.
 
 ### Cyclomatic complexity {#cyclomatic-complexity}
 
-The cyclomatic complexity is the number of paths through a function: 1, plus 1 for each `if`, loop, `case`, `catch`, `?:`, `&&`, `||`, `??` and `?.`. Each path needs its own test. Fallow reports a function above 20 by default. Split the function, or remove branches.
+The cyclomatic complexity is the number of paths through a function: 1, plus 1 for each `if`, loop, `case`, `catch`, `?:`, `&&`, `||`, `??` and `?.`. Each path needs its own test, so `classifyCustomer` has 23 paths to test. Fallow reports a function above 20 by default. Split the function, or remove branches.
 
 Full reference: [High cyclomatic complexity](/rules/high-cyclomatic-complexity)
 
 ### Cognitive complexity {#cognitive-complexity}
 
-The cognitive complexity estimates how hard a function is to read. Nested code counts more than flat code. Fallow reports a function above 15 by default. Flatten the nesting with early returns, or move nested blocks to helper functions.
+The cognitive complexity estimates how hard a function is to read. Nested code counts more than flat code. `classifyCustomer` has `if` blocks inside a loop inside an `if`, so it gets 32, more than its 23 paths. Fallow reports a function above 15 by default. Flatten the nesting with early returns, or move nested blocks to helper functions.
 
 Full reference: [High cognitive complexity](/rules/high-cognitive-complexity)
 
@@ -42,29 +52,35 @@ Full reference: [Long file](/rules/long-file)
 
 ## File health scores {#file-health-scores}
 
-`fallow health --file-scores` gives each file a score and its measurements: lines, fan-in (the files that import it), fan-out (the files that it imports), the share of unused exports and the complexity density. Fallow sorts the files with the most concern first. Start with the files at the top. Fallow leaves out files without functions, such as barrel files.
+The complexity metrics rate one function. A file can be hard to change for other reasons too, for example many imports or many unused exports. `fallow health --file-scores` gives each file a score and its measurements. The measurements are the lines, the fan-in (the files that import it), fan-out (the files that it imports), the share of unused exports and the complexity density. Fallow sorts the files with the most concern first, so start with the files at the top. Fallow leaves out files without functions, such as barrel files.
 
 ### Maintainability index {#maintainability-index-mi}
 
-The [maintainability index](/analysis/health) (MI) is a number from 0 to 100 for one file. It goes down with more complexity for each line, more unused exports and more imports. Higher is better. The health score counts a file below 70 as low. The formula is different from the index of other tools, so do not compare the numbers.
+The [maintainability index](/analysis/health) (MI) is a number from 0 to 100 for one file. It goes down with more complexity for each line, more unused exports and more imports. Higher is better. In the demo project, `src/utils/legacy-currency.ts` has the MI 78.8, lower than most files, because each of its exports is unused. The health score counts a file below 70 as low. The formula is different from the index of other tools, so do not compare the numbers.
 
 ## Untested complexity risk {#untested-complexity-risk}
 
-Complex code without tests is the most likely place for a bug. Fallow combines the complexity of each function with its test coverage. Without coverage data, fallow estimates the coverage from the imports of the test files. Give fallow real coverage data with `--coverage` for exact scores.
+Complexity tells you how hard a function is. It does not tell you if tests protect the function, and complex code without tests is the most likely place for a bug. So fallow combines the complexity of each function with its test coverage. Without coverage data, fallow estimates the coverage from the imports of the test files, and the report says so in a hint line:
+
+```text
+  No coverage file found, so CRAP scores are a static estimate. Pass `--coverage <coverage-final.json>` for measured scores, or raise `health.maxCrap`.
+```
+
+This line is not an error. Give fallow real coverage data with `--coverage` for exact scores.
 
 ### CRAP score {#crap-score}
 
-CRAP combines the cyclomatic complexity of a function with its test coverage. A complex function without tests gets a high score. Fallow reports a score of 30 or more by default. Add tests for the function first, then make it simpler.
+CRAP combines the cyclomatic complexity of a function with its test coverage. A complex function without tests gets a high score: `classifyCustomer` has 23 paths and no test, so its estimate is 552.0. Fallow reports a score of 30 or more by default. Add tests for the function first, then make it simpler.
 
 Full reference: [High CRAP score](/rules/high-crap-score)
 
 ## Coverage gaps {#coverage-gaps}
 
-A coverage gap is production code that no test imports, directly or through other files. `fallow health --coverage-gaps` reports a file as [Untested file](/rules/untested-file) and an export as [Untested export](/rules/untested-export). A gap is not line coverage: a test can import a file and still skip most of its code. Add a test that imports the code, or check that fallow finds your test files.
+A coverage gap asks a simpler question than CRAP: does any test import the code at all? A coverage gap is production code that no test imports, directly or through other files. `fallow health --coverage-gaps` reports a file as [Untested file](/rules/untested-file) and an export as [Untested export](/rules/untested-export). A gap is not line coverage: a test can import a file and still skip most of its code. Add a test that imports the code, or check that fallow finds your test files.
 
 ## Runtime coverage {#runtime-coverage}
 
-[Runtime coverage](/analysis/runtime-coverage) adds data about the functions that ran in production. Each function gets a verdict, for example "safe to delete" for a function that is unused and never ran. A function that never ran can still run at another time of year, or only on an error path. Check those cases before you delete code.
+Test coverage shows the code that your tests run. [Runtime coverage](/analysis/runtime-coverage) adds data about the functions that ran in production. Each function gets a verdict, for example "safe to delete" for a function that is unused and never ran. A function that never ran can still run at another time of year, or only on an error path. Check those cases before you delete code.
 
 Full reference: [Runtime coverage](/rules/runtime-coverage), [Safe to delete](/rules/runtime-safe-to-delete), [Review required](/rules/runtime-review-required), [Low traffic](/rules/runtime-low-traffic), [Coverage unavailable](/rules/runtime-coverage-unavailable)
 
@@ -74,7 +90,7 @@ Coverage intelligence combines runtime coverage with the static analysis, the te
 
 ## Hotspot metrics {#hotspot-metrics}
 
-A hotspot is a file that is complex and changes often. `fallow health --hotspots` reads the git history to find them. Recent commits count more than old commits. The score is relative to your project: the worst file of a clean project can still have a high score. Refactor the top hotspots first, because a fix there helps most.
+A complex file costs you time only when you change it, so the metrics above need the change history too. A hotspot is a file that is complex and changes often. `fallow health --hotspots` reads the git history to find them. Recent commits count more than old commits. The score is relative to your project: the worst file of a clean project can still have a high score. Refactor the top hotspots first, because a fix there helps most.
 
 ## Change coupling {#change-coupling}
 
@@ -126,7 +142,16 @@ Full reference: [CSS broken reference](/rules/css-broken-reference)
 
 ## Health score {#health-score}
 
-The [health score](/analysis/health) is one number from 0 to 100 for the whole project. Higher is better. Fallow subtracts points for unused files and exports, complex functions, hotspots, cycles, duplication and other problems. The grade is A at 85 or more, B at 70, C at 55, D at 40 and F below 40. The JSON output lists each penalty, so you can see which problem costs the most points.
+The sections above rate functions and files. The [health score](/analysis/health) is one number from 0 to 100 for the whole project. Higher is better. Fallow subtracts points for unused files and exports, complex functions, hotspots, cycles, duplication and other problems. The grade is A at 85 or more, B at 70, C at 55, D at 40 and F below 40.
+
+The demo project gets a low score, and the first lines of the report show why:
+
+```text
+● Health score: 61 C
+  Deductions: unused deps -25.0 · duplication -10.0 · dead exports -2.9 · dead files -1.3
+```
+
+Fallow counts the unused dependencies for each 1,000 files, so in a small project one package can cost the maximum of 25 points. The demo project has 16 files and one unused dependency, `left-pad`. The JSON output lists each penalty, so you can see which problem costs the most points.
 
 ## Related
 

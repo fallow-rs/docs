@@ -6,7 +6,7 @@ keywords: ["dependency-cruiser", "depcruise", "architecture rules", "boundaries"
 icon: "scale-balanced"
 ---
 
-Fallow reports import cycles, imports across [architecture](/analysis/architecture) boundaries, and problems in `package.json` dependencies. This guide maps your dependency-cruiser rules to these checks. `fallow migrate` does not read a dependency-cruiser config, so you write the fallow config by hand.
+Your dependency-cruiser config holds the import rules of your project: no cycles, no imports across layers, no package that `package.json` does not list. Fallow reports import cycles, imports across [architecture](/analysis/architecture) boundaries, and problems in `package.json` dependencies, so most of these rules have a fallow check. `fallow migrate` does not read a dependency-cruiser config, so you write the fallow config by hand. Most checks need no config at all. Only a `forbidden` rule between directories needs boundary zones.
 
 ## Before you start
 
@@ -14,6 +14,8 @@ Fallow reports import cycles, imports across [architecture](/analysis/architectu
 - A fallow [config file](/configuration/overview), or a plan to create one.
 
 ## What maps to what
+
+Find each rule of your list in the left column. The right column gives the fallow issue type that reports the same problem:
 
 | dependency-cruiser rule | fallow issue type |
 |:--|:--|
@@ -27,6 +29,8 @@ Fallow reports import cycles, imports across [architecture](/analysis/architectu
 
 ## Steps
 
+The steps use the demo project of these docs. It imports `uuid` in `src/services/orders.ts`, and `package.json` does not list it. For the example, `src/lib/format.ts` also gets a `formatSku` function that imports `lookupPrice` from `src/services/catalog.ts`.
+
 1. Run the checks that need no config:
 
    ```bash
@@ -34,29 +38,37 @@ Fallow reports import cycles, imports across [architecture](/analysis/architectu
    npx fallow dead-code --unresolved-imports --unlisted-deps
    ```
 
-2. Write a zone for each directory of a `forbidden` rule. A dependency-cruiser `forbidden` rule says which imports are not allowed. A fallow boundary rule says which zones a zone can import from. Each other import between zones is a violation. This dependency-cruiser rule forbids imports from `src/ui` into `src/db`:
+   The demo has no cycle, so the first command prints `✓ No issues found`. The second command reports the package that a `no-non-package-json` rule reports:
+
+   ```text
+   ● Unlisted dependencies (1)
+     uuid
+     Packages imported in code but missing from package.json
+     https://fallow.tools/docs/explanations/dead-code/#unlisted-dependencies
+   ```
+
+2. Write a zone for each directory of a `forbidden` rule. The two tools state the rule from opposite sides. A dependency-cruiser `forbidden` rule says which imports are not allowed. A fallow boundary rule says which zones a zone can import from, and each other import between zones is a violation. This dependency-cruiser rule forbids imports from `src/lib` and `src/utils` into `src/services`:
 
    ```json
    {
      "forbidden": [
-       { "name": "ui-not-to-db", "severity": "error", "from": { "path": "^src/ui" }, "to": { "path": "^src/db" } }
+       { "name": "lib-not-to-services", "severity": "error", "from": { "path": "^src/(lib|utils)" }, "to": { "path": "^src/services" } }
      ]
    }
    ```
 
-   In fallow, the `ui` zone can import only from the `shared` zone:
+   In fallow, the `lib` zone can import no other zone:
 
    ```jsonc
    // .fallowrc.json
    {
      "boundaries": {
        "zones": [
-         { "name": "ui", "patterns": ["src/ui/**"] },
-         { "name": "db", "patterns": ["src/db/**"] },
-         { "name": "shared", "patterns": ["src/shared/**"] }
+         { "name": "lib", "patterns": ["src/lib/**", "src/utils/**"] },
+         { "name": "services", "patterns": ["src/services/**"] }
        ],
        "rules": [
-         { "from": "ui", "allow": ["shared"] }
+         { "from": "lib", "allow": [] }
        ]
      }
    }
@@ -70,14 +82,22 @@ Fallow reports import cycles, imports across [architecture](/analysis/architectu
 
 ## Check the result
 
-An import from `src/ui` into `src/db` gives this finding:
+The import in `src/lib/format.ts` breaks the rule, so the boundary check reports it and exits with code 1:
 
 ```text
 ● Boundary violations (1)
-  src/ui/view.ts:1 → src/db/query.ts (ui → db)
+  src/lib/format.ts:1 → src/services/catalog.ts (lib → services)
+  Imports that cross defined architecture zone boundaries
+  https://fallow.tools/docs/explanations/dead-code/#boundary-violations
+
+✗ 1 boundary violation (0.03s)
 ```
 
+Run the same check on a commit where dependency-cruiser reported a violation, and compare the two lists.
+
 ## What differs
+
+When the lists do not agree, look for one of these differences:
 
 - Fallow zone patterns are globs, not regular expressions. A file that matches no zone has no restriction. [Boundaries](/configuration/boundaries) shows presets for common layouts and zones for each feature directory.
 - A boundary rule matches on the zone of the importing file and the zone of the imported file. The only condition on the kind of import is `allowTypeOnly`, which allows type-only imports from more zones.
@@ -89,6 +109,6 @@ Each tool reads its own config, so you can run both in CI. Fallow does not repor
 
 ## Related
 
+- [Boundaries](/configuration/boundaries): read it next to model all your layers, or to start from a preset.
 - [Architecture](/analysis/architecture): cycles and boundaries.
-- [Boundaries](/configuration/boundaries): zones, rules and presets.
 - [`fallow architecture`](/cli/architecture): each option and the output.
