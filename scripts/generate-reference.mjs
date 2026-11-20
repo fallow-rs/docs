@@ -1035,9 +1035,110 @@ export const ruleFacts = (issue, configLink = () => undefined) => {
   return table(["Fact", "Value"], rows);
 };
 
+// A text of more words than this is split into paragraphs and lists.
+const LONG_TEXT_WORDS = 60;
+const PARAGRAPH_WORDS = 55;
+const PARAGRAPH_SENTENCES = 3;
+const LIST_ITEMS = 3;
+
+const wordCount = (text) => text.split(/\s+/u).filter(Boolean).length;
+
+/** The index of the `)` that closes the `(` at `open`, or -1. A parenthesis in a code span does not count. */
+const closingParenthesis = (text, open) => {
+  let depth = 0;
+  for (let index = open; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === "`") {
+      const end = text.indexOf("`", index + 1);
+      if (end === -1) {
+        return -1;
+      }
+      index = end;
+    } else if (character === "(") {
+      depth += 1;
+    } else if (character === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
+};
+
+/**
+ * The lead and the items of a sentence that lists code names, each with a
+ * text in parentheses, after a colon: "The kinds are: `a` (text), `b` (text)
+ * or `c` (text)." Null when the sentence has fewer than three such items, or
+ * other text after them.
+ */
+export const parseCodeList = (sentence) => {
+  const colon = sentence.indexOf(": `");
+  if (colon === -1) {
+    return null;
+  }
+  const items = [];
+  let rest = sentence.slice(colon + 1);
+  for (;;) {
+    rest = rest.replace(/^\s*(?:,\s*)?(?:(?:or|and)\s+)?/u, "");
+    const name = rest.match(/^`[^`]+`/u);
+    if (name === null) {
+      break;
+    }
+    const open = rest.slice(name[0].length).match(/^\s*\(/u);
+    if (open === null) {
+      return null;
+    }
+    const start = name[0].length + open[0].length - 1;
+    const end = closingParenthesis(rest, start);
+    if (end === -1) {
+      return null;
+    }
+    items.push({ name: name[0], text: rest.slice(start + 1, end).trim() });
+    rest = rest.slice(end + 1);
+  }
+  return items.length >= LIST_ITEMS && /^\s*\.?\s*$/u.test(rest) ? { lead: sentence.slice(0, colon + 1), items } : null;
+};
+
+/**
+ * The paragraphs and lists of a text of the tool. A short text is one
+ * paragraph. A long text gets a new paragraph after three sentences or 55
+ * words, and a sentence that {@link parseCodeList} reads becomes a list, so
+ * that a page has no wall of text.
+ */
+export const readableBlocks = (text) => {
+  const flat = text.replace(/\s+/gu, " ").trim();
+  if (wordCount(flat) <= LONG_TEXT_WORDS) {
+    return [escapeParagraph(flat)];
+  }
+  const blocks = [];
+  let paragraph = [];
+  const flush = () => {
+    if (paragraph.length > 0) {
+      blocks.push(escapeParagraph(paragraph.join(" ")));
+      paragraph = [];
+    }
+  };
+  for (const sentence of splitSentences(flat)) {
+    const list = parseCodeList(sentence);
+    if (list !== null) {
+      paragraph.push(list.lead);
+      flush();
+      blocks.push(list.items.map((item) => `- ${item.name}: ${escapeProse(terminate(item.text))}`).join("\n"));
+      continue;
+    }
+    if (paragraph.length >= PARAGRAPH_SENTENCES || (paragraph.length > 0 && wordCount([...paragraph, sentence].join(" ")) > PARAGRAPH_WORDS)) {
+      flush();
+    }
+    paragraph.push(sentence);
+  }
+  flush();
+  return blocks;
+};
+
 const section = (heading, text) => {
   const value = (text ?? "").trim();
-  return value === "" ? [] : [`## ${heading}`, "", escapeParagraph(value), ""];
+  return value === "" ? [] : [`## ${heading}`, "", ...readableBlocks(value).flatMap((block) => [block, ""])];
 };
 
 // A line of code: it ends with code punctuation, or starts with a comment
