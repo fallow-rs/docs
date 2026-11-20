@@ -1771,9 +1771,14 @@ export const buildGeneratedFiles = ({ contract, schema, inbound, existing = () =
 };
 
 const MAIN_BUILD = "a build of the main branch";
+const NO_RELEASE = "No release has this version yet.";
 
-/** Whether a contracts README says that the files come from a build of the main branch. */
-export const isMainBuild = (readme) => (readme ?? "").includes(MAIN_BUILD);
+/**
+ * Whether a contracts README says that the files come from a build of the
+ * main branch. The sentence about `--main-build` is in each README, so only
+ * the sentence about the missing release decides.
+ */
+export const isMainBuild = (readme) => (readme ?? "").includes(NO_RELEASE);
 
 /**
  * The README of the contracts directory, with the fallow version of the
@@ -1787,7 +1792,7 @@ export const renderContractReadme = (contract, { mainBuild = false } = {}) =>
     "These files are the source of the generated reference pages. `fallow schema --cli-reference --pretty` writes `cli-reference.json`: each command, option, exit code, environment variable, issue type and MCP tool and resource. `fallow config-schema` writes `config-schema.json`: the JSON Schema of the config file.",
     "",
     mainBuild
-      ? `The files come from ${MAIN_BUILD} of fallow, with the version ${contract.version}. No release has this version yet. Do not edit the files by hand.`
+      ? `The files come from ${MAIN_BUILD} of fallow, with the version ${contract.version}. ${NO_RELEASE} Do not edit the files by hand.`
       : `The files come from fallow ${contract.version}. Do not edit them by hand.`,
     "",
     "To refresh them, run `node scripts/generate-reference.mjs --update-contracts <path>`. The path is a `fallow` binary or a fallow checkout. Add `--main-build` when the binary is a build of the main branch and not a release. Then run `npm run docs:reference:write`.",

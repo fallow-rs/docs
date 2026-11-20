@@ -750,6 +750,14 @@ test("the contracts README says when the files come from a build of the main bra
   assert.ok(isMainBuild(files.get("contracts/README.md")));
 });
 
+test("the contracts README of a release stays a release README when the pages are written", () => {
+  const release = renderContractReadme({ version: "9.9.9" });
+  assert.equal(isMainBuild(release), false);
+  const { files } = buildGeneratedFiles({ contract: CONTRACT, schema: SCHEMA, inbound: INBOUND, existing: (path) => (path === "contracts/README.md" ? release : undefined) });
+  assert.equal(isMainBuild(files.get("contracts/README.md")), false);
+  assert.doesNotMatch(files.get("contracts/README.md"), /No release has this version yet/u);
+});
+
 // ---------------------------------------------------------------------------
 // Command line
 
