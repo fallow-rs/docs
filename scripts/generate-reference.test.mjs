@@ -47,6 +47,8 @@ import {
   renderGlobalOptions,
   renderMcpResources,
   renderMcpTools,
+  parseCodeList,
+  readableBlocks,
   renderContractReadme,
   renderPageBlocks,
   renderRule,
@@ -756,6 +758,41 @@ test("the contracts README of a release stays a release README when the pages ar
   const { files } = buildGeneratedFiles({ contract: CONTRACT, schema: SCHEMA, inbound: INBOUND, existing: (path) => (path === "contracts/README.md" ? release : undefined) });
   assert.equal(isMainBuild(files.get("contracts/README.md")), false);
   assert.doesNotMatch(files.get("contracts/README.md"), /No release has this version yet/u);
+});
+
+test("a short text stays one paragraph", () => {
+  assert.deepEqual(readableBlocks("An unused file adds weight. Delete it."), ["An unused file adds weight. Delete it."]);
+});
+
+test("a long text becomes paragraphs of at most three sentences", () => {
+  const sentence = (index) => `Sentence ${index} has exactly eight words in it.`;
+  const text = Array.from({ length: 10 }, (_, index) => sentence(index + 1)).join(" ");
+  const blocks = readableBlocks(text);
+  assert.equal(blocks.length, 4);
+  assert.equal(blocks[0], [1, 2, 3].map(sentence).join(" "));
+  assert.equal(blocks.join(" "), text);
+});
+
+test("a sentence that lists code names with a text in parentheses becomes a list", () => {
+  const list = parseCodeList("The `kind` field tells the cause: `skip-only` (a new `.skip`, `.only` or `fit` marker), `removed-tests` (fewer test cases (in a file)), or `rule-severity` (a less strict severity).");
+  assert.equal(list.lead, "The `kind` field tells the cause:");
+  assert.deepEqual(list.items, [
+    { name: "`skip-only`", text: "a new `.skip`, `.only` or `fit` marker" },
+    { name: "`removed-tests`", text: "fewer test cases (in a file)" },
+    { name: "`rule-severity`", text: "a less strict severity" },
+  ]);
+  assert.equal(parseCodeList("The keys are: `a` (one) and `b` (two)."), null);
+  assert.equal(parseCodeList("Use one of: `a` (one), `b` (two), `c` (three) and more text."), null);
+});
+
+test("a long text with a list keeps the lead with its paragraph and the items as bullets", () => {
+  const filler = "This sentence only adds words so that the text is long enough to split. ".repeat(6);
+  const blocks = readableBlocks(`${filler}The \`kind\` field tells the cause: \`a-kind\` (first reason), \`b-kind\` (second reason) or \`c-kind\` (third reason). The end.`);
+  const list = blocks.findIndex((block) => block.startsWith("- "));
+  assert.ok(list > 0);
+  assert.ok(blocks[list - 1].endsWith("The `kind` field tells the cause:"));
+  assert.equal(blocks[list], "- `a-kind`: first reason.\n- `b-kind`: second reason.\n- `c-kind`: third reason.");
+  assert.equal(blocks.at(-1), "The end.");
 });
 
 // ---------------------------------------------------------------------------
