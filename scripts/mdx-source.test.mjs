@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { collectAnchorSets, collectAnchors, collectHeadings, lineAt, stripCode } from "./mdx-source.mjs";
+import { collectAnchorSets, collectAnchors, collectHeadings, countLinesOutsideCode, lineAt, stripCode } from "./mdx-source.mjs";
 
 test("collects headings, explicit ids and titled components", () => {
   const anchors = collectAnchors(
@@ -41,4 +41,9 @@ test("blanks code but keeps line numbers", () => {
   assert.ok(stripped.startsWith("Run `xxxxxxxxxxxx`."));
   assert.ok(!stripped.includes("now"));
   assert.equal(lineAt(stripped, stripped.indexOf("End")), 5);
+});
+
+test("counts the lines outside code blocks", () => {
+  assert.equal(countLinesOutsideCode(["# Title", "", "```ts", "const a = 1;", "const b = 2;", "```", "", "Text."].join("\n")), 4);
+  assert.equal(countLinesOutsideCode("one\ntwo"), 2);
 });

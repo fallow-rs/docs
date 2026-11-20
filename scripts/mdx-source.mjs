@@ -28,6 +28,23 @@ export const stripCode = (text) =>
   );
 
 /** The 1-based line number of a character offset. */
+/**
+ * The number of lines of `text` outside its fenced code blocks. The lines of
+ * a code block and its two fence lines do not count.
+ */
+export const countLinesOutsideCode = (text) => {
+  let inFence = false;
+  let count = 0;
+  for (const line of text.split("\n")) {
+    if (/^\s*```/u.test(line)) {
+      inFence = !inFence;
+    } else if (!inFence) {
+      count += 1;
+    }
+  }
+  return count;
+};
+
 export const lineAt = (text, offset) => text.slice(0, offset).split("\n").length;
 
 /** Heading slug: drop markup and punctuation, lowercase, join words with `-`. */

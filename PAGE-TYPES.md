@@ -28,7 +28,8 @@ file. [Checks](#checks) lists what each check enforces.
 | Command reference | `cli/` | None |
 | Rule reference | `rules/` | 80 lines |
 
-The line budget counts every line of the file, also the frontmatter. Each
+The line budget counts every line of the file, also the frontmatter. On a
+rule page, the lines of a code block do not count. Each
 page also has a hard limit of 50,000 characters.
 
 A page in another directory has no page type. The generic rules apply to it:
@@ -309,7 +310,8 @@ The page path is `rules/<issue type id>.mdx`, for example
 frontmatter. It keeps the other frontmatter keys and
 each line below the block.
 
-**Line budget.** 80 lines.
+**Line budget.** 80 lines. The lines of a code block do not count, because
+the example of a rule shows the files of a small project.
 
 **Never on this page.** The explanation of reachability or of another
 concept (link to it), and the options of the command.
