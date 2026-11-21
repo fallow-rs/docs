@@ -6,7 +6,7 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { listPagePaths } from "./mdx-source.mjs";
+import { countLinesOutsideCode, listPagePaths } from "./mdx-source.mjs";
 
 // Writes the reference that the tool already knows: command options, global
 // options, exit codes, environment variables, config keys and issue types.
@@ -1234,16 +1234,45 @@ const SOURCE_PATH = /(?<![\w`/.@-])(?:\.{1,2}\/)?[\w@.-]+(?:\/[\w@.[\]-]+)+\.(?:
 /** Wraps each file path of a prose example in a code span. Text in a code span stays as it is. */
 export const wrapSourcePaths = (text) => mapProse(text, (prose) => prose.replace(SOURCE_PATH, (path) => `\`${path}\``));
 
-const exampleSection = (text) => {
+/** The language of a code fence for a file path: its extension, or `text` without one. */
+const fenceLanguage = (path) => {
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  const dot = name.lastIndexOf(".");
+  return dot === -1 ? "text" : name.slice(dot + 1);
+};
+
+/** One file of an example project as a code block with the file path as its title. */
+const exampleFileBlock = (file) => ["```" + `${fenceLanguage(file.path)} title="${file.path}"`, file.code.trimEnd(), "```", ""];
+
+/**
+ * The files of the example project of a rule as code blocks. A rule that
+ * reports on a change has the files before the change and the files after it.
+ */
+const exampleFileLines = (explanation) => {
+  const files = explanation.example_files ?? [];
+  const baseFiles = explanation.example_base_files ?? [];
+  if (baseFiles.length === 0) {
+    return files.flatMap(exampleFileBlock);
+  }
+  return ["**Before the change**", "", ...baseFiles.flatMap(exampleFileBlock), "**After the change**", "", ...files.flatMap(exampleFileBlock)];
+};
+
+const exampleProse = (text) => {
   const value = (text ?? "").trim();
   if (value === "") {
     return [];
   }
   if (!isCodeExample(value)) {
-    return section("Example", wrapSourcePaths(value));
+    return readableBlocks(wrapSourcePaths(value)).flatMap((block) => [block, ""]);
   }
   const body = value.startsWith("```") ? renderDoc(value) : ["```" + LANGUAGE, value.replaceAll(EM_DASH, ","), "```"].join("\n");
-  return ["## Example", "", body, ""];
+  return [body, ""];
+};
+
+/** The "Example" section: the sentence that describes the example, then the files of the example project. */
+const exampleSection = (explanation) => {
+  const lines = [...exampleProse(explanation.example), ...exampleFileLines(explanation)];
+  return lines.length === 0 ? [] : ["## Example", "", ...lines];
 };
 
 /** The note of an issue type as a paragraph below the facts table. A long note does not fit in a table cell. */
@@ -1265,7 +1294,7 @@ export const renderRule = (contract, id, configLink) => {
     `[${teaching.title}](${teaching.page}) explains how fallow finds it.`,
     "",
     ...section("Why it matters", explanation.rationale),
-    ...exampleSection(explanation.example),
+    ...exampleSection(explanation),
     ...section("Fix", explanation.how_to_fix),
     "## Facts",
     "",
@@ -2046,11 +2075,11 @@ const reportOrphans = (orphans) => {
   }
 };
 
-/** Rule pages whose generated part alone is longer than the line budget of a rule page. */
+/** Rule pages whose generated part alone is longer than the line budget of a rule page. Code block lines do not count. */
 export const overBudgetRules = (files) =>
   [...files]
     .filter(([path]) => path.startsWith("rules/"))
-    .map(([path, text]) => ({ path, lines: text.slice(0, text.indexOf(END) + END.length).split("\n").length }))
+    .map(([path, text]) => ({ path, lines: countLinesOutsideCode(text.slice(0, text.indexOf(END) + END.length)) }))
     .filter((entry) => entry.lines > RULE_LINE_BUDGET);
 
 const reportRuleBudget = (entries) => {

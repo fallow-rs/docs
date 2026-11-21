@@ -67,7 +67,7 @@ import {
   teachingPage,
   updateRulePage,
 } from "./generate-reference.mjs";
-import { collectHeadings, findBareMdx } from "./mdx-source.mjs";
+import { collectHeadings, countLinesOutsideCode, findBareMdx } from "./mdx-source.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const readJson = (path) => JSON.parse(readFileSync(resolve(ROOT, path), "utf8"));
@@ -431,7 +431,7 @@ test("generates one rule page for each issue type, within the line budget", () =
     const text = generated.files.get(`rules/${issue.id}.mdx`);
     const description = text.match(/^description: (.*)$/mu)[1];
     assert.ok(JSON.parse(description).length <= 160, issue.id);
-    assert.ok(text.split("\n").length <= RULE_LINE_BUDGET, issue.id);
+    assert.ok(countLinesOutsideCode(text) <= RULE_LINE_BUDGET, issue.id);
   }
 });
 
@@ -707,6 +707,22 @@ test("renders an example as a code block only when the contract fences it or eac
   const contract = { ...CONTRACT, issue_types: CONTRACT.issue_types.map((issue) => (issue.id === "unused-export" ? { ...issue, explanation: { ...issue.explanation, example: "import { a } from './a';\nexport const b = a();" } } : issue)) };
   assert.match(renderRule(contract, "unused-export"), /## Example\n\n```ts\nimport \{ a \} from '.\/a';\nexport const b = a\(\);\n```\n/u);
   assert.match(generated.files.get("rules/unused-export.mdx"), /^`export const formatPrice = \.\.\.` exists in `src\/money\.ts`/mu);
+});
+
+test("renders the files of the example project as code blocks with the file path as the title", () => {
+  const withExample = (explanation) => ({ ...CONTRACT, issue_types: CONTRACT.issue_types.map((issue) => (issue.id === "unused-export" ? { ...issue, explanation: { ...issue.explanation, ...explanation } } : issue)) });
+  const files = [
+    { path: "src/money.ts", code: "export const formatPrice = 1;\n" },
+    { path: ".fallowrc.json", code: "{}\n" },
+  ];
+  const page = renderRule(withExample({ example: "A sentence.", example_files: files, example_base_files: [] }), "unused-export");
+  assert.ok(page.includes('## Example\n\nA sentence.\n\n```ts title="src/money.ts"\nexport const formatPrice = 1;\n```\n\n```json title=".fallowrc.json"\n{}\n```\n\n## Fix'));
+
+  const change = renderRule(withExample({ example: "A sentence.", example_files: [{ path: "a.test.ts", code: "it.skip();\n" }], example_base_files: [{ path: "a.test.ts", code: "it();\n" }] }), "unused-export");
+  assert.ok(change.includes('**Before the change**\n\n```ts title="a.test.ts"\nit();\n```\n\n**After the change**\n\n```ts title="a.test.ts"\nit.skip();\n```\n'));
+
+  const none = renderRule(withExample({ example: "A sentence.", example_files: [], example_base_files: [] }), "unused-export");
+  assert.ok(none.includes("## Example\n\nA sentence.\n\n## Fix"));
 });
 
 test("writes the note of an issue type below the facts table, not in a cell", () => {
