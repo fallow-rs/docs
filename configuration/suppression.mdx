@@ -2,7 +2,7 @@
 title: "Suppression comments and tags"
 sidebarTitle: "Suppression comments"
 description: "Find the fallow-ignore comments, range markers, JSDoc tags and config keys that hide findings, with the rules for each form."
-keywords: ["suppress", "fallow-ignore-next-line", "fallow-ignore-file", "fallow-ignore-start", "fallow-ignore-end", "@public", "@internal", "@beta", "@alpha", "@expected-unused", "JSDoc", "stale suppressions", "suppression reason"]
+keywords: ["suppress", "fallow-ignore-next-line", "fallow-ignore-file", "fallow-ignore-start", "fallow-ignore-end", "@public", "@internal", "@beta", "@alpha", "@expected-unused", "JSDoc", "stale suppressions", "suppression reason", "fallow-override-threshold-next-line"]
 icon: "comment-slash"
 ---
 
@@ -62,6 +62,35 @@ Some tokens are different from the issue type id, or work only in one form:
 | `unused-catalog-entry` | A YAML comment, `# fallow-ignore-next-line unused-catalog-entry`, on the line above the entry in `pnpm-workspace.yaml`. |
 
 A comment in a source file cannot hide a finding that belongs to `package.json`, for example an unused dependency. Use the [config keys](#config-keys) for these findings.
+
+## Threshold override comments {#threshold-override-comments}
+
+A suppression comment hides a complexity finding. A `fallow-override-threshold-next-line` comment keeps the function in the health output and gives it its own limits. The function still fails when it grows past these limits.
+
+```ts
+// src/lib/parse.ts
+// fallow-override-threshold-next-line maxCyclomatic=30 maxCognitive=40 -- generated lookup table
+export function parseRow(row: string): Row {
+  // ...
+}
+```
+
+- Put the comment on the line directly before the function. For a decorated method, put it between the decorator and the method name, as for `fallow-ignore-next-line complexity`.
+- The keys are the keys of a [`health.thresholdOverrides`](/reference/config-health#health-thresholdoverrides) entry: `maxCyclomatic`, `maxCognitive`, `maxCrap` and `maxUnitSize`. Write each key one time, as `key=value`.
+- The reason after ` -- ` is required. A comment without a reason, with an unknown key or with a bad value has no effect, and `fallow health` lists it under `inline_threshold_override_problems`.
+- For each limit that it sets, the comment wins over a `thresholdOverrides` entry. The human output of `fallow health` shows `override (comment, line N)` under the finding, or `override (config)` for a config entry.
+- A `fallow-ignore-next-line complexity` comment hides the finding. It does not go together with a threshold override comment, because each comment applies to the next line only.
+- [`health.inlineThresholdOverrides: false`](/reference/config-health) turns the comment form off. Use it when each exception must be in the config file.
+- `fallow audit` reports a new comment through the [`added-suppression`](/rules/added-suppression) rule, so a reviewer sees the raised limit.
+
+The JSON output of `fallow health` has an `inline_threshold_overrides` array with one row for each comment and each dimension that it sets. A row has the fields of a [`threshold_overrides` row](/cli/health#threshold-overrides) without `override_index`, plus these fields:
+
+| Field | Content |
+|:--|:--|
+| `path`, `comment_line` | The file and the 1-based line of the comment. |
+| `function`, `line`, `col` | The function on the next line. No position on a `no_match` row: no function starts on the next line. |
+
+The `inline_threshold_override_problems` array lists each comment with a problem, with `path`, `line` and `problem`: `missing_reason`, `missing_threshold`, `invalid_key`, `invalid_value` or `disabled`. An `invalid_key` or `invalid_value` row also has the `token`. `disabled` means that `health.inlineThresholdOverrides` is `false`.
 
 ## Unknown tokens and stale suppressions {#stale-suppressions}
 
@@ -144,6 +173,7 @@ A comment or a tag works for one place in the code. For a package in `package.js
 | Need | Use |
 |:--|:--|
 | One finding in code that you keep | A `fallow-ignore-next-line` comment |
+| A complex function that you keep visible with its own limits | A [`fallow-override-threshold-next-line`](#threshold-override-comments) comment, or [`thresholdOverrides`](/reference/config-health#health-thresholdoverrides) for many files |
 | All findings of one issue type in one file | A `fallow-ignore-file <token>` comment |
 | An export that code outside the project uses | `@public`, or [`ignoreExports`](/reference/config-dead-code#ignoreexports) for many files |
 | An unused export that you keep on purpose | `@expected-unused` |
