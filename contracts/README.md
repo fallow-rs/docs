@@ -2,6 +2,6 @@
 
 These files are the source of the generated reference pages. `fallow schema --cli-reference --pretty` writes `cli-reference.json`: each command, option, exit code, environment variable, issue type and MCP tool and resource. `fallow config-schema` writes `config-schema.json`: the JSON Schema of the config file.
 
-The files come from fallow 3.45.0. Do not edit them by hand.
+The files come from fallow 3.46.0. Do not edit them by hand.
 
 To refresh them, run `node scripts/generate-reference.mjs --update-contracts <path>`. The path is a `fallow` binary or a fallow checkout. Add `--main-build` when the binary is a build of the main branch and not a release. Then run `npm run docs:reference:write`.
