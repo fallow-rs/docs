@@ -63,7 +63,7 @@ fallow health [OPTIONS] [PATH]
 | `--complexity-breakdown` |  | Include the per-decision-point complexity breakdown (`contributions[]`) on each complexity finding in `--format json` output. Each entry names the construct (if, else-if, loop, boolean operator, ...) and its cyclomatic/cognitive weight, so a consumer can explain WHY a function scored high. Off by default to keep CI/default output lean |
 | `--top <TOP>` |  | Show only the N most complex functions |
 | `--sort <SORT>` | `cyclomatic` | Sort by: cyclomatic (default), cognitive, lines, or severity |
-| `--save-snapshot <PATH>` |  | Save a vital signs snapshot for trend tracking. Defaults to `.fallow/snapshots/{timestamp}.json` if no path is given. |
+| `--save-snapshot <PATH>` |  | Save a vital signs snapshot for trend tracking. Defaults to `.fallow/snapshots/{timestamp}.json` if no path is given, with a `-2`, `-3` suffix when a snapshot of the same second exists. |
 
 ### Gates {#options-gates}
 
@@ -100,7 +100,7 @@ Without a section option, the run shows the health score, the complexity finding
 - `--hotspots` and `--ownership` need git history, or a `--churn-file`. Outside a git repository, the section is empty and the run continues.
 - `--score` alone does not read the git history, so the score has no hotspot penalty. Add `--hotspots` for the penalty.
 - `--coverage-gaps` and `--type-coupling` are opt-in. `--type-coupling` needs `--type-aware`.
-- Fallow takes the coverage path from `--coverage`, else from `FALLOW_COVERAGE`, else from `health.coverage`. When none is set, fallow reads `coverage/coverage-final.json`, then `.nyc_output/coverage-final.json`, in the project root. Without these files, it estimates the CRAP score. A file that fallow finds on disk gives the note `using auto-detected coverage at <path>` on stderr. `--coverage-root` follows the same order with `FALLOW_COVERAGE_ROOT` and `health.coverageRoot`, and must be an absolute path.
+- Fallow takes the coverage path from `--coverage`, else from `FALLOW_COVERAGE`, else from `health.coverage`. When none is set, fallow reads `coverage/coverage-final.json`, then `.nyc_output/coverage-final.json`, in the project root. Without these files, it estimates the CRAP score. An auto-detected file gives the note `using auto-detected coverage at <path>` on stderr. `--coverage-root` follows the same order with `FALLOW_COVERAGE_ROOT` and `health.coverageRoot`, and must be an absolute path.
 - `--coverage` reads an Istanbul coverage map (`coverage-final.json`), a directory that holds one, a raw V8 coverage directory, or one V8 coverage JSON file. It does not read LCOV: with `lcov.info`, the run stops with `failed to parse coverage data` and exits with code 2. Add the `json` reporter to the test runner, and pass `coverage-final.json`.
 
 ### Coverage input {#coverage-input}
@@ -108,7 +108,7 @@ Without a section option, the run shows the health score, the complexity finding
 Fallow computes the statement coverage of each function over the statements in the body of that function. The statements of a nested function belong to the nested function, not to the function that holds it.
 
 - For an Istanbul map, fallow counts the statements of each function from the file on disk, and reads the counts from the map. The coverage of a function can therefore differ from the text table of the test runner.
-- For V8 input, fallow takes the statements from the file on disk and the counts from the V8 block ranges. It adds the dumps of all test processes together. A transpiled script (`tsx`, an esbuild or webpack bundle) maps back to its source files through the source map that Node writes into the dump. A script that is different from the file on disk and has no source map keeps the estimate.
+- For V8 input, fallow takes the statements from the file on disk and the counts from the V8 block ranges. It sums the dumps of all test processes. A transpiled script (`tsx`, an esbuild or webpack bundle) maps back to its sources through the source map that Node writes into the dump. A script that is different from the file on disk and has no source map keeps the estimate.
 - A function that the coverage data does not describe keeps the estimate. The human output counts the matched functions: `CRAP scores use Istanbul coverage where matched (22/25 functions); the rest fall back to the static estimate.`
 - When the coverage data describes files that match no analyzed file, fallow prints `note: the coverage file describes N files that no analyzed file matched`. Set `--coverage-root` to the checkout that made the data.
 
@@ -136,9 +136,9 @@ The policy changes the cyclomatic value of the `maxCyclomatic` gate, of each CRA
 
 ### Threshold overrides {#threshold-overrides}
 
-A [`health.thresholdOverrides`](/reference/config-health#health-thresholdoverrides) entry gives some files or functions their own limits. The entry keeps the function in the output, and a suppression comment hides it. A finding that fallow checked against an override has `effective_thresholds` and `threshold_source: "override"`.
+A [`health.thresholdOverrides`](/reference/config-health#health-thresholdoverrides) entry gives some files or functions their own limits. The entry keeps the function in the output, and a suppression comment hides it. A finding checked against an override has `effective_thresholds` and `threshold_source: "override"`.
 
-When an entry affects the run, the JSON output has a `threshold_overrides` array. It has one row for each entry and each dimension that the entry sets. The dimension `complexity` covers `maxCyclomatic`, `maxCognitive`, `maxUnitSize` and `maxFileLines`. The dimension `crap` covers only `maxCrap`. To count the entries and not the rows, group on `override_index`.
+When an entry affects the run, the JSON output has a `threshold_overrides` array. It has one row for each entry and dimension. The dimension `complexity` covers `maxCyclomatic`, `maxCognitive`, `maxUnitSize` and `maxFileLines`. The dimension `crap` covers only `maxCrap`. To count the entries and not the rows, group on `override_index`.
 
 | Field | Content |
 |:--|:--|
