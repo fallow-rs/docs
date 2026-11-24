@@ -153,6 +153,44 @@ Two files often change in the same commits, and no import connects them. Fallow 
 
 Each hotspot shows how far a change to the file usually spreads: the median number of files, and of lines, in the commits that change the file. A high number means that a change to this file usually needs changes in many other files.
 
+## Shallow directories {#shallow-directories}
+
+A directory is a module: files outside it use its interface items, and it keeps the rest inside. A deep directory hides much code behind a small interface. A shallow directory shows almost all that it has, so each caller must learn many names and gets little in return. `fallow health --shallow-directories` reports a directory when files outside it use at least as many of its interface items as it keeps inside, and it shows at least `health.shallowDirectories.minInterface` items (default 8).
+
+An interface item is a module-scope function or an exported class with a method. Types, constants, enums and UI components are no items, because a wide set of them is usually on purpose. An export that a package entry re-exports is public API, so it is no item either. Only runtime imports from files that are not tests or stories count as use. A barrel `index` file is the face of its directory: a caller that imports through it counts for the file that declares the item.
+
+Some directories pass the counts but do not act as one module. Fallow does not report them, and their parent directory counts their items:
+
+- a catalog, where the shown items come about one per file (one hook, model or task per file), or all from one file;
+- a family, where at least 30 percent of the shown functions have one parameter list, for example a set of editor commands;
+- low reuse, where the shown items have fewer than 2 outside users on average.
+
+A reported directory claims its items, so one wide child does not make each of its parents shallow too.
+
+The signal finds junk-drawer `utils`, `lib` and `shared` directories best. A cohesive set of same-role functions with different parameter lists, such as an i18n helper set, can still report: in a check on public projects, about half of the findings were real. Move the logic behind fewer items, split the directory by the concern of its callers, or merge a helper into its only caller. When the width is on purpose, add the directory to `health.shallowDirectories.ignore`. [Fields](#shallow-directory-fields) lists the JSON fields.
+
+### Fields {#shallow-directory-fields}
+
+| Field | Description |
+|:--|:--|
+| `min_interface` | The `health.shallowDirectories.minInterface` value of the run. |
+| `total` | The shallow directories before `--top`. |
+| `directories[].path` | The directory, relative to the project root. |
+| `directories[].anchor_file` | The `index` file of the directory, else its first source file. SARIF and CodeClimate report the finding on this file. |
+| `directories[].shown_count`, `shown_files` | The interface items that files outside the directory use, and the files of the directory that declare them. |
+| `directories[].hidden_count` | The functions and classes that no outside file uses. |
+| `directories[].items` | At most 7 shown items, the most used first: `name`, `path`, `line`, `kind` (`function` or `class`), `outside_files`, and `members` for a class. `is_default` marks a default export. |
+| `directories[].more_items` | The shown items that `items` leaves out. |
+| `directories[].actions` | `narrow-interface`, and `ignore-directory`. Add its `value`, an escaped glob of the directory, to its `config_key` list (`health.shallowDirectories.ignore`) to hide the directory. |
+
+SARIF has the rule `fallow/shallow-directory` at level `note`. CodeClimate has the check `fallow/shallow-directory` at severity `info`. Both fingerprints read the directory, so a new anchor file keeps them. The markdown format adds a `Shallow Directories` table, and the compact format has one line for each directory:
+
+```text
+shallow-directory:src/utils/index.ts:dir=src/utils,shown=8,hidden=2,files=2
+```
+
+Full reference: [Shallow directory](/rules/shallow-directory)
+
 ## Refactoring targets {#refactoring-targets}
 
 `fallow health --targets` gives a list of files to refactor, with the reason, the expected effort and the confidence. The quick wins come first. Start at the top of the list, and act on the evidence of each target, for example the unused exports or the complex functions that it names. [Refactoring targets](/cli/health#refactoring-targets) gives the priority formula and the rule of each category.
