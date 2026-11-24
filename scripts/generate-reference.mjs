@@ -1717,7 +1717,7 @@ export const CONFIG_AREAS = [
   {
     slug: "dead-code",
     title: "Dead code and dependencies",
-    keys: ["ignoreFindings", "ignoreDependencies", "ignoreBinaries", "ignoreCommandEntries", "ignoreUnresolvedImports", "ignoreExports", "ignoreCatalogReferences", "ignoreDependencyOverrides", "ignoreExportsUsedInFile", "ignoreDecorators", "usedClassMembers", "unusedComponentProps", "effect", "sharedStateAllowlist", "fix"],
+    keys: ["ignoreFindings", "ignoreDependencies", "ignoreBinaries", "ignoreCommandEntries", "ignoreUnresolvedImports", "ignoreExports", "ignoreCatalogReferences", "ignoreDependencyOverrides", "ignoreExportsUsedInFile", "keepExportTags", "ignoreDecorators", "usedClassMembers", "unusedComponentProps", "effect", "sharedStateAllowlist", "fix"],
   },
   { slug: "rules", title: "Rules and gates", keys: ["rules", "overrides", "regression", "audit", "showCascade"] },
   { slug: "duplication", title: "Duplication", keys: ["duplicates", "similarCode"] },
