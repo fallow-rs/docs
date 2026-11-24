@@ -39,6 +39,8 @@ The file works only when fallow finds it, so its name and its place matter.
 
 Fallow starts in the project root: the current directory, or the directory that `--root` names. It looks for the names in the order of the table, and the first file that exists wins. When the directory has no config file, fallow looks in each parent directory up to the repository root: the directory with `.git`, `.hg` or `.svn`. When one directory has two config files, fallow loads the file that is higher in the table. It writes a warning on stderr that names the other file. To load a file at another path, pass `--config <path>`.
 
+Fallow does not read other names, such as `fallow.json`, `fallow.jsonc`, `fallow.yaml` or `fallow.config.json`. When the project root has such a file and none of the names in the table, the run writes a `Note:` line that names the file and the accepted names. The JSON output has a `config-file-name-unrecognized` entry in `workspace_diagnostics`. Rename the file, or pass it with `--config` when it is JSON.
+
 ## Editor completion {#json-schema}
 
 A key with a wrong name stops the run (see the next section), so it helps when your editor finds the error while you type. Add the `$schema` key to a JSON config file. Your editor then completes the keys and checks the values:
@@ -203,12 +205,24 @@ Each format shows the warnings in a different place:
 
 ### Unmatched config patterns {#unmatched-config-patterns}
 
-An `ignoreDependencies` glob matches no declared dependency, or an `ignoreFindings` pattern matches no finding. The usual cause is a typo. `fallow dead-code`, `fallow audit` and the bare `fallow` run report it, with the kind `ignore-dependencies-glob-unmatched` or `ignore-findings-pattern-unmatched` and a `pattern` field:
+A config entry matches nothing in the run. The usual cause is a typo, or a file or an export that was moved, renamed or deleted. `fallow dead-code`, `fallow audit` and the bare `fallow` run report it, with a `pattern` field:
+
+| `kind` | Entry | When it matches nothing |
+|:--|:--|:--|
+| `ignore-dependencies-glob-unmatched` | An `ignoreDependencies` glob | No declared dependency has a matching name. |
+| `ignore-findings-pattern-unmatched` | An `ignoreFindings` pattern | No finding has a matching path. |
+| `ignore-exports-file-unmatched` | The `file` glob of an `ignoreExports` rule | No analyzed file has a matching path. |
+| `ignore-exports-name-unmatched` | A name in the `exports` of an `ignoreExports` rule | No file that the glob matches declares or re-exports the name. The entry also has `file` and `export`. |
+| `duplicates-ignore-unmatched` | A `duplicates.ignore` glob | No project file has a matching path. |
+| `health-ignore-unmatched` | A `health.ignore` glob | No project file has a matching path. |
 
 ```json
 {"path":".","kind":"ignore-dependencies-glob-unmatched","pattern":"@acm/*","message":"ignoreDependencies glob '@acm/*' matched no declared dependency in this run, so it has no effect. A glob matches package names, such as @scope/*. Fix the glob, or remove it from the config."}
 ```
 
+- A file with `export *` can supply any name, so fallow does not report a name of a rule that matches such a file.
+- When the `file` glob of an `ignoreExports` rule matches no file, fallow reports the glob once and not each name of the rule.
+- A run with `--production` reports no unmatched `ignoreExports`, `duplicates.ignore` or `health.ignore` entry, because it reads fewer files.
 - Fallow reports an `ignoreDependencies` glob only when the run reports dependency findings. A run with `--file`, or with an issue filter without `--unused-deps` or `--unlisted-deps`, does not report it. An exact package name never gives this warning.
 - Fallow compares an `ignoreFindings` pattern with each finding of the analysis, before the issue filters and the scope filters. So a filtered run does not make a pattern look unused.
 - Fallow does not report an `ignoreFindings` pattern whose removal changes which paths are hidden. When no positive pattern matched beside `!` exceptions, the positive patterns are not reported: without them, every path outside the exceptions is hidden. When there is no positive pattern and no `!` exception matched, the exceptions are not reported: without them, no path is hidden.
