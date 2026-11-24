@@ -45,6 +45,7 @@ fallow health [OPTIONS] [PATH]
 | `--complexity` | Show only complexity findings (functions exceeding thresholds). By default all sections are shown; use this to select only complexity |
 | `--file-scores` | Show only per-file health scores (fan-in, fan-out, dead code ratio, maintainability index). Requires full analysis pipeline (graph + dead code detection). |
 | `--coverage-gaps` | Show only static test coverage gaps: runtime files and exports with no dependency path from any discovered test root. Requires full analysis pipeline |
+| `--shallow-directories` | Show only shallow directories: directories whose interface is as large as what they hide. Advisory, no health score weight. |
 | `--hotspots` | Show only hotspots: files that are both complex and frequently changing. Combines git churn history with complexity data. |
 | `--ownership` | Attach ownership signals to hotspot entries: bus factor, contributor count, declared CODEOWNERS owner, and ownership drift. Implies `--hotspots`. |
 | `--ownership-emails <MODE>` | Privacy mode for author emails emitted with `--ownership`. Defaults to `handle` (local-part only). Values: `raw`, `handle`, `anonymized`. |
@@ -349,7 +350,7 @@ Fallow writes each entry with or without `--quiet`. These kinds come from the he
 | `ownership-unavailable` | The ownership inputs did not load. `cause` is `invalid-bot-pattern` or `codeowners-parse-failed`. | `true` |
 | `trend-snapshot-unreadable` | Fallow could not read a saved snapshot, so the trend uses fewer snapshots. | `true` |
 | `change-coupling-skipped` | `change_coupling.pairs` is empty. `cause` is `shallow-clone` or `too-few-commits`. The other sections still measure. | absent |
-| `trend-group-baseline-unavailable` | The baseline snapshot has no group data for the `--group-by` mode. See [Group trends](#group-trends). | absent |
+| `trend-group-baseline-unavailable` | The baseline snapshot has no group data for the `--group-by` mode. See [Group trends](/cli/health-files#group-trends). | absent |
 | `coverage-auto-detected` | Not a failure: `path` names the coverage file that fallow found on disk. | absent |
 
 The set of kinds is open. Read a kind that you do not know as one more diagnostic, not as an error.
@@ -522,70 +523,9 @@ The markdown format adds a `Hidden Change Coupling` table after the hotspots, wh
 change-coupling:src/a.ts:src/b.ts:degree=1.00,shared=6,commits_a=6,commits_b=6,strong=true
 ```
 
-### Snapshot file {#snapshots}
+### Snapshot and churn files {#snapshots}
 
-`--save-snapshot` writes `.fallow/snapshots/<timestamp>.json`, or the path that you give. `--trend` reads the newest file in that directory, and `--trend-from` reads one file. A snapshot has these fields:
-
-| Field | Content |
-|:--|:--|
-| `snapshot_schema_version` | The version of this file format. |
-| `version`, `timestamp`, `git_sha`, `git_branch`, `shallow_clone` | The fallow version, the time and the git state of the run. |
-| `vital_signs`, `counts` | The [vital signs](#vital-signs) and the numbers behind them. |
-| `score`, `grade`, `score_formula_version` | The health score. A trend compares scores only when the formula versions match. |
-| `coverage_model` | The source of the CRAP coverage. |
-| `groups` | The metrics of each group, when the run used `--group-by`. |
-| `analysis_identity` | The mode of the analysis, for example `syntactic`, and its completeness. |
-
-`--save-snapshot` computes the file scores and the hotspots, so the saved metrics are complete. A trend without a formula version, or with a different version, has no score delta. The other metrics still compare.
-
-With `--trend`, the output has `health_trend`:
-
-- `compared_to`: the `timestamp`, `git_sha`, `score`, `grade` and `score_formula_version` of the snapshot.
-- `metrics[]`: one entry for each metric, with `name`, `label`, `previous`, `current`, `delta`, `unit` and `direction` (`improving`, `declining` or `stable`). A percentage has `previous_count` and `current_count` with `value` and `total`.
-- `snapshots_loaded`, and `overall_direction`: `improving` when more metrics improve than decline, `declining` for the reverse, else `stable`.
-
-Without a saved snapshot, the output has no `health_trend`.
-
-#### Group trends {#group-trends}
-
-With `--group-by`, `--trend` and `--trend-from` also compare each group with the same group key in the snapshot. Save the snapshot with the same `--group-by` mode. Each group gets `trend_status`:
-
-- `compared`: the group has a `trend` object with the shape of `health_trend`.
-- `new_group`: the snapshot has group data, but not for this key.
-- `no_group_baseline`: the snapshot did not measure this group. When it has no group data for the mode, the run adds a `trend-group-baseline-unavailable` diagnostic. The project trend still works.
-
-### Churn file {#importing-churn-from-a-non-git-vcs}
-
-`--churn-file <PATH>` reads the change history from a JSON file, for a project without git. The file feeds `--hotspots`, `--ownership` and `--targets`. When the project also has git, the file wins.
-
-```json
-// churn.json
-{
-  "schema": "fallow-churn/v1",
-  "events": [
-    { "path": "src/foo.ts", "timestamp": 1717459200, "author": "dev@corp", "added": 10, "deleted": 5 }
-  ]
-}
-```
-
-| Field | Required | Content |
-|:--|:--|:--|
-| `path` | yes | The path from the repository root, with forward slashes. |
-| `timestamp` | yes | The commit time in Unix seconds, UTC. A time more than one year in the future exits with code 2. |
-| `author` | no | One stable identity for each person, for example the email. Fallow does not apply a mailmap. |
-| `added`, `deleted` | yes | The changed lines. The hotspot score counts events, so the line counts are only for display. |
-| `commit` | no | A commit id. The events with the same id form one commit. Change coupling and change dispersion need it. |
-
-For git, fallow runs `git log --numstat --no-merges --no-renames --use-mailmap`. A file from another version control system must follow the same rules, else the hotspots and the ownership signals are wrong:
-
-1. Leave out merge commits. Else the author of the merge looks like a contributor to each merged file.
-2. Leave out binary files. Do not write them with `0` lines.
-3. Give a renamed file under its new path only, with the real line counts. Do not write a delete of the old path.
-4. Give one event for each commit and file, with `timestamp` in seconds.
-
-Fallow ignores other fields. When your version control system records commits under a merge or CI identity, add that identity to `health.ownership.botPatterns`. Else the bus factor is 1 for each file. An empty `events` array is valid and gives no hotspots. A file that is not valid stops the run with exit code 2. The file is resolved from `--root`, and it sets the window, so fallow ignores `--since`.
-
-The file feeds only the churn sections. `--changed-since` needs git: use `--diff-file` or `--diff-stdin` with a unified diff. `fallow audit` and `fallow impact` analyze the base revision again, so they need git.
+[Health files](/cli/health-files) gives the format of the snapshot file that `--save-snapshot` writes, and of the churn file that `--churn-file` reads for history from a VCS other than git.
 
 ## Exit codes
 
