@@ -1,0 +1,82 @@
+---
+title: "Test-only exports"
+description: "What a test-only-export finding of fallow dead-code means, why it matters and how to fix it."
+keywords: ["test-only-export","fallow/test-only-export","test-only-exports","dead code","fallow dead-code"]
+icon: "skull-crossbones"
+---
+
+{/* generated:start rule test-only-export */}
+
+## What it reports
+
+Export is used only by test-side files.
+
+[Dead code](/analysis/dead-code) explains how fallow finds it.
+
+## Why it matters
+
+An exported value that production code does not use, while a test-side file does. Test-side files are the files that `--production` leaves out: test, story, fixture and bench files and the `production.ignore` globs, plus the files that only tests reach, such as a test helper.
+
+A file that a runtime or support entry reaches, such as a source file that a bundler config names, is production code. In the default mode the tests keep such an export alive, so `unused-export` does not report it. In `--production` mode the same export is an `unused-export` finding, and this rule does not run.
+
+One export is never in both kinds in one run. Only values are checked in this version, not types. Entry exports, `keepExportTags`, `ignoreExports` and plugin rules keep an export, as for `unused-export`.
+
+The `colocated_only` field is true when each test-side importer is next to the module, which can mean a deliberate internal seam. A test-only use does not make an `@expected-unused` tag stale. Defaults to off.
+
+## Example
+
+`src/price.ts` exports legacyFormat. Only `src/price.test.ts` imports it, and no production file calls it.
+
+```json title=".fallowrc.json"
+{
+  "rules": {
+    "test-only-exports": "warn"
+  }
+}
+```
+
+```ts title="src/index.ts"
+import { formatPrice } from "./price";
+
+export const label = (cents: number): string => `Total: ${formatPrice(cents)}`;
+```
+
+```ts title="src/price.test.ts"
+import { expect, it } from "vitest";
+import { formatPrice, legacyFormat } from "./price";
+
+it("formats", () => {
+  expect(formatPrice(150)).toBe("1.5 EUR");
+  expect(legacyFormat(150)).toBe("EUR 1.5");
+});
+```
+
+```ts title="src/price.ts"
+export const formatPrice = (cents: number): string => `${roundCents(cents) / 100} EUR`;
+
+export const roundCents = (cents: number): number => Math.round(cents);
+
+export const legacyFormat = (cents: number): string => `EUR ${cents / 100}`;
+```
+
+## Fix
+
+When the export is dead code that its tests keep alive, remove the export and those tests. When it is a seam for tests only, test the behavior through the public functions of the module and make the item internal. When the export is deliberate, add // fallow-ignore-next-line test-only-export above it. See also unused-export.
+
+## Facts
+
+| Fact | Value |
+|:--|:--|
+| Issue type | `test-only-export` |
+| Rule id in SARIF output | `fallow/test-only-export` |
+| Command | [`fallow dead-code`](/cli/dead-code) |
+| Default severity | `off` |
+| Config key in `rules` | [`test-only-exports`](/reference/config-rules#rules-test-only-exports) |
+| Filter option | `--test-only-exports` |
+| Suppression comment | `// fallow-ignore-next-line test-only-export` |
+| Fixable with `fallow fix` | No |
+| Opt-in | Yes |
+
+**Note.** Opt-in check for default-scope runs; the rule defaults to off. No automatic fix, because a removal breaks the test-side importers.
+
+{/* generated:end */}
