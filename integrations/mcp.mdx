@@ -111,7 +111,7 @@ Then, in the agent, ask for the tools of the `fallow` server. The list has `audi
 ## If it fails
 
 - **The server does not start, with `ENOENT`.** The client cannot find `fallow-mcp`. With a project install, use `npx --no fallow-mcp`, and start the agent from the project root.
-- **A call times out on a large project.** Set `FALLOW_TIMEOUT_SECS` in the environment of the server. The default is 120 seconds.
+- **A call times out on a large project.** Set `FALLOW_TIMEOUT_SECS` in the environment of the server. The default is 120 seconds. A client that supports [tasks](#tasks) gets 30 minutes for the long tools.
 - **A call returns `FALLOW_MCP_SUBPROCESS_OUTPUT_LIMIT`.** The result is larger than the response cap. See [Errors and limits](#error-handling).
 
 The hosted MCP server of Fallow Cloud is a separate product. It reads production data and needs no local install. See [Hosted MCP](/cloud/hosted-mcp).
@@ -311,6 +311,24 @@ The server also serves the `fallow` and `fallow-setup` skills through the MCP sk
 In Claude Code 2.1.331 or later, the skills show as `<server>:fallow` and `<server>:fallow-setup`, where `<server>` is the name of the server entry.
 
 `fallow agent install` also writes these skills to disk. So it sets `FALLOW_MCP_SKILLS=off` in the `env` object of the server entry that it registers, and the client shows each skill once. To stop the server from serving the skills in another setup, set `FALLOW_MCP_SKILLS=off` yourself.
+
+### Tasks {#tasks}
+
+A long tool call can run as a task of the MCP tasks extension (`io.modelcontextprotocol/tasks`). The server then answers the call at once with a task handle. The client asks `tasks/get` for the status and the result, and can stop the run with `tasks/cancel`.
+
+The server returns a task only when the request declares the extension in its `_meta` client capabilities. Claude Code does this on a `2026-07-28` connection. Other requests get the result as before.
+
+| Tool | Runs as a task | Poll interval |
+|:--|:--|:--|
+| `audit` | Always | 2 seconds |
+| `mutation_plan` | Always | 2 seconds |
+| `find_similar_code` | Always | 10 seconds |
+| `analyze` | With `type_aware`, `type_aware_projects` or `type_aware_require` | 10 seconds |
+
+- A task run has a deadline of 30 minutes. `FALLOW_TIMEOUT_SECS` still sets the deadline when you set it.
+- The status message names the tool and the time that the run took so far.
+- A finished result stays readable for at least one hour.
+- The server keeps its tasks in memory. When the server stops, it stops its running tasks, and a new server does not know the old task IDs.
 
 ## Related
 
