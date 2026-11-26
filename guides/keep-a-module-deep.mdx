@@ -1,0 +1,112 @@
+---
+title: "Keep a module deep"
+sidebarTitle: "Keep a module deep"
+description: "Make each module folder export through its index file, and fail CI when an import or a test bypasses it."
+keywords: ["deep modules", "deep-modules", "module interface", "index file", "publicFiles", "presetPublicFiles", "boundary-violation", "shallow-directories", "narrow-interface"]
+icon: "box"
+---
+
+You narrowed the interface of a module, but the next change can import an internal file again. At the end of this guide, each folder under `src/modules` is a module that other code imports only through its `index.ts`. CI fails on each import that bypasses it, also from a test outside the module.
+
+A [shallow directory](/rules/shallow-directory) finding tells you that an interface is too wide. This guide keeps it narrow after the fix.
+
+## Before you start
+
+- Put each module in its own folder under `src/modules`, or under `src/features`. Give each module an index file, for example `src/modules/billing/index.ts`, that exports its interface.
+- The examples use this project:
+
+```text
+src/main.ts                       imports from ./modules/billing and ./modules/billing/money
+src/modules/billing/index.ts      export { charge } from './charge';
+src/modules/billing/charge.ts
+src/modules/billing/money.ts      export const roundCents = ...
+src/modules/billing/money.test.ts imports ./money
+tests/billing.test.ts             imports ../src/modules/billing/money
+```
+
+## Steps
+
+### 1. Turn on the preset
+
+```jsonc
+// .fallowrc.json
+{ "boundaries": { "preset": "deep-modules" } }
+```
+
+The preset uses `src/modules`. When that folder does not exist or has no module folders, it uses `src/features`. When neither folder exists, fallow stops with exit code 2. When `compilerOptions.rootDir` in `tsconfig.json` names another source folder, the preset uses that folder in place of `src`.
+
+### 2. Check the zones
+
+```bash
+npx fallow list --boundaries
+```
+
+```text
+Boundaries: 4 zones, 0 rules, 1 logical group
+
+Zones:
+  modules/billing      4 files  src/modules/billing/**
+                       public files: src/modules/billing/index.{ts,tsx,mts,cts,js,jsx,mjs,cjs}
+  modules              0 files  src/modules/**
+  app                  1 file  src/**
+  tests                1 file  test/**, tests/**, e2e/**
+
+Logical groups:
+  modules              4 files (4 children + 0 fallback)  autoDiscover: src/modules
+    children: modules/billing
+```
+
+A file belongs to the first zone that matches it:
+
+- `modules/<name>`: one zone for each module folder. Its public file is the index file with a JavaScript or TypeScript extension. A file such as `index.internal.ts` is not public.
+- `modules`: the loose files directly in `src/modules`. They have no public file, so other code may import them.
+- `app`: the other files under `src`, such as `src/main.ts`.
+- `tests`: the test folders outside `src`.
+
+A zone that you add to `zones` goes after `modules` and before `app` and `tests`, so it keeps its files.
+
+No zone has a rule, so each zone may import each other zone. The only limit is the public file: an import from another zone into a module must use its index file.
+
+### 3. Keep tests on the interface
+
+A test next to the module code, such as `src/modules/billing/money.test.ts`, is in the zone of the module. It may import internal files, because it tests the module from the inside.
+
+A test in `test/`, `tests/` or `e2e/` is in the `tests` zone. It must use the index file, as other code does. Do not add a pattern such as `**/*.test.ts` to the `tests` zone: the module zones come first, so a test next to the module code stays in its module.
+
+### 4. Fail CI on a bypass
+
+Add the check to CI:
+
+```bash
+npx fallow architecture --boundaries
+```
+
+The command exits with code 1 when it finds a boundary violation. To start without a failure, set the rule to `warn`: `"rules": { "boundary-violation": "warn" }`. See [CI](/integrations/ci).
+
+## Check the result
+
+```bash
+npx fallow architecture --boundaries
+```
+
+```text
+● Boundary violations (2)
+  src/main.ts:2 → src/modules/billing/money.ts (app → modules/billing)
+    src/modules/billing/money.ts is not a public entry file of zone 'modules/billing'; import it through src/modules/billing/index.ts
+  tests/billing.test.ts:1 → src/modules/billing/money.ts (tests → modules/billing)
+    src/modules/billing/money.ts is not a public entry file of zone 'modules/billing'; import it through src/modules/billing/index.ts
+```
+
+The import of `./modules/billing` in `src/main.ts` and the colocated test give no finding. Export `roundCents` from `index.ts`, or move the test into the module, and import through the index file. The run then exits with code 0.
+
+## If it fails
+
+- **Each import into a module is a finding.** The module has no index file. Fallow then warns `sets publicFiles, but no file of the zone matches its globs`. Add the index file.
+- **Your modules are in another folder.** Replace the `modules` zone of the preset with your own zone of the same name, for example `{ "name": "modules", "patterns": ["src/domains/**"], "autoDiscover": ["src/domains"], "publicFiles": ["index.ts"] }`. See [Merge a preset with your zones](/configuration/boundaries#merging-presets-with-custom-config).
+- **You use the `bulletproof` or `feature-sliced` preset.** Add `"presetPublicFiles": true` to `boundaries`. Each feature, or each slice of `pages`, `widgets`, `features` and `entities`, then has its index file as its public file. The `@x` files of an entity stay public too. A fallow version without this key ignores it, so set [`minimumVersion`](/reference/config-files#minimumversion) to the version that added it.
+
+## Related
+
+- [Public entry files](/configuration/boundaries#public-entry-files): how `publicFiles` works on any zone.
+- [Shallow directory](/rules/shallow-directory): the finding that shows an interface that is too wide.
+- [`fallow architecture`](/cli/architecture): the options and output of the command.
