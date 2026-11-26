@@ -1,16 +1,19 @@
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gunzipSync } from "node:zlib";
 
 // Checks that the built-in plugin page has a row for each plugin of the
 // latest fallow release. The plugin names come from `plugins.names` in the
-// `capabilities.json` file of the release.
+// `capabilities.json` file of the release. The script reads that file from
+// the published npm package, because npm serves a release before its Git tag
+// exists.
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PAGE = "frameworks/built-in.mdx";
 const REGISTRY_URL = "https://registry.npmjs.org/fallow/latest";
-const capabilitiesUrl = (version) =>
-  `https://raw.githubusercontent.com/fallow-rs/fallow/v${version}/npm/fallow/capabilities.json`;
+const CAPABILITIES_ENTRY = "package/capabilities.json";
+const TAR_BLOCK = 512;
 
 // A plugin row has the plugin name in bold in its first cell.
 const PLUGIN_ROW = /^\s*\| \*\*([^*]+)\*\* \|/gm;
@@ -59,6 +62,25 @@ export const capabilitiesPath = (args) => {
   return path;
 };
 
+/** The text of the file `name` in a gzipped tar archive, such as an npm tarball. */
+export const tarballEntry = (archive, name) => {
+  const tar = gunzipSync(archive);
+  let offset = 0;
+  while (offset + TAR_BLOCK <= tar.length && tar[offset] !== 0) {
+    const field = (start, length) =>
+      tar.toString("utf8", offset + start, offset + start + length).replace(/\0.*$/s, "");
+    const prefix = field(345, 155);
+    const path = prefix === "" ? field(0, 100) : `${prefix}/${field(0, 100)}`;
+    const size = Number.parseInt(field(124, 12).trim(), 8);
+    const start = offset + TAR_BLOCK;
+    if (path === name) {
+      return tar.toString("utf8", start, start + size);
+    }
+    offset = start + Math.ceil(size / TAR_BLOCK) * TAR_BLOCK;
+  }
+  throw new Error(`The tarball has no ${name}.`);
+};
+
 const fetchJson = async (url) => {
   const response = await fetch(url);
   if (!response.ok) {
@@ -71,8 +93,16 @@ const readCapabilities = async (path) => {
   if (path !== undefined) {
     return { source: path, capabilities: JSON.parse(await readFile(path, "utf8")) };
   }
-  const { version } = await fetchJson(REGISTRY_URL);
-  return { source: `fallow ${version}`, capabilities: await fetchJson(capabilitiesUrl(version)) };
+  const { version, dist } = await fetchJson(REGISTRY_URL);
+  const response = await fetch(dist.tarball);
+  if (!response.ok) {
+    throw new Error(`GET ${dist.tarball} returned ${response.status}.`);
+  }
+  const archive = Buffer.from(await response.arrayBuffer());
+  return {
+    source: `fallow ${version}`,
+    capabilities: JSON.parse(tarballEntry(archive, CAPABILITIES_ENTRY)),
+  };
 };
 
 const run = async () => {
