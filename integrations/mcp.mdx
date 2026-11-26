@@ -125,7 +125,7 @@ The hosted MCP server of Fallow Cloud is a separate product. It reads production
 - The response cap is 1,000,000 bytes. A larger result returns `isError: true` with the code `FALLOW_MCP_SUBPROCESS_OUTPUT_LIMIT`. Its `narrow` array lists the parameters that make the result smaller, for example `issue_types` or `top`. Call the tool again with one of them.
 - The `max_output_bytes` parameter of a call can only lower the cap. `FALLOW_MCP_MAX_OUTPUT_BYTES` sets it for the server, up to 16 MiB.
 - Claude Code saves a text result over 50,000 characters to a file, and the agent reads that file. The tools with large results (`analyze`, `audit`, `check_architecture`, `check_changed`, `check_health`, `code_execute`, `find_dupes`, `fix_preview`, `get_token_blast_radius`, `impact_all`, `project_info`, `security_candidates` and `trace_file`) raise this limit to 200,000 characters with `_meta["anthropic/maxResultSizeChars"]`. A larger result still goes to a file. To keep a result small, pass a filter such as `issue_types` or `top`.
-- Only `fix_apply` changes source files. Call `fix_preview` first.
+- Only `fix_apply` changes source files. Call `fix_preview` first. A client with form elicitation asks the user to confirm before the write. See [Fix confirmation](#fix-confirmation).
 - The `get_cloud_*` tools, and `inspect_target` with `cloud: true`, read production data from Fallow Cloud. They send the repository name, and for some tools the file paths and function names that you select. All other tools work only on the local project.
 
 ### Run-level warnings {#run-level-warnings}
@@ -329,6 +329,26 @@ The server returns a task only when the request declares the extension in its `_
 - The status message names the tool and the time that the run took so far.
 - A finished result stays readable for at least one hour.
 - The server keeps its tasks in memory. When the server stops, it stops its running tasks, and a new server does not know the old task IDs.
+
+### Fix confirmation {#fix-confirmation}
+
+When the client declares form elicitation, `fix_apply` asks the user to confirm before it writes. The server runs the dry run first. The form shows the number of fixes, the number of files, the fixes per type and the fixes that the run skips. The tool writes only after a yes.
+
+- On a `2026-07-28` connection, the call returns an `input_required` result with the form. The client shows the form and calls the tool again with the answer. Claude Code does this.
+- On an earlier protocol revision, the server sends `elicitation/create` during the call and waits at most 10 minutes for the answer.
+- When the user does not confirm, no file changes. The result has `applied: false` and a `confirmation` value:
+
+| `confirmation` | Meaning |
+|:--|:--|
+| `declined` | The user declined, or cleared the `apply` box. |
+| `cancelled` | The form closed without an answer. |
+| `timed_out` | No answer came in 10 minutes. |
+| `failed` | The client could not show the form. |
+| `plan_changed` | The project changed while the form was open. Call `fix_apply` again to confirm the new plan. |
+
+- A session with no person to answer, such as `claude -p` or an Agent SDK run, cancels the form at once. The call does not wait. To answer the form from a script, use an [`Elicitation` hook](https://code.claude.com/docs/en/hooks#elicitation) that returns `accept` with `{"apply": true}`.
+- A client without form elicitation applies the fixes with no question, as before.
+- A plan with no fixes applies with no question.
 
 ## Related
 
