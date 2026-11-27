@@ -99,6 +99,25 @@ Each finding above is a fact about the module graph: fallow starts at the entry 
 
 A type-only import, such as `import type { Order } from "./orders"`, counts as a use of the export, the same as a value import. So [`OrderStatus`](/rules/unused-type) is unused only because no file names it. For an enum that is in use, fallow checks each member. `Channel.Phone` is an [unused enum member](/rules/unused-enum-member), because no code reads it. `Object.values(Channel)` and other uses of the whole enum count for each member.
 
+### Types in the signature of an export {#types-in-the-signature-of-an-export}
+
+A type that only the signature of another export in the same file uses is also an unused type when no other file imports it:
+
+```ts title="src/button.ts"
+export type ButtonProps = { label: string };
+
+export const Button = (props: ButtonProps) => props.label;
+```
+
+You can remove the `export` from `ButtonProps`. TypeScript accepts the file, and the declaration output of the file includes the local type.
+
+Fallow does not report such a type in two cases:
+
+- The project of the file emits declarations. One config in the nearest folder with a `tsconfig*.json` sets `declaration` or `composite` and does not set `noEmit`. Or the nearest `package.json` names a `.d.ts` file in `types`, `typings`, `typesVersions` or a `types` export condition. Without the export, the declaration of another module that holds the value with an inferred type can fail with TS4023.
+- The [`private-type-leak`](/rules/private-type-leak) rule is on for the file. Without the export, that rule reports the signature.
+
+A config that does not parse, or whose `extends` chain does not resolve, counts as a config that emits declarations. A build tool that emits declarations without a tsconfig flag or a `types` field (for example `tsdown` with `dts: true` and `exports` that name only `.js` files) is not detected. In that project, keep the export when another module holds the value with an inferred type. `fallow dead-code --trace <file>:<Type>` names the exports whose signatures use the type and the reason, and the JSON trace has the object `kept_by_signature`. To not report a type that its own file uses, set [`ignoreExportsUsedInFile`](/reference/config-dead-code#ignoreexportsusedinfile) to `{ "type": true, "interface": true }`.
+
 ### Class members
 
 `OrderBook.clear` is an [unused class member](/rules/unused-class-member): no code calls it. A use through `this` inside the class counts, so a helper method that only `add` calls through `this` is not reported. Fallow checks public methods, public properties and static methods. It does not report these members:
