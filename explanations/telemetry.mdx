@@ -8,7 +8,7 @@ icon: "shield-halved"
 
 You run fallow on code that you may not share, and you must know what leaves your machine. Fallow telemetry is off by default. When you turn it on, fallow sends one small event for each analysis run. The events help the maintainers improve the agent, CI, JSON, MCP and editor workflows. [`fallow telemetry`](/cli/telemetry) has the commands and the environment variables.
 
-To keep telemetry off on each machine and in CI, set `FALLOW_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`.
+To keep telemetry off on each machine and in CI, set `FALLOW_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`. Each value of these two variables turns telemetry off, except empty, `0`, `false`, `no` and `off`.
 
 ## You do not have to trust the list {#inspect-what-is-sent}
 
@@ -109,7 +109,24 @@ Fallow leaves out a field that does not apply to the run. For example, `agent_so
 
 An agent can start a follow-up run with the hidden option `--parent-run <RUN_ID>`, with the `_meta.telemetry.analysis_run_id` value of the JSON output of the earlier run. That run sends a cleaned link token in the HTTP header `X-Fallow-Parent-Run`, never in the event. When fallow changes the fields, `schema_version` changes.
 
-Telemetry comes only from the CLI. The language server, the editor extension and the Node.js bindings send no telemetry. When the MCP server starts the CLI, the event of that run counts for the MCP tool.
+The language server, the editor extension and the Node.js bindings send no telemetry. The MCP server runs most analysis tools in its own process, and runs the CLI for the other tools:
+
+- A tool call that runs the CLI gets the event of that CLI run, with the MCP tool in `mcp_tool`.
+- A tool call that runs only in the server process gets one event from the hidden `fallow telemetry record` command. The server runs that command after it answers the call, and the CLI applies the same consent rules as for every other run. The event has the workflow of the tool, a time range and `success` or `failed`. For `analyze`, `check_changed`, `check_architecture`, `find_dupes`, `check_health` and `audit`, it also has `findings_present` and `result_count_bucket`. The server reads only that one count from the result.
+
+With telemetry off, the server starts no `record` process, and it checks the telemetry state at most once every ten minutes. Telemetry work never delays a tool call.
+
+## Consent form in MCP clients {#mcp-consent-form}
+
+Agents run fallow through MCP, and they never show the telemetry note of the human CLI. So the MCP server can ask you once, in a form of your MCP client, whether to share usage data. The form says what a yes turns on: telemetry for all fallow runs on the machine, the kind of values, the random install ID and the endpoint.
+
+- The form has one checkbox, clear by default. Only a submit with the box checked turns telemetry on. A submit with the box clear, or a decline, turns it off and records your choice, so fallow does not ask again. A cancel records nothing.
+- The form comes after the first tool call, and only when no fallow tool call has run for 20 seconds. The server never tells the agent about the form.
+- Only clients that support MCP form elicitation on a protocol before `2026-07-28` show the form.
+- A machine gets the form at most twice, at least 14 days apart, for all its MCP servers together.
+- The form never comes in CI, when `DO_NOT_TRACK` or `FALLOW_TELEMETRY_DISABLED` holds an opt-out value, when `FALLOW_TELEMETRY` or `FALLOW_TELEMETRY_DEBUG` is set, or after you made a choice.
+
+To keep the form off a fleet of machines, set `FALLOW_TELEMETRY_DISABLED=1` in the machine or container image.
 
 ## Agent source {#agent-source}
 
@@ -139,7 +156,7 @@ The sections above describe the content of an event. This section describes how 
 
 ## Turn telemetry off everywhere {#disabling-everywhere}
 
-For a team or a fleet of machines, use an environment variable, because it wins over the choice of each user. `DO_NOT_TRACK` and `FALLOW_TELEMETRY_DISABLED` have the highest precedence. When one of them is set, telemetry stays off, and `fallow telemetry enable` refuses to turn it on. In CI, telemetry is off unless `FALLOW_TELEMETRY` is set in that CI environment. A local `fallow telemetry enable` does not turn it on in CI.
+For a team or a fleet of machines, use an environment variable, because it wins over the choice of each user. `DO_NOT_TRACK` and `FALLOW_TELEMETRY_DISABLED` have the highest precedence. When one of them holds an opt-out value, telemetry stays off, `fallow telemetry enable` refuses to turn it on, and the MCP server shows no consent form. In CI, telemetry is off unless `FALLOW_TELEMETRY` is set in that CI environment. A local `fallow telemetry enable` does not turn it on in CI.
 
 ## Related
 
