@@ -76,3 +76,21 @@ Remove or privatize the member. For reflection/framework lifecycle hooks, config
 - When the class extends another class, a call of the member in the parent class counts as a use of the override.
 - When code gives an instance in a variable to `Object.keys`, `Object.values`, a rest pattern or `for...in`, fallow counts each member as used.
 - A Playwright test that `test.extend<T>()` or `mergeTests(...).extend<T>()` makes from `@playwright/test` uses the members of each fixture class that the test reads.
+- A destructured property of a factory result uses the members of the class that the property holds, for example `const { ctx } = newService()` followed by `ctx.seed()`. A local wrapper such as `const setup = () => newService(db)` counts as the factory. The name can have a binding in each test of a file, when each binding destructures the same property of the same call. A parameter or another declaration with the same name in the file stops the credit.
+
+## Known limits
+
+Fallow reads the source text and does not infer types. Without [type-aware analysis](/analysis/type-aware), it reports a member that code calls only through one of these receivers:
+
+- A test double whose type comes from the class, for example `Mocked<StorageRepository>` or a mock that copies the members of the class. A call on the mock does not count as a use of the class member.
+- A fixture that a test framework gives to a test without a typed `extend<T>()` call.
+- An instance that a library receives and calls through an interface of the library, for example a PDF signer, a mail transport, or a ProseMirror node view.
+- A receiver that a helper builds again from a factory result, for example `return { ctx }` after `const { ctx } = newService()`.
+
+With `--type-aware`, the TypeScript checker resolves each call to the class member, so a call through a typed mock, a wrapper or a fixture counts as a use. A class that `implements` a library interface keeps each required member of the interface and each optional member that the library declares, because the library can call it. Some members stay reported in type-aware mode too:
+
+- The TypeScript project of the file has errors that block the analysis.
+- The member or its class has a decorator.
+- The library receives the class without an `implements` or `extends` clause.
+
+For these members, add the name to [`usedClassMembers`](/reference/config-dead-code#usedclassmembers), or [suppress](/guides/suppress) the finding.
