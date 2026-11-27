@@ -300,6 +300,8 @@ A file that only tool config files reach gets `build-tool-only` for each mutant,
 
 Before the mutants run, fallow runs your tests once with no active mutant: the dry run. It finds the covering tests of each planned mutant, also of the mutants after the `--max-mutants` limit. The dry run always runs, also when each result comes from the cache.
 
+With `--concurrency` above 1, the runner processes divide the dry run. Each process runs a part of the test files at the same time as the others, and keeps that part for the mutant runs. A mutant runs first on a process whose part holds each file of its covering tests. A process that starts later runs only the test files of the covering tests in its own dry run.
+
 The dry run executes the instrumented code, which is slower than your code. Each runner therefore gives it three times the test timeout:
 
 | Runner | Dry-run timeout |
@@ -346,10 +348,11 @@ The dry run selects whole test files. A mutant run selects single tests by id, t
 A baseline failure is a test that fails with no active mutant. The report lists it in `baseline_failures`, and its result decides no mutant status.
 
 - A test that fails in the dry run, or in a control run, is a baseline failure. A test that depends on another test of its file can fail in a control run and pass in the dry run of its whole file.
+- Runner processes that dry-run at the same time can fail on shared state, for example a port or a fixed file. After each part ended, a new process runs each test file with a failed test or an error again, and its result counts. Only a failure that stays is a baseline failure.
 - A restarted runner process runs its own dry run. A covering test that does not pass there is a baseline failure of that process, with the ids of the affected mutants in `mutant_ids`. The mutant runs with its other covering tests. A mutant with no covering test left is `runtime_error`.
 - A planned mutant with no covering test left after the dry run or the self-check is `no_coverage`. With `--max-mutants`, the next covered `pending` mutant takes its place.
 - The message keeps the first error of the test: the error name and message, then the stack frames of your project. Fallow removes the frames of the runner, Node.js and dependencies, makes paths relative, and keeps at most 8 KiB.
-- The dry run of a restarted runner process has a time limit: the first dry-run time, multiplied by 2 and by the number of workers, and at least `--setup-timeout`.
+- The dry run of a restarted runner process has a time limit: the first dry-run time, multiplied by 2 and by the number of workers, and at least `--setup-timeout`. When more than one process divided the first dry run, the first dry-run time is the sum of their times.
 - A baseline failure makes the completion `partial` with `baseline-failure`.
 
 A run in which baseline failures leave no mutant with a test result exits with code 2 and `FALLOW_MUTATION_BASELINE_FAILED`. The error names the first baseline failure and the first line of its message. A `pending` mutant keeps the exit code at 0, because a limit stopped the run. The run still saves the full report to `.fallow/mutation/last-report.json` and to the `-o` file.
