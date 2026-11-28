@@ -345,6 +345,19 @@ The dry run selects whole test files. A mutant run selects single tests by id, t
 - A mutant run that executes no test and reports an error is `killed` only when the same tests pass in a control run. A mutant that throws when its module loads gives this result. Otherwise the mutant is `runtime_error`, with no second run.
 - Each set of tests gets at most one control run. A control result is never a mutant result, so the result cache never stores it.
 
+### Reach selection {#reach-selection}
+
+A changed-code run dry-runs each test file that reaches a changed file through imports. Through barrel files, that can be most of the suite, while few files run the changed code. `--reach-selection on` (config key `mutation.reachSelection`) leaves a test file out of the dry run when an earlier run proves that the file cannot run a mutant of this run. The selection is off by default and needs the cache.
+
+- A run with `on` or `check` records, for each test file, the modules that it loads and the functions that it enters. The record is in `.fallow/mutation/dry-runs.json`.
+- A later run leaves a test file out only when each module that it loads has the same module code (imports, exports and top-level statements, without types and comments), each function that it entered is unchanged, each constant or helper that this code reads keeps its value, and no mutant is in code that it runs. Each other case keeps the file.
+- A change of a file that the runner config loads (for example a reporter that imports project code) keeps each test file, because the runner loads that code outside the test workers.
+- A runner whose workers keep the modules of one test file for the next one (Vitest with `isolate: false`) writes no record.
+- `--reach-selection check` records in the same way and dry-runs each test file. It lists each mutant that a dropped test file covers in `cache.reach_selection.violations` and exits 2 when the list is not empty.
+- `cache.reach_selection` of the JSON report gives the dropped test files and a count for each reason that kept a file.
+
+A pull request run reads the record of the default branch from the cache: run `--reach-selection on` on the default branch and restore `.fallow/mutation` in the pull request job. The GitHub Action caches `dry-runs.json` with the result cache.
+
 ## Baseline failures {#baseline-failures}
 
 A baseline failure is a test that fails with no active mutant. The report lists it in `baseline_failures`, and its result decides no mutant status.
